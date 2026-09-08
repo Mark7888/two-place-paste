@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "profile": "tpp-crypto-v1",
+  "suite": "derive",
+  "spec": "spec/crypto.md §5.1",
+  "description": "HKDF-SHA256(ikm=group_key, salt=nonce, info=\"tpp/v1/entry\"||u64be(epoch), L=32).",
+  "vectors": [
+    {
+      "name": "epoch-1-text",
+      "description": "content key for the first entry at epoch 1",
+      "group_key": "8428a1927adc541599026731486ffe36ca302c1c0e850896e637edb28a2a08cf",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "nonce": "de6bd460f77d1913eb90eb6615ad8774ac22605dd9389d21",
+      "hkdf_salt": "de6bd460f77d1913eb90eb6615ad8774ac22605dd9389d21",
+      "hkdf_info": "7470702f76312f656e7472790000000000000001",
+      "content_key": "10e129e8169bab9532820713714fea0b640303408b609bd3b3fb14bf6c17e3a7"
+    },
+    {
+      "name": "epoch-1-same-key-other-nonce",
+      "description": "same group key and epoch, different nonce: an unrelated content key",
+      "group_key": "8428a1927adc541599026731486ffe36ca302c1c0e850896e637edb28a2a08cf",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "nonce": "6ce65ed541ad655210f4a40247db9d602860abad552ed95c",
+      "hkdf_salt": "6ce65ed541ad655210f4a40247db9d602860abad552ed95c",
+      "hkdf_info": "7470702f76312f656e7472790000000000000001",
+      "content_key": "127c21e472fb889ce08b1b3c1cd9139cd45be1e8a017ef909f429fa26aa88569"
+    },
+    {
+      "name": "epoch-2-same-nonce",
+      "description": "same group key and nonce, different epoch: the info string separates them",
+      "group_key": "8428a1927adc541599026731486ffe36ca302c1c0e850896e637edb28a2a08cf",
+      "epoch": 2,
+      "epoch_hex": "0000000000000002",
+      "nonce": "de6bd460f77d1913eb90eb6615ad8774ac22605dd9389d21",
+      "hkdf_salt": "de6bd460f77d1913eb90eb6615ad8774ac22605dd9389d21",
+      "hkdf_info": "7470702f76312f656e7472790000000000000002",
+      "content_key": "a16d02f17cf22fb7c5ad20e064c91c76ec9593f4ca027d1c1e5e8ee500b94d96"
+    },
+    {
+      "name": "epoch-7-after-rekey",
+      "description": "content key under the group key installed by a rekey",
+      "group_key": "dbed0c7cc52bf7b25ce4fe65b739685b205f29ad6983799f1a0dfff680ff0a7c",
+      "epoch": 7,
+      "epoch_hex": "0000000000000007",
+      "nonce": "d36b6a019bd880c1e0774cb8fcfabb011193f19afe162929",
+      "hkdf_salt": "d36b6a019bd880c1e0774cb8fcfabb011193f19afe162929",
+      "hkdf_info": "7470702f76312f656e7472790000000000000007",
+      "content_key": "46732ae9056cdde558ac2f48620bdc7f632cda774e6ad42dbd3215ef825fc237"
+    },
+    {
+      "name": "epoch-max",
+      "description": "epoch at the u64 ceiling, to pin the big-endian encoding",
+      "group_key": "8428a1927adc541599026731486ffe36ca302c1c0e850896e637edb28a2a08cf",
+      "epoch": 18446744073709551615,
+      "epoch_hex": "ffffffffffffffff",
+      "nonce": "de6bd460f77d1913eb90eb6615ad8774ac22605dd9389d21",
+      "hkdf_salt": "de6bd460f77d1913eb90eb6615ad8774ac22605dd9389d21",
+      "hkdf_info": "7470702f76312f656e747279ffffffffffffffff",
+      "content_key": "87193de25e9859438fd550ca577dab3a7ba43735be96c134666dc259651e8494"
+    }
+  ]
+}

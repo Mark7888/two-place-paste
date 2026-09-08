@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "profile": "tpp-crypto-v1",
+  "spec": "spec/crypto.md",
+  "description": "Cross-language test vectors for the TwoPlacePaste crypto profile. All byte strings are lowercase hex. A client that cannot reproduce every vector in this corpus does not ship (docs/conventions.md §11).",
+  "total_vectors": 42,
+  "suites": [
+    {
+      "file": "x25519.json",
+      "suite": "x25519",
+      "vectors": 6,
+      "description": "device and ephemeral X25519 keys, and the raw shared secret"
+    },
+    {
+      "file": "wrap.json",
+      "suite": "wrap",
+      "vectors": 3,
+      "description": "group key wrapping to a device public key"
+    },
+    {
+      "file": "derive.json",
+      "suite": "derive",
+      "vectors": 5,
+      "description": "HKDF-SHA256 content key derivation"
+    },
+    {
+      "file": "frame.json",
+      "suite": "frame",
+      "vectors": 5,
+      "description": "plaintext frame serialization"
+    },
+    {
+      "file": "entry.json",
+      "suite": "entry",
+      "vectors": 5,
+      "description": "end-to-end entry encryption"
+    },
+    {
+      "file": "failure.json",
+      "suite": "failure",
+      "vectors": 18,
+      "description": "inputs that every implementation must reject"
+    }
+  ]
+}

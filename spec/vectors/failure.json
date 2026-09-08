@@ -1,0 +1,199 @@
+{
+  "schema_version": 1,
+  "profile": "tpp-crypto-v1",
+  "suite": "failure",
+  "spec": "spec/crypto.md §7",
+  "description": "Inputs every implementation must reject. `operation` names the call under test; the only correct outcome is an error. An implementation that returns plaintext for any of these is broken, not lenient.",
+  "vectors": [
+    {
+      "name": "unwrap-wrong-recipient",
+      "description": "a wrapped key addressed to another device must not open",
+      "operation": "unwrap",
+      "expect": "error",
+      "reason": "the AEAD key is derived from the recipient's own public key",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "recipient_private_key": "35028f55496129bbef14ea4ea14f2ec1b3083d93237d51803c5d24173a679968",
+      "wrapped_key": "0172d8cdae001b542de50d0add7555383e31bb2ddc6ed5244558b580c567478859dc78726623ad072de747c38049d35dbc6b5114a981ccd91be3906f62d816bdf0bf630d73f220029cf1339809250e3b32"
+    },
+    {
+      "name": "unwrap-wrong-epoch",
+      "description": "SPEC §3.3: a wrapped key replayed at a different epoch must not open",
+      "operation": "unwrap",
+      "expect": "error",
+      "reason": "the epoch is bound into the AAD",
+      "epoch": 2,
+      "epoch_hex": "0000000000000002",
+      "recipient_private_key": "853bdf42c3085daa5c8906f5d9f17e6f816be1036bf70b81de72e00ea437001d",
+      "wrapped_key": "0172d8cdae001b542de50d0add7555383e31bb2ddc6ed5244558b580c567478859dc78726623ad072de747c38049d35dbc6b5114a981ccd91be3906f62d816bdf0bf630d73f220029cf1339809250e3b32"
+    },
+    {
+      "name": "unwrap-tampered-ciphertext",
+      "description": "one flipped bit in the wrapped group key",
+      "operation": "unwrap",
+      "expect": "error",
+      "reason": "Poly1305 authentication fails",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "recipient_private_key": "853bdf42c3085daa5c8906f5d9f17e6f816be1036bf70b81de72e00ea437001d",
+      "wrapped_key": "0172d8cdae001b542de50d0add7555383e31bb2ddc6ed5244558b580c567478859dd78726623ad072de747c38049d35dbc6b5114a981ccd91be3906f62d816bdf0bf630d73f220029cf1339809250e3b32"
+    },
+    {
+      "name": "unwrap-tampered-ephemeral-key",
+      "description": "one flipped bit in the ephemeral public key",
+      "operation": "unwrap",
+      "expect": "error",
+      "reason": "a different shared secret derives a different AEAD key",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "recipient_private_key": "853bdf42c3085daa5c8906f5d9f17e6f816be1036bf70b81de72e00ea437001d",
+      "wrapped_key": "0173d8cdae001b542de50d0add7555383e31bb2ddc6ed5244558b580c567478859dc78726623ad072de747c38049d35dbc6b5114a981ccd91be3906f62d816bdf0bf630d73f220029cf1339809250e3b32"
+    },
+    {
+      "name": "unwrap-unknown-version",
+      "description": "version byte 0x02",
+      "operation": "unwrap",
+      "expect": "error",
+      "reason": "an unknown container version is rejected before any key material is touched",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "recipient_private_key": "853bdf42c3085daa5c8906f5d9f17e6f816be1036bf70b81de72e00ea437001d",
+      "wrapped_key": "0272d8cdae001b542de50d0add7555383e31bb2ddc6ed5244558b580c567478859dc78726623ad072de747c38049d35dbc6b5114a981ccd91be3906f62d816bdf0bf630d73f220029cf1339809250e3b32"
+    },
+    {
+      "name": "unwrap-truncated",
+      "description": "the last byte of the tag removed",
+      "operation": "unwrap",
+      "expect": "error",
+      "reason": "a wrapped key has exactly one valid length",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "recipient_private_key": "853bdf42c3085daa5c8906f5d9f17e6f816be1036bf70b81de72e00ea437001d",
+      "wrapped_key": "0172d8cdae001b542de50d0add7555383e31bb2ddc6ed5244558b580c567478859dc78726623ad072de747c38049d35dbc6b5114a981ccd91be3906f62d816bdf0bf630d73f220029cf1339809250e3b"
+    },
+    {
+      "name": "entry-wrong-epoch",
+      "description": "SPEC §3.3: an entry from another epoch must not open, it must be skipped",
+      "operation": "open_entry",
+      "expect": "error",
+      "reason": "the epoch feeds both the HKDF info and the AAD",
+      "group_key": "8428a1927adc541599026731486ffe36ca302c1c0e850896e637edb28a2a08cf",
+      "epoch": 2,
+      "epoch_hex": "0000000000000002",
+      "entry_id": "01J9ZQK8N4X0000000000000AB",
+      "container": "01de6bd460f77d1913eb90eb6615ad8774ac22605dd9389d2110b668204f5f60e31280a59ffcfa164b458d8de69176301bddbbcbe2a80a5c1ddbf5a335079c20ba250c4ed3a7628797b35feec9023fa21a8e64189f957315e58b7dcd09"
+    },
+    {
+      "name": "entry-wrong-entry-id",
+      "description": "the same ciphertext presented under another entry id",
+      "operation": "open_entry",
+      "expect": "error",
+      "reason": "entry_id is bound into the AAD, so an entry cannot be relabelled",
+      "group_key": "8428a1927adc541599026731486ffe36ca302c1c0e850896e637edb28a2a08cf",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "entry_id": "01J9ZQK8N4X0000000000000ZZ",
+      "container": "01de6bd460f77d1913eb90eb6615ad8774ac22605dd9389d2110b668204f5f60e31280a59ffcfa164b458d8de69176301bddbbcbe2a80a5c1ddbf5a335079c20ba250c4ed3a7628797b35feec9023fa21a8e64189f957315e58b7dcd09"
+    },
+    {
+      "name": "entry-tampered-ciphertext",
+      "description": "one flipped bit in the ciphertext",
+      "operation": "open_entry",
+      "expect": "error",
+      "reason": "Poly1305 authentication fails",
+      "group_key": "8428a1927adc541599026731486ffe36ca302c1c0e850896e637edb28a2a08cf",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "entry_id": "01J9ZQK8N4X0000000000000AB",
+      "container": "01de6bd460f77d1913eb90eb6615ad8774ac22605dd9389d2111b668204f5f60e31280a59ffcfa164b458d8de69176301bddbbcbe2a80a5c1ddbf5a335079c20ba250c4ed3a7628797b35feec9023fa21a8e64189f957315e58b7dcd09"
+    },
+    {
+      "name": "entry-tampered-nonce",
+      "description": "one flipped bit in the nonce",
+      "operation": "open_entry",
+      "expect": "error",
+      "reason": "the nonce is the HKDF salt, so a different nonce derives a different content key",
+      "group_key": "8428a1927adc541599026731486ffe36ca302c1c0e850896e637edb28a2a08cf",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "entry_id": "01J9ZQK8N4X0000000000000AB",
+      "container": "01df6bd460f77d1913eb90eb6615ad8774ac22605dd9389d2110b668204f5f60e31280a59ffcfa164b458d8de69176301bddbbcbe2a80a5c1ddbf5a335079c20ba250c4ed3a7628797b35feec9023fa21a8e64189f957315e58b7dcd09"
+    },
+    {
+      "name": "entry-truncated-tag",
+      "description": "the last byte of the tag removed",
+      "operation": "open_entry",
+      "expect": "error",
+      "reason": "a truncated container never authenticates",
+      "group_key": "8428a1927adc541599026731486ffe36ca302c1c0e850896e637edb28a2a08cf",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "entry_id": "01J9ZQK8N4X0000000000000AB",
+      "container": "01de6bd460f77d1913eb90eb6615ad8774ac22605dd9389d2110b668204f5f60e31280a59ffcfa164b458d8de69176301bddbbcbe2a80a5c1ddbf5a335079c20ba250c4ed3a7628797b35feec9023fa21a8e64189f957315e58b7dcd"
+    },
+    {
+      "name": "entry-unknown-version",
+      "description": "version byte 0x02",
+      "operation": "open_entry",
+      "expect": "error",
+      "reason": "an unknown container version is rejected before any key material is touched",
+      "group_key": "8428a1927adc541599026731486ffe36ca302c1c0e850896e637edb28a2a08cf",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "entry_id": "01J9ZQK8N4X0000000000000AB",
+      "container": "02de6bd460f77d1913eb90eb6615ad8774ac22605dd9389d2110b668204f5f60e31280a59ffcfa164b458d8de69176301bddbbcbe2a80a5c1ddbf5a335079c20ba250c4ed3a7628797b35feec9023fa21a8e64189f957315e58b7dcd09"
+    },
+    {
+      "name": "entry-wrong-group-key",
+      "description": "an entry from another group, or from before a rekey the client already applied",
+      "operation": "open_entry",
+      "expect": "error",
+      "reason": "the content key is derived from the group key",
+      "group_key": "dbed0c7cc52bf7b25ce4fe65b739685b205f29ad6983799f1a0dfff680ff0a7c",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "entry_id": "01J9ZQK8N4X0000000000000AB",
+      "container": "01de6bd460f77d1913eb90eb6615ad8774ac22605dd9389d2110b668204f5f60e31280a59ffcfa164b458d8de69176301bddbbcbe2a80a5c1ddbf5a335079c20ba250c4ed3a7628797b35feec9023fa21a8e64189f957315e58b7dcd09"
+    },
+    {
+      "name": "frame-trailing-bytes",
+      "description": "a well-formed frame with one extra byte appended",
+      "operation": "decode_frame",
+      "expect": "error",
+      "reason": "the frame encoding is canonical; trailing bytes are rejected",
+      "encoded_frame": "010019746578742f706c61696e3b20636861727365743d7574662d3800000000019929a05f00000000000000000661736431323300"
+    },
+    {
+      "name": "frame-truncated-body",
+      "description": "body_len promises more bytes than the frame carries",
+      "operation": "decode_frame",
+      "expect": "error",
+      "reason": "length prefixes are validated against the remaining input",
+      "encoded_frame": "010019746578742f706c61696e3b20636861727365743d7574662d3800000000019929a05f0000000000000000066173643132"
+    },
+    {
+      "name": "frame-unknown-version",
+      "description": "frame version byte 0x02",
+      "operation": "decode_frame",
+      "expect": "error",
+      "reason": "an unknown frame version is rejected",
+      "encoded_frame": "020019746578742f706c61696e3b20636861727365743d7574662d3800000000019929a05f000000000000000006617364313233"
+    },
+    {
+      "name": "frame-pad-len-nonzero",
+      "description": "pad_len is reserved and MUST be zero in v1",
+      "operation": "decode_frame",
+      "expect": "error",
+      "reason": "padding is specified but not implemented (SPEC §9); a non-zero pad_len is a future format",
+      "encoded_frame": "010019746578742f706c61696e3b20636861727365743d7574662d3800000000019929a05f00000000040000000661736431323300000000"
+    },
+    {
+      "name": "frame-empty-content-type",
+      "description": "a zero-length content type",
+      "operation": "decode_frame",
+      "expect": "error",
+      "reason": "content_type is mandatory",
+      "encoded_frame": "01000000000000019929a05f000000000000000006617364313233"
+    }
+  ]
+}
