@@ -1,0 +1,41 @@
+// Server-pushed events (SPEC §3.2, §3.3, ROADMAP P1).
+//
+// Events are unsolicited: they are never requested and are never answered. A
+// client that receives one it does not understand ignores it.
+syntax = "proto3";
+
+package tpp.v1;
+
+option go_package = "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1";
+
+// EpochChanged tells every remaining device that the group has been re-keyed
+// (SPEC §3.3). Entries below the new epoch are skipped from here on; they are
+// not deleted and expire naturally within 24 hours.
+//
+// Receiving this must never touch the OS clipboard.
+message EpochChanged {
+  uint64 epoch = 1;
+
+  // The device whose revocation caused the rekey.
+  string revoked_device_id = 2;
+}
+
+// WrappedKeyAvailable delivers this device's copy of the new group key. It is
+// pushed on connect if the device was offline during the rekey: a wrapped key
+// waits for a device rather than requiring it to be online (SPEC §3.3).
+message WrappedKeyAvailable {
+  uint64 epoch = 1;
+
+  // The new group key wrapped to the receiving device's public key.
+  bytes wrapped_group_key = 2;
+}
+
+// DeviceRevoked tells the group that a device is gone, so a roster on screen
+// can update without refetching. The revoked device's own socket is closed in
+// the same operation rather than being told (SPEC §3.3 step 5).
+message DeviceRevoked {
+  string device_id = 1;
+
+  // The epoch the group runs at after the revocation.
+  uint64 epoch = 2;
+}

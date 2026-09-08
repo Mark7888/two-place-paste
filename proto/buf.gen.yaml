@@ -1,0 +1,28 @@
+# Code generation for both target languages.
+#
+# `clean` removes the two output directories before generating, so a message
+# deleted from the schema cannot leave a stale generated file behind — that is
+# what makes `make proto` idempotent and `make proto-check` meaningful.
+version: v2
+clean: true
+plugins:
+  # Go: output lands in /pkg/tppclient/protogen/tppv1, matching the go_package
+  # option. `module` strips the module prefix from the generated path.
+  - local: protoc-gen-go
+    out: ../pkg/tppclient/protogen
+    opt:
+      - module=github.com/Mark7888/two-place-paste/pkg/tppclient/protogen
+
+  # TypeScript: consumed by the React Native app (ROADMAP P6a).
+  # forceLong=string keeps 64-bit fields off the `long` dependency;
+  # outputServices=none because the protocol has no services — every frame is
+  # an Envelope (SPEC §5.1).
+  - local: protoc-gen-ts_proto
+    out: ../mobile/src/protocol/gen
+    opt:
+      - esModuleInterop=true
+      - forceLong=string
+      - useOptionals=messages
+      - outputServices=none
+      - outputTypeRegistry=false
+      - snakeToCamel=true

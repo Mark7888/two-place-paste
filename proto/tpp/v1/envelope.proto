@@ -1,0 +1,72 @@
+// TwoPlacePaste wire protocol, version 1 (SPEC §5.1, ROADMAP P1).
+//
+// Every frame on the WebSocket is a serialized Envelope. Nothing else is ever
+// written to the socket. The concrete message travels as opaque bytes in
+// `payload`, which is what makes the transport replaceable at zero cost: a
+// future HTTP/2 or gRPC carrier moves Envelopes without any message in this
+// package changing.
+syntax = "proto3";
+
+package tpp.v1;
+
+option go_package = "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1";
+
+// Envelope is the single frame type of the protocol.
+message Envelope {
+  // Correlation id, chosen by the sender of a request and echoed verbatim on
+  // the matching response or Error. Server-pushed events carry a fresh id that
+  // correlates with nothing.
+  string id = 1;
+
+  // Discriminator for `payload`. A receiver that does not know the type
+  // answers with ERROR_CODE_UNSUPPORTED_MESSAGE rather than closing the socket.
+  MessageType type = 2;
+
+  // The serialized message named by `type`. Empty for message types whose body
+  // has no fields.
+  bytes payload = 3;
+}
+
+// MessageType names every message that may appear in Envelope.payload.
+//
+// Numbers are permanent: they are the on-the-wire contract between clients that
+// upgrade independently. Never renumber, never reuse a removed number.
+enum MessageType {
+  MESSAGE_TYPE_UNSPECIFIED = 0;
+
+  // Errors.
+  MESSAGE_TYPE_ERROR = 1;
+
+  // Group creation (SPEC §3.1).
+  MESSAGE_TYPE_CREATE_GROUP_REQUEST = 10;
+  MESSAGE_TYPE_CREATE_GROUP_RESPONSE = 11;
+
+  // Pairing (SPEC §3.2).
+  MESSAGE_TYPE_PAIRING_START_REQUEST = 20;
+  MESSAGE_TYPE_PAIRING_START_RESPONSE = 21;
+  MESSAGE_TYPE_PAIRING_JOIN_REQUEST = 22;
+  MESSAGE_TYPE_PAIRING_JOIN_NOTICE = 23;
+  MESSAGE_TYPE_PAIRING_WRAPPED_KEY_UPLOAD = 24;
+  MESSAGE_TYPE_PAIRING_COMPLETE = 25;
+
+  // Devices and rekey (SPEC §3.3).
+  MESSAGE_TYPE_DEVICE_LIST_REQUEST = 30;
+  MESSAGE_TYPE_DEVICE_LIST_RESPONSE = 31;
+  MESSAGE_TYPE_REKEY_REQUEST = 32;
+  MESSAGE_TYPE_REKEY_RESPONSE = 33;
+
+  // Entries (SPEC §4.3, §6).
+  MESSAGE_TYPE_ENTRY_PUT_REQUEST = 40;
+  MESSAGE_TYPE_ENTRY_PUT_RESPONSE = 41;
+  MESSAGE_TYPE_ENTRY_LATEST_REQUEST = 42;
+  MESSAGE_TYPE_ENTRY_LATEST_RESPONSE = 43;
+  MESSAGE_TYPE_ENTRY_HISTORY_REQUEST = 44;
+  MESSAGE_TYPE_ENTRY_HISTORY_RESPONSE = 45;
+  MESSAGE_TYPE_ENTRY_FETCH_REQUEST = 46;
+  MESSAGE_TYPE_ENTRY_FETCH_RESPONSE = 47;
+
+  // Server-pushed events. These are never requested and never answered.
+  MESSAGE_TYPE_EPOCH_CHANGED = 50;
+  MESSAGE_TYPE_WRAPPED_KEY_AVAILABLE = 51;
+  MESSAGE_TYPE_DEVICE_REVOKED = 52;
+}

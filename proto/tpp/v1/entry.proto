@@ -1,0 +1,112 @@
+// Clipboard entries: put, latest, history, fetch (SPEC §4.3, §6, ROADMAP P1).
+syntax = "proto3";
+
+package tpp.v1;
+
+option go_package = "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1";
+
+// EntryMeta is everything the server knows about an entry. Note what is absent:
+// content type, filename and plaintext size are inside the ciphertext and are
+// never visible here (SPEC §2.3).
+message EntryMeta {
+  string entry_id = 1;
+
+  // The group epoch the entry was encrypted under. A client silently skips any
+  // entry whose epoch is below its own (SPEC §3.3).
+  uint64 epoch = 2;
+
+  // Ciphertext length in bytes, as received by the server.
+  uint64 size = 3;
+
+  // Milliseconds since the Unix epoch, UTC.
+  int64 created_at_unix_ms = 4;
+
+  // created_at + 24h. Fixed at write time and never extended: the blob garbage
+  // collector depends entirely on that (SPEC §4.5).
+  int64 expires_at_unix_ms = 5;
+
+  // True when the ciphertext is stored inline (<= 256 KB) and is therefore
+  // delivered with the metadata; false when it lives in the blob backend and
+  // must be pulled with EntryFetchRequest.
+  bool inline = 6;
+}
+
+// EntryPutRequest uploads one encrypted clipboard item. The group and the
+// author are taken from the connection's device identity.
+message EntryPutRequest {
+  // The epoch the ciphertext was encrypted under. The server rejects an epoch
+  // that is not its current one.
+  uint64 epoch = 1;
+
+  // Ciphertext length in bytes, declared up front so the server can reject an
+  // oversize entry before reading it. Must equal the actual body length;
+  // anything above the 10 MB cap is refused with ERROR_CODE_TOO_LARGE
+  // (SPEC §4.3).
+  uint64 size = 2;
+
+  oneof body {
+    // Inline ciphertext, for entries up to 256 KB (SPEC §4.3).
+    bytes ciphertext = 3;
+
+    // Handle for ciphertext already streamed to the blob backend out of band.
+    // Reserved for the large-entry upload path; how a handle is obtained is
+    // ROADMAP P3c's to define. Clients that only send inline entries never set
+    // this field.
+    string upload_handle = 4;
+  }
+}
+
+// EntryPutResponse confirms the write. The entry is the group's latest from
+// this moment: last write to reach the server wins (SPEC §6).
+message EntryPutResponse {
+  EntryMeta meta = 1;
+}
+
+// EntryLatestRequest asks for the group's most recent entry. Sync operates on
+// the latest entry only (SPEC §6).
+message EntryLatestRequest {}
+
+// EntryLatestResponse carries the latest entry, if there is one.
+message EntryLatestResponse {
+  // Unset when the group has no unexpired entry.
+  optional EntryMeta meta = 1;
+
+  // Present when meta.inline is true. Otherwise empty and the client issues an
+  // EntryFetchRequest.
+  bytes ciphertext = 2;
+}
+
+// EntryHistoryRequest lists entry metadata, newest first. History is only ever
+// pulled: the server never pushes it, and a client must not fetch it on
+// reconnect (SPEC §6).
+message EntryHistoryRequest {
+  // Maximum number of entries to return. Zero means the server's default.
+  uint32 limit = 1;
+
+  // Cursor for paging: return only entries created strictly before this time,
+  // in milliseconds since the Unix epoch, UTC. Zero means start at the newest.
+  int64 before_unix_ms = 2;
+}
+
+// EntryHistoryResponse returns metadata only. Bodies are pulled one at a time
+// with EntryFetchRequest, when the user taps an entry to copy it.
+message EntryHistoryResponse {
+  // Newest first.
+  repeated EntryMeta entries = 1;
+
+  // Cursor to pass as the next request's before_unix_ms. Zero when the listing
+  // reached the end.
+  int64 next_before_unix_ms = 2;
+}
+
+// EntryFetchRequest pulls one entry's ciphertext by id.
+message EntryFetchRequest {
+  string entry_id = 1;
+}
+
+// EntryFetchResponse returns the ciphertext, whether it was stored inline or in
+// the blob backend; that distinction is the server's problem, not the client's.
+message EntryFetchResponse {
+  EntryMeta meta = 1;
+  bytes ciphertext = 2;
+}

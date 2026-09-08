@@ -1,0 +1,14 @@
+# buf module for the TwoPlacePaste wire protocol.
+#
+# SHARED CONTRACT (ROADMAP §3): /proto/** is owned by Phase 1. A downstream
+# phase that needs a schema change opens a `contract-change` issue; it does not
+# edit these files.
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - FILE
