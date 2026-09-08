@@ -1,0 +1,67 @@
+// Protocol errors (SPEC §5.1, ROADMAP P1).
+syntax = "proto3";
+
+package tpp.v1;
+
+option go_package = "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1";
+
+// Error is the response to any request that could not be served. It is sent in
+// an Envelope whose id echoes the failed request.
+message Error {
+  // Stable, machine-readable cause. Clients branch on this, never on `message`.
+  ErrorCode code = 1;
+
+  // Human-readable detail for logs and operator-facing UI.
+  //
+  // This string reaches server logs, so it obeys docs/conventions.md §1: it may
+  // name an entry id, an epoch, a device id or a byte length, and it may never
+  // contain ciphertext, a key, a wrapped key, a creation token, a pairing
+  // token, a filename or a content type (SPEC §2.3).
+  string message = 2;
+}
+
+// ErrorCode is the stable enum every client branches on.
+//
+// Numbers are permanent. A code is never removed and never given new meaning;
+// a new condition gets a new number.
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+
+  // The frame or its payload could not be decoded, or a field is out of range.
+  ERROR_CODE_INVALID_ARGUMENT = 1;
+
+  // The connection has not established a device identity, or the identity was
+  // invalidated by a revocation (SPEC §3.3 step 5).
+  ERROR_CODE_UNAUTHENTICATED = 2;
+
+  // The device is authenticated but is not a member of the target group.
+  ERROR_CODE_PERMISSION_DENIED = 3;
+
+  // No such group, device, entry, or pairing.
+  ERROR_CODE_NOT_FOUND = 4;
+
+  // The creation token has already produced a group. One token, one group,
+  // no reuse (SPEC §3.1).
+  ERROR_CODE_TOKEN_CONSUMED = 5;
+
+  // The pairing token has passed its short lifetime (SPEC §3.2).
+  ERROR_CODE_TOKEN_EXPIRED = 6;
+
+  // RekeyRequest.expected_epoch does not match the group's current epoch:
+  // another device rekeyed first. The caller refetches the roster and retries
+  // (SPEC §3.3 step 4).
+  ERROR_CODE_EPOCH_CONFLICT = 7;
+
+  // The ciphertext exceeds the 10 MB per-entry cap (SPEC §4.3).
+  ERROR_CODE_TOO_LARGE = 8;
+
+  // Rate limited. The caller backs off and retries.
+  ERROR_CODE_RATE_LIMITED = 9;
+
+  // Envelope.type is unknown to this peer, or is not legal in this direction.
+  ERROR_CODE_UNSUPPORTED_MESSAGE = 10;
+
+  // Server-side failure. The caller may retry; nothing about the cause is
+  // disclosed beyond this code.
+  ERROR_CODE_INTERNAL = 11;
+}

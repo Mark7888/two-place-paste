@@ -1,0 +1,112 @@
+// Group creation, device roster and rekey (SPEC §3.1, §3.3, ROADMAP P1).
+syntax = "proto3";
+
+package tpp.v1;
+
+option go_package = "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1";
+
+// CreateGroupRequest turns a one-time creation token into a group (SPEC §3.1
+// step 4). The client has already generated its device keypair and a fresh
+// group key, and has wrapped that group key to its own public key: the server
+// only ever receives the wrapped form.
+//
+// This is one of the two frames an unauthenticated connection may send; the
+// other is PairingJoinRequest.
+message CreateGroupRequest {
+  // The token from https://<host>/<token>. Consumed by this request and by no
+  // other; a GET of that URL returns 404 (SPEC §3.1).
+  string token = 1;
+
+  // Raw device public key. Algorithm and byte layout are pinned by
+  // /spec/crypto.md (ROADMAP P2), not here.
+  bytes device_public_key = 2;
+
+  // The group key wrapped to device_public_key. Opaque to the server.
+  bytes wrapped_group_key = 3;
+
+  // Human-chosen device name, shown in the revocation confirmation dialog
+  // (SPEC §3.3 step 2). Not a secret, but not clipboard content either.
+  string device_name = 4;
+}
+
+// CreateGroupResponse reports the identifiers the client stores for the life of
+// the installation.
+message CreateGroupResponse {
+  // The consumed token is the group identifier (SPEC §3.1 step 5).
+  string group_id = 1;
+
+  // Server-assigned identifier for the creating device.
+  string device_id = 2;
+
+  // Always 1 for a freshly created group; stated explicitly so a client never
+  // has to assume a starting epoch.
+  uint64 epoch = 3;
+}
+
+// Device is one member of a group, as the server knows it (SPEC §4.2).
+message Device {
+  string device_id = 1;
+
+  // Name supplied at creation or pairing time.
+  string name = 2;
+
+  // The device's public key, used by a rekeying peer to wrap the new group key
+  // (SPEC §3.3 step 3).
+  bytes public_key = 3;
+
+  // Milliseconds since the Unix epoch, UTC (docs/conventions.md §6).
+  int64 created_at_unix_ms = 4;
+
+  // Milliseconds since the Unix epoch, UTC. Zero when the device has never
+  // connected.
+  int64 last_seen_unix_ms = 5;
+}
+
+// DeviceListRequest asks for the current roster. It carries no fields: the
+// group is determined by the connection's device identity.
+message DeviceListRequest {}
+
+// DeviceListResponse is the roster a client must render, by name, before it may
+// offer to revoke anything (SPEC §3.3 steps 1-2).
+message DeviceListResponse {
+  repeated Device devices = 1;
+
+  // The group's current epoch, to be echoed as RekeyRequest.expected_epoch.
+  uint64 epoch = 2;
+}
+
+// WrappedKey carries the new group key encrypted to one device's public key.
+message WrappedKey {
+  string device_id = 1;
+
+  // Opaque to the server. Layout pinned by /spec/crypto.md (ROADMAP P2).
+  bytes wrapped_group_key = 2;
+}
+
+// RekeyRequest revokes one device and re-keys every remaining one in a single
+// frame (SPEC §3.3 step 4).
+//
+// The server applies the whole request atomically: every wrapped key is
+// written, the revoked device is deleted, and the epoch is incremented, or
+// nothing happens at all. A client that dies mid-upload leaves the group
+// untouched at the old epoch. Splitting this into several requests would break
+// that guarantee, which is why the wrapped keys are a repeated field rather
+// than a stream.
+message RekeyRequest {
+  // The device being removed. It must not appear in wrapped_keys.
+  string revoked_device_id = 1;
+
+  // The epoch the caller believes is current, from DeviceListResponse.epoch.
+  // A mismatch means another device rekeyed first; the server rejects the
+  // request with ERROR_CODE_EPOCH_CONFLICT and changes nothing.
+  uint64 expected_epoch = 2;
+
+  // Exactly one entry per remaining device, including the caller itself.
+  repeated WrappedKey wrapped_keys = 3;
+}
+
+// RekeyResponse reports the epoch the group now runs at.
+message RekeyResponse {
+  // expected_epoch + 1.
+  uint64 epoch = 1;
+}

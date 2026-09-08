@@ -1,0 +1,2 @@
+# Pinned codegen plugins, built by generate.sh into a throwaway directory.
+.bin/

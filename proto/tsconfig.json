@@ -1,0 +1,27 @@
+// Typechecks the generated TypeScript so `make proto` cannot commit output that
+// does not compile (ROADMAP P1 acceptance criteria). This config exists only for
+// that check — the React Native app brings its own (ROADMAP P6a).
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    // DOM supplies atob/btoa, which ts-proto's base64 helpers fall back to when
+    // Buffer is absent.
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "types": [],
+    // The generated files live under /mobile, so Node's own resolution would
+    // look for node_modules there. The one runtime dependency is mapped
+    // explicitly instead; /mobile/package.json declares it for real in P6a.
+    "baseUrl": ".",
+    "paths": {
+      "@bufbuild/protobuf/wire": ["./node_modules/@bufbuild/protobuf/dist/esm/wire/index.d.ts"]
+    }
+  },
+  "include": ["../mobile/src/protocol/gen/**/*.ts"]
+}

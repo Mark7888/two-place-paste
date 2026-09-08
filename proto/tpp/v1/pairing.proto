@@ -1,0 +1,95 @@
+// Pairing an additional device into an existing group (SPEC §3.2, ROADMAP P1).
+//
+// Pairing is symmetric: desktop->mobile, mobile->desktop and desktop->desktop
+// run the identical exchange. Only the transport of PairingPayload differs
+// (QR code or copy-pasted string).
+syntax = "proto3";
+
+package tpp.v1;
+
+option go_package = "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1";
+
+// PairingPayload is what the inviter displays and the joiner scans or pastes
+// (SPEC §3.2, "Payload contents").
+//
+// It never travels over the WebSocket. It is defined here because both client
+// implementations must encode it identically or a phone will not be able to
+// read a desktop's QR code; the serialized bytes are base64url-encoded
+// (unpadded) to form the scannable and copyable string.
+message PairingPayload {
+  // Base URL of the relay, e.g. "https://tpp.example.com".
+  string server_url = 1;
+
+  // Short-lived, single-use token from PairingStartResponse.
+  string pairing_token = 2;
+
+  // The inviter's ephemeral public key, generated for this pairing attempt and
+  // discarded afterwards. It binds the joiner's public key to this out-of-band
+  // channel so that the relay cannot substitute a key of its own; how it is
+  // used is pinned by /spec/crypto.md (ROADMAP P2), not here.
+  bytes inviter_ephemeral_public_key = 3;
+}
+
+// PairingStartRequest asks the server to mint a pairing token (SPEC §3.2
+// step 1). Sent by an already-paired device over its authenticated connection;
+// the group is taken from that connection, so the message has no fields.
+message PairingStartRequest {}
+
+// PairingStartResponse returns the registered token. The inviter combines it
+// with its server URL and ephemeral public key into a PairingPayload.
+message PairingStartResponse {
+  string pairing_token = 1;
+
+  // Milliseconds since the Unix epoch, UTC. Suggested lifetime is 5 minutes
+  // (SPEC §3.2); the server is the authority, and the client shows the
+  // countdown from this value rather than assuming the duration.
+  int64 expires_at_unix_ms = 2;
+}
+
+// PairingJoinRequest is the joiner presenting itself (SPEC §3.2 step 2). It is
+// sent on an unauthenticated connection: the pairing token is the only
+// credential the joiner has at this point.
+message PairingJoinRequest {
+  string pairing_token = 1;
+
+  // Human-chosen name for the joining device.
+  string device_name = 2;
+
+  // The joiner's freshly generated device public key.
+  bytes device_public_key = 3;
+}
+
+// PairingJoinNotice is pushed to the inviter over its open WebSocket
+// (SPEC §3.2 step 3) so it can wrap the current group key for the joiner.
+message PairingJoinNotice {
+  string pairing_token = 1;
+
+  // Identifier the server assigned to the joining device.
+  string device_id = 2;
+  string device_name = 3;
+
+  // Echoed from PairingJoinRequest. The inviter wraps to this key.
+  bytes device_public_key = 4;
+}
+
+// PairingWrappedKeyUpload delivers the wrapped group key from the inviter
+// (SPEC §3.2 step 4). The server relays it and cannot unwrap it.
+message PairingWrappedKeyUpload {
+  string pairing_token = 1;
+  string device_id = 2;
+
+  // The current group key wrapped to the joiner's public key.
+  bytes wrapped_group_key = 3;
+}
+
+// PairingComplete is pushed to the joiner once the relay holds its wrapped key.
+// The joiner is now a member at the group's current epoch.
+//
+// A newly paired device starts empty: it cannot decrypt anything created before
+// it joined and must not request history for that period (SPEC §3.2).
+message PairingComplete {
+  string group_id = 1;
+  string device_id = 2;
+  uint64 epoch = 3;
+  bytes wrapped_group_key = 4;
+}

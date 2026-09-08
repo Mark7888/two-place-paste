@@ -1,0 +1,13 @@
+{
+  "name": "@two-place-paste/proto",
+  "private": true,
+  "description": "Pinned TypeScript codegen toolchain for the TwoPlacePaste wire protocol (ROADMAP P1).",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@bufbuild/protobuf": "2.10.1",
+    "ts-proto": "2.12.3",
+    "typescript": "5.9.3"
+  }
+}
