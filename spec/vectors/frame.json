@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "profile": "tpp-crypto-v1",
+  "suite": "frame",
+  "spec": "spec/crypto.md §6",
+  "description": "Plaintext frame serialization. The encoding is canonical: encoding the fields must produce `encoded` byte for byte, and decoding `encoded` must produce the fields.",
+  "vectors": [
+    {
+      "name": "text-ascii",
+      "description": "the ordinary case: a short ASCII clipboard string",
+      "frame": {
+        "content_type": "text/plain; charset=utf-8",
+        "filename": "",
+        "created_at_unix_ms": 1757340000000,
+        "pad_len": 0,
+        "body": "617364313233"
+      },
+      "encoded": "010019746578742f706c61696e3b20636861727365743d7574662d3800000000019929a05f000000000000000006617364313233"
+    },
+    {
+      "name": "text-unicode",
+      "description": "non-ASCII body and a multi-byte content type boundary",
+      "frame": {
+        "content_type": "text/plain; charset=utf-8",
+        "filename": "",
+        "created_at_unix_ms": 1757340061234,
+        "pad_len": 0,
+        "body": "68c3a96c6c6f20e2809420e4b896e7958c20f09f8c8d"
+      },
+      "encoded": "010019746578742f706c61696e3b20636861727365743d7574662d3800000000019929a14e32000000000000001668c3a96c6c6f20e2809420e4b896e7958c20f09f8c8d"
+    },
+    {
+      "name": "image-binary",
+      "description": "binary body with no filename",
+      "frame": {
+        "content_type": "image/png",
+        "filename": "",
+        "created_at_unix_ms": 1757340122000,
+        "pad_len": 0,
+        "body": "cfd8ea29c1ee85d7e5256bce17aa934b550a810110b8875e1f1e4eedba1bc39a729fd0ba26bc0530fa4c7cea53feaf40aeb6cdf7a70f1bb6f972e78bc111239b"
+      },
+      "encoded": "010009696d6167652f706e6700000000019929a23b900000000000000040cfd8ea29c1ee85d7e5256bce17aa934b550a810110b8875e1f1e4eedba1bc39a729fd0ba26bc0530fa4c7cea53feaf40aeb6cdf7a70f1bb6f972e78bc111239b"
+    },
+    {
+      "name": "file-with-filename",
+      "description": "a file entry: the filename is inside the frame, so the server never sees it",
+      "frame": {
+        "content_type": "application/pdf",
+        "filename": "quarterly report.pdf",
+        "created_at_unix_ms": 1757340183000,
+        "pad_len": 0,
+        "body": "b95c77d20ecca87fd68cb0b17e3cfc94b73c05fae1f2fe36c66017b98be5e374341cf02aa3bf9efe44ca12504500114370fffdaaf0711f90ba563b67f9a57c10ca38fe21703ac371cecda26f8a6f10881eba3a8fc76a99c1c6dd955a46d55e92d719238293ed0af8a11c964dbf15af832aed0543becaa7751714e8115c075826"
+      },
+      "encoded": "01000f6170706c69636174696f6e2f7064660014717561727465726c79207265706f72742e7064660000019929a329d80000000000000080b95c77d20ecca87fd68cb0b17e3cfc94b73c05fae1f2fe36c66017b98be5e374341cf02aa3bf9efe44ca12504500114370fffdaaf0711f90ba563b67f9a57c10ca38fe21703ac371cecda26f8a6f10881eba3a8fc76a99c1c6dd955a46d55e92d719238293ed0af8a11c964dbf15af832aed0543becaa7751714e8115c075826"
+    },
+    {
+      "name": "empty-body",
+      "description": "zero-length body: legal, and the length prefixes must still be present",
+      "frame": {
+        "content_type": "text/plain; charset=utf-8",
+        "filename": "",
+        "created_at_unix_ms": 1757340244000,
+        "pad_len": 0,
+        "body": ""
+      },
+      "encoded": "010019746578742f706c61696e3b20636861727365743d7574662d3800000000019929a418200000000000000000"
+    }
+  ]
+}

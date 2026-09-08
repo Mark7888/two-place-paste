@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "profile": "tpp-crypto-v1",
+  "suite": "entry",
+  "spec": "spec/crypto.md §5",
+  "description": "End-to-end entry encryption. `container` is the byte string the server stores and never understands.",
+  "vectors": [
+    {
+      "name": "text-ascii",
+      "description": "the ordinary case: a short ASCII clipboard string",
+      "group_key": "8428a1927adc541599026731486ffe36ca302c1c0e850896e637edb28a2a08cf",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "entry_id": "01J9ZQK8N4X0000000000000AB",
+      "nonce": "de6bd460f77d1913eb90eb6615ad8774ac22605dd9389d21",
+      "content_key": "10e129e8169bab9532820713714fea0b640303408b609bd3b3fb14bf6c17e3a7",
+      "frame": {
+        "content_type": "text/plain; charset=utf-8",
+        "filename": "",
+        "created_at_unix_ms": 1757340000000,
+        "pad_len": 0,
+        "body": "617364313233"
+      },
+      "encoded_frame": "010019746578742f706c61696e3b20636861727365743d7574662d3800000000019929a05f000000000000000006617364313233",
+      "aad": "7470702f76312f656e7472792d6161640100000000000000010000001a30314a395a514b384e3458303030303030303030303030304142",
+      "container": "01de6bd460f77d1913eb90eb6615ad8774ac22605dd9389d2110b668204f5f60e31280a59ffcfa164b458d8de69176301bddbbcbe2a80a5c1ddbf5a335079c20ba250c4ed3a7628797b35feec9023fa21a8e64189f957315e58b7dcd09"
+    },
+    {
+      "name": "text-unicode",
+      "description": "non-ASCII body and a multi-byte content type boundary",
+      "group_key": "8428a1927adc541599026731486ffe36ca302c1c0e850896e637edb28a2a08cf",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "entry_id": "01J9ZQK8N4X0000000000000CD",
+      "nonce": "844012cc89ddcb968e13d48ca72e9194359978c1150cea32",
+      "content_key": "5bcc8785876fafab043f9a85bddc5a5b8ab47cccd419337b41fcaa9148227d3a",
+      "frame": {
+        "content_type": "text/plain; charset=utf-8",
+        "filename": "",
+        "created_at_unix_ms": 1757340061234,
+        "pad_len": 0,
+        "body": "68c3a96c6c6f20e2809420e4b896e7958c20f09f8c8d"
+      },
+      "encoded_frame": "010019746578742f706c61696e3b20636861727365743d7574662d3800000000019929a14e32000000000000001668c3a96c6c6f20e2809420e4b896e7958c20f09f8c8d",
+      "aad": "7470702f76312f656e7472792d6161640100000000000000010000001a30314a395a514b384e3458303030303030303030303030304344",
+      "container": "01844012cc89ddcb968e13d48ca72e9194359978c1150cea322b15f30f0882727b876c79a122edda51a9f0b179e4ea72904c8c3452a22f5ae3fc184f44d6bd82803dbb8040029c3f4b431d9d95cd553bc8e471aa8dedb077e28157e98be544e7ac1ef0b2d0ab901494c617968c"
+    },
+    {
+      "name": "image-binary",
+      "description": "binary body with no filename",
+      "group_key": "8428a1927adc541599026731486ffe36ca302c1c0e850896e637edb28a2a08cf",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "entry_id": "01J9ZQK8N4X0000000000000EF",
+      "nonce": "6ce65ed541ad655210f4a40247db9d602860abad552ed95c",
+      "content_key": "127c21e472fb889ce08b1b3c1cd9139cd45be1e8a017ef909f429fa26aa88569",
+      "frame": {
+        "content_type": "image/png",
+        "filename": "",
+        "created_at_unix_ms": 1757340122000,
+        "pad_len": 0,
+        "body": "cfd8ea29c1ee85d7e5256bce17aa934b550a810110b8875e1f1e4eedba1bc39a729fd0ba26bc0530fa4c7cea53feaf40aeb6cdf7a70f1bb6f972e78bc111239b"
+      },
+      "encoded_frame": "010009696d6167652f706e6700000000019929a23b900000000000000040cfd8ea29c1ee85d7e5256bce17aa934b550a810110b8875e1f1e4eedba1bc39a729fd0ba26bc0530fa4c7cea53feaf40aeb6cdf7a70f1bb6f972e78bc111239b",
+      "aad": "7470702f76312f656e7472792d6161640100000000000000010000001a30314a395a514b384e3458303030303030303030303030304546",
+      "container": "016ce65ed541ad655210f4a40247db9d602860abad552ed95c6c23a1bda4b2aa09a9097248abf215c21f9fb196ed02c920e21a3cebd24cab5455cf5126e8b553913d26e1cd90c825fb367b671ad4133f073bf26d0e2dd6e3dc3795f6f3c84b57b139e46389586ec5a43848c36a91cc911c1afd340b43facafd37de55359de521232ac2949eedd2"
+    },
+    {
+      "name": "file-with-filename",
+      "description": "a file entry: the filename is inside the frame, so the server never sees it",
+      "group_key": "dbed0c7cc52bf7b25ce4fe65b739685b205f29ad6983799f1a0dfff680ff0a7c",
+      "epoch": 7,
+      "epoch_hex": "0000000000000007",
+      "entry_id": "01J9ZQK8N4X0000000000000GH",
+      "nonce": "d36b6a019bd880c1e0774cb8fcfabb011193f19afe162929",
+      "content_key": "46732ae9056cdde558ac2f48620bdc7f632cda774e6ad42dbd3215ef825fc237",
+      "frame": {
+        "content_type": "application/pdf",
+        "filename": "quarterly report.pdf",
+        "created_at_unix_ms": 1757340183000,
+        "pad_len": 0,
+        "body": "b95c77d20ecca87fd68cb0b17e3cfc94b73c05fae1f2fe36c66017b98be5e374341cf02aa3bf9efe44ca12504500114370fffdaaf0711f90ba563b67f9a57c10ca38fe21703ac371cecda26f8a6f10881eba3a8fc76a99c1c6dd955a46d55e92d719238293ed0af8a11c964dbf15af832aed0543becaa7751714e8115c075826"
+      },
+      "encoded_frame": "01000f6170706c69636174696f6e2f7064660014717561727465726c79207265706f72742e7064660000019929a329d80000000000000080b95c77d20ecca87fd68cb0b17e3cfc94b73c05fae1f2fe36c66017b98be5e374341cf02aa3bf9efe44ca12504500114370fffdaaf0711f90ba563b67f9a57c10ca38fe21703ac371cecda26f8a6f10881eba3a8fc76a99c1c6dd955a46d55e92d719238293ed0af8a11c964dbf15af832aed0543becaa7751714e8115c075826",
+      "aad": "7470702f76312f656e7472792d6161640100000000000000070000001a30314a395a514b384e3458303030303030303030303030304748",
+      "container": "01d36b6a019bd880c1e0774cb8fcfabb011193f19afe162929093c28f9147066871bbc5b5966a1218a6911edae6229598c4d5f8730d571c11daa6b6e3db8375f3e2c007a9282cdcf84711c8e43ea8cf41a8f1130517176a05b9b73d6d8283e4eb1a5c29b8915a459a95b782a43196c750810ce3935c2d856ea982ca7a7ffe05b972bae938591aee8f273fbc983871b0b6fb8591f7a7d912c808d1951e5d9dbd03389d4eb41c78fc4c89302adcb28cf5de4cd94bc435b37e275a768dd8726a0fc4b1c6c62e9b3a9a66fab8b68705a8fa5c528c12b1113e5fd6a447a1f26df508cf2"
+    },
+    {
+      "name": "empty-body",
+      "description": "zero-length body: legal, and the length prefixes must still be present",
+      "group_key": "8428a1927adc541599026731486ffe36ca302c1c0e850896e637edb28a2a08cf",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "entry_id": "01J9ZQK8N4X0000000000000JK",
+      "nonce": "219c0e26c01443ce23a6e44373e6bebcce0cf1dd0fe5d0c0",
+      "content_key": "13ea0c92b0abebbbd235ae4807cc143701dcada5f6bde9e710965971b8420edf",
+      "frame": {
+        "content_type": "text/plain; charset=utf-8",
+        "filename": "",
+        "created_at_unix_ms": 1757340244000,
+        "pad_len": 0,
+        "body": ""
+      },
+      "encoded_frame": "010019746578742f706c61696e3b20636861727365743d7574662d3800000000019929a418200000000000000000",
+      "aad": "7470702f76312f656e7472792d6161640100000000000000010000001a30314a395a514b384e3458303030303030303030303030304a4b",
+      "container": "01219c0e26c01443ce23a6e44373e6bebcce0cf1dd0fe5d0c0870265229fe6405b241e59b0acebae46df46a7dcf2d028519682048070e5a5d2111075a0e4880ee3e3d540cf792ae93f98cad44e7e4a4b23f1725142d5d7"
+    }
+  ]
+}

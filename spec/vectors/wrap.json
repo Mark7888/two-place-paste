@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "profile": "tpp-crypto-v1",
+  "suite": "wrap",
+  "spec": "spec/crypto.md §4",
+  "description": "Group key wrapping. Given the ephemeral private key an implementation must reproduce wrapped_key byte for byte; with a fresh ephemeral key it must still produce a blob the recipient can unwrap.",
+  "vectors": [
+    {
+      "name": "creation-self-wrap",
+      "description": "SPEC §3.1 step 4: the creating device wraps a fresh group key to itself at epoch 1",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "group_key": "8428a1927adc541599026731486ffe36ca302c1c0e850896e637edb28a2a08cf",
+      "recipient_private_key": "853bdf42c3085daa5c8906f5d9f17e6f816be1036bf70b81de72e00ea437001d",
+      "recipient_public_key": "c21d2baf0b2ac4c476b878e1094c1a4cb1ac24f02934d178180ef72a49ab154f",
+      "ephemeral_private_key": "ac861621fc86ad3873bc13a57e5d7024b1f6cdf4b9261ad7a4ae6a38966b1e7d",
+      "ephemeral_public_key": "72d8cdae001b542de50d0add7555383e31bb2ddc6ed5244558b580c567478859",
+      "shared_secret": "3a7d937e245c93e367d268de8c4c73185f2871ffefb360b135626b8ba12e3878",
+      "hkdf_info": "7470702f76312f7772617072d8cdae001b542de50d0add7555383e31bb2ddc6ed5244558b580c567478859c21d2baf0b2ac4c476b878e1094c1a4cb1ac24f02934d178180ef72a49ab154f",
+      "wrap_key": "ce495a76fab8faea489f9a7f060d8058233dc33af748fb8c10d1a5f30fe09a29",
+      "aad": "7470702f76312f777261702d616164010000000000000001",
+      "wrapped_key": "0172d8cdae001b542de50d0add7555383e31bb2ddc6ed5244558b580c567478859dc78726623ad072de747c38049d35dbc6b5114a981ccd91be3906f62d816bdf0bf630d73f220029cf1339809250e3b32"
+    },
+    {
+      "name": "pairing-wrap-to-joiner",
+      "description": "SPEC §3.2 step 4: the inviter wraps the current group key to the joiner",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "group_key": "8428a1927adc541599026731486ffe36ca302c1c0e850896e637edb28a2a08cf",
+      "recipient_private_key": "35028f55496129bbef14ea4ea14f2ec1b3083d93237d51803c5d24173a679968",
+      "recipient_public_key": "60153561f7722d81c794594d208a0e50d3ac0c503fd34c104a80e9b5c6e0cb30",
+      "ephemeral_private_key": "51506247e0b10289c085de8ef0af35afe89ff7125db3af19193a2453157258ab",
+      "ephemeral_public_key": "f2831664eb0c3f3e6b12db9fca1a17a35a40de705f50df77242e28a30cb78b5b",
+      "shared_secret": "f2bf72668f8f35858a3a6a69fe75e64e958dfd9e2f15985801d7caafe16fa929",
+      "hkdf_info": "7470702f76312f77726170f2831664eb0c3f3e6b12db9fca1a17a35a40de705f50df77242e28a30cb78b5b60153561f7722d81c794594d208a0e50d3ac0c503fd34c104a80e9b5c6e0cb30",
+      "wrap_key": "6dcd09cab0f987995f6d71c6335962b6ffc79402b1fd3d211ffba97788396d27",
+      "aad": "7470702f76312f777261702d616164010000000000000001",
+      "wrapped_key": "01f2831664eb0c3f3e6b12db9fca1a17a35a40de705f50df77242e28a30cb78b5ba1b3d20f8218b9526f1d54852b56edb1aa51b5c3740cb29b1d0bf124b5250a3f70112f435c6efa9c4a0b4bc8e4d7232b"
+    },
+    {
+      "name": "rekey-wrap-after-revocation",
+      "description": "SPEC §3.3 step 3: a new group key wrapped to a remaining device at the incremented epoch",
+      "epoch": 7,
+      "epoch_hex": "0000000000000007",
+      "group_key": "dbed0c7cc52bf7b25ce4fe65b739685b205f29ad6983799f1a0dfff680ff0a7c",
+      "recipient_private_key": "f40784d0566185b06266bcd7b50b9869b6bf926e959caca3c73d78684eccf9ad",
+      "recipient_public_key": "367a310527c530921c36774b20ae2c9a60d763b387e81cc7b2cde5d4b8c16c7d",
+      "ephemeral_private_key": "760df61c90391d4a21401538573f72d20dc9e4e32d1e33097dfc8326cfecaa7c",
+      "ephemeral_public_key": "ce61eea882039bb8f9c6756db9d7edc04759019fbae669ab4a4ae6a134634b73",
+      "shared_secret": "e3d7164674da3a4fb60bdc64159ae5294927206a5828c3164f6f8e5333161240",
+      "hkdf_info": "7470702f76312f77726170ce61eea882039bb8f9c6756db9d7edc04759019fbae669ab4a4ae6a134634b73367a310527c530921c36774b20ae2c9a60d763b387e81cc7b2cde5d4b8c16c7d",
+      "wrap_key": "8e9882d50526200d473ef717770df3eb17abc4b0a619533b17aa5861b8cf4c2b",
+      "aad": "7470702f76312f777261702d616164010000000000000007",
+      "wrapped_key": "01ce61eea882039bb8f9c6756db9d7edc04759019fbae669ab4a4ae6a134634b73918b973718dda29d5ecad38766403d04e9a032a7d42184b3e1aa05f64603339bf05609c67d1616030d13edff05a53efe"
+    }
+  ]
+}

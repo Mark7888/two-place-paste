@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "profile": "tpp-crypto-v1",
+  "suite": "x25519",
+  "spec": "spec/crypto.md §3",
+  "description": "Device keypairs and raw X25519 agreement (RFC 7748).",
+  "vectors": [
+    {
+      "name": "device-desktop",
+      "description": "public key derived from a device private key",
+      "private_key": "853bdf42c3085daa5c8906f5d9f17e6f816be1036bf70b81de72e00ea437001d",
+      "public_key": "c21d2baf0b2ac4c476b878e1094c1a4cb1ac24f02934d178180ef72a49ab154f"
+    },
+    {
+      "name": "device-phone",
+      "description": "public key derived from a device private key",
+      "private_key": "35028f55496129bbef14ea4ea14f2ec1b3083d93237d51803c5d24173a679968",
+      "public_key": "60153561f7722d81c794594d208a0e50d3ac0c503fd34c104a80e9b5c6e0cb30"
+    },
+    {
+      "name": "device-laptop",
+      "description": "public key derived from a device private key",
+      "private_key": "f40784d0566185b06266bcd7b50b9869b6bf926e959caca3c73d78684eccf9ad",
+      "public_key": "367a310527c530921c36774b20ae2c9a60d763b387e81cc7b2cde5d4b8c16c7d"
+    },
+    {
+      "name": "ephemeral-pairing",
+      "description": "ephemeral key used by the wrap suite",
+      "private_key": "51506247e0b10289c085de8ef0af35afe89ff7125db3af19193a2453157258ab",
+      "public_key": "f2831664eb0c3f3e6b12db9fca1a17a35a40de705f50df77242e28a30cb78b5b"
+    },
+    {
+      "name": "agreement-desktop-to-phone",
+      "description": "raw X25519 shared secret, computed from the desktop side",
+      "private_key": "853bdf42c3085daa5c8906f5d9f17e6f816be1036bf70b81de72e00ea437001d",
+      "public_key": "c21d2baf0b2ac4c476b878e1094c1a4cb1ac24f02934d178180ef72a49ab154f",
+      "peer_public_key": "60153561f7722d81c794594d208a0e50d3ac0c503fd34c104a80e9b5c6e0cb30",
+      "shared_secret": "bfa73f8db6af476e17b13d398604649bb31fe970680deeded0d2bfe4a4f93964"
+    },
+    {
+      "name": "agreement-phone-to-desktop",
+      "description": "the same shared secret, computed from the phone side",
+      "private_key": "35028f55496129bbef14ea4ea14f2ec1b3083d93237d51803c5d24173a679968",
+      "public_key": "60153561f7722d81c794594d208a0e50d3ac0c503fd34c104a80e9b5c6e0cb30",
+      "peer_public_key": "c21d2baf0b2ac4c476b878e1094c1a4cb1ac24f02934d178180ef72a49ab154f",
+      "shared_secret": "bfa73f8db6af476e17b13d398604649bb31fe970680deeded0d2bfe4a4f93964"
+    }
+  ]
+}
