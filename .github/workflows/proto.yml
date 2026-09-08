@@ -1,0 +1,47 @@
+# Protobuf CI: generated Go and TypeScript bindings are committed, so CI fails
+# if regenerating them produces a diff (ROADMAP P1 acceptance criteria).
+#
+# The schema itself lands in Phase 1. Until proto/generate.sh exists, `make
+# proto` reports that and this workflow is a no-op.
+name: Proto
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "proto/**"
+      - "pkg/tppclient/protogen/**"
+      - "mobile/src/protocol/gen/**"
+      - ".github/workflows/proto.yml"
+  pull_request:
+    paths:
+      - "proto/**"
+      - "pkg/tppclient/protogen/**"
+      - "mobile/src/protocol/gen/**"
+      - ".github/workflows/proto.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: proto-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  regenerate:
+    name: generated output is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: server/go.mod
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "26"
+
+      - name: make proto-check
+        run: make proto-check

@@ -1,0 +1,56 @@
+# golangci-lint v2 configuration, shared by every Go module in the workspace.
+#
+# SHARED TOUCHPOINT (ROADMAP §3): owned by Phase 0.
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: standard   # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose
+    - contextcheck    # context propagation (docs/conventions.md)
+    - copyloopvar
+    - errorlint       # error wrapping with %w and errors.Is/As
+    - gocritic
+    - misspell
+    - nilerr
+    - noctx
+    - revive
+    - unconvert
+    - wrapcheck       # errors crossing a package boundary carry context
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+        - name: package-comments
+        - name: error-strings
+        - name: context-as-argument
+        - name: indent-error-flow
+    wrapcheck:
+      ignore-sigs:
+        - .Errorf(
+        - errors.Join(
+        - errors.New(
+        - fmt.Errorf(
+
+  exclusions:
+    presets:
+      - common-false-positives
+      - std-error-handling
+    rules:
+      # Tests may be blunter than production code.
+      - path: _test\.go
+        linters:
+          - bodyclose
+          - contextcheck
+          - noctx
+          - wrapcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
