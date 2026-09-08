@@ -1,0 +1,39 @@
+# ---- Go ----
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.*
+
+# go.work.sum is committed for reproducible workspace builds; go.work is too.
+
+# ---- Node / React Native ----
+node_modules/
+.npm/
+*.tsbuildinfo
+/desktop/ui/dist/
+/mobile/android/app/build/
+/mobile/android/.gradle/
+/mobile/ios/Pods/
+.expo/
+
+# ---- Secrets and local state ----
+# .env holds ADMIN_PASSWORD. deploy/.env.example is the committed template.
+.env
+.env.*
+!.env.example
+!*/.env.example
+
+# Blob storage root for a local server run (SPEC §4.3).
+/blobs/
+/server/blobs/
+
+# ---- Editors and OS ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

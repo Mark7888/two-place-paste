@@ -1,0 +1,12 @@
+// Go workspace for TwoPlacePaste.
+//
+// SHARED TOUCHPOINT (ROADMAP §3): changes to this file are always their own PR,
+// owned by Phase 0. Feature phases must not edit it; they open a
+// `contract-change` issue instead.
+go 1.26
+
+use (
+	./desktop
+	./pkg/tppclient
+	./server
+)

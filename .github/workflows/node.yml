@@ -1,0 +1,83 @@
+# Node CI for the React Native app (Phase 6a onward) and the desktop localhost
+# UI (Phase 5c).
+#
+# Path-gated so that a Go-only change does not run Node jobs. Each job is a
+# no-op until the corresponding directory exists, so this workflow is green
+# from Phase 0 without needing an edit when those phases land.
+name: Node
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "mobile/**"
+      - "desktop/ui/**"
+      - ".github/workflows/node.yml"
+  pull_request:
+    paths:
+      - "mobile/**"
+      - "desktop/ui/**"
+      - ".github/workflows/node.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: node-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    name: ${{ matrix.project }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [mobile, desktop/ui]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect project
+        id: detect
+        run: |
+          if [ -f "${{ matrix.project }}/package.json" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "${{ matrix.project }} does not exist yet — skipping."
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.detect.outputs.present == 'true'
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: ${{ matrix.project }}/package-lock.json
+
+      - name: Install
+        if: steps.detect.outputs.present == 'true'
+        working-directory: ${{ matrix.project }}
+        run: npm ci
+
+      # Each script is optional so a project can land incrementally without a
+      # workflow edit (workflows are a Phase 0 contract, ROADMAP §3).
+      - name: Lint
+        if: steps.detect.outputs.present == 'true'
+        working-directory: ${{ matrix.project }}
+        run: npm run --if-present lint
+
+      - name: Typecheck
+        if: steps.detect.outputs.present == 'true'
+        working-directory: ${{ matrix.project }}
+        run: npm run --if-present typecheck
+
+      - name: Test
+        if: steps.detect.outputs.present == 'true'
+        working-directory: ${{ matrix.project }}
+        run: npm run --if-present test
+
+      - name: Build
+        if: steps.detect.outputs.present == 'true'
+        working-directory: ${{ matrix.project }}
+        run: npm run --if-present build
