@@ -36,7 +36,7 @@ jobs:
       matrix:
         project: [mobile, desktop/ui]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Detect project
         id: detect
@@ -48,7 +48,7 @@ jobs:
             echo "${{ matrix.project }} does not exist yet — skipping."
           fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         if: steps.detect.outputs.present == 'true'
         with:
           node-version: "26"
