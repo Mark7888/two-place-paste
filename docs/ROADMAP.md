@@ -13,8 +13,8 @@ request. Phases run in numeric order; only one pair of phases may overlap.
 | **P0** | Foundation — scaffolding, config, CI | ✅ **Done** (#1) | — |
 | **P1** | Wire contract — protobuf schema + codegen | ✅ **Done** (#2) | P0 |
 | **P2** | Crypto contract — spec + cross-language vectors | ✅ **Done** (#3) | P0 |
-| **P3** | Server core — storage, blobs, WebSocket protocol | ▶ **Next** | P1, P2 |
-| **P4** | Server surface — admin UI, tokens, deployment | ⏳ Blocked | P3 |
+| **P3** | Server core — storage, blobs, WebSocket protocol | ✅ **Done** | P1, P2 |
+| **P4** | Server surface — admin UI, tokens, deployment | ▶ **Next** | P3 |
 | **P5** | Go client core — `pkg/tppclient` | ⏳ Blocked | P4 |
 | **P6** | Desktop app — Windows + macOS | ⏳ Blocked | P5 |
 | **P7** | Android app | ⏳ Blocked | P5 (server from P4 for tests) |
@@ -128,7 +128,7 @@ wiring in `cmd/tpp/main.go`. **P3 does not touch `router.go` or `main.go`.**
 graph TD
     P0["P0 Foundation ✅"] --> P1["P1 Wire contract ✅"]
     P0 --> P2["P2 Crypto contract ✅"]
-    P1 --> P3["P3 Server core"]
+    P1 --> P3["P3 Server core ✅"]
     P2 --> P3
     P3 --> P4["P4 Server surface"]
     P4 --> P5["P5 Go client core"]
@@ -184,7 +184,7 @@ re-derive the algorithms.**
 
 ---
 
-# PHASE 3 — Server core ▶ Next
+# PHASE 3 — Server core ✅ Done
 
 **Depends on:** P1, P2. **SPEC §3, §4.2, §4.3, §4.5, §5, §6**
 **Owns:** `/server/internal/store/**`, `/server/internal/blob/**`,
@@ -247,15 +247,79 @@ Build it in this order; each step is independently testable.
 
 ### Acceptance
 
-- [ ] Store integration tests against a real Redis (CI service container), including 50
-      simultaneous `ConsumeToken` calls where exactly one succeeds.
-- [ ] Rekey interruption test: old epoch survives a partial apply.
-- [ ] Bucket maths tested at hour and DST boundaries; sweep tested with past, current and
-      future buckets; oversize upload rejected without full buffering.
-- [ ] Protocol test driving a real WS connection through: create group → pair a second
-      device → put entry → second device fetches latest → rekey → first device sees
-      `EpochChanged` → revoked device's socket is closed.
-- [ ] `make build test lint` green.
+- [x] Store integration tests against a real Redis, including 50 simultaneous
+      `ConsumeToken` calls where exactly one succeeds
+      (`internal/store/redis_test.go`). Every Redis-backed test runs against
+      `TPP_TEST_REDIS_ADDR` (default `127.0.0.1:6379`) and skips with a reason when no
+      Redis is reachable — see "CI still needs a Redis service" below.
+- [x] Rekey interruption test: old epoch survives a partial apply
+      (`internal/store/scripts_test.go`).
+- [x] Bucket maths tested at hour and DST boundaries in non-UTC zones; sweep tested with
+      past, current and future buckets, and with 10 000 blobs to prove it is O(buckets);
+      oversize upload rejected after reading at most one byte past the cap
+      (`internal/blob/blob_test.go`).
+- [x] Protocol test driving real WebSocket connections through: create group → pair a
+      second device → put entry → second device fetches latest → rekey → first device
+      sees `EpochChanged` → revoked device's socket is closed and its credential no
+      longer connects (`internal/ws/ws_test.go`).
+- [x] `make build test lint` green (`golangci-lint` reports 0 issues).
+
+### Delivered
+
+**`internal/store`** — the persistent zone behind a `Store` interface, with the §4.2 key
+layout in `keys.go` and the `volatile-lru` assumption restated at every write. `CreateGroup`
+and `ConsumeToken` share one Lua script, so a token becomes exactly one group under any
+amount of contention; `ApplyRekey` is a second Lua script that writes every wrapped key
+first and bumps the epoch **last**, which is what makes an interrupted apply leave the
+group untouched (Redis does not roll back a failed script, so the ordering is the
+guarantee). A `MemoryStore` with identical semantics lets the transport tests run without
+a service container; both implementations are held to one shared test suite.
+
+**`internal/blob`** — `Backend` (`Put`/`Get`/`Delete`/`Sweep`, each taking a context), a
+disk implementation writing `<root>/<YYYYMMDDHH>/<entry_id>.bin`, and a `Sweeper` that
+runs once at startup and then every 10 minutes under a cancellable context. Bucket maths
+is pure UTC. The sweep's only filesystem operations are one `ReadDir` and one `RemoveAll`
+per expired bucket — the test counts them. The size cap is enforced through
+`io.LimitReader`, reading one byte past the limit and removing the partial file. The `s3`
+backend is a stub whose `Sweep()` is a documented no-op. `blob.Verify` is the
+mark-and-sweep cross-check, report-only, with `VerifyReport.WriteReport` for its output.
+
+**`internal/entries`** — the ephemeral zone plus the entry service: declared size checked
+before the body is touched, inline below 256 KB and the blob backend above it, **blob
+written before the Redis record**, expiry fixed at write time and never extended.
+`EntryRefs` exists solely to feed `blob.Verify`; normal reclamation never queries Redis.
+
+**`internal/ws`** — WebSocket upgrade, binary protobuf envelopes, and a handler for every
+message in P1. Device identity is established at connect and an unauthenticated
+connection may only create a group or join a pairing. A hub fans `EpochChanged`,
+`DeviceRevoked` and per-device `WrappedKeyAvailable` out to the group, delivers the
+pairing notice to the inviter, and closes a revoked device's socket immediately after the
+store has deleted its record. The per-connection write queue is bounded at 32 frames; a
+client that stops draining it is dropped, not buffered. `register.go` exposes the
+`httpapi.Registrar`; neither `router.go` nor `main.go` was touched.
+
+### Two things this phase deliberately left for P4
+
+1. **`cmd/tpp/gc.go` was not created.** `cmd/tpp` has no `main.go` yet — P4 owns it — and
+   a `package main` with no `func main()` fails to link, so adding the file would have
+   broken `make build`. The command's whole implementation is delivered instead as
+   `blob.Verify` plus `VerifyReport.WriteReport` in an owned package; wiring
+   `tpp gc --verify` to them is a handful of lines in P4's `main.go`.
+2. **CI still needs a Redis service.** `.github/workflows/go.yml` is a shared touchpoint
+   (§3 rule 3) and has no Redis service container, so the Redis-backed tests currently
+   skip in CI and pass locally against `redis-server`. Adding the service container is a
+   small standalone PR against the workflow, owned by P0.
+
+### One design decision worth a reviewer's attention
+
+The wire contract carries no device secret, and `/spec/crypto.md` explicitly leaves
+server-side device authentication to this phase. A connection therefore presents its
+`device_id` — 256 bits of `crypto/rand` — as a bearer credential in the WebSocket query
+string. Inside a group that grants nothing the threat model withholds (every device
+belongs to the same person, §3.3), across groups the identifier is unguessable, and
+revocation deletes the record in the same atomic operation that rekeys the group, so the
+credential dies with the socket. A per-device secret issued at creation and pairing time
+is the right long-term answer and is a wire-contract change, not a server change.
 
 ---
 
@@ -283,7 +347,9 @@ step. This phase is the first one that produces a runnable server.
   token; `POST` still consumes it.
 - Server-rendered Go templates. Do not pull a second React build into the server module.
 - `main.go`: wire the registrars, store, blob backend and sweeper; graceful shutdown;
-  healthcheck endpoint.
+  healthcheck endpoint. Also add `cmd/tpp/gc.go` and its `tpp gc --verify` subcommand on
+  top of P3's `blob.Verify` / `VerifyReport.WriteReport`: the file could not exist before
+  `main.go` did (see the end of Phase 3).
 - `deploy/docker-compose.yml`: Go server + Redis, with Redis on **AOF persistence** and
   **`maxmemory-policy volatile-lru`** — inline comment explaining that `allkeys-lru` would
   silently evict group records and destroy pairings (§4.2). Container runs non-root; blob
