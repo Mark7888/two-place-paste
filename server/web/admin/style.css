@@ -1,0 +1,66 @@
+/* Admin UI styling. One file, no build step, no framework (ROADMAP P4). */
+:root {
+  color-scheme: light dark;
+  --bg: #fbfbfa;
+  --fg: #1d1d1f;
+  --muted: #6b6b70;
+  --line: #dcdcd8;
+  --card: #ffffff;
+  --accent: #2f5fd0;
+  --error: #a01b1b;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17181a;
+    --fg: #ececeb;
+    --muted: #9a9aa0;
+    --line: #33343a;
+    --card: #1e2023;
+    --accent: #7fa4f5;
+    --error: #f08a8a;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; padding: .85rem 1.25rem;
+  border-bottom: 1px solid var(--line); background: var(--card);
+}
+.brand { font-weight: 600; }
+main { max-width: 60rem; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+footer { max-width: 60rem; margin: 0 auto 2rem; padding: 0 1.25rem; font-size: .85rem; }
+h1 { font-size: 1.3rem; margin: 0 0 1rem; }
+.muted { color: var(--muted); }
+.card {
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  padding: 1rem; margin-bottom: 1.5rem; max-width: 34rem;
+  display: flex; flex-direction: column; gap: .5rem;
+}
+.card.row { flex-direction: row; align-items: center; flex-wrap: wrap; }
+label { font-weight: 600; }
+input[type=text], input[type=password] {
+  flex: 1 1 14rem; padding: .5rem .6rem; font: inherit;
+  border: 1px solid var(--line); border-radius: 7px;
+  background: var(--bg); color: var(--fg);
+}
+button {
+  padding: .5rem .9rem; font: inherit; font-weight: 600; cursor: pointer;
+  border: 1px solid transparent; border-radius: 7px;
+  background: var(--accent); color: #fff;
+}
+button.link { background: none; color: var(--accent); border-color: var(--line); }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; vertical-align: top; padding: .6rem .5rem; border-bottom: 1px solid var(--line); }
+th { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+code.wrap { display: block; margin-top: .4rem; word-break: break-all; font-size: .8rem; }
+.qr { display: block; image-rendering: pixelated; background: #fff; border-radius: 6px; }
+.tag { font-size: .75rem; padding: .15rem .45rem; border-radius: 999px; border: 1px solid var(--line); }
+.tag.used { color: var(--muted); }
+.tag.open { color: var(--accent); }
+.error { color: var(--error); font-weight: 600; }

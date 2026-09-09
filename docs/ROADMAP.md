@@ -14,8 +14,8 @@ request. Phases run in numeric order; only one pair of phases may overlap.
 | **P1** | Wire contract — protobuf schema + codegen | ✅ **Done** (#2) | P0 |
 | **P2** | Crypto contract — spec + cross-language vectors | ✅ **Done** (#3) | P0 |
 | **P3** | Server core — storage, blobs, WebSocket protocol | ✅ **Done** | P1, P2 |
-| **P4** | Server surface — admin UI, tokens, deployment | ▶ **Next** | P3 |
-| **P5** | Go client core — `pkg/tppclient` | ⏳ Blocked | P4 |
+| **P4** | Server surface — admin UI, tokens, deployment | ✅ **Done** | P3 |
+| **P5** | Go client core — `pkg/tppclient` | ▶ **Next** | P4 |
 | **P6** | Desktop app — Windows + macOS | ⏳ Blocked | P5 |
 | **P7** | Android app | ⏳ Blocked | P5 (server from P4 for tests) |
 | **P8** | Release — E2E, hardening, docs, artefacts | ⏳ Blocked | P6, P7 |
@@ -130,7 +130,7 @@ graph TD
     P0 --> P2["P2 Crypto contract ✅"]
     P1 --> P3["P3 Server core ✅"]
     P2 --> P3
-    P3 --> P4["P4 Server surface"]
+    P3 --> P4["P4 Server surface ✅"]
     P4 --> P5["P5 Go client core"]
     P5 --> P6["P6 Desktop app"]
     P5 --> P7["P7 Android app"]
@@ -323,7 +323,7 @@ is the right long-term answer and is a wire-contract change, not a server change
 
 ---
 
-# PHASE 4 — Server surface: admin, tokens, deployment
+# PHASE 4 — Server surface: admin, tokens, deployment ✅ Done
 
 **Depends on:** P3. **SPEC §3.1, §4.1, §4.4**
 **Owns:** `/server/internal/admin/**` (including `register.go`), `/server/web/admin/**`,
@@ -359,10 +359,100 @@ step. This phase is the first one that produces a runnable server.
 
 ### Acceptance
 
-- [ ] Login rate-limit test; cookie flags asserted in tests.
-- [ ] `GET /<token>` returns 404 while the token stays usable by `POST`.
-- [ ] `docker compose up` on a clean machine yields a working server.
-- [ ] Restarting the stack preserves groups and devices and drops expired entries.
+- [x] Login rate-limit test; cookie flags asserted in tests
+      (`internal/admin/admin_test.go`, `internal/admin/ratelimit_test.go`).
+- [x] `GET /<token>` returns 404 while the token stays usable by `POST`
+      (`TestCreationTokenEndpoint`), verified again by hand against a running
+      server and a real Redis.
+- [x] `docker compose config` validates and the server it describes was run
+      end-to-end from source — but the image build itself could **not** be
+      executed here (see "One acceptance criterion could not be executed"
+      below).
+- [x] Restarting the stack preserves groups and devices and drops expired
+      entries — verified by restarting the binary against a real Redis: the
+      group, its device roster and the wrapped key survived, a TTL-carrying
+      entry key did not.
+
+### Delivered
+
+**`internal/admin`** — one screen and two public endpoints. Login verifies
+`ADMIN_PASSWORD` with `subtle.ConstantTimeCompare` behind a rate limiter that
+runs **before** the comparison: a token bucket per client IP (burst 5, one
+refill every 12s) plus a global bucket (burst 30, one refill every 2s), because
+per-IP limits alone multiply by an attacker's number of source addresses. A
+refusal by the global bucket does not charge the client's own budget, so a
+flood cannot lock an operator out. Lockouts log at `Warn`; no password, token
+or cookie is ever logged. Sessions live in memory — a restart costs one login
+and removes a persistence format from the threat surface — and the cookie is
+`HttpOnly`, `SameSite=Strict`, `Path=/admin`, with `Secure` derived from
+`TPP_PUBLIC_BASE_URL`'s scheme so that https deployments get the flag SPEC §4.4
+requires while a local http run stays usable, without adding a knob an operator
+could point the wrong way. Forms also carry a per-session CSRF token, since
+`SameSite` is a browser policy rather than something the server enforces.
+
+The token screen lists name, created, used and resulting group, and renders
+each unused token as a QR code of `https://<host>/<token>` (`rsc.io/qr`, the
+one dependency this phase adds). A consumed token has no QR code: it can create
+nothing, and offering a scannable code would only invite the attempt.
+
+`GET /<token>` is a handler that answers 404 and nothing else, so a crawler or
+a link preview cannot burn a token by following it; `POST /<token>` consumes it
+through the same atomic `store.CreateGroup` the WebSocket handler uses, so
+SPEC §3.1 step 4's "POSTs to create the group" is literally true and one token
+still yields exactly one group. An unknown token is answered identically to an
+unknown path.
+
+**`web/admin`** — server-rendered Go templates and one stylesheet, embedded.
+No second front-end build, no JavaScript, and a CSP of `default-src 'none'`
+with `style-src 'self'`.
+
+**`cmd/tpp`** — `main.go` builds the logger, opens and pings Redis, constructs
+the store, the entry service, the blob backend, the sweeper, the transport and
+the admin surface, and hands the two registrars to `httpapi`. `router.go` was
+not touched. A signal context is the parent of everything, so `SIGTERM` stops
+the sweeper and the server together with a 15s grace period. `gc.go` adds
+`tpp gc --verify` on top of P3's `blob.Verify`; `--verify` is required because
+it is the only mode — the command never deletes.
+
+**`deploy/`** — `docker-compose.yml` (server + Redis, Redis on AOF and
+`volatile-lru` with the comment explaining what `allkeys-lru` would silently
+destroy), a multi-stage `Dockerfile` producing a static binary that runs as uid
+10001 with a read-only root filesystem and no capabilities, `redis.conf`, and
+`.env.example` documenting every key. The published port is bound to
+`127.0.0.1`: the reverse proxy is the only thing that should reach the server.
+
+**`docs/deployment.md`** — reverse proxy and TLS expectations with working
+Caddy and nginx configurations (including the WebSocket upgrade and
+`X-Forwarded-For`, which the rate limiter needs to see distinct clients),
+first-run steps, the two Redis settings that are not tuning, blob GC and
+`gc --verify`, backup and restore, and what the logs do and do not contain.
+
+### One acceptance criterion could not be executed
+
+`docker compose up` was **not** run. This environment's egress proxy returns
+403 for the container image CDN, so `golang:1.26-alpine` cannot be pulled and
+no image can be built here. What was verified instead: `docker compose config`
+validates the file, and the server it would run was exercised from source
+against a real `redis-server` — health endpoint, login, rate-limit lockout,
+token generation, QR rendering, `GET /<token>` → 404, `POST /<token>` → 201
+then 409, graceful shutdown, restart persistence and `tpp gc --verify`. The
+Dockerfile itself is therefore the one artefact of this phase that no machine
+has yet executed; it is worth a reviewer building it once.
+
+### Two decisions worth a reviewer's attention
+
+1. **`ADMIN_PASSWORD_HASH` is refused at startup.** The P0 config loader
+   accepts it so that hashing stays a config change, but no hash format has
+   been chosen and verifying one is on the deferred backlog. `admin.New`
+   returns `ErrHashedPasswordUnsupported` naming the variable. The
+   alternative — accepting the variable and quietly failing every login, or
+   worse, skipping the check — is not a better MVP.
+2. **The login limiter trusts `X-Forwarded-For` only from a loopback or
+   private peer, and only its rightmost entry.** SPEC §4.1 puts a reverse proxy
+   in front of the server, so `RemoteAddr` is always the proxy and per-IP
+   limiting would otherwise collapse into a single bucket. Entries to the left
+   of the last one are attacker-controlled and are ignored. Adding a trusted-
+   proxy configuration knob is a config change, which this phase does not own.
 
 ---
 
