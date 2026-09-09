@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"syscall"
 	"time"
 )
 
@@ -80,7 +79,7 @@ func Listen(ctx context.Context, opts Options) (*Server, error) {
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp4", addr)
 	if err != nil {
-		if errors.Is(err, syscall.EADDRINUSE) {
+		if isAddrInUse(err) {
 			return nil, fmt.Errorf("localui: bind %s: %w", addr, ErrPortInUse)
 		}
 		return nil, fmt.Errorf("localui: bind %s: %w", addr, err)
