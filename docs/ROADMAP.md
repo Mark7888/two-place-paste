@@ -16,14 +16,14 @@ request. Phases run in numeric order; only one pair of phases may overlap.
 | **P3** | Server core — storage, blobs, WebSocket protocol | ✅ **Done** | P1, P2 |
 | **P4** | Server surface — admin UI, tokens, deployment | ✅ **Done** | P3 |
 | **P5** | Go client core — `pkg/tppclient` | ✅ **Done** | P4 |
-| **P6** | Desktop app — Windows + macOS | ▶ **Next** ‖ | P5 |
-| **P7** | Android app | ▶ **Next** ‖ | P5 (server from P4 for tests) |
+| **P6** | Desktop app — Windows + macOS | ✅ **Done** | P5 |
+| **P7** | Android app | ▶ **Next** | P5 (server from P4 for tests) |
 | **P8** | Release — E2E, hardening, docs, artefacts | ⏳ Blocked | P6, P7 |
 
 **Only P6 and P7 may run at the same time** (different languages, disjoint directories,
-no shared file). Everything else is strictly sequential. Running a single agent through
-P3 → P4 → P5 → P6 → P7 → P8 is a fully valid schedule; nothing in this roadmap requires
-parallelism.
+no shared file). P6 is done, so P7 now runs on its own. Everything else is strictly
+sequential. Running a single agent through P3 → P4 → P5 → P6 → P7 → P8 is a fully valid
+schedule; nothing in this roadmap requires parallelism.
 
 When a phase merges, update its row here to ✅ and flip the next row to ▶.
 
@@ -132,7 +132,7 @@ graph TD
     P2 --> P3
     P3 --> P4["P4 Server surface ✅"]
     P4 --> P5["P5 Go client core ✅"]
-    P5 --> P6["P6 Desktop app"]
+    P5 --> P6["P6 Desktop app ✅"]
     P5 --> P7["P7 Android app"]
     P6 --> P8["P8 Release"]
     P7 --> P8
@@ -595,64 +595,151 @@ gone.
 
 ---
 
-# PHASE 6 — Desktop app (Windows, macOS) ‖ ▶ Next
+# PHASE 6 — Desktop app (Windows, macOS) ✅ Done
 
-**Depends on:** P5. **SPEC §6, §7.2** · May run in parallel with P7.
+**Depends on:** P5. **SPEC §6, §7.2**
 **Owns:** `/desktop/**`, desktop CI workflow job.
 **Must not touch:** `/mobile/**`, `/server/**`, `/pkg/**`.
 
 One phase, because the localhost server, the UI it serves, the clipboard it drives and
-the installer that ships them are one product and one review. Build in this order:
-
-### 6.1 Service skeleton and localhost UI server
-- Tray icon and menu: sync now, open UI, quit.
-- HTTP server bound explicitly to **`127.0.0.1:47821`** — never `0.0.0.0` (§7.2).
-- A per-launch token required on **every** request; the tray opens
-  `http://127.0.0.1:47821/app?token=<token>`.
-- **`Origin` validated on every request**, WebSocket upgrade included, with a test that a
-  foreign `Origin` is rejected. This is the entire defence against a malicious page
-  reaching localhost.
-- Bind failure surfaces a visible tray error and a config port override — **never fails
-  silently** (§7.2).
-- `go:embed` of the built UI, plus a dev mode proxying to Vite.
-
-### 6.2 Clipboard — `internal/clipboard`
-- `clipboard_windows.go` and `clipboard_darwin.go` behind one interface: read and write
-  text, image and file references.
-- Optional auto-watch, **default off** (§7.2): polling with change detection and
-  self-write suppression, so a paste from the service never re-uploads itself.
-- Direction logic per §6: upload if local is newer, otherwise download. Where the platform
-  timestamp is unreliable, expose the two explicit directional buttons rather than guess.
-
-### 6.3 React UI — `desktop/ui`
-- Screens: sync (status, last-synced); history browser with copy-to-clipboard per entry;
-  device management with the **named-device confirmation dialog required by §3.3 step 2**;
-  pairing (show QR + copyable token — no scanner on desktop).
-- Settings: auto-watch (off), autostart (off), port override.
-- The query-string token is captured once and kept in memory — never `localStorage`, never
-  left in the URL bar.
-
-### 6.4 Autostart and packaging
-- macOS launchd plist and Windows registry Run key, **default off**, toggleable (§7.2).
-- Installers, signed where possible: `.dmg`/`.app`, MSI or NSIS.
-- One CI job: UI build → embed → binary build.
+the installer that ships them are one product and one review.
 
 ### Acceptance
 
-- [ ] Service starts, tray opens the browser, UI shell loads.
-- [ ] Foreign-`Origin` and missing-token requests are rejected; an occupied port surfaces
-      a visible error.
-- [ ] Loop test proving a service-originated clipboard write does not trigger an upload.
-- [ ] Manual matrix on both OSes for text and image.
-- [ ] The revoke dialog cannot be confirmed before the roster has loaded.
-- [ ] CI produces installable artefacts for both platforms.
+- [x] Service starts, tray opens the browser, UI shell loads. Verified end to end against
+      a built binary: the settings file is read, the keystore opened, the listener bound,
+      the browser launched, and `/app` serves the embedded React build with its assets
+      (a missing asset 404s rather than silently returning the app).
+- [x] Foreign-`Origin` and missing-token requests are rejected; an occupied port surfaces
+      a visible error. `TestOriginIsValidatedOnEveryRequest` walks **every** route,
+      including the WebSocket upgrade, with a foreign `Origin` and a valid token;
+      `TestEventStreamRejectsAForeignOrigin` repeats the upgrade over a real listener,
+      because a recorder cannot prove a handshake is guarded.
+      `TestTokenIsRequiredOnEveryRequest` covers the three ways the token may arrive and
+      asserts that a refused request never reached the service.
+      `TestPortInUseIsVisible` pins the distinct `ErrPortInUse` the tray renders.
+- [x] Loop test proving a service-originated clipboard write does not trigger an upload.
+      Two of them: `clipboard.TestWatcherServiceWriteDoesNotUpload` at the watcher (both
+      with and without a platform change counter), and `service.TestSyncLoopIsClosed`,
+      which runs the real watcher against a real download and fails if the relay ever
+      holds more than the one entry it started with.
+- [ ] **Manual matrix on both OSes for text and image — not executed.** This phase was
+      built in a Linux container: there is no macOS pasteboard and no Windows clipboard
+      here to drive, and reporting a matrix that was not run would be worse than leaving
+      the box unticked. See "The acceptance criterion that could not be executed" below
+      for exactly what a reviewer should run.
+- [x] The revoke dialog cannot be confirmed before the roster has loaded. It is enforced
+      by the API rather than by the front end remembering: `PrepareRevoke` returns a plan
+      id, and `ConfirmRevoke` accepts nothing else — there is no endpoint that revokes a
+      device id. `TestRevocationNeedsAPlan` and `TestRevocationNeedsAConfirmedPlan` cover
+      the missing plan, the unknown plan, the replayed plan and the expired one.
+- [x] CI produces installable artefacts for both platforms: `.github/workflows/desktop.yml`
+      builds the UI, embeds it, builds the binary, and packages a `.dmg` around a
+      `TwoPlacePaste.app` on macOS and an NSIS `Setup.exe` on Windows.
+
+### Delivered
+
+**`internal/localui`** — the localhost server, and the phase's security surface. Any page
+in the user's browser can reach `127.0.0.1`, so: the listener is `127.0.0.1` written out
+(`TestListenerIsLoopbackOnly`), a 32-byte token generated per launch and never persisted
+is required on every request and compared in constant time, and the `Origin` header is
+checked on every route. The `Origin` rule is two rules, and the split is the interesting
+part: the API and the event stream **require** a matching `Origin`, because a browser
+always attaches one to a scripted request, while the two navigations that legitimately
+carry none — opening `/app` and loading its assets — accept its absence but still refuse
+a foreign one, and still require the token. The UI is `go:embed`ed with an `all:` pattern
+so a checkout with no UI build still compiles, and a binary built that way serves a page
+saying so rather than a blank screen.
+
+**`internal/clipboard`** — text, images and file references on both platforms, with no
+cgo: macOS goes through `pbpaste`/`pbcopy` and `osascript`, Windows through `user32`
+directly. The watcher is off by default, polls only while enabled, and suppresses this
+service's own writes twice over — by the digest of what was written, and by re-basing on
+whatever the platform hands back, which is what covers a pasteboard that re-encodes an
+image. A filename that arrives from another device is display text, never a path:
+`SafeName` reduces it to a bounded last element before anything is written to disk.
+
+**`internal/service`** — the sync direction of SPEC §6 and the consent gate of SPEC §3.3.
+It fetches the *metadata* of the newest entry to compare timestamps rather than the entry
+itself: deciding a direction should not cost a 10 MB download. A revocation is prepared,
+never performed, until a plan the user was shown is confirmed, and plans expire.
+
+**`internal/tray`, `internal/autostart`, `internal/config`** — the tray menu SPEC §7.2
+asks for, plus the one it does not: when the listener cannot bind, the tray shows the
+failure and offers the settings file that overrides the port. The login item is a launchd
+agent with `RunAtLoad` and deliberately no `KeepAlive` (quitting from the tray must stay
+quit) and an HKCU Run key on Windows — `HKCU`, so an install needs no administrator. Both
+default off. The tray icon is drawn at runtime from `image/draw` rather than shipped as a
+committed `.png` and `.ico`, so the repository keeps its property of containing no binary
+blobs.
+
+**`ui/`** — React and TypeScript, five screens (sync, history, devices, pairing,
+settings), built by Vite straight into the directory the Go package embeds. The token is
+captured from the query string on first import, held in a module variable, and stripped
+from the address bar; it is never put in `localStorage`, `sessionStorage` or a cookie,
+all of which outlive the launch the token is scoped to. History is fetched only when the
+user asks. The pairing QR is rendered by a bundled library — a payload carrying a pairing
+token must not travel to a remote QR service to be drawn.
+
+### Three decisions worth a reviewer's attention
+
+1. **The service refuses to guess a sync direction, by design.** SPEC §6 says upload if
+   the local clipboard is newer, otherwise download — and neither NSPasteboard nor the
+   Windows clipboard records when its content arrived. The only local timestamp that
+   exists is one this service observed while watching, so `Status` carries
+   `direction_known: false` when it has none, "Sync now" is disabled, and the UI shows the
+   two explicit directional buttons SPEC §6 provides for exactly this case. Guessing here
+   would silently destroy whichever side it overwrote.
+2. **No cgo anywhere in this module's own code.** A pasteboard binding or a clipboard
+   library would have pulled cgo into a module that otherwise cross-compiles from any
+   machine, and `go vet` for `darwin` and a full `windows` build both run from a Linux
+   checkout as a result. The one cgo dependency is `fyne.io/systray`, and it is confined
+   to the two files behind `//go:build windows || darwin`: the Linux build gets a headless
+   tray that prints the URL, which is also what makes the module testable in CI on Ubuntu.
+   The consequence to know about: `golangci-lint` reports 0 issues for `GOOS=linux` and
+   `GOOS=windows`, and cannot analyse `GOOS=darwin` from a Linux machine at all, because
+   `systray`'s darwin build needs the macOS toolchain. The macOS job in the Go workflow is
+   what compiles that code.
+3. **The revocation gate lives in the API, not in the front end.** `POST
+   /api/devices/revoke/confirm` takes a plan id and nothing else, and a plan only exists
+   because `PrepareRevoke` fetched a roster and returned it to be rendered. A UI that
+   skipped the dialog would have nothing to send. That is SPEC §3.3 step 2 expressed the
+   same way P5 expressed it in the type system, one layer up.
+
+### The acceptance criterion that could not be executed
+
+The manual matrix needs a macOS and a Windows machine. What a reviewer should run on
+each, against a P4 relay:
+
+1. Copy text, press **Upload this clipboard**, then on the second machine press **Copy the
+   latest entry here** and paste. Repeat in the other direction.
+2. Copy a screenshot (⌘⇧4 / Win+Shift+S) and repeat. macOS carries it as PNG through the
+   pasteboard; Windows uses the registered `PNG` clipboard format.
+3. Copy a file in Finder or Explorer and repeat; the receiving machine should paste a file
+   with the same name, staged under its user cache directory.
+4. Turn **Watch the clipboard** on, copy something, and confirm one entry appears — then
+   press **Copy the latest entry here** and confirm that no *further* entry appears. That
+   is the loop test by hand.
+5. Turn **Start at login** on, sign out and back in.
+6. Start a second instance and confirm the tray shows the bind failure and opens the
+   settings file.
+
+### Two notes for Phase 8
+
+1. **The installers are unsigned unless secrets are present.** The macOS job ad-hoc signs
+   and falls back cleanly; the Windows installer is per-user and unsigned. Real signing and
+   notarisation are release work, and the workflow already has the conditional branch for
+   the identity.
+2. **The `.dmg` is built for the runner's own architecture.** A universal binary needs both
+   architectures built with cgo and `lipo`'d together, which belongs with the rest of the
+   release plumbing rather than in a phase that had no macOS machine to verify it on.
 
 ---
 
-# PHASE 7 — Android app ‖ ▶ Next
+# PHASE 7 — Android app ▶ Next
 
 **Depends on:** P5 for the flow shape; needs a P4 server to test against.
-**SPEC §3.2, §5.2, §6, §7.1, §7.3** · May run in parallel with P6.
+**SPEC §3.2, §5.2, §6, §7.1, §7.3**
 **Owns:** `/mobile/**` (except the committed `src/protocol/gen/` from P1), mobile CI job.
 **Must not touch:** `/server/**`, `/desktop/**`, `/pkg/**`, `/proto/**`, `/spec/**`.
 
