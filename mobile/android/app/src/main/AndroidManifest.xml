@@ -1,0 +1,76 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      The camera is used for one thing: scanning a pairing QR code (SPEC §3.2).
+      It is optional hardware, because pasting the pairing code is an equal
+      path and a device without a camera must still be able to join.
+    -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <!--
+      There is no FOREGROUND_SERVICE, no accessibility service and no
+      BIND_ACCESSIBILITY_SERVICE. Background clipboard access is not attempted
+      at all (SPEC §7.1): the quick-settings tile foregrounds the app, which is
+      the only legal moment to read the clipboard on Android 10+.
+    -->
+
+    <application
+        android:name=".MainApplication"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:allowBackup="false"
+        android:theme="@style/AppTheme"
+        android:supportsRtl="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:label="@string/app_name"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          The quick-settings tile (SPEC §7.1). android:exported is required for
+          a TileService, and BIND_QUICK_SETTINGS_TILE means only the system may
+          bind it.
+        -->
+        <service
+            android:name=".SyncTileService"
+            android:label="@string/tile_label"
+            android:icon="@drawable/ic_tile"
+            android:exported="true"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.ACTIVE_TILE"
+                android:value="false" />
+        </service>
+
+        <!--
+          An image arriving from another device is staged in this app's cache
+          and put on the clipboard as a content URI, with a read grant attached
+          to the clip. The provider is not exported: only the grant lets the
+          pasting app read it.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.clips"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">TwoPlacePaste</string>
+    <string name="tile_label">Paste sync</string>
+</resources>

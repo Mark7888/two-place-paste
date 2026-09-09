@@ -1,0 +1,46 @@
+{
+  "name": "two-place-paste-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TwoPlacePaste Android client (ROADMAP P7). React Native, structured so iOS stays addable (SPEC \u00a77.3).",
+  "scripts": {
+    "start": "react-native start",
+    "android": "react-native run-android",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "jest",
+    "interop": "jest --config jest.interop.config.js"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.10.1",
+    "@noble/ciphers": "2.4.0",
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "@react-native-clipboard/clipboard": "1.16.3",
+    "react": "19.2.3",
+    "react-native": "0.87.1",
+    "react-native-camera-kit": "18.0.1",
+    "react-native-get-random-values": "1.11.0",
+    "react-native-keychain": "10.0.0",
+    "react-native-qrcode-svg": "6.3.24",
+    "react-native-svg": "15.15.5"
+  },
+  "devDependencies": {
+    "@babel/core": "7.28.4",
+    "@babel/preset-env": "7.28.3",
+    "@babel/preset-typescript": "7.27.1",
+    "@eslint/js": "^9.38.0",
+    "@react-native/babel-preset": "0.87.1",
+    "@react-native/metro-config": "0.87.1",
+    "@types/jest": "30.0.0",
+    "@types/react": "19.2.7",
+    "babel-jest": "30.2.0",
+    "eslint": "9.38.0",
+    "jest": "30.2.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.46.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

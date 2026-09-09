@@ -1,0 +1,18 @@
+# Build output and generated tooling for the Android app (ROADMAP P7).
+
+# The Go peer's compiled binary. Its source is committed; the binary is not.
+scripts/gopeer/gopeer
+
+# Gradle's wrapper is generated, never committed: the JAR is a binary blob and
+# this repository has none. `gradle wrapper` in ./android recreates all three
+# from the version pinned in gradle/wrapper/gradle-wrapper.properties.
+android/gradlew
+android/gradlew.bat
+android/gradle/wrapper/gradle-wrapper.jar
+
+# Local Android SDK location, written by Android Studio.
+android/local.properties
+
+android/.gradle/
+android/app/build/
+android/build/

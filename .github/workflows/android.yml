@@ -1,0 +1,76 @@
+# The Android app's build (ROADMAP P7).
+#
+# The Node workflow already lints, typechecks and tests /mobile — that is the
+# JavaScript half, and it runs on every Node change. This job is the half that
+# only exists on Android: Kotlin compiles, the manifest resolves, the tile
+# service and the two native modules are real classes, and the whole thing
+# packages into an APK that can be installed.
+#
+# It is a debug build. Release signing is a key this repository does not carry
+# and is release work (ROADMAP P8), so what this job proves is that the app
+# builds and that the artefact a reviewer needs to test the tile by hand exists.
+name: Android
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "mobile/**"
+      - ".github/workflows/android.yml"
+  pull_request:
+    paths:
+      - "mobile/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      # Autolinking reads node_modules, so the JavaScript dependencies have to
+      # be installed before Gradle configures anything.
+      - name: Install the JavaScript dependencies
+        working-directory: mobile
+        run: npm ci
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # The wrapper JAR is not committed (see mobile/.gitignore): this
+      # materialises it from the pinned distribution, so the build uses exactly
+      # the Gradle version the repository states.
+      - name: Materialise the Gradle wrapper
+        working-directory: mobile/android
+        run: gradle wrapper --gradle-version 8.14.3
+
+      - name: Build the debug APK
+        working-directory: mobile/android
+        run: ./gradlew --no-daemon assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: twoplacepaste-debug-apk
+          path: mobile/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
