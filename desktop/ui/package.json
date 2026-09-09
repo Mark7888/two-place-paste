@@ -1,0 +1,26 @@
+{
+  "name": "tpp-desktop-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Localhost UI for the TwoPlacePaste desktop service (SPEC §7.2).",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "node scripts/clean-dist.mjs && tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "qrcode": "1.5.4",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/qrcode": "1.5.5",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@vitejs/plugin-react": "4.3.4",
+    "typescript": "5.6.3",
+    "vite": "5.4.11"
+  }
+}

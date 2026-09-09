@@ -1,0 +1,84 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f6f6f7;
+  --panel: #ffffff;
+  --ink: #16181d;
+  --muted: #6a7080;
+  --line: #dcdee5;
+  --accent: #2f6df6;
+  --danger: #c0392b;
+  --ok: #1d7a46;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181d;
+    --panel: #1e2027;
+    --ink: #eceef3;
+    --muted: #9aa1b1;
+    --line: #333744;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.app { max-width: 52rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+
+header.top { display: flex; align-items: baseline; gap: 0.75rem; margin-bottom: 1rem; }
+header.top h1 { font-size: 1.15rem; margin: 0; }
+
+.dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; display: inline-block; background: var(--muted); }
+.dot.on { background: var(--ok); }
+.dot.off { background: var(--danger); }
+
+nav.tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid var(--line); margin-bottom: 1rem; }
+nav.tabs button {
+  background: none; border: none; border-bottom: 2px solid transparent;
+  padding: 0.5rem 0.75rem; color: var(--muted); cursor: pointer; font: inherit;
+}
+nav.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1rem; margin-bottom: 1rem; }
+.panel h2 { font-size: 0.95rem; margin: 0 0 0.75rem; }
+.row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+.spread { display: flex; justify-content: space-between; gap: 1rem; align-items: center; }
+.muted { color: var(--muted); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; overflow-wrap: anywhere; }
+
+button.action {
+  font: inherit; padding: 0.45rem 0.8rem; border-radius: 7px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer;
+}
+button.action.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.action.danger { color: var(--danger); }
+button.action:disabled { opacity: 0.5; cursor: not-allowed; }
+
+input[type="text"], textarea {
+  font: inherit; padding: 0.45rem 0.6rem; border-radius: 7px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink); width: 100%;
+}
+textarea { min-height: 5rem; resize: vertical; }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 0.45rem 0.35rem; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 500; }
+
+.notice { padding: 0.6rem 0.75rem; border-radius: 7px; margin-bottom: 0.75rem; }
+.notice.error { background: rgba(192, 57, 43, 0.12); color: var(--danger); }
+.notice.info { background: rgba(47, 109, 246, 0.12); }
+
+.preview { white-space: pre-wrap; max-height: 9rem; overflow: auto; margin: 0.5rem 0 0; }
+
+dialog { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); max-width: 30rem; }
+dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
+
+label.toggle { display: flex; gap: 0.6rem; align-items: flex-start; margin-bottom: 0.85rem; }
+label.toggle span.text { display: block; }

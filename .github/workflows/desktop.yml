@@ -1,0 +1,131 @@
+# Desktop packaging: UI build → embed → binary build → installer.
+#
+# The desktop job ROADMAP P6 owns. The Go and Node workflows already compile
+# and test this module; what happens here is the part that only makes sense on
+# the target operating systems — a .app in a .dmg for macOS and an NSIS
+# installer for Windows, each built around a binary with the React UI embedded
+# in it.
+#
+# Signing is deliberately conditional. A fork and a pull request have no
+# certificate, and a workflow that fails without one is a workflow nobody can
+# run; when the secrets are present the same job signs, and when they are not
+# it says so and ships an unsigned artefact.
+name: Desktop
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "desktop/**"
+      - "pkg/tppclient/**"
+      - ".github/workflows/desktop.yml"
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "pkg/tppclient/**"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: auto
+
+jobs:
+  package:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macOS
+          - os: windows-latest
+            name: Windows
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: desktop/ui/package-lock.json
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
+
+      # The UI builds into desktop/internal/localui/dist, which the Go package
+      # embeds. Order matters: a Go build before this one produces a binary
+      # that serves the "UI not built" page.
+      - name: Build the UI
+        working-directory: desktop/ui
+        shell: bash
+        run: |
+          npm ci
+          npm run build
+
+      - name: Check the UI was embedded
+        shell: bash
+        run: test -f desktop/internal/localui/dist/index.html
+
+      - name: Build the binary
+        working-directory: desktop
+        shell: bash
+        run: |
+          mkdir -p ../dist
+          go build -trimpath -ldflags "-s -w" -o "../dist/tppdesktop${{ runner.os == 'Windows' && '.exe' || '' }}" ./cmd/tppdesktop
+
+      # ----------------------------------------------------------------- macOS
+      - name: Build the .app and .dmg
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="dist/TwoPlacePaste.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp desktop/packaging/macos/Info.plist "$APP/Contents/Info.plist"
+          cp dist/tppdesktop "$APP/Contents/MacOS/tppdesktop"
+          chmod +x "$APP/Contents/MacOS/tppdesktop"
+          printf 'APPL????' > "$APP/Contents/PkgInfo"
+
+          if [ -n "${MACOS_SIGN_IDENTITY:-}" ]; then
+            codesign --force --deep --options runtime --sign "$MACOS_SIGN_IDENTITY" "$APP"
+          else
+            echo "::notice::no signing identity configured; shipping an unsigned .app"
+            codesign --force --deep --sign - "$APP" || true
+          fi
+
+          hdiutil create -volname TwoPlacePaste -srcfolder "$APP" -ov -format UDZO \
+            dist/TwoPlacePaste.dmg
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+
+      # --------------------------------------------------------------- Windows
+      - name: Build the installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
+            choco install nsis -y --no-progress
+            $env:PATH = "$env:PATH;C:\Program Files (x86)\NSIS"
+          }
+          Copy-Item desktop/packaging/windows/installer.nsi dist/installer.nsi
+          Push-Location dist
+          makensis /DVERSION=0.1.0 installer.nsi
+          Pop-Location
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tppdesktop-${{ matrix.name }}
+          if-no-files-found: error
+          path: |
+            dist/*.dmg
+            dist/*Setup.exe

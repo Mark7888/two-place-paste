@@ -1,0 +1,7 @@
+The built React UI (desktop/ui) is written here by `npm run build` and embedded
+into the binary by assets.go. Nothing in this directory but this file is
+committed: the build output is a build artefact, and CI builds it before it
+builds the binary.
+
+A binary built without it still runs and says so — see placeholderPage in
+assets.go.
