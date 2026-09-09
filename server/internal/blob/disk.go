@@ -60,8 +60,16 @@ func (d *Disk) Put(ctx context.Context, entryID string, expiresAt time.Time, r i
 		return "", fmt.Errorf("create blob bucket %s: %w", bucket, err)
 	}
 
+	// O_EXCL rather than O_TRUNC: the filename is the entry id, and the id
+	// comes from the writing client (/spec/crypto.md §5.3), so replacing an
+	// existing file would let one client destroy another's ciphertext. The
+	// entry record is refused for a duplicate id too; this is the half that
+	// protects the bytes.
 	path := filepath.Join(dir, entryID+".bin")
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, fs.ErrExist) {
+		return "", fmt.Errorf("create blob for entry %s: %w", entryID, ErrExists)
+	}
 	if err != nil {
 		return "", fmt.Errorf("create blob for entry %s: %w", entryID, err)
 	}

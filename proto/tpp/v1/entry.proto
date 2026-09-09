@@ -9,6 +9,9 @@ option go_package = "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/
 // content type, filename and plaintext size are inside the ciphertext and are
 // never visible here (SPEC §2.3).
 message EntryMeta {
+  // The entry's identifier. It is the id the writing client chose and bound
+  // into the ciphertext's associated data (see EntryPutRequest.entry_id), so a
+  // reader can reproduce that binding before it decrypts.
   string entry_id = 1;
 
   // The group epoch the entry was encrypted under. A client silently skips any
@@ -34,6 +37,24 @@ message EntryMeta {
 // EntryPutRequest uploads one encrypted clipboard item. The group and the
 // author are taken from the connection's device identity.
 message EntryPutRequest {
+  // Identifier chosen by the writing client, before it encrypts.
+  //
+  // /spec/crypto.md §5.3 binds the entry id into the ciphertext's associated
+  // data, which only works if both sides know the id before decryption: a
+  // server-assigned id would arrive in EntryPutResponse, after the ciphertext
+  // was sealed, and the writer could never read back what it wrote. So the
+  // client picks it, binds it, and sends it here; EntryPutResponse echoes it.
+  //
+  // The server treats it as opaque, but it is also the entry's key and its
+  // blob filename (SPEC §4.2, §4.5), so it must match `[A-Za-z0-9_-]{1,64}` and
+  // must not already exist. A client draws it from its CSPRNG with at least
+  // 128 bits of entropy; a duplicate is refused with
+  // ERROR_CODE_INVALID_ARGUMENT rather than overwriting anything.
+  //
+  // Empty means the server assigns one, for a client that binds no id. Such an
+  // entry is written normally and its id is in the response.
+  string entry_id = 5;
+
   // The epoch the ciphertext was encrypted under. The server rejects an epoch
   // that is not its current one.
   uint64 epoch = 1;
@@ -59,6 +80,9 @@ message EntryPutRequest {
 // EntryPutResponse confirms the write. The entry is the group's latest from
 // this moment: last write to reach the server wins (SPEC §6).
 message EntryPutResponse {
+  // meta.entry_id is the id from the request, echoed. A client that sent one
+  // and gets a different id back must treat the entry as unreadable rather
+  // than trusting it: the id it bound is not the id the entry now carries.
   EntryMeta meta = 1;
 }
 

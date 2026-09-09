@@ -35,9 +35,13 @@ func newOfflineClient(t *testing.T, epoch uint64) *Client {
 }
 
 // sealFor produces what the relay would hand back for an item written at the
-// given epoch.
+// given epoch, under the id the writer chose and bound.
 func sealFor(t *testing.T, c *Client, epoch uint64, body string) (EntryMeta, []byte) {
 	t.Helper()
+	entryID, err := newEntryID()
+	if err != nil {
+		t.Fatalf("entry id: %v", err)
+	}
 	frame, err := tppcrypto.Frame{ContentType: "text/plain; charset=utf-8", Body: []byte(body)}.Encode()
 	if err != nil {
 		t.Fatalf("encode frame: %v", err)
@@ -46,11 +50,11 @@ func sealFor(t *testing.T, c *Client, epoch uint64, body string) (EntryMeta, []b
 	if err != nil {
 		t.Fatalf("nonce: %v", err)
 	}
-	container, err := tppcrypto.SealEntry(c.state.GroupKey, nonce, epoch, entryAADID, frame)
+	container, err := tppcrypto.SealEntry(c.state.GroupKey, nonce, epoch, entryID, frame)
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
-	return EntryMeta{ID: "entry-1", Epoch: epoch, Size: int64(len(container))}, container
+	return EntryMeta{ID: entryID, Epoch: epoch, Size: int64(len(container))}, container
 }
 
 // TestEpochRules pins /spec/crypto.md §7: an older entry is skipped silently,
@@ -81,6 +85,18 @@ func TestEpochRules(t *testing.T) {
 		meta, container := sealFor(t, c, 4, "new")
 		if _, err := c.open(meta, container); !errors.Is(err, ErrEpochAhead) {
 			t.Errorf("open = %v, want ErrEpochAhead", err)
+		}
+	})
+
+	t.Run("a relabelled entry does not open", func(t *testing.T) {
+		// The id is bound into the associated data (/spec/crypto.md §5.3), so
+		// a relay that files the ciphertext under a different id — to replay
+		// it as another entry, or to hand it back as one — produces an
+		// authentication failure rather than plaintext.
+		meta, container := sealFor(t, c, 3, "current")
+		meta.ID = "some-other-entry-id"
+		if _, err := c.open(meta, container); err == nil {
+			t.Error("an entry opened under an id it was not sealed with")
 		}
 	})
 

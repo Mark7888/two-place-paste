@@ -78,6 +78,9 @@ func TestPairSyncRekeyRevoke(t *testing.T) {
 	if meta.Epoch != 1 {
 		t.Errorf("entry epoch = %d, want 1", meta.Epoch)
 	}
+	if meta.ID == "" {
+		t.Error("the relay returned no entry id")
+	}
 	got, err := phone.GetLatest(ctx)
 	if err != nil {
 		t.Fatalf("GetLatest on the phone: %v", err)
@@ -129,6 +132,14 @@ func TestPairSyncRekeyRevoke(t *testing.T) {
 			t.Error("history is not newest first")
 		}
 	}
+	// The id in the metadata is the one the writer bound into the ciphertext:
+	// the reader reproduces the associated data from it, so a mismatch would
+	// have failed the decryption above rather than merely looked odd
+	// (/spec/crypto.md §5.3).
+	if got.Meta.ID != history.Entries[0].ID {
+		t.Errorf("latest entry id %q is not the newest in history %q", got.Meta.ID, history.Entries[0].ID)
+	}
+
 	// Tapping an older entry pulls just that one.
 	older, err := phone.GetEntry(ctx, history.Entries[1].ID)
 	if err != nil {

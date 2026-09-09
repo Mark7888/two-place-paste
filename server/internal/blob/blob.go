@@ -29,6 +29,16 @@ var (
 	// ErrInvalidRef is returned for a reference that is not the layout this
 	// package writes. It is a guard against path traversal, not a diagnostic.
 	ErrInvalidRef = errors.New("blob: invalid reference")
+
+	// ErrExists is returned when a blob already exists for an entry id.
+	//
+	// A backend creates and never replaces. Entry ids are chosen by the
+	// writing client, because the id is bound into the ciphertext before it is
+	// sent (/spec/crypto.md §5.3), so a client that picks an id already in use
+	// must not be able to overwrite the ciphertext filed under it — including
+	// another group's, since a blob's filename is the entry id and nothing
+	// else.
+	ErrExists = errors.New("blob: a blob already exists for this entry")
 )
 
 // BucketLayout is the time format of an hour bucket directory: the UTC hour in
@@ -45,6 +55,9 @@ type Backend interface {
 	// Redis entry. expiresAt is passed in rather than derived because
 	// reclamation depends on it (SPEC §4.5). A body larger than the backend's
 	// cap fails with ErrTooLarge and leaves nothing behind.
+	//
+	// Put creates and never replaces: an entry id that already has a blob
+	// fails with ErrExists.
 	Put(ctx context.Context, entryID string, expiresAt time.Time, r io.Reader) (ref string, err error)
 
 	// Get opens a stored blob. The caller closes it.

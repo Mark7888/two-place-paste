@@ -460,7 +460,10 @@ has yet executed; it is worth a reviewer building it once.
 
 **Depends on:** P4. **SPEC §2.2, §3, §5, §6**
 **Owns:** `/pkg/tppclient/**`.
-**Must not touch:** `/server/**`, `/desktop/**`, `/mobile/**`.
+**Must not touch:** `/server/**`, `/desktop/**`, `/mobile/**` — with one exception, made
+at the maintainer's request and kept to its own commit: the contract change below, which
+touches `/proto`, `/spec` and the server's entry path. See "The contract change this
+phase needed, and got".
 
 Desktop and any future CLI or Linux client are shells around this package: it holds
 **all** crypto and protocol logic, and they hold none.
@@ -536,26 +539,43 @@ Two design points worth a reviewer's attention:
    and fails on an import that could. "A rekey never touches the local clipboard" is
    therefore a property of the design rather than a rule someone has to remember.
 
-### One contract gap this phase could not close
+### The contract change this phase needed, and got
 
-`/spec/crypto.md` §5.3 binds the **server-assigned** `entry_id` into an entry's associated
-data. That is not constructible with the wire contract as P1 defines it: the id is
-assigned in `EntryPutResponse`, after the ciphertext has been sealed and sent, and
-`EntryPutRequest` has no field for a client-chosen one. There is no id both sides can
-agree on before decryption, and a client that bound the id it receives back could never
-read what it wrote.
+`/spec/crypto.md` §5.3 binds the entry id into an entry's associated data, and the
+P1 wire contract made that impossible to satisfy: the id was assigned in
+`EntryPutResponse`, after the ciphertext had been sealed and sent, so there was no id
+both sides could know before decryption and a writer could never read back what it
+wrote. The first cut of this phase shipped with the binding inert — an empty id, one
+documented constant — and this section recorded why.
 
-This phase owns neither `/proto` nor `/spec`, so it did not paper over the difference:
-`tppcrypto.EntryAAD` takes the id as the spec defines it and is validated against the
-vectors with real ids, and the client passes the empty string, in one documented constant
-(`entries.go`, `entryAADID`). The epoch is still bound, and content type and filename are
-still authenticated inside the frame; what is lost is the relay's inability to relabel an
-entry under a different id, which SPEC §2.3 does not rely on for confidentiality.
+It is now closed, as a contract change made at the maintainer's request and kept to its
+own commit, because it crosses into `/proto`, `/server` and `/spec` (ROADMAP §3):
 
-**P7 must use the same empty id**, or the TypeScript and Go clients will not read each
-other's entries. Closing it properly is a `contract-change` PR against `/proto` — a
-client-chosen `entry_id` on `EntryPutRequest`, or a reserve step — plus the server change
-that honours it, after which both clients bind the real id.
+- **`EntryPutRequest.entry_id`** (field 5): the id the writing client chose and bound
+  before it encrypted. `EntryPutResponse` echoes it. An empty id still means the server
+  assigns one, for a client that binds none.
+- **`/spec/crypto.md` 1.1**: §5.3 now says the writer chooses the id, with the entropy
+  rule for a client and the form and uniqueness rules a server enforces, and §5.4 extends
+  "do not try other epochs" to "do not try other ids". The profile is still
+  `tpp-crypto-v1`: no byte layout, derivation or primitive changed, and
+  `GOWORK=off go run ./spec/vectors/gen -check` confirms all 42 vectors are byte-identical.
+- **The server** honours the id and defends the two places it lands. It is validated
+  against `[A-Za-z0-9_-]{1,64}` before it becomes a Redis key or a blob filename;
+  `entries.Store.Put` is now a Lua script that creates and never replaces, so an id is
+  claimed exactly once even under a race; and the disk blob backend opens with `O_EXCL`
+  rather than `O_TRUNC`. That last one matters more than it looks: a blob's filename *is*
+  the entry id and entry keys are global, so without it a client could have picked a known
+  id and destroyed another group's ciphertext before the record write was refused.
+  A duplicate is `ERROR_CODE_INVALID_ARGUMENT`, never an overwrite.
+- **The client** draws 128 bits from the CSPRNG per entry, binds that id, sends it, and
+  refuses an entry the relay filed under a different one. Readers bind the id from the
+  metadata, so a relabelled or replayed entry now fails to authenticate — covered by
+  `TestEpochRules/a_relabelled_entry_does_not_open`, and by protocol- and store-level
+  tests on the server for the honoured id, the rejected forms and the refused duplicate.
+
+**P7 inherits the fixed contract**: the TypeScript client chooses and binds its own entry
+ids exactly as the Go client does. The empty-id rule the earlier note imposed on it is
+gone.
 
 ### Two smaller notes for the next phase
 

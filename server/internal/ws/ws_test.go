@@ -524,6 +524,66 @@ func TestEntrySizePaths(t *testing.T) {
 	}
 }
 
+// TestEntryIDIsChosenByTheClient covers the wire half of /spec/crypto.md §5.3:
+// the writer picks the id it binds into its ciphertext, the server files the
+// entry under exactly that id, and it refuses one that is already taken rather
+// than overwriting anything.
+func TestEntryIDIsChosenByTheClient(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	laptop, _ := h.createGroup(t, "laptop")
+	body := []byte("ciphertext")
+
+	const chosen = "client-chosen-id_0"
+	laptop.send("put-chosen", tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST, &tppv1.EntryPutRequest{
+		EntryId: chosen, Epoch: 1, Size: uint64(len(body)),
+		Body: &tppv1.EntryPutRequest_Ciphertext{Ciphertext: body},
+	})
+	var put tppv1.EntryPutResponse
+	laptop.await(tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_RESPONSE, &put)
+	if got := put.GetMeta().GetEntryId(); got != chosen {
+		t.Fatalf("EntryPutResponse.Meta.EntryId = %q, want the client's %q", got, chosen)
+	}
+
+	// A second write under the same id is refused; the first entry stands.
+	laptop.send("put-duplicate", tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST, &tppv1.EntryPutRequest{
+		EntryId: chosen, Epoch: 1, Size: 5,
+		Body: &tppv1.EntryPutRequest_Ciphertext{Ciphertext: []byte("other")},
+	})
+	if got := laptop.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT {
+		t.Errorf("duplicate entry id = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT)
+	}
+	laptop.send("fetch-chosen", tppv1.MessageType_MESSAGE_TYPE_ENTRY_FETCH_REQUEST, &tppv1.EntryFetchRequest{EntryId: chosen})
+	var fetched tppv1.EntryFetchResponse
+	laptop.await(tppv1.MessageType_MESSAGE_TYPE_ENTRY_FETCH_RESPONSE, &fetched)
+	if !bytes.Equal(fetched.GetCiphertext(), body) {
+		t.Error("the duplicate write replaced the original ciphertext")
+	}
+
+	// An id that is not a usable key or filename never reaches storage.
+	for _, bad := range []string{"../escape", "a/b", "has space"} {
+		laptop.send("put-bad", tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST, &tppv1.EntryPutRequest{
+			EntryId: bad, Epoch: 1, Size: uint64(len(body)),
+			Body: &tppv1.EntryPutRequest_Ciphertext{Ciphertext: body},
+		})
+		if got := laptop.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT {
+			t.Errorf("entry id %q = %s, want %s", bad, got.GetCode(), tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT)
+		}
+	}
+
+	// An empty id still works: the server assigns one for a client that binds
+	// none, and says which.
+	laptop.send("put-empty", tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST, &tppv1.EntryPutRequest{
+		Epoch: 1, Size: uint64(len(body)),
+		Body: &tppv1.EntryPutRequest_Ciphertext{Ciphertext: body},
+	})
+	laptop.await(tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_RESPONSE, &put)
+	if put.GetMeta().GetEntryId() == "" {
+		t.Error("the server assigned no entry id")
+	}
+}
+
 func TestHistoryIsPulledNewestFirst(t *testing.T) {
 	t.Parallel()
 

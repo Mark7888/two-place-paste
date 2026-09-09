@@ -333,3 +333,37 @@ func TestDiskSweepCostIsIndependentOfBlobCount(t *testing.T) {
 		t.Errorf("root holds %d buckets after the sweep, want 0", len(entries))
 	}
 }
+
+// TestDiskPutDoesNotReplaceAnExistingBlob pins the guarantee that makes a
+// client-chosen entry id safe: a blob's filename is the entry id, so writing
+// one that already exists must fail rather than destroy the ciphertext stored
+// under it — which, entry ids being global, could belong to another group.
+func TestDiskPutDoesNotReplaceAnExistingBlob(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	d := blob.NewDisk(t.TempDir(), 1<<20)
+	expires := time.Date(2026, 3, 14, 9, 0, 0, 0, time.UTC)
+
+	ref, err := d.Put(ctx, "entry-1", expires, strings.NewReader("original"))
+	if err != nil {
+		t.Fatalf("Put() error = %v", err)
+	}
+
+	if _, err := d.Put(ctx, "entry-1", expires, strings.NewReader("overwrite")); !errors.Is(err, blob.ErrExists) {
+		t.Fatalf("second Put() error = %v, want blob.ErrExists", err)
+	}
+
+	rc, err := d.Get(ctx, ref)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+	got, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != "original" {
+		t.Errorf("stored blob = %q, want %q", got, "original")
+	}
+}

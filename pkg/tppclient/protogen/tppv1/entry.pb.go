@@ -27,8 +27,11 @@ const (
 // content type, filename and plaintext size are inside the ciphertext and are
 // never visible here (SPEC §2.3).
 type EntryMeta struct {
-	state   protoimpl.MessageState `protogen:"open.v1"`
-	EntryId string                 `protobuf:"bytes,1,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The entry's identifier. It is the id the writing client chose and bound
+	// into the ciphertext's associated data (see EntryPutRequest.entry_id), so a
+	// reader can reproduce that binding before it decrypts.
+	EntryId string `protobuf:"bytes,1,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
 	// The group epoch the entry was encrypted under. A client silently skips any
 	// entry whose epoch is below its own (SPEC §3.3).
 	Epoch uint64 `protobuf:"varint,2,opt,name=epoch,proto3" json:"epoch,omitempty"`
@@ -123,6 +126,23 @@ func (x *EntryMeta) GetInline() bool {
 // author are taken from the connection's device identity.
 type EntryPutRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// Identifier chosen by the writing client, before it encrypts.
+	//
+	// /spec/crypto.md §5.3 binds the entry id into the ciphertext's associated
+	// data, which only works if both sides know the id before decryption: a
+	// server-assigned id would arrive in EntryPutResponse, after the ciphertext
+	// was sealed, and the writer could never read back what it wrote. So the
+	// client picks it, binds it, and sends it here; EntryPutResponse echoes it.
+	//
+	// The server treats it as opaque, but it is also the entry's key and its
+	// blob filename (SPEC §4.2, §4.5), so it must match `[A-Za-z0-9_-]{1,64}` and
+	// must not already exist. A client draws it from its CSPRNG with at least
+	// 128 bits of entropy; a duplicate is refused with
+	// ERROR_CODE_INVALID_ARGUMENT rather than overwriting anything.
+	//
+	// Empty means the server assigns one, for a client that binds no id. Such an
+	// entry is written normally and its id is in the response.
+	EntryId string `protobuf:"bytes,5,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
 	// The epoch the ciphertext was encrypted under. The server rejects an epoch
 	// that is not its current one.
 	Epoch uint64 `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
@@ -168,6 +188,13 @@ func (x *EntryPutRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use EntryPutRequest.ProtoReflect.Descriptor instead.
 func (*EntryPutRequest) Descriptor() ([]byte, []int) {
 	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *EntryPutRequest) GetEntryId() string {
+	if x != nil {
+		return x.EntryId
+	}
+	return ""
 }
 
 func (x *EntryPutRequest) GetEpoch() uint64 {
@@ -233,8 +260,11 @@ func (*EntryPutRequest_UploadHandle) isEntryPutRequest_Body() {}
 // EntryPutResponse confirms the write. The entry is the group's latest from
 // this moment: last write to reach the server wins (SPEC §6).
 type EntryPutResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Meta          *EntryMeta             `protobuf:"bytes,1,opt,name=meta,proto3" json:"meta,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// meta.entry_id is the id from the request, echoed. A client that sent one
+	// and gets a different id back must treat the entry as unreadable rather
+	// than trusting it: the id it bound is not the id the entry now carries.
+	Meta          *EntryMeta `protobuf:"bytes,1,opt,name=meta,proto3" json:"meta,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -595,8 +625,9 @@ const file_tpp_v1_entry_proto_rawDesc = "" +
 	"\x04size\x18\x03 \x01(\x04R\x04size\x12+\n" +
 	"\x12created_at_unix_ms\x18\x04 \x01(\x03R\x0fcreatedAtUnixMs\x12+\n" +
 	"\x12expires_at_unix_ms\x18\x05 \x01(\x03R\x0fexpiresAtUnixMs\x12\x16\n" +
-	"\x06inline\x18\x06 \x01(\bR\x06inline\"\x8c\x01\n" +
-	"\x0fEntryPutRequest\x12\x14\n" +
+	"\x06inline\x18\x06 \x01(\bR\x06inline\"\xa7\x01\n" +
+	"\x0fEntryPutRequest\x12\x19\n" +
+	"\bentry_id\x18\x05 \x01(\tR\aentryId\x12\x14\n" +
 	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12\x12\n" +
 	"\x04size\x18\x02 \x01(\x04R\x04size\x12 \n" +
 	"\n" +

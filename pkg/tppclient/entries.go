@@ -2,6 +2,8 @@ package tppclient
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"time"
 
@@ -14,27 +16,22 @@ import (
 // adds 41 bytes plus the frame header.
 const MaxCiphertextBytes = 10 << 20
 
-// entryAADID is the entry id bound into an entry's associated data
-// (/spec/crypto.md §5.3).
+// newEntryID returns the identifier this client binds into an entry's
+// associated data and sends with it (/spec/crypto.md §5.3).
 //
-// It is empty, and that is a known gap this phase could not close alone. §5.3
-// binds the *server-assigned* entry id, but the wire contract (ROADMAP P1)
-// assigns an id only in EntryPutResponse — after the ciphertext has been sealed
-// and sent — and EntryPutRequest has no field for a client-chosen one. There is
-// therefore no id both sides can agree on before decryption, and a client that
-// bound the id it receives back could never decrypt what it wrote.
-//
-// The rest of §5.3 is unaffected: the epoch is still bound, and the content
-// type and filename are still authenticated inside the frame. What is lost is
-// the relay's inability to relabel an entry under a different id, which SPEC
-// §2.3 does not rely on for confidentiality.
-//
-// Closing it is a contract change, not a client change: EntryPutRequest needs a
-// client-chosen entry_id (or a reserve step) so that both sides bind the same
-// value. Until then every implementation must use this same empty id, or a Go
-// client and a TypeScript client will not read each other's entries. See
-// ROADMAP P5, "One contract gap this phase could not close".
-const entryAADID = ""
+// The id must exist before the ciphertext does — the AAD binds it — so the
+// client chooses it rather than the relay: 128 bits from the CSPRNG, in
+// base64url, which is the alphabet the relay accepts because an id is also a
+// key and a blob filename. At that width a collision is not a case worth
+// retrying for; the relay refuses one rather than overwriting an entry, and
+// the caller sees the refusal.
+func newEntryID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("tppclient: generate an entry id: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b[:]), nil
+}
 
 // Item is one clipboard payload in plaintext. Nothing here reaches the relay
 // in the clear: content type and filename live inside the encrypted frame
@@ -122,7 +119,11 @@ func (c *Client) PutEntry(ctx context.Context, item Item) (EntryMeta, error) {
 	if err != nil {
 		return EntryMeta{}, fmt.Errorf("tppclient: generate the entry nonce: %w", err)
 	}
-	container, err := tppcrypto.SealEntry(state.GroupKey, nonce, state.Epoch, entryAADID, frame)
+	entryID, err := newEntryID()
+	if err != nil {
+		return EntryMeta{}, err
+	}
+	container, err := tppcrypto.SealEntry(state.GroupKey, nonce, state.Epoch, entryID, frame)
 	if err != nil {
 		return EntryMeta{}, fmt.Errorf("tppclient: seal the entry: %w", err)
 	}
@@ -135,9 +136,10 @@ func (c *Client) PutEntry(ctx context.Context, item Item) (EntryMeta, error) {
 
 	var resp tppv1.EntryPutResponse
 	err = c.call(ctx, tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST, &tppv1.EntryPutRequest{
-		Epoch: state.Epoch,
-		Size:  uint64(len(container)),
-		Body:  &tppv1.EntryPutRequest_Ciphertext{Ciphertext: container},
+		EntryId: entryID,
+		Epoch:   state.Epoch,
+		Size:    uint64(len(container)),
+		Body:    &tppv1.EntryPutRequest_Ciphertext{Ciphertext: container},
 	}, &resp)
 	if err != nil {
 		// ErrEpochConflict means a rekey landed between sealing and sending.
@@ -146,7 +148,15 @@ func (c *Client) PutEntry(ctx context.Context, item Item) (EntryMeta, error) {
 		// did not ask for twice is not this library's call.
 		return EntryMeta{}, err
 	}
-	return entryMeta(resp.GetMeta()), nil
+	meta := entryMeta(resp.GetMeta())
+	if meta.ID != entryID {
+		// The relay filed the entry under an id this client did not bind, so
+		// nothing — this client included — can decrypt it. Reported rather
+		// than ignored: the entry is on the relay and is unreadable.
+		return EntryMeta{}, fmt.Errorf(
+			"tppclient: the relay stored the entry under a different id than the one bound into its ciphertext")
+	}
+	return meta, nil
 }
 
 // GetLatest returns the group's most recent entry, decrypted (SPEC §6).
@@ -254,10 +264,12 @@ func (c *Client) open(meta EntryMeta, ciphertext []byte) (Item, error) {
 			meta.ID, meta.Epoch, state.Epoch, ErrEpochAhead)
 	}
 
-	// The epoch used here is the one the relay reports for the entry. A client
-	// must never try other epochs to make an entry decrypt: at its own epoch a
-	// failure is corruption or tampering, and it is reported (§7).
-	encoded, err := tppcrypto.OpenEntry(state.GroupKey, ciphertext, meta.Epoch, entryAADID)
+	// The epoch and the entry id used here are the ones the relay reports. A
+	// client must never try other epochs, or other ids, to make an entry
+	// decrypt: at its own epoch a failure is corruption or tampering — an
+	// entry the relay relabelled or replayed under another id included — and
+	// it is reported (§5.3, §7).
+	encoded, err := tppcrypto.OpenEntry(state.GroupKey, ciphertext, meta.Epoch, meta.ID)
 	if err != nil {
 		return Item{}, fmt.Errorf("tppclient: entry %s did not decrypt: %w", meta.ID, err)
 	}

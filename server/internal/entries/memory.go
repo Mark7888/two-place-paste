@@ -2,6 +2,7 @@ package entries
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -35,12 +36,27 @@ func (m *MemoryStore) Put(_ context.Context, meta Meta, inline []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Create-only, like the Redis implementation: an id is claimed once, and a
+	// client-chosen one cannot overwrite an entry — not even another group's,
+	// since entry ids are global.
+	if existing, ok := m.metas[meta.ID]; ok && m.now().Before(existing.ExpiresAt) {
+		return fmt.Errorf("put entry %s: %w", meta.ID, ErrEntryExists)
+	}
+
 	m.metas[meta.ID] = meta
 	if meta.Inline() {
 		m.bodies[meta.ID] = inline
 	}
 	m.byGroup[meta.GroupID] = append(m.byGroup[meta.GroupID], meta.ID)
 	return nil
+}
+
+// Exists implements Store.
+func (m *MemoryStore) Exists(_ context.Context, entryID string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	meta, ok := m.metas[entryID]
+	return ok && m.now().Before(meta.ExpiresAt), nil
 }
 
 // live returns the group's unexpired entries, newest first.

@@ -82,17 +82,45 @@ func (s *Service) MaxBytes() int64 { return s.maxBytes }
 // The blob is written **before** the Redis record (SPEC §4.5, "write
 // ordering"). A crash in between leaves an orphan in a bucket that expires
 // within 24 hours; the reverse order would leave an entry nobody can read.
-func (s *Service) Put(ctx context.Context, groupID string, epoch uint64, declaredSize int64, body io.Reader) (Meta, error) {
+// entryID is the identifier the writing client chose and bound into its
+// ciphertext's associated data (/spec/crypto.md §5.3). An empty one is
+// assigned here instead, for a client that binds no id; anything else is
+// validated before it is used, because it becomes a Redis key and a blob
+// filename.
+func (s *Service) Put(ctx context.Context, groupID string, epoch uint64, entryID string, declaredSize int64, body io.Reader) (Meta, error) {
 	if declaredSize < 0 {
 		return Meta{}, fmt.Errorf("put entry: %w: negative declared size", ErrSizeMismatch)
 	}
 	if declaredSize > s.maxBytes {
 		return Meta{}, fmt.Errorf("put entry: %w: declared %d bytes, cap is %d", ErrTooLarge, declaredSize, s.maxBytes)
 	}
+	if entryID == "" {
+		entryID = newEntryID()
+	} else {
+		if !ValidID(entryID) {
+			// Checked before the id reaches a key or a path, and without
+			// echoing it: an id that failed validation is not something to put
+			// in a log line (docs/conventions.md §2).
+			return Meta{}, fmt.Errorf("put entry: %w: %d bytes outside [A-Za-z0-9_-]{1,%d}",
+				ErrInvalidID, len(entryID), MaxIDLen)
+		}
+		// Refused before the blob is written, so a client cannot even attempt
+		// to write over the ciphertext of an entry that already holds this id.
+		// The check is not the guarantee — Put and the blob backend both
+		// create-only, and that is what closes the race — it is what keeps the
+		// common case from touching storage at all.
+		taken, err := s.store.Exists(ctx, entryID)
+		if err != nil {
+			return Meta{}, fmt.Errorf("put entry %s: %w", entryID, err)
+		}
+		if taken {
+			return Meta{}, fmt.Errorf("put entry %s: %w", entryID, ErrEntryExists)
+		}
+	}
 
 	now := s.now()
 	meta := Meta{
-		ID:        newEntryID(),
+		ID:        entryID,
 		GroupID:   groupID,
 		Epoch:     epoch,
 		CreatedAt: now,
@@ -112,6 +140,12 @@ func (s *Service) Put(ctx context.Context, groupID string, epoch uint64, declare
 		if errors.Is(err, blob.ErrTooLarge) {
 			return Meta{}, fmt.Errorf("put entry %s: %w", meta.ID, ErrTooLarge)
 		}
+		if errors.Is(err, blob.ErrExists) {
+			// The id is taken by an entry whose blob is already on disk. The
+			// backend refused to replace it, which is what keeps a chosen id
+			// from destroying someone else's ciphertext.
+			return Meta{}, fmt.Errorf("put entry %s: %w", meta.ID, ErrEntryExists)
+		}
 		if err != nil {
 			return Meta{}, fmt.Errorf("put entry %s: %w", meta.ID, err)
 		}
@@ -128,6 +162,13 @@ func (s *Service) Put(ctx context.Context, groupID string, epoch uint64, declare
 	}
 
 	if err := s.store.Put(ctx, meta, inline); err != nil {
+		if errors.Is(err, ErrEntryExists) && meta.StorageRef != "" {
+			// Lost a race for the id. The blob is this call's own — the
+			// backend creates and never replaces — so removing it takes
+			// nothing but its own bytes. Best-effort; the bucket sweep is the
+			// backstop (SPEC §4.5).
+			_ = s.blobs.Delete(ctx, meta.StorageRef)
+		}
 		return Meta{}, fmt.Errorf("put entry %s: %w", meta.ID, err)
 	}
 	return meta, nil

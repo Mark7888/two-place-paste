@@ -36,6 +36,44 @@ func NewRedisStore(rdb redis.Cmdable) *RedisStore {
 
 var _ Store = (*RedisStore)(nil)
 
+// putEntryScript writes one entry, or refuses because its id is taken.
+//
+// It is a script rather than a transaction pipeline because a pipeline cannot
+// decide: the existence check and the writes must be one step, or two clients
+// choosing the same id could both believe they wrote it. Entry ids are global
+// keys, so this is also what stops a client-chosen id from overwriting another
+// group's entry.
+//
+// Return codes: 0 written, 1 the id is already in use.
+//
+//	KEYS[1] entry key         ARGV[1] group id      ARGV[6] storage ref
+//	KEYS[2] entry blob key    ARGV[2] epoch         ARGV[7] "1" when inline
+//	KEYS[3] group index key   ARGV[3] size          ARGV[8] inline body
+//	                          ARGV[4] created_at    ARGV[9] index prune cutoff
+//	                          ARGV[5] expires_at
+var putEntryScript = redis.NewScript(`
+if redis.call('EXISTS', KEYS[1]) == 1 then return 1 end
+
+redis.call('HSET', KEYS[1],
+  'group_id', ARGV[1],
+  'epoch', ARGV[2],
+  'size', ARGV[3],
+  'created_at', ARGV[4],
+  'expires_at', ARGV[5],
+  'storage_ref', ARGV[6])
+redis.call('PEXPIREAT', KEYS[1], ARGV[5])
+
+if ARGV[7] == '1' then
+  redis.call('SET', KEYS[2], ARGV[8])
+  redis.call('PEXPIREAT', KEYS[2], ARGV[5])
+end
+
+redis.call('ZADD', KEYS[3], ARGV[4], ARGV[1 + 9])
+redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', ARGV[9])
+
+return 0
+`)
+
 // Put implements Store.
 func (s *RedisStore) Put(ctx context.Context, m Meta, inline []byte) error {
 	ttl := time.Until(m.ExpiresAt)
@@ -43,31 +81,34 @@ func (s *RedisStore) Put(ctx context.Context, m Meta, inline []byte) error {
 		return fmt.Errorf("put entry %s: expiry is already past", m.ID)
 	}
 
-	pipe := s.rdb.TxPipeline()
-	pipe.HSet(ctx, entryKey(m.ID),
-		"group_id", m.GroupID,
-		"epoch", strconv.FormatUint(m.Epoch, 10),
-		"size", strconv.FormatInt(m.Size, 10),
-		"created_at", strconv.FormatInt(m.CreatedAt.UTC().UnixMilli(), 10),
-		"expires_at", strconv.FormatInt(m.ExpiresAt.UTC().UnixMilli(), 10),
-		"storage_ref", m.StorageRef,
-	)
-	pipe.PExpireAt(ctx, entryKey(m.ID), m.ExpiresAt)
+	expiresAt := strconv.FormatInt(m.ExpiresAt.UTC().UnixMilli(), 10)
+	createdAt := strconv.FormatInt(m.CreatedAt.UTC().UnixMilli(), 10)
+	inlineFlag := "0"
 	if m.Inline() {
-		pipe.Set(ctx, entryBlobKey(m.ID), inline, 0)
-		pipe.PExpireAt(ctx, entryBlobKey(m.ID), m.ExpiresAt)
+		inlineFlag = "1"
 	}
-	pipe.ZAdd(ctx, groupEntriesKey(m.GroupID), redis.Z{
-		Score:  float64(m.CreatedAt.UTC().UnixMilli()),
-		Member: m.ID,
-	})
 	// The index has no TTL of its own, so it is pruned by score on every
 	// write: an id whose entry has expired can never be returned.
-	pipe.ZRemRangeByScore(ctx, groupEntriesKey(m.GroupID),
-		"-inf", "("+strconv.FormatInt(s.now().Add(-entryTTLBound).UnixMilli(), 10))
+	prune := "(" + strconv.FormatInt(s.now().Add(-entryTTLBound).UnixMilli(), 10)
 
-	if _, err := pipe.Exec(ctx); err != nil {
+	res, err := putEntryScript.Run(ctx, s.rdb,
+		[]string{entryKey(m.ID), entryBlobKey(m.ID), groupEntriesKey(m.GroupID)},
+		m.GroupID,
+		strconv.FormatUint(m.Epoch, 10),
+		strconv.FormatInt(m.Size, 10),
+		createdAt,
+		expiresAt,
+		m.StorageRef,
+		inlineFlag,
+		inline,
+		prune,
+		m.ID,
+	).Int64()
+	if err != nil {
 		return fmt.Errorf("put entry %s: %w", m.ID, err)
+	}
+	if res == 1 {
+		return fmt.Errorf("put entry %s: %w", m.ID, ErrEntryExists)
 	}
 	return nil
 }
@@ -75,6 +116,19 @@ func (s *RedisStore) Put(ctx context.Context, m Meta, inline []byte) error {
 // entryTTLBound is the widest lifetime any entry can have. It bounds the index
 // prune above; the authoritative expiry is the TTL on each entry key.
 const entryTTLBound = 24 * time.Hour
+
+// Exists implements Store.
+//
+// An expired entry answers false without any pruning of its own: Redis has
+// already removed the key by its TTL, which is the only expiry authority in
+// this zone.
+func (s *RedisStore) Exists(ctx context.Context, entryID string) (bool, error) {
+	n, err := s.rdb.Exists(ctx, entryKey(entryID)).Result()
+	if err != nil {
+		return false, fmt.Errorf("check entry %s: %w", entryID, err)
+	}
+	return n > 0, nil
+}
 
 // Latest implements Store.
 func (s *RedisStore) Latest(ctx context.Context, groupID string) (Meta, error) {
