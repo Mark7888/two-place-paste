@@ -563,10 +563,15 @@ that honours it, after which both clients bind the real id.
    Go toolchain on `PATH`, and they build `server/cmd/tpp` themselves; without either they
    skip with a reason, exactly as the server's own Redis-backed tests do. Running them in
    CI is the same standalone workflow change Phase 3 asked for.
-2. **`golang.org/x/crypto` is pinned to v0.55.0**, not the latest. v0.56.0 requires
-   `go >= 1.26.0`, which would force this module's `go` directive above the `go 1.26` in
-   the workspace file — and `/go.work` is a shared touchpoint this phase must not edit
-   (ROADMAP §3). Raising both is a Phase 0 PR.
+2. **`/go.work` moved from `go 1.26` to `go 1.26.0`** — the one edit outside this phase's
+   owned paths, made at the maintainer's explicit request and kept to its own commit.
+   `golang.org/x/crypto` v0.56.0 requires `go >= 1.26.0`, which forces the client module's
+   directive to the three-part form, which a workspace declaring `1.26` then refuses. Both
+   are now on the three-part form and `x/crypto` is unpinned at v0.56.0 — the same version
+   the vector generator uses, so the reference implementation and the client no longer
+   build against different releases of the one primitive they share. No other module
+   changed: `go work sync` would have propagated an `x/sys` bump into `/server`, and that
+   was reverted rather than carried here.
 
 ---
 
