@@ -32,7 +32,42 @@ var (
 	// disagree. The declared size is what lets the server refuse an oversize
 	// entry before reading it, so it is not allowed to lie.
 	ErrSizeMismatch = errors.New("entries: declared size does not match the body")
+
+	// ErrInvalidID is returned when a client-chosen entry id is not in the
+	// alphabet this package accepts. The id is a Redis key and a blob
+	// filename, so it is validated before it reaches either (SPEC §4.2, §4.5).
+	ErrInvalidID = errors.New("entries: entry id is not usable")
+
+	// ErrEntryExists is returned when a client-chosen entry id is already
+	// taken. Entry keys are global, so accepting a duplicate would let one
+	// group overwrite another group's entry; the write is refused instead.
+	ErrEntryExists = errors.New("entries: entry id is already in use")
 )
+
+// MaxIDLen bounds a client-chosen entry id.
+const MaxIDLen = 64
+
+// ValidID reports whether an id may be used as an entry id.
+//
+// The alphabet is base64url's, which is what a server-generated id already
+// uses: an id is a Redis key and, for a large entry, a filename inside a blob
+// bucket. Rejecting everything else here is what keeps a client-chosen id from
+// reaching into another directory or colliding with the key layout — the whole
+// reason ids are validated in one place rather than at each use.
+func ValidID(id string) bool {
+	if id == "" || len(id) > MaxIDLen {
+		return false
+	}
+	for i := range len(id) {
+		c := id[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // Meta is everything the server knows about an entry. Content type, filename
 // and plaintext size are inside the ciphertext and never appear here
@@ -67,6 +102,10 @@ type Store interface {
 	// Put writes the entry record, and its ciphertext when inline, both with
 	// the entry's TTL. It is always called after the blob has been written
 	// (SPEC §4.5, "write ordering").
+	//
+	// It creates and never replaces: an id that already exists fails with
+	// ErrEntryExists, atomically, so two writers racing on one id cannot both
+	// think they won and a client-chosen id cannot clobber an existing entry.
 	Put(ctx context.Context, m Meta, inline []byte) error
 
 	// Latest returns the group's newest unexpired entry, or ErrNotFound.
@@ -82,6 +121,11 @@ type Store interface {
 	// Get returns one entry's metadata. It fails with ErrNotFound if the entry
 	// belongs to another group: entry ids are not capabilities.
 	Get(ctx context.Context, groupID, entryID string) (Meta, error)
+
+	// Exists reports whether an unexpired entry already holds this id, in any
+	// group. It is how a client-chosen id is refused before anything is
+	// written; Put is what makes the refusal race-free.
+	Exists(ctx context.Context, entryID string) (bool, error)
 
 	// InlineBody returns the inline ciphertext of an entry.
 	InlineBody(ctx context.Context, entryID string) ([]byte, error)

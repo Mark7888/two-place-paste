@@ -58,7 +58,7 @@ type Store interface {
 
 // Entries is the entry read/write subset this package needs.
 type Entries interface {
-	Put(ctx context.Context, groupID string, epoch uint64, declaredSize int64, body io.Reader) (entries.Meta, error)
+	Put(ctx context.Context, groupID string, epoch uint64, entryID string, declaredSize int64, body io.Reader) (entries.Meta, error)
 	Latest(ctx context.Context, groupID string) (entries.Meta, []byte, error)
 	History(ctx context.Context, groupID string, limit int, before time.Time) ([]entries.Meta, time.Time, error)
 	Fetch(ctx context.Context, groupID, entryID string) (entries.Meta, []byte, error)

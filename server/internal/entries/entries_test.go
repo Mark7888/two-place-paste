@@ -234,3 +234,68 @@ func TestReadersSeeWhatWasWritten(t *testing.T) {
 		}
 	})
 }
+
+// TestStorePutIsCreateOnly pins the guarantee a client-chosen entry id depends
+// on: the id is claimed once, in one step, by both implementations. Without it
+// a client could pick an id and overwrite an entry — its own, or, since entry
+// keys are global, another group's.
+func TestStorePutIsCreateOnly(t *testing.T) {
+	t.Parallel()
+
+	forEachStore(t, func(t *testing.T, s entries.Store) {
+		ctx := context.Background()
+		first := newGroupID(t)
+		id := "e-" + newGroupID(t)
+
+		if err := s.Put(ctx, meta(first, id, time.Now().UTC()), []byte("original")); err != nil {
+			t.Fatalf("Put() error = %v", err)
+		}
+		exists, err := s.Exists(ctx, id)
+		if err != nil || !exists {
+			t.Fatalf("Exists() = %v, %v; want true, nil", exists, err)
+		}
+
+		second := newGroupID(t)
+		err = s.Put(ctx, meta(second, id, time.Now().UTC()), []byte("overwrite"))
+		if !errors.Is(err, entries.ErrEntryExists) {
+			t.Fatalf("second Put() error = %v, want ErrEntryExists", err)
+		}
+
+		got, err := s.Get(ctx, first, id)
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		if got.GroupID != first {
+			t.Errorf("entry moved to group %q, want %q", got.GroupID, first)
+		}
+		body, err := s.InlineBody(ctx, id)
+		if err != nil {
+			t.Fatalf("InlineBody() error = %v", err)
+		}
+		if string(body) != "original" {
+			t.Errorf("inline body = %q, want %q", body, "original")
+		}
+		// The loser's group must not have gained an entry it cannot read.
+		if _, err := s.Latest(ctx, second); !errors.Is(err, entries.ErrNotFound) {
+			t.Errorf("Latest() for the refused group = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+// TestStoreExistsIgnoresExpiredEntries: an id is free again once the entry it
+// named has expired, because nothing in this zone outlives its TTL.
+func TestStoreExistsIgnoresExpiredEntries(t *testing.T) {
+	t.Parallel()
+
+	forEachStore(t, func(t *testing.T, s entries.Store) {
+		ctx := context.Background()
+		id := "e-" + newGroupID(t)
+		exists, err := s.Exists(ctx, id)
+		if err != nil {
+			t.Fatalf("Exists() error = %v", err)
+		}
+		if exists {
+			t.Error("an id that was never written reports as taken")
+		}
+	})
+}

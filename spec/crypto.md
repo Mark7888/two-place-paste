@@ -1,7 +1,7 @@
 # TwoPlacePaste — Cryptography Specification
 
 **Profile:** `tpp-crypto-v1`
-**Version:** 1.0
+**Version:** 1.1
 **Status:** normative for MVP
 **Companion to:** [`docs/SPECS.md`](../docs/SPECS.md) §2, §3
 **Vectors:** [`spec/vectors/`](vectors/) — 42 vectors, 6 suites
@@ -264,10 +264,28 @@ entry_aad =
  || entry_id                     raw UTF-8 bytes, no terminator
 ```
 
-`entry_id` is the server-assigned identifier, treated here as an opaque UTF-8
-string. Binding it means an entry cannot be relabelled, duplicated under a new
-id, or replayed as a different entry by the server. Binding the epoch means an
-entry cannot be presented as belonging to a later key generation.
+`entry_id` is the entry's identifier, treated here as an opaque UTF-8 string.
+Binding it means an entry cannot be relabelled, duplicated under a new id, or
+replayed as a different entry by the server. Binding the epoch means an entry
+cannot be presented as belonging to a later key generation.
+
+**The writing client chooses the id, before it encrypts.** It has to: the AAD
+must be reproducible by the reader *before* it decrypts, so both sides need the
+id in advance, and an id the server minted on receipt would reach the writer
+only in its response — after the ciphertext was sealed, and therefore too late
+to bind. The client MUST draw it from the CSPRNG with at least 128 bits of
+entropy, and MUST NOT derive it from the plaintext, the key or the nonce.
+
+The server treats the id as opaque but stores under it, so it constrains the
+form: `[A-Za-z0-9_-]`, 1 to 64 bytes, and not an id already in use
+(`proto/tpp/v1/entry.proto`, `EntryPutRequest.entry_id`). A server MUST refuse a
+duplicate rather than overwrite what is stored under it, and a client that is
+handed back an id other than the one it sent MUST treat the entry as unreadable:
+what it bound is not what the entry now carries.
+
+A reader takes the id from the entry's metadata as the server reports it, and
+MUST NOT try other ids to make an entry decrypt — the same rule §7 states for
+epochs, and for the same reason.
 
 The length prefix is what makes the encoding unambiguous: without it,
 `(epoch, "ab" + "c")` and `(epoch, "ab" + "c")` split differently would collide.
@@ -287,8 +305,9 @@ server, as SPEC §2.3 requires. See §11.2.
    partially usable entry.
 ```
 
-The `epoch` in steps 3 and 4 is the epoch the **server** reports for the entry.
-A client MUST NOT try other epochs to make an entry decrypt; see §7.
+The `epoch` in steps 3 and 4, and the `entry_id` inside `entry_aad`, are the
+ones the **server** reports for the entry. A client MUST NOT try other epochs,
+or other ids, to make an entry decrypt; see §7 and §5.3.
 
 Vectors: [`entry.json`](vectors/entry.json), and the `entry-*` cases in
 [`failure.json`](vectors/failure.json).
@@ -377,7 +396,7 @@ Mapping this document onto the group lifecycle in SPEC §3:
 | §3.2 step 5 — joiner is a member | unwrap, install `(epoch, group_key)` | §4.4 |
 | §3.3 step 3 — rekey | generate a new group key at epoch+1, wrap once per remaining device | §4.1, §4.2 |
 | §3.3 step 4 — atomic upload | all wrapped keys in one request; the server applies them or none | server-side, Phase 3a |
-| §6 — put an entry | frame, derive content key, seal | §6, §5.1, §5.2 |
+| §6 — put an entry | choose the entry id, frame, derive content key, seal | §5.3, §6, §5.1, §5.2 |
 | §6 — read an entry | epoch check, open, decode | §7, §5.4, §6 |
 
 Note that the pairing ephemeral keypair of SPEC §3.2 step 1 (transported inside
@@ -529,3 +548,10 @@ Any change to a byte layout, a domain-separation string, a derivation or a
 primitive is a **new profile**, `tpp-crypto-v2`, with a new version byte (§2.4).
 The version byte is bound into every AAD specifically so that the two profiles
 cannot be confused on the wire.
+
+### Revisions
+
+| Version | Change |
+|---|---|
+| 1.0 | Initial profile. |
+| 1.1 | §5.3: the entry id bound into the AAD is chosen by the writing client, not assigned by the server, with the form and uniqueness rules a server enforces. No byte layout, derivation or primitive changed, so the profile is still `tpp-crypto-v1`, the version byte is still `0x01` and every vector in `spec/vectors/` is byte-identical — this states who supplies a value the format always had. It lands with the `EntryPutRequest.entry_id` field that makes it constructible. |

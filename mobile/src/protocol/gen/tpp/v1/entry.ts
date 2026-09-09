@@ -17,6 +17,11 @@ export const protobufPackage = "tpp.v1";
  * never visible here (SPEC §2.3).
  */
 export interface EntryMeta {
+  /**
+   * The entry's identifier. It is the id the writing client chose and bound
+   * into the ciphertext's associated data (see EntryPutRequest.entry_id), so a
+   * reader can reproduce that binding before it decrypts.
+   */
   entryId: string;
   /**
    * The group epoch the entry was encrypted under. A client silently skips any
@@ -45,6 +50,25 @@ export interface EntryMeta {
  * author are taken from the connection's device identity.
  */
 export interface EntryPutRequest {
+  /**
+   * Identifier chosen by the writing client, before it encrypts.
+   *
+   * /spec/crypto.md §5.3 binds the entry id into the ciphertext's associated
+   * data, which only works if both sides know the id before decryption: a
+   * server-assigned id would arrive in EntryPutResponse, after the ciphertext
+   * was sealed, and the writer could never read back what it wrote. So the
+   * client picks it, binds it, and sends it here; EntryPutResponse echoes it.
+   *
+   * The server treats it as opaque, but it is also the entry's key and its
+   * blob filename (SPEC §4.2, §4.5), so it must match `[A-Za-z0-9_-]{1,64}` and
+   * must not already exist. A client draws it from its CSPRNG with at least
+   * 128 bits of entropy; a duplicate is refused with
+   * ERROR_CODE_INVALID_ARGUMENT rather than overwriting anything.
+   *
+   * Empty means the server assigns one, for a client that binds no id. Such an
+   * entry is written normally and its id is in the response.
+   */
+  entryId: string;
   /**
    * The epoch the ciphertext was encrypted under. The server rejects an epoch
    * that is not its current one.
@@ -75,6 +99,11 @@ export interface EntryPutRequest {
  * this moment: last write to reach the server wins (SPEC §6).
  */
 export interface EntryPutResponse {
+  /**
+   * meta.entry_id is the id from the request, echoed. A client that sent one
+   * and gets a different id back must treat the entry as unreadable rather
+   * than trusting it: the id it bound is not the id the entry now carries.
+   */
   meta?: EntryMeta | undefined;
 }
 
@@ -303,11 +332,14 @@ export const EntryMeta: MessageFns<EntryMeta> = {
 };
 
 function createBaseEntryPutRequest(): EntryPutRequest {
-  return { epoch: "0", size: "0", ciphertext: undefined, uploadHandle: undefined };
+  return { entryId: "", epoch: "0", size: "0", ciphertext: undefined, uploadHandle: undefined };
 }
 
 export const EntryPutRequest: MessageFns<EntryPutRequest> = {
   encode(message: EntryPutRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.entryId !== "") {
+      writer.uint32(42).string(message.entryId);
+    }
     if (message.epoch !== "0") {
       writer.uint32(8).uint64(message.epoch);
     }
@@ -336,6 +368,14 @@ export const EntryPutRequest: MessageFns<EntryPutRequest> = {
       while (reader.pos < end) {
         const tag = reader.uint32();
         switch (tag >>> 3) {
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.entryId = reader.string();
+            continue;
+          }
           case 1: {
             if (tag !== 8) {
               break;
@@ -382,6 +422,11 @@ export const EntryPutRequest: MessageFns<EntryPutRequest> = {
 
   fromJSON(object: any): EntryPutRequest {
     return {
+      entryId: isSet(object.entryId)
+        ? globalThis.String(object.entryId)
+        : isSet(object.entry_id)
+        ? globalThis.String(object.entry_id)
+        : "",
       epoch: isSet(object.epoch) ? globalThis.String(object.epoch) : "0",
       size: isSet(object.size) ? globalThis.String(object.size) : "0",
       ciphertext: isSet(object.ciphertext) ? bytesFromBase64(object.ciphertext) : undefined,
@@ -395,6 +440,9 @@ export const EntryPutRequest: MessageFns<EntryPutRequest> = {
 
   toJSON(message: EntryPutRequest): unknown {
     const obj: any = {};
+    if (message.entryId !== "") {
+      obj.entryId = message.entryId;
+    }
     if (message.epoch !== "0") {
       obj.epoch = message.epoch;
     }
@@ -415,6 +463,7 @@ export const EntryPutRequest: MessageFns<EntryPutRequest> = {
   },
   fromPartial<I extends Exact<DeepPartial<EntryPutRequest>, I>>(object: I): EntryPutRequest {
     const message = createBaseEntryPutRequest();
+    message.entryId = object.entryId ?? "";
     message.epoch = object.epoch ?? "0";
     message.size = object.size ?? "0";
     message.ciphertext = object.ciphertext ?? undefined;

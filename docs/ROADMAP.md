@@ -15,9 +15,9 @@ request. Phases run in numeric order; only one pair of phases may overlap.
 | **P2** | Crypto contract — spec + cross-language vectors | ✅ **Done** (#3) | P0 |
 | **P3** | Server core — storage, blobs, WebSocket protocol | ✅ **Done** | P1, P2 |
 | **P4** | Server surface — admin UI, tokens, deployment | ✅ **Done** | P3 |
-| **P5** | Go client core — `pkg/tppclient` | ▶ **Next** | P4 |
-| **P6** | Desktop app — Windows + macOS | ⏳ Blocked | P5 |
-| **P7** | Android app | ⏳ Blocked | P5 (server from P4 for tests) |
+| **P5** | Go client core — `pkg/tppclient` | ✅ **Done** | P4 |
+| **P6** | Desktop app — Windows + macOS | ▶ **Next** ‖ | P5 |
+| **P7** | Android app | ▶ **Next** ‖ | P5 (server from P4 for tests) |
 | **P8** | Release — E2E, hardening, docs, artefacts | ⏳ Blocked | P6, P7 |
 
 **Only P6 and P7 may run at the same time** (different languages, disjoint directories,
@@ -131,7 +131,7 @@ graph TD
     P1 --> P3["P3 Server core ✅"]
     P2 --> P3
     P3 --> P4["P4 Server surface ✅"]
-    P4 --> P5["P5 Go client core"]
+    P4 --> P5["P5 Go client core ✅"]
     P5 --> P6["P6 Desktop app"]
     P5 --> P7["P7 Android app"]
     P6 --> P8["P8 Release"]
@@ -456,11 +456,14 @@ has yet executed; it is worth a reviewer building it once.
 
 ---
 
-# PHASE 5 — Go client core (`pkg/tppclient`)
+# PHASE 5 — Go client core (`pkg/tppclient`) ✅ Done
 
 **Depends on:** P4. **SPEC §2.2, §3, §5, §6**
 **Owns:** `/pkg/tppclient/**`.
-**Must not touch:** `/server/**`, `/desktop/**`, `/mobile/**`.
+**Must not touch:** `/server/**`, `/desktop/**`, `/mobile/**` — with one exception, made
+at the maintainer's request and kept to its own commit: the contract change below, which
+touches `/proto`, `/spec` and the server's entry path. See "The contract change this
+phase needed, and got".
 
 Desktop and any future CLI or Linux client are shells around this package: it holds
 **all** crypto and protocol logic, and they hold none.
@@ -481,13 +484,118 @@ Desktop and any future CLI or Linux client are shells around this package: it ho
 
 ### Acceptance
 
-- [ ] Vector tests pass against `/spec/vectors`.
-- [ ] Integration test runs two in-process clients against a real server through the full
-      pair → sync → rekey → revoke cycle.
+- [x] Vector tests pass against `/spec/vectors`: all 42 vectors in all 6 suites
+      (`tppcrypto/vectors_test.go`), including the 18 must-fail cases. A seventh test reads
+      `index.json` and fails if the corpus ever grows a suite or a vector this package does
+      not run, so a contract-change PR cannot leave the Go client silently unvalidated.
+- [x] Integration test runs two in-process clients against a real server through the full
+      pair → sync → rekey → revoke cycle (`integration_test.go`,
+      `TestPairSyncRekeyRevoke`). It starts a real `redis-server` and builds and runs
+      `server/cmd/tpp` as a subprocess, then drives the admin UI to mint a creation token
+      exactly as an operator would. Two further tests cover a revoked client giving up
+      rather than reconnecting forever, and an install rebuilt from its stored state.
+- [x] `go build`, `go vet` and `go test -race` green for the module, and `golangci-lint`
+      reports 0 issues for `GOOS=linux`, `darwin` and `windows`.
+
+### Delivered
+
+**`tppcrypto`** — `/spec/crypto.md` byte for byte and nothing else: X25519 device keys,
+the §4 wrap container, §5 entry sealing, and the §6 plaintext frame with its canonical
+encoding. Three primitives, as the profile demands. `Wrap` draws its own ephemeral key
+per call, which is what keeps the all-zero wrap nonce safe; the variant that accepts a
+caller's ephemeral key is unexported and exists only so the vector tests can replay
+recorded ones. Every rejection maps onto one of four error kinds, so a caller can tell a
+corrupt container from a wrong key without parsing strings.
+
+**`keystore`** — where the device private key and the group key live at rest
+(/spec/crypto.md §10). `Open` picks the strongest backend the platform offers: the macOS
+login keychain via `/usr/bin/security`, a DPAPI-sealed file on Windows, and otherwise a
+file encrypted under a caller-supplied passphrase, falling back to an owner-only plain
+file — with `Backend()` naming what is actually in use, so a client can tell the user
+rather than silently taking the floor. The keychain write goes through `security -i`,
+which reads *commands* from stdin: passing the secret as `-w`'s argument would publish it
+to every local `ps` for the life of the call. Writes are atomic through a temporary file
+in the same directory, created 0600, so a crash cannot replace a whole key with half of
+one.
+
+**The client** — one supervised connection with jittered exponential backoff, request
+correlation by envelope id, and one method per flow: `CreateGroup`, `StartPairing` /
+`Invitation.Wait`, `JoinPairing`, `Devices`, `Revoke`, `PutEntry`, `GetLatest`,
+`GetHistory`, `GetEntry`. Group creation and pairing-join dial *without* a credential,
+because they are how a device acquires one, and reconnect authenticated afterwards. Epoch
+handling is §7 exactly: an older entry is `ErrStaleEntry` and is skipped silently, a newer
+one is `ErrEpochAhead` and waits for the wrapped key the relay pushes, a failure at the
+client's own epoch is reported. Old group keys are never retained.
+
+Two design points worth a reviewer's attention:
+
+1. **`Revoke` returns a plan, not a result.** It fetches the roster, works out who
+   remains, and stops. Nothing is generated and nothing is sent until
+   `Revocation.Confirm`. That is SPEC §3.3 step 2 expressed in the type system: a UI that
+   has not rendered the named roster has nothing to confirm with, and the library never
+   assumes consent.
+2. **The clipboard invariant is structural and now tested as such.** The package cannot
+   reach an OS clipboard, and `TestNoClipboardAnywhere` parses every file in the module
+   and fails on an import that could. "A rekey never touches the local clipboard" is
+   therefore a property of the design rather than a rule someone has to remember.
+
+### The contract change this phase needed, and got
+
+`/spec/crypto.md` §5.3 binds the entry id into an entry's associated data, and the
+P1 wire contract made that impossible to satisfy: the id was assigned in
+`EntryPutResponse`, after the ciphertext had been sealed and sent, so there was no id
+both sides could know before decryption and a writer could never read back what it
+wrote. The first cut of this phase shipped with the binding inert — an empty id, one
+documented constant — and this section recorded why.
+
+It is now closed, as a contract change made at the maintainer's request and kept to its
+own commit, because it crosses into `/proto`, `/server` and `/spec` (ROADMAP §3):
+
+- **`EntryPutRequest.entry_id`** (field 5): the id the writing client chose and bound
+  before it encrypted. `EntryPutResponse` echoes it. An empty id still means the server
+  assigns one, for a client that binds none.
+- **`/spec/crypto.md` 1.1**: §5.3 now says the writer chooses the id, with the entropy
+  rule for a client and the form and uniqueness rules a server enforces, and §5.4 extends
+  "do not try other epochs" to "do not try other ids". The profile is still
+  `tpp-crypto-v1`: no byte layout, derivation or primitive changed, and
+  `GOWORK=off go run ./spec/vectors/gen -check` confirms all 42 vectors are byte-identical.
+- **The server** honours the id and defends the two places it lands. It is validated
+  against `[A-Za-z0-9_-]{1,64}` before it becomes a Redis key or a blob filename;
+  `entries.Store.Put` is now a Lua script that creates and never replaces, so an id is
+  claimed exactly once even under a race; and the disk blob backend opens with `O_EXCL`
+  rather than `O_TRUNC`. That last one matters more than it looks: a blob's filename *is*
+  the entry id and entry keys are global, so without it a client could have picked a known
+  id and destroyed another group's ciphertext before the record write was refused.
+  A duplicate is `ERROR_CODE_INVALID_ARGUMENT`, never an overwrite.
+- **The client** draws 128 bits from the CSPRNG per entry, binds that id, sends it, and
+  refuses an entry the relay filed under a different one. Readers bind the id from the
+  metadata, so a relabelled or replayed entry now fails to authenticate — covered by
+  `TestEpochRules/a_relabelled_entry_does_not_open`, and by protocol- and store-level
+  tests on the server for the honoured id, the rejected forms and the refused duplicate.
+
+**P7 inherits the fixed contract**: the TypeScript client chooses and binds its own entry
+ids exactly as the Go client does. The empty-id rule the earlier note imposed on it is
+gone.
+
+### Two smaller notes for the next phase
+
+1. **The integration tests skip where they cannot run.** They need `redis-server` and the
+   Go toolchain on `PATH`, and they build `server/cmd/tpp` themselves; without either they
+   skip with a reason, exactly as the server's own Redis-backed tests do. Running them in
+   CI is the same standalone workflow change Phase 3 asked for.
+2. **`/go.work` moved from `go 1.26` to `go 1.26.0`** — the one edit outside this phase's
+   owned paths, made at the maintainer's explicit request and kept to its own commit.
+   `golang.org/x/crypto` v0.56.0 requires `go >= 1.26.0`, which forces the client module's
+   directive to the three-part form, which a workspace declaring `1.26` then refuses. Both
+   are now on the three-part form and `x/crypto` is unpinned at v0.56.0 — the same version
+   the vector generator uses, so the reference implementation and the client no longer
+   build against different releases of the one primitive they share. No other module
+   changed: `go work sync` would have propagated an `x/sys` bump into `/server`, and that
+   was reverted rather than carried here.
 
 ---
 
-# PHASE 6 — Desktop app (Windows, macOS) ‖
+# PHASE 6 — Desktop app (Windows, macOS) ‖ ▶ Next
 
 **Depends on:** P5. **SPEC §6, §7.2** · May run in parallel with P7.
 **Owns:** `/desktop/**`, desktop CI workflow job.
@@ -541,7 +649,7 @@ the installer that ships them are one product and one review. Build in this orde
 
 ---
 
-# PHASE 7 — Android app ‖
+# PHASE 7 — Android app ‖ ▶ Next
 
 **Depends on:** P5 for the flow shape; needs a P4 server to test against.
 **SPEC §3.2, §5.2, §6, §7.1, §7.3** · May run in parallel with P6.

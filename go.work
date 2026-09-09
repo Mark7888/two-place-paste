@@ -3,7 +3,12 @@
 // SHARED TOUCHPOINT (ROADMAP §3): changes to this file are always their own PR,
 // owned by Phase 0. Feature phases must not edit it; they open a
 // `contract-change` issue instead.
-go 1.26
+//
+// The version is written as 1.26.0 rather than 1.26 on purpose: a workspace
+// version must be at least the highest one any member module declares, and a
+// dependency that requires `go >= 1.26.0` forces its module's directive to the
+// three-part form. Written as `1.26`, this file would reject that module.
+go 1.26.0
 
 use (
 	./desktop

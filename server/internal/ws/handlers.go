@@ -392,8 +392,22 @@ func (s *Server) handleEntryPut(ctx context.Context, env *tppv1.Envelope, groupI
 		declared = int64(len(ciphertext))
 	}
 
-	meta, err := s.entries.Put(ctx, groupID, req.GetEpoch(), declared, bytes.NewReader(ciphertext))
+	// The id comes from the client because it is bound into the ciphertext's
+	// associated data before the entry is sealed (/spec/crypto.md §5.3): the
+	// server could not supply one in time. It is opaque here, but it is also a
+	// key and a blob filename, so entries validates it and refuses a duplicate
+	// rather than overwriting anything.
+	meta, err := s.entries.Put(ctx, groupID, req.GetEpoch(), req.GetEntryId(), declared, bytes.NewReader(ciphertext))
 	switch {
+	case errors.Is(err, entries.ErrInvalidID):
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
+			"entry_id must match [A-Za-z0-9_-]{1,%d}", entries.MaxIDLen)
+	case errors.Is(err, entries.ErrEntryExists):
+		// Not a collision a client should ever hit with 128 bits of
+		// randomness, and not something to paper over: retrying with a new id
+		// is the caller's choice, not the server's.
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
+			"entry_id is already in use")
 	case errors.Is(err, entries.ErrTooLarge):
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_TOO_LARGE,
 			"ciphertext of %d bytes exceeds the per-entry cap of %d", declared, s.entries.MaxBytes())

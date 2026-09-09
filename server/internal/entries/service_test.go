@@ -52,7 +52,7 @@ func TestServicePutChoosesStorageBySize(t *testing.T) {
 			svc, _ := newService(t, entries.NewMemoryStore())
 			body := strings.Repeat("c", tt.size)
 
-			m, err := svc.Put(ctx, gid, 3, int64(tt.size), strings.NewReader(body))
+			m, err := svc.Put(ctx, gid, 3, "", int64(tt.size), strings.NewReader(body))
 			if err != nil {
 				t.Fatalf("Put() error = %v", err)
 			}
@@ -87,7 +87,7 @@ func TestServicePutRejectsOversizeBeforeReading(t *testing.T) {
 	svc, _ := newService(t, entries.NewMemoryStore())
 
 	body := &countingReader{src: strings.NewReader(strings.Repeat("c", testMaxBytes*4))}
-	_, err := svc.Put(ctx, newGroupID(t), 1, testMaxBytes*4, body)
+	_, err := svc.Put(ctx, newGroupID(t), 1, "", testMaxBytes*4, body)
 	if !errors.Is(err, entries.ErrTooLarge) {
 		t.Fatalf("Put(declared oversize) error = %v, want %v", err, entries.ErrTooLarge)
 	}
@@ -97,7 +97,7 @@ func TestServicePutRejectsOversizeBeforeReading(t *testing.T) {
 
 	// A body that lies about its size is caught at the reader instead.
 	liar := &countingReader{src: strings.NewReader(strings.Repeat("c", testMaxBytes*4))}
-	if _, err := svc.Put(ctx, newGroupID(t), 1, testMaxBytes, liar); !errors.Is(err, entries.ErrTooLarge) {
+	if _, err := svc.Put(ctx, newGroupID(t), 1, "", testMaxBytes, liar); !errors.Is(err, entries.ErrTooLarge) {
 		t.Errorf("Put(undeclared oversize) error = %v, want %v", err, entries.ErrTooLarge)
 	}
 	if liar.read > testMaxBytes+1 {
@@ -111,7 +111,7 @@ func TestServicePutRejectsSizeMismatch(t *testing.T) {
 	ctx := context.Background()
 	svc, _ := newService(t, entries.NewMemoryStore())
 
-	if _, err := svc.Put(ctx, newGroupID(t), 1, 100, strings.NewReader("short")); !errors.Is(err, entries.ErrSizeMismatch) {
+	if _, err := svc.Put(ctx, newGroupID(t), 1, "", 100, strings.NewReader("short")); !errors.Is(err, entries.ErrSizeMismatch) {
 		t.Errorf("Put(short body) error = %v, want %v", err, entries.ErrSizeMismatch)
 	}
 }
@@ -141,7 +141,7 @@ func TestServicePutWritesBlobBeforeRedis(t *testing.T) {
 	})
 
 	size := testInlineMax * 2
-	if _, err := svc.Put(ctx, newGroupID(t), 1, int64(size), strings.NewReader(strings.Repeat("c", size))); !errors.Is(err, errStoreDown) {
+	if _, err := svc.Put(ctx, newGroupID(t), 1, "", int64(size), strings.NewReader(strings.Repeat("c", size))); !errors.Is(err, errStoreDown) {
 		t.Fatalf("Put() error = %v, want %v", err, errStoreDown)
 	}
 
@@ -167,7 +167,7 @@ func TestServiceLatestAndHistory(t *testing.T) {
 
 	var last string
 	for _, body := range []string{"one", "two", "three"} {
-		m, err := svc.Put(ctx, gid, 1, int64(len(body)), strings.NewReader(body))
+		m, err := svc.Put(ctx, gid, 1, "", int64(len(body)), strings.NewReader(body))
 		if err != nil {
 			t.Fatalf("Put() error = %v", err)
 		}
@@ -206,4 +206,110 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	n, err := c.src.Read(p)
 	c.read += int64(n)
 	return n, err
+}
+
+// TestServicePutHonoursAClientChosenID pins the contract that makes
+// /spec/crypto.md §5.3 constructible: the writing client picks the id, binds it
+// into its ciphertext, and the server files the entry under exactly that id.
+func TestServicePutHonoursAClientChosenID(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, _ := newService(t, entries.NewMemoryStore())
+	gid := newGroupID(t)
+
+	const chosen = "0123456789abcdefABCDEF-_"
+	m, err := svc.Put(ctx, gid, 1, chosen, 5, strings.NewReader("hello"))
+	if err != nil {
+		t.Fatalf("Put() error = %v", err)
+	}
+	if m.ID != chosen {
+		t.Errorf("entry id = %q, want the client's %q", m.ID, chosen)
+	}
+
+	got, _, err := svc.Fetch(ctx, gid, chosen)
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if got.ID != chosen {
+		t.Errorf("fetched id = %q, want %q", got.ID, chosen)
+	}
+}
+
+// TestServicePutRejectsAnUnusableID guards the two places a chosen id lands: a
+// Redis key and a filename inside a blob bucket.
+func TestServicePutRejectsAnUnusableID(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc, _ := newService(t, entries.NewMemoryStore())
+
+	for _, id := range []string{
+		"../escape",
+		"a/b",
+		"with space",
+		"dot.dot",
+		"..",
+		"emoji🙂",
+		strings.Repeat("x", entries.MaxIDLen+1),
+	} {
+		if _, err := svc.Put(ctx, newGroupID(t), 1, id, 1, strings.NewReader("x")); !errors.Is(err, entries.ErrInvalidID) {
+			t.Errorf("Put(%q) error = %v, want ErrInvalidID", id, err)
+		}
+	}
+}
+
+// TestServicePutRefusesADuplicateID is the other half: entry keys are global,
+// so a chosen id must never overwrite an existing entry — not the caller's own,
+// and not another group's.
+func TestServicePutRefusesADuplicateID(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name string
+		size int
+	}{
+		{name: "inline entry", size: 16},
+		{name: "blob-backed entry", size: testInlineMax + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			svc, blobs := newService(t, entries.NewMemoryStore())
+			victim := newGroupID(t)
+			const id = "shared-id"
+			original := strings.Repeat("a", tc.size)
+
+			first, err := svc.Put(ctx, victim, 1, id, int64(tc.size), strings.NewReader(original))
+			if err != nil {
+				t.Fatalf("Put() error = %v", err)
+			}
+
+			attacker := newGroupID(t)
+			overwrite := strings.Repeat("b", tc.size)
+			if _, err := svc.Put(ctx, attacker, 1, id, int64(tc.size), strings.NewReader(overwrite)); !errors.Is(err, entries.ErrEntryExists) {
+				t.Fatalf("second Put() error = %v, want ErrEntryExists", err)
+			}
+
+			// The first entry is untouched: same group, same bytes.
+			meta, body, err := svc.Fetch(ctx, victim, id)
+			if err != nil {
+				t.Fatalf("Fetch() error = %v", err)
+			}
+			if meta.GroupID != victim {
+				t.Errorf("entry now belongs to %q, want %q", meta.GroupID, victim)
+			}
+			if string(body) != original {
+				t.Error("the stored ciphertext was overwritten by the second write")
+			}
+			if first.StorageRef != "" {
+				// And no second blob was left behind under the same name.
+				if _, err := blobs.Get(ctx, first.StorageRef); err != nil {
+					t.Errorf("the original blob is gone: %v", err)
+				}
+			}
+		})
+	}
 }
