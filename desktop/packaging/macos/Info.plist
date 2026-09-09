@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>TwoPlacePaste</string>
+	<key>CFBundleDisplayName</key>
+	<string>TwoPlacePaste</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.twoplacepaste.desktop</string>
+	<key>CFBundleExecutable</key>
+	<string>tppdesktop</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.1.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>12.0</string>
+	<!-- An agent, not an application: the service lives in the menu bar and
+	     has no Dock icon and no window of its own. Its UI is a browser tab
+	     served from 127.0.0.1 (SPEC §7.2). -->
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+</dict>
+</plist>

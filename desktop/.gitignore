@@ -1,0 +1,8 @@
+# Node dependencies and build output for the localhost UI (desktop/ui).
+ui/node_modules/
+
+# The built UI is copied into the Go package that embeds it. It is a build
+# artefact: CI builds it before it builds the binary, and only the .gitkeep
+# that keeps the directory present is committed.
+internal/localui/dist/*
+!internal/localui/dist/.gitkeep
