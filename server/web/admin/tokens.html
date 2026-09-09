@@ -1,0 +1,38 @@
+{{define "content"}}
+<h1>Creation tokens</h1>
+
+<form method="post" action="/admin/tokens" class="card row">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label for="name">Name</label>
+  <input type="text" id="name" name="name" maxlength="120" placeholder="e.g. Anna — laptop" required>
+  <button type="submit">Generate token</button>
+</form>
+
+{{if .Tokens}}
+<table>
+  <thead>
+    <tr><th>Name</th><th>Created</th><th>Status</th><th>Group</th><th>Onboarding</th></tr>
+  </thead>
+  <tbody>
+  {{range .Tokens}}
+    <tr>
+      <td>{{.Name}}</td>
+      <td>{{.Created}}</td>
+      <td>{{if .Used}}<span class="tag used">used</span>{{else}}<span class="tag open">unused</span>{{end}}</td>
+      <td>{{if .Used}}<code class="wrap">{{.GroupID}}</code>{{else}}<span class="muted">—</span>{{end}}</td>
+      <td>
+        {{if .Used}}
+          <span class="muted">This token has created its group. One token creates exactly one group.</span>
+        {{else}}
+          <img class="qr" width="180" height="180" alt="QR code for the creation URL" src="/admin/tokens/{{.Value}}/qr.png">
+          <code class="wrap">{{.URL}}</code>
+        {{end}}
+      </td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="muted">No tokens yet. Generate one above and send its URL to the user.</p>
+{{end}}
+{{end}}

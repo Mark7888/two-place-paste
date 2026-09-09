@@ -11,6 +11,10 @@ go 1.26
 //   - redis/go-redis: the only datastore (SPEC §4.2). Needed for its EVALSHA
 //     script support, which is what makes the rekey and the token CAS atomic.
 //   - google.golang.org/protobuf: the wire contract from ROADMAP P1.
+//   - rsc.io/qr: QR encoding for the admin UI's token codes (SPEC §4.4).
+//     Standard library plus one file's worth of encoder; it pulls in nothing
+//     and it writes a PNG, so the admin screen needs no image dependency
+//     either.
 //
 // The workspace supplies pkg/tppclient (the generated protobuf bindings); it
 // is not a module dependency.
@@ -18,6 +22,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/redis/go-redis/v9 v9.22.0
 	google.golang.org/protobuf v1.36.12
+	rsc.io/qr v0.2.0
 )
 
 require (

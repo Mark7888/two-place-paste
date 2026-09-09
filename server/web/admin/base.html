@@ -1,0 +1,29 @@
+{{define "base"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{{.Title}} — TwoPlacePaste</title>
+<link rel="stylesheet" href="/admin/style.css">
+</head>
+<body>
+<header class="bar">
+  <span class="brand">TwoPlacePaste <span class="muted">admin</span></span>
+  {{if .Authenticated}}
+  <form method="post" action="/admin/logout">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button type="submit" class="link">Log out</button>
+  </form>
+  {{end}}
+</header>
+<main>
+{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+{{template "content" .}}
+</main>
+<footer class="muted">
+  The server relays ciphertext only. This screen can list creation tokens and
+  nothing else — there is no content access here by construction (SPEC §4.4).
+</footer>
+</body>
+</html>{{end}}
