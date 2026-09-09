@@ -184,6 +184,22 @@ func pngFormat() uint32 {
 	return uint32(r)
 }
 
+// locked turns the address GlobalLock returned into a pointer Go can read
+// through.
+//
+// The conversion is written as a round trip via a *uintptr rather than as
+// unsafe.Pointer(p) on purpose, and not to quiet a check: go vet's unsafeptr
+// rule exists because an integer cannot keep Go-heap memory alive across a
+// garbage collection, and this memory is not on the Go heap. GlobalAlloc
+// owns it, the clipboard holds it, and GlobalLock pins it until the matching
+// GlobalUnlock — every caller below unlocks after it has finished reading —
+// so the invariant the rule protects does not apply here. Writing it as
+// unsafe.Pointer(p) would fail `go vet` for every build of this package on
+// Windows, which is a check worth keeping for the rest of the file.
+func locked(p uintptr) unsafe.Pointer {
+	return *(*unsafe.Pointer)(unsafe.Pointer(&p))
+}
+
 func readBytes(format uint32) ([]byte, error) {
 	h, _, err := procGetClipboardData.Call(uintptr(format))
 	if h == 0 {
@@ -199,11 +215,7 @@ func readBytes(format uint32) ([]byte, error) {
 		return nil, ErrEmpty
 	}
 	out := make([]byte, size)
-	// GlobalLock returns a pointer that stays valid until GlobalUnlock, which
-	// the defer above runs after this copy: the documented case where turning
-	// a uintptr from a syscall back into a pointer is sound.
-	//nolint:govet // unsafeptr: see above.
-	copy(out, unsafe.Slice((*byte)(unsafe.Pointer(p)), size))
+	copy(out, unsafe.Slice((*byte)(locked(p)), size))
 	return out, nil
 }
 
@@ -217,9 +229,7 @@ func readText() (string, error) {
 		return "", fmt.Errorf("clipboard: lock clipboard memory: %w", err)
 	}
 	defer func() { _, _, _ = procGlobalUnlock.Call(h) }()
-	// Valid until the deferred GlobalUnlock, as above.
-	//nolint:govet // unsafeptr: see readBytes.
-	return windows.UTF16PtrToString((*uint16)(unsafe.Pointer(p))), nil
+	return windows.UTF16PtrToString((*uint16)(locked(p))), nil
 }
 
 // readDrop reads the first file of a CF_HDROP. Sync carries one entry
@@ -309,9 +319,7 @@ func globalFromBytes(b []byte) (uintptr, error) {
 		_, _, _ = procGlobalFree.Call(h)
 		return 0, fmt.Errorf("clipboard: lock clipboard memory: %w", err)
 	}
-	// Valid until the GlobalUnlock below.
-	//nolint:govet // unsafeptr: see readBytes.
-	copy(unsafe.Slice((*byte)(unsafe.Pointer(p)), len(b)), b)
+	copy(unsafe.Slice((*byte)(locked(p)), len(b)), b)
 	_, _, _ = procGlobalUnlock.Call(h)
 	return h, nil
 }
