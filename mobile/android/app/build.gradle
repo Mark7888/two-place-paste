@@ -20,8 +20,8 @@ android {
 
     defaultConfig {
         applicationId "com.twoplacepaste"
-        minSdkVersion rootProject.ext.minSdkVersion
-        targetSdkVersion rootProject.ext.targetSdkVersion
+        minSdk rootProject.ext.minSdkVersion
+        targetSdk rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "0.1.0"
     }
@@ -39,9 +39,11 @@ android {
         }
     }
 
-    packagingOptions {
-        // react-native-keychain and the camera library each bring a copy.
-        pickFirst "**/libc++_shared.so"
+    packaging {
+        jniLibs {
+            // react-native-keychain and the camera library each bring a copy.
+            pickFirsts += ["**/libc++_shared.so"]
+        }
     }
 }
 

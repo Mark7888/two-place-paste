@@ -37,7 +37,7 @@ test here that exercises the actual relay.
 To build the app you also need the Android SDK and a JDK:
 
 ```sh
-cd android && gradle wrapper --gradle-version 8.14.3   # once: the JAR is not committed
+cd android && gradle wrapper --gradle-version 9.4.1   # once: the JAR is not committed
 ./gradlew assembleDebug
 ```
 

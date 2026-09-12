@@ -43,6 +43,8 @@ jobs:
           cache: npm
           cache-dependency-path: mobile/package-lock.json
 
+      # React Native 0.87's own Gradle plugin builds against a Java 17
+      # toolchain, so 17 is what the build needs — not the newest JDK.
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -50,20 +52,39 @@ jobs:
 
       - uses: android-actions/setup-android@v3
 
+      # The SDK, NDK and CMake React Native 0.87 pins
+      # (node_modules/react-native/gradle/libs.versions.toml). Installed
+      # explicitly rather than left to the build to fetch, so a missing package
+      # is a named step that failed and not a puzzle inside Gradle.
+      - name: Install the SDK packages React Native pins
+        run: |
+          sdkmanager --install \
+            "platforms;android-37" \
+            "build-tools;37.0.0" \
+            "ndk;27.1.12297006" \
+            "cmake;3.30.5"
+
       # Autolinking reads node_modules, so the JavaScript dependencies have to
       # be installed before Gradle configures anything.
       - name: Install the JavaScript dependencies
         working-directory: mobile
         run: npm ci
 
+      # Pinned, and pinned to React Native 0.87's own Gradle version. Without
+      # this the runner's preinstalled Gradle is used, and a newer one ships a
+      # Kotlin stdlib whose metadata React Native's plugin — built with Kotlin
+      # 2.2.0 — cannot read, which fails the build inside node_modules before
+      # any of this app is compiled.
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.4.1"
 
       # The wrapper JAR is not committed (see mobile/.gitignore): this
       # materialises it from the pinned distribution, so the build uses exactly
       # the Gradle version the repository states.
       - name: Materialise the Gradle wrapper
         working-directory: mobile/android
-        run: gradle wrapper --gradle-version 8.14.3
+        run: gradle wrapper --gradle-version 9.4.1
 
       - name: Build the debug APK
         working-directory: mobile/android
