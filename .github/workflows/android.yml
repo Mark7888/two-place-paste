@@ -52,17 +52,24 @@ jobs:
 
       - uses: android-actions/setup-android@v3
 
-      # The SDK, NDK and CMake React Native 0.87 pins
-      # (node_modules/react-native/gradle/libs.versions.toml). Installed
-      # explicitly rather than left to the build to fetch, so a missing package
-      # is a named step that failed and not a puzzle inside Gradle.
+      # The SDK packages React Native 0.87 pins, installed explicitly so that a
+      # missing one is a named step that failed rather than a puzzle inside
+      # Gradle.
+      #
+      # The platform id is "android-37.0", not "android-37": Android now
+      # versions platforms with a minor component, and `compileSdk 37` in the
+      # build file resolves to the .0 of that API. The runner image already
+      # carries the platform and the build tools, so those two lines are
+      # usually a no-op that costs nothing and stops the build from depending
+      # on what a runner image happens to ship. The NDK is the one real
+      # download: the runner has 27.3, React Native pins 27.1.
       - name: Install the SDK packages React Native pins
         run: |
           sdkmanager --install \
-            "platforms;android-37" \
+            "platforms;android-37.0" \
             "build-tools;37.0.0" \
             "ndk;27.1.12297006" \
-            "cmake;3.30.5"
+            "cmake;3.22.1"
 
       # Autolinking reads node_modules, so the JavaScript dependencies have to
       # be installed before Gradle configures anything.
