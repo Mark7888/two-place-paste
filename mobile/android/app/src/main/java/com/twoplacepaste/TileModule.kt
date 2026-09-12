@@ -62,14 +62,14 @@ class TileModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun removeListeners(count: Int) = Unit
 
+    /** Outcome is the last sync's result, which the tile renders as its subtitle. */
+    data class Outcome(val ok: Boolean, val label: String)
+
     companion object {
         const val NAME = "TppTile"
 
         /** TILE_REQUEST_EVENT is what a running app listens for. */
         const val TILE_REQUEST_EVENT = "TppTileSyncRequested"
-
-        /** Outcome is the last sync's result, which the tile renders as its subtitle. */
-        data class Outcome(val ok: Boolean, val label: String)
 
         @Volatile
         var lastOutcome: Outcome? = null
