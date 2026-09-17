@@ -50,7 +50,14 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # `packages` is pinned to override the action's default of
+      # "tools platform-tools". The obsolete `tools` package has been removed
+      # from Google's repository, so that default now fails the action with
+      # "Failed to find package 'tools'" — it stopped working between one run
+      # of this workflow and the next, with nothing changed here.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
 
       # The SDK packages React Native 0.87 pins, installed explicitly so that a
       # missing one is a named step that failed rather than a puzzle inside
