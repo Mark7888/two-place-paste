@@ -93,9 +93,27 @@ jobs:
         working-directory: mobile/android
         run: gradle wrapper --gradle-version 9.4.1
 
+      # -PbundleInDebug=true makes the debug variant carry its own JS bundle
+      # (see mobile/android/app/build.gradle). Without it React Native leaves
+      # the bundle out of a debug build and the APK cannot start without a
+      # Metro dev server, which is no use to someone installing it to test the
+      # tile on a device.
       - name: Build the debug APK
         working-directory: mobile/android
-        run: ./gradlew --no-daemon assembleDebug
+        run: ./gradlew --no-daemon assembleDebug -PbundleInDebug=true
+
+      # The bundle is the thing that makes this artefact installable, and its
+      # absence is invisible until the app is launched on a device. So it is
+      # asserted here rather than discovered there.
+      - name: Check the APK carries its own JS bundle
+        run: |
+          set -euo pipefail
+          apk=$(ls mobile/android/app/build/outputs/apk/debug/*.apk | head -1)
+          if ! unzip -l "$apk" | grep -q "assets/index.android.bundle"; then
+            echo "::error::$apk has no assets/index.android.bundle; it would ask for a Metro server on launch"
+            exit 1
+          fi
+          echo "$apk carries assets/index.android.bundle"
 
       - uses: actions/upload-artifact@v4
         with:

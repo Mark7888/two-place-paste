@@ -9,6 +9,20 @@ react {
     reactNativeDir = file("../../node_modules/react-native")
     codegenDir = file("../../node_modules/@react-native/codegen")
     autolinkLibrariesWithApp()
+
+    // A debug build expects Metro to serve the JavaScript, so React Native
+    // skips bundling it: every variant named in `debuggableVariants` — by
+    // default `debug` and `debugOptimized` — is built without an
+    // `index.android.bundle`. That is what makes fast refresh possible, and it
+    // is also why such an APK cannot start on its own.
+    //
+    // `-PbundleInDebug=true` empties that list, so the debug APK carries its
+    // own bundle and runs with no dev server. CI builds with it, because an
+    // artefact someone installs to test the tile on a device has to start; a
+    // developer building locally does not pass it and keeps fast refresh.
+    if (Boolean.parseBoolean(project.findProperty("bundleInDebug")?.toString() ?: "false")) {
+        debuggableVariants = []
+    }
 }
 
 android {

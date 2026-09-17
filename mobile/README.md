@@ -38,8 +38,17 @@ To build the app you also need the Android SDK and a JDK:
 
 ```sh
 cd android && gradle wrapper --gradle-version 9.4.1   # once: the JAR is not committed
-./gradlew assembleDebug
+./gradlew assembleDebug                               # needs Metro: npm start
+./gradlew assembleDebug -PbundleInDebug=true          # standalone, starts on its own
 ```
+
+The difference matters. React Native leaves the JavaScript bundle out of a
+debug build — that is what fast refresh is — so a plain `assembleDebug` APK
+shows "Unable to load script" unless `npm start` is running and reachable.
+`-PbundleInDebug=true` empties React Native's `debuggableVariants`, so the APK
+carries its own bundle and starts with no dev server. CI builds with it and
+asserts the bundle is inside the APK, because that is the artefact a reviewer
+installs to run the manual matrix below.
 
 The Gradle wrapper JAR is deliberately absent — this repository contains no
 binary blobs, and the same rule keeps the launcher icon and the tile icon as
