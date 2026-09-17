@@ -1,0 +1,27 @@
+// Root Gradle build for the TwoPlacePaste Android app (ROADMAP P7).
+buildscript {
+    // These are React Native 0.87's own versions, read from
+    // node_modules/react-native/gradle/libs.versions.toml. They are not an
+    // independent choice: the app compiles against the same SDK, NDK and
+    // Kotlin as the React Native it links, and a version skew here is a build
+    // failure inside React Native's own Gradle plugin rather than in this app.
+    ext {
+        buildToolsVersion = "37.0.0"
+        minSdkVersion = 24
+        compileSdkVersion = 37
+        targetSdkVersion = 36
+        ndkVersion = "27.1.12297006"
+        kotlinVersion = "2.2.0"
+    }
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath("com.android.tools.build:gradle:9.2.1")
+        classpath("com.facebook.react:react-native-gradle-plugin")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion")
+    }
+}
+
+apply plugin: "com.facebook.react.rootproject"

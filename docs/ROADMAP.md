@@ -17,11 +17,11 @@ request. Phases run in numeric order; only one pair of phases may overlap.
 | **P4** | Server surface — admin UI, tokens, deployment | ✅ **Done** | P3 |
 | **P5** | Go client core — `pkg/tppclient` | ✅ **Done** | P4 |
 | **P6** | Desktop app — Windows + macOS | ✅ **Done** | P5 |
-| **P7** | Android app | ▶ **Next** | P5 (server from P4 for tests) |
-| **P8** | Release — E2E, hardening, docs, artefacts | ⏳ Blocked | P6, P7 |
+| **P7** | Android app | ✅ **Done** | P5 (server from P4 for tests) |
+| **P8** | Release — E2E, hardening, docs, artefacts | ▶ **Next** | P6, P7 |
 
 **Only P6 and P7 may run at the same time** (different languages, disjoint directories,
-no shared file). P6 is done, so P7 now runs on its own. Everything else is strictly
+no shared file). Both are done, so P8 now runs on its own. Everything else is strictly
 sequential. Running a single agent through P3 → P4 → P5 → P6 → P7 → P8 is a fully valid
 schedule; nothing in this roadmap requires parallelism.
 
@@ -100,7 +100,11 @@ Fixed in P0, not renegotiated later. Phase ownership is expressed in terms of it
   internal/autostart/
   ui/                        React app for the localhost UI
 /mobile/                     React Native app
-  src/crypto/  src/protocol/  src/screens/  src/platform/
+  src/core/                  crypto + protocol client, free of React Native imports
+    crypto/  protocol/
+  src/platform/              per-OS files: clipboard, key storage, tile
+  src/app/                   session wiring and screens/
+  src/interop/               the scripted test against a real relay and the Go client
   android/                   native modules (quick-settings tile)
 /deploy/                     docker-compose, .env.example, redis.conf
 /docs/
@@ -133,7 +137,7 @@ graph TD
     P3 --> P4["P4 Server surface ✅"]
     P4 --> P5["P5 Go client core ✅"]
     P5 --> P6["P6 Desktop app ✅"]
-    P5 --> P7["P7 Android app"]
+    P5 --> P7["P7 Android app ✅"]
     P6 --> P8["P8 Release"]
     P7 --> P8
 ```
@@ -736,7 +740,7 @@ each, against a P4 relay:
 
 ---
 
-# PHASE 7 — Android app ▶ Next
+# PHASE 7 — Android app ✅ Done
 
 **Depends on:** P5 for the flow shape; needs a P4 server to test against.
 **SPEC §3.2, §5.2, §6, §7.1, §7.3**
@@ -769,14 +773,115 @@ each, against a P4 relay:
 
 ### Acceptance
 
-- [ ] Vector tests green in Jest.
-- [ ] A scripted test pairs the RN client with a Go client against a local server.
-- [ ] Tile sync works from a locked-then-unlocked device and from another app; behaviour
-      documented on Android 12/13/14.
+- [x] **Vector tests green in Jest.** All 42 vectors in `/spec/vectors` — the same JSON
+      the Go client runs, read from the repository rather than copied, because a copy is
+      a contract that can drift. `vectors.test.ts` also asserts every intermediate the
+      corpus publishes (shared secret, HKDF info, wrap key, AAD, content key), so a wrong
+      ciphertext says *which step* is wrong, and it runs `index.json` as a test of its own
+      so a suite that stopped being loaded cannot pass by being absent. 91 tests in total
+      with the protocol and encoding suites.
+- [x] **A scripted test pairs the RN client with a Go client against a local server.**
+      `npm run interop` starts a real Redis, builds and runs `/server`, mints a creation
+      token through the admin UI, drives `pkg/tppclient` as a subprocess
+      (`mobile/scripts/gopeer`), and runs this client's own core in the test process. It
+      covers group creation, pairing in the payload's real encoding, an entry each way
+      (including non-ASCII and an emoji), history, and a revocation that locks the phone
+      out. It skips with a reason where Go or Redis is missing, so it is `npm run interop`
+      and not `npm test`.
+- [ ] **Tile behaviour on Android 12/13/14 — not executed.** This phase was built in a
+      Linux container with no Android SDK and no device. The version table in
+      `mobile/README.md` is written from the platform contracts, and the manual matrix a
+      reviewer should run is in the same file. Reporting a device matrix that was not run
+      would be worse than leaving the box unticked.
+
+### Delivered
+
+**`src/core`, and the boundary that makes it worth naming.** The crypto profile and the
+protocol client import nothing from React Native. That is what lets the same code run in
+three places — the app on Hermes, the tile's sync, and Node, where the vectors and the
+interop test exercise it — and it is what makes the interop test meaningful: the thing
+paired against the Go client is the code the phone runs, not a Node-shaped rehearsal of it.
+
+**`src/core/crypto`** — `tpp-crypto-v1` byte for byte, on the `@noble/*` libraries
+`/spec/crypto.md` §2.2 pins. Epochs and frame timestamps are `bigint` throughout, never
+`number`: one vector uses 2^64-1, and a `u64` above 2^53 does not survive a JavaScript
+number. Hex, UTF-8 and base64url are written out in `bytes.ts` rather than taken from
+`Buffer`, `TextEncoder` or `atob` — none of the three is guaranteed on Hermes, and a
+polyfill that differs on a lone surrogate or a stray `=` would be a wire incompatibility
+rather than a cosmetic bug. The tests caught exactly that class of bug during the phase:
+the first UTF-8 encoder mishandled a surrogate pair and produced two replacement
+characters per emoji.
+
+**`src/core/protocol`** — one method per flow of SPEC §3 and §6, mirroring `pkg/tppclient`
+so the two read against each other. `prepareRevoke` returns a plan carrying the roster;
+`confirm` is the only thing that revokes, so a screen that skipped the dialog would have
+nothing to confirm with. The client refuses an entry the relay filed under an id other
+than the one bound into its AAD, and applies the epoch rules of `/spec/crypto.md` §7 as
+three distinct outcomes a UI phrases differently — decrypt, skip silently, wait for the
+wrapped key.
+
+**`src/platform`** — every OS capability behind a per-OS file, with `moduleSuffixes` in
+`tsconfig.json` so the typecheck is the Android bundle's typecheck and Metro applies the
+same rule when it bundles. iOS files exist for each port and are the honest minimum: iOS
+is deferred, and its clipboard is manual-only by construction (SPEC §7.3).
+
+**`android/`** — the tile service, two native modules, and no more. `SyncTileService`
+starts the app and waits to be told how the sync went; it holds no socket and reads no
+clipboard. `TileModule` carries a tap to JavaScript on both paths a tap can arrive by —
+an event to a running app, a pending flag a cold start claims — and the flag is claimed
+exactly once, so a tap cannot produce two syncs and a launcher tap produces none.
+`ClipboardModule` fills the two gaps the clipboard library leaves on Android.
+
+One divergence from the layout sketched in P0 is worth naming: the crypto and the
+protocol client sit under `src/core/` rather than at `src/crypto/` and `src/protocol/`,
+and the screens under `src/app/screens/`. The directory boundary *is* the invariant — what
+is inside `src/core` may not import React Native — so it is expressed as a directory
+rather than as a convention, and the layout block above now says so.
+
+**Five screens** — sync with the direction said out loud, history with an explicit fetch
+button and nothing that lists it otherwise, devices with the named confirmation of §3.3
+step 2, pairing in all three directions with the QR rendered on device, and settings. The
+navigation is five tabs and a piece of state: a navigation library would be a dependency
+to keep current for a stack one level deep.
+
+### Three decisions worth a reviewer's attention
+
+1. **Android is the only platform in this system that can infer a sync direction, and it
+   does.** SPEC §6 says upload if the local clipboard is newer, and P6 could not implement
+   it because neither NSPasteboard nor the Windows clipboard records when its content
+   arrived. Android does: `ClipDescription.getTimestamp()`, API 26+. `sync()` uses it,
+   compared against the newest entry's *metadata* rather than the entry, because deciding
+   a direction should not cost a 10 MB download. When the platform answers 0 the app says
+   so and leaves the choice to the two directional buttons — the same refusal to guess P6
+   made, reached from the other side.
+2. **"Revoked" is inferred on this platform, not read.** The Go client reads the 401 the
+   relay answers a revoked device's upgrade with. The WebSocket API React Native exposes
+   does not surface the response status at all: a refused upgrade and an unreachable host
+   are the same `onerror`. So the client asks a question the API does answer — is the
+   relay serving `/healthz`? — and only after two consecutive refusals with a healthy
+   relay does it report "this device may have been removed", in those words. Nothing is
+   deleted on the strength of a guess.
+3. **An image can be received as well as sent.** `@react-native-clipboard/clipboard`
+   writes images on iOS only, and an image that can be received but not pasted is half a
+   feature. `ClipboardModule.setImagePNG` stages the PNG in the app's own cache and puts a
+   FileProvider URI on the clipboard with the read grant attached to the clip; the
+   provider is not exported, so without that grant nothing can read the file, and one file
+   is reused rather than accumulating a second copy of the group's data in the cache.
+
+### Two notes for Phase 8
+
+1. **The Gradle wrapper JAR is not committed**, in keeping with this repository containing
+   no binary blobs — the launcher and tile icons are vector drawables and the debug
+   keystore is the one Gradle generates on the building machine. `gradle wrapper`
+   materialises it from the version pinned in `gradle-wrapper.properties`, and the Android
+   CI job does exactly that before it builds. A release job needs a real signing key and
+   the same step.
+2. **The APK the Android job uploads is a debug build.** Release signing, an app bundle
+   and the store metadata are release work, and the app's `versionCode` is still 1.
 
 ---
 
-# PHASE 8 — Release: E2E, hardening, docs
+# PHASE 8 — Release: E2E, hardening, docs ▶ Next
 
 **Depends on:** P6, P7.
 **Owns:** `/e2e/**`, `/docs/**`, release workflow, `SECURITY.md`.
@@ -793,6 +898,21 @@ each, against a P4 relay:
   and no filenames.
 - Docs: install, pairing walkthrough, revocation, backup and restore.
 - Tagged release with artefacts for Windows, macOS and Android.
+
+---
+
+## Queued contract change — joiner-emitted pairing
+
+Pairing works in every transport (QR, copied text) but only in one direction: the device
+that already holds a group key emits the code, and the device without one consumes it.
+`PairingStartRequest` is legal only on an authenticated connection, so a joiner cannot
+mint a token and cannot show a code a member could accept.
+
+Making it symmetric needs new message types, relay-held offers, and a named confirmation
+on the accepting member — a shared-contract change, so it is its own PR and not part of
+any feature phase (§3). The mechanism, the wire additions, the security consequence of
+moving the risk onto the member, and the work split are in
+[`docs/plans/joiner-emitted-pairing.md`](plans/joiner-emitted-pairing.md).
 
 ---
 

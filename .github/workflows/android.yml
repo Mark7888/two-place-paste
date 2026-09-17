@@ -1,0 +1,129 @@
+# The Android app's build (ROADMAP P7).
+#
+# The Node workflow already lints, typechecks and tests /mobile — that is the
+# JavaScript half, and it runs on every Node change. This job is the half that
+# only exists on Android: Kotlin compiles, the manifest resolves, the tile
+# service and the two native modules are real classes, and the whole thing
+# packages into an APK that can be installed.
+#
+# It is a debug build. Release signing is a key this repository does not carry
+# and is release work (ROADMAP P8), so what this job proves is that the app
+# builds and that the artefact a reviewer needs to test the tile by hand exists.
+name: Android
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "mobile/**"
+      - ".github/workflows/android.yml"
+  pull_request:
+    paths:
+      - "mobile/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      # React Native 0.87's own Gradle plugin builds against a Java 17
+      # toolchain, so 17 is what the build needs — not the newest JDK.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # `packages` is pinned to override the action's default of
+      # "tools platform-tools". The obsolete `tools` package has been removed
+      # from Google's repository, so that default now fails the action with
+      # "Failed to find package 'tools'" — it stopped working between one run
+      # of this workflow and the next, with nothing changed here.
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
+
+      # The SDK packages React Native 0.87 pins, installed explicitly so that a
+      # missing one is a named step that failed rather than a puzzle inside
+      # Gradle.
+      #
+      # The platform id is "android-37.0", not "android-37": Android now
+      # versions platforms with a minor component, and `compileSdk 37` in the
+      # build file resolves to the .0 of that API. The runner image already
+      # carries the platform and the build tools, so those two lines are
+      # usually a no-op that costs nothing and stops the build from depending
+      # on what a runner image happens to ship. The NDK is the one real
+      # download: the runner has 27.3, React Native pins 27.1.
+      - name: Install the SDK packages React Native pins
+        run: |
+          sdkmanager --install \
+            "platforms;android-37.0" \
+            "build-tools;37.0.0" \
+            "ndk;27.1.12297006" \
+            "cmake;3.22.1"
+
+      # Autolinking reads node_modules, so the JavaScript dependencies have to
+      # be installed before Gradle configures anything.
+      - name: Install the JavaScript dependencies
+        working-directory: mobile
+        run: npm ci
+
+      # Pinned, and pinned to React Native 0.87's own Gradle version. Without
+      # this the runner's preinstalled Gradle is used, and a newer one ships a
+      # Kotlin stdlib whose metadata React Native's plugin — built with Kotlin
+      # 2.2.0 — cannot read, which fails the build inside node_modules before
+      # any of this app is compiled.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.4.1"
+
+      # The wrapper JAR is not committed (see mobile/.gitignore): this
+      # materialises it from the pinned distribution, so the build uses exactly
+      # the Gradle version the repository states.
+      - name: Materialise the Gradle wrapper
+        working-directory: mobile/android
+        run: gradle wrapper --gradle-version 9.4.1
+
+      # -PbundleInDebug=true makes the debug variant carry its own JS bundle
+      # (see mobile/android/app/build.gradle). Without it React Native leaves
+      # the bundle out of a debug build and the APK cannot start without a
+      # Metro dev server, which is no use to someone installing it to test the
+      # tile on a device.
+      - name: Build the debug APK
+        working-directory: mobile/android
+        run: ./gradlew --no-daemon assembleDebug -PbundleInDebug=true
+
+      # The bundle is the thing that makes this artefact installable, and its
+      # absence is invisible until the app is launched on a device. So it is
+      # asserted here rather than discovered there.
+      - name: Check the APK carries its own JS bundle
+        run: |
+          set -euo pipefail
+          apk=$(ls mobile/android/app/build/outputs/apk/debug/*.apk | head -1)
+          if ! unzip -l "$apk" | grep -q "assets/index.android.bundle"; then
+            echo "::error::$apk has no assets/index.android.bundle; it would ask for a Metro server on launch"
+            exit 1
+          fi
+          echo "$apk carries assets/index.android.bundle"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: twoplacepaste-debug-apk
+          path: mobile/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

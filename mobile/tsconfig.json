@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2022", "dom"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    // The platform layer is per-OS files (src/platform/*.android.ts). This is
+    // the Android app, so the typecheck is the Android bundle's typecheck;
+    // Metro applies the same rule when it bundles.
+    "moduleSuffixes": [".android", ""],
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["jest", "node"]
+  },
+  "include": ["src/**/*", "index.js", "jest.config.js", "babel.config.js", "metro.config.js"],
+  "exclude": ["node_modules", "android"]
+}

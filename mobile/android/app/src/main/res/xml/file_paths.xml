@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The one directory the FileProvider may hand out: where a received image is
+  staged before it goes on the clipboard. Nothing else in this app's storage is
+  reachable through the provider.
+-->
+<paths>
+    <cache-path name="clips" path="clips/" />
+</paths>
