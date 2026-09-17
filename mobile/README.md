@@ -152,3 +152,7 @@ device or emulator:
    pending request exactly once, so exactly one sync should happen.
 6. Revoke the phone from the desktop while the phone is in the background. Bring
    it forward: it should report that the relay is refusing it.
+7. Check the window's edges, in portrait and in landscape, with gesture
+   navigation and with three-button navigation: the app is edge-to-edge, so its
+   background should reach both bars while no title, button or tab label sits
+   under the status bar, under the navigation bar, or under a display cutout.
