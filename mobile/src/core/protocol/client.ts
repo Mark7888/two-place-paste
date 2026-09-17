@@ -82,6 +82,7 @@ import {
   devicePublicKey,
   inGroup,
   loadState,
+  newState,
   saveState,
 } from './state';
 import { splitCreationURL, normalizeServerURL, websocketURL } from './urls';
@@ -667,6 +668,28 @@ export class Client {
     };
     await saveState(this.store, this.state);
     await this.connect();
+  }
+
+  /**
+   * forget deletes this installation's identity and returns the client to the
+   * state of a first launch: no group, and a brand-new device keypair.
+   *
+   * It is a local operation only. The relay still lists this device until
+   * another device revokes it, and only that re-keys the group — which is why
+   * the screen offering this says so. What it does guarantee is that the group
+   * key is gone from this phone, so nothing here can read the group's entries
+   * afterwards.
+   *
+   * A fresh keypair rather than the old one, because this is a new identity:
+   * pairing again should look like a new device to the group, not like the
+   * device that left.
+   */
+  async forget(): Promise<void> {
+    this.disconnect();
+    this.invitations.clear();
+    this.refusals = 0;
+    this.state = newState(this.state.deviceName);
+    await saveState(this.store, this.state);
   }
 
   // -------------------------------------------------------------------------

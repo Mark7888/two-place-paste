@@ -1,31 +1,35 @@
 /**
- * Pairing, in all three directions SPEC §3.2 asks for: show a QR, scan a QR,
- * and paste a token. The payload is one string in every direction, so this
- * screen shows the same text under the QR code that the scanner accepts.
+ * Inviting another device into this group (SPEC §3.2).
  *
- * The QR code is rendered on device. A payload carrying a pairing token must
- * not travel to a remote QR service to be drawn.
+ * This screen only ever *shows* a code. That is not a simplification of the
+ * spec, it is the shape of the flow: the payload travels from the device that
+ * is already in the group to the one that is not, because only a member can
+ * mint a pairing token against the relay. So the member displays, and the
+ * joiner scans or pastes — a phone scans this screen's QR, and a desktop,
+ * which has no camera by design (SPEC §7.2), pastes the string under it.
+ *
+ * Both forms are the same string, which is why they sit together: whichever
+ * the joining device can take, it is reading the same payload.
+ *
+ * There is deliberately no scanner here. A device holding a group key cannot
+ * join another group without discarding that key, so the way to move this
+ * phone elsewhere is Settings, and this screen says so rather than offering a
+ * button that would have to mean "leave the group" in disguise.
  */
 
 import React, { useState } from 'react';
-import { Linking, Platform, ScrollView, Text, TextInput, View } from 'react-native';
-import { PermissionsAndroid } from 'react-native';
+import { Linking, ScrollView, Text, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
-import { Camera, CameraType } from 'react-native-camera-kit';
 
 import type { Invitation } from '../../core';
 import { useSession } from '../SessionContext';
 import { failureMessage } from '../session';
 import { Button, Card, Status } from '../ui';
-import { colors, styles } from '../theme';
-
-type Mode = 'idle' | 'showing' | 'scanning';
+import { styles } from '../theme';
 
 export function PairingScreen(): React.JSX.Element {
   const session = useSession();
-  const [mode, setMode] = useState<Mode>('idle');
   const [invitation, setInvitation] = useState<Invitation | null>(null);
-  const [pasted, setPasted] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [ok, setOk] = useState(true);
@@ -41,11 +45,11 @@ export function PairingScreen(): React.JSX.Element {
         await client.connect();
         const started = await client.startPairing();
         setInvitation(started);
-        setMode('showing');
         setOk(true);
-        setMessage('Scan this from the joining device, or copy the text below.');
-        // The inviter is the only device holding the group key, so it stays on
-        // this screen until it has wrapped it for the joiner (§3.2 step 4).
+        setMessage('Scan this from the joining device, or send it the text below.');
+        // The inviter is the only device holding the group key, so it wraps it
+        // for the joiner as soon as the relay reports the join (§3.2 step 4).
+        // That happens on the client's own connection; this only reports it.
         started.joined
           .then((device) => setMessage(`${device.name} joined the group.`))
           .catch(() => undefined);
@@ -58,109 +62,57 @@ export function PairingScreen(): React.JSX.Element {
     })();
   };
 
-  const join = (payload: string) => {
-    const client = session.client;
-    if (client === null || busy || payload.trim() === '') {
-      return;
-    }
-    setBusy(true);
-    setMode('idle');
-    void (async () => {
-      try {
-        await client.joinPairing(payload);
-        setOk(true);
-        setMessage('This device is now in the group. It starts empty by design.');
-      } catch (err) {
-        setOk(false);
-        setMessage(failureMessage(err));
-      } finally {
-        setBusy(false);
-        session.refresh();
-      }
-    })();
-  };
-
-  const scan = () => {
-    void (async () => {
-      if (Platform.OS === 'android') {
-        const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CAMERA);
-        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-          setOk(false);
-          setMessage('Scanning needs the camera. You can paste the pairing code instead.');
-          return;
-        }
-      }
-      setMode('scanning');
-    })();
-  };
-
-  if (mode === 'scanning') {
-    return (
-      <View style={styles.screen}>
-        <Camera
-          style={{ flex: 1 }}
-          cameraType={CameraType.Back}
-          scanBarcode
-          onReadCode={(event) => join(event.nativeEvent.codeStringValue)}
-        />
-        <View style={styles.content}>
-          <Button label="Cancel" variant="secondary" onPress={() => setMode('idle')} />
-        </View>
-      </View>
-    );
-  }
-
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Pairing</Text>
-      <Status message={message} ok={ok} />
 
-      {session.inGroup && (
-        <Card title="Add a device to this group">
-          <Button label="Show a pairing code" onPress={show} disabled={busy} />
-          {mode === 'showing' && invitation !== null && (
-            <View style={{ alignItems: 'center', gap: 10 }}>
-              <View style={{ backgroundColor: '#ffffff', padding: 12, borderRadius: 8 }}>
-                <QRCode value={invitation.payload} size={220} />
-              </View>
-              <Text style={styles.mono} selectable>
-                {invitation.payload}
-              </Text>
-              <Text style={styles.muted}>
-                Valid until {invitation.expiresAt.toLocaleTimeString()} · single use
-              </Text>
-            </View>
-          )}
-        </Card>
-      )}
-
-      <Card title={session.inGroup ? 'Join another group' : 'Join a group'}>
+      <Card title="Add a device to this group">
         <Text style={styles.muted}>
-          Scan the code another device is showing, or paste it. Both carry the same string.
-        </Text>
-        <Button label="Scan a QR code" variant="secondary" onPress={scan} disabled={busy} />
-        <TextInput
-          style={styles.input}
-          value={pasted}
-          onChangeText={setPasted}
-          placeholder="Paste a pairing code"
-          placeholderTextColor={colors.muted}
-          autoCapitalize="none"
-          autoCorrect={false}
-          multiline
-        />
-        <Button label="Join with this code" onPress={() => join(pasted)} disabled={busy} />
-      </Card>
-
-      <Card title="Where a pairing code comes from">
-        <Text style={styles.muted}>
-          Another device that is already in the group shows one. To create the first group
-          instead, open your relay’s admin page and use the creation link it gives you.
+          The code is short-lived and pairs exactly one device. The joining device scans it, or
+          pastes the same string.
         </Text>
         <Button
-          label="Open the relay’s admin page"
+          label={invitation === null ? 'Show a pairing code' : 'New pairing code'}
+          onPress={show}
+          disabled={busy}
+        />
+        {invitation !== null && (
+          <View style={{ alignItems: 'center', gap: 10 }}>
+            <View style={{ backgroundColor: '#ffffff', padding: 12, borderRadius: 8 }}>
+              {/*
+                Rendered on device by a bundled library: a payload carrying a
+                pairing token must not travel to a remote QR service to be
+                drawn.
+              */}
+              <QRCode value={invitation.payload} size={220} />
+            </View>
+            <Text style={styles.mono} selectable>
+              {invitation.payload}
+            </Text>
+            <Text style={styles.muted}>
+              Valid until {invitation.expiresAt.toLocaleTimeString()} · single use
+            </Text>
+          </View>
+        )}
+      </Card>
+
+      <Status message={message} ok={ok} />
+
+      <Card title="Moving this device to another group">
+        <Text style={styles.muted}>
+          This device can only be in one group, because it holds one group key. Delete its keys in
+          Settings and the app returns to its setup screen, where it can join or create another.
+        </Text>
+      </Card>
+
+      <Card title="The relay’s admin page">
+        <Text style={styles.muted}>
+          Where creation links and the device roster live, for the operator of this relay.
+        </Text>
+        <Button
+          label="Open in a browser"
           variant="secondary"
-          disabled={session.client?.serverUrl === '' || session.client === null}
+          disabled={session.client === null || session.client.serverUrl === ''}
           onPress={() => {
             const base = session.client?.serverUrl ?? '';
             if (base !== '') {

@@ -37,6 +37,12 @@ export interface SessionState {
   /** refresh re-reads the client's own state into React after a flow changed it. */
   refresh(): void;
   setNotice(message: string): void;
+  /**
+   * forget deletes this device's keys and puts the app back to its setup
+   * screen, with no restart. It is how a paired device is moved to another
+   * group: there is no second way in while it still holds a group key.
+   */
+  forget(): Promise<void>;
 }
 
 const SessionContext = createContext<SessionState | null>(null);
@@ -59,6 +65,16 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
   const syncing = useRef(false);
 
   const refresh = useCallback(() => setVersion((v) => v + 1), []);
+
+  const forget = useCallback(async () => {
+    if (client === null) {
+      return;
+    }
+    await client.forget();
+    setProbablyRevoked(false);
+    setNotice('');
+    refresh();
+  }, [client, refresh]);
 
   useEffect(() => {
     let cancelled = false;
@@ -175,11 +191,12 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
       probablyRevoked,
       refresh,
       setNotice,
+      forget,
     }),
     // `version` is the dependency that makes a change inside the client — a new
     // epoch, a dropped socket — reach React, since the client is mutable and
     // is deliberately not a React value.
-    [client, ready, notice, probablyRevoked, refresh, version],
+    [client, ready, notice, probablyRevoked, refresh, forget, version],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

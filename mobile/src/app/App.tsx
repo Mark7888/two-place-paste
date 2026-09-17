@@ -23,7 +23,7 @@
  * behind the navigation bar instead of leaving a stripe of a different colour.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StatusBar, Text, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -49,6 +49,12 @@ const TABS: { id: Tab; label: string }[] = [
 function Shell(): React.JSX.Element {
   const session = useSession();
   const [tab, setTab] = useState<Tab>('sync');
+  const paired = session.inGroup;
+  useEffect(() => {
+    if (!paired) {
+      setTab('sync');
+    }
+  }, [paired]);
   // Left and right matter too: in landscape the navigation bar moves to one
   // side, and a display cutout can take a strip of either edge.
   const insets = useSafeAreaInsets();
@@ -66,13 +72,14 @@ function Shell(): React.JSX.Element {
     );
   }
 
-  // Before this device is in a group there is nothing to navigate between, so
-  // the setup screen gets the whole window — including the bottom inset, which
-  // the tab bar would otherwise have taken care of.
-  if (!session.inGroup && tab !== 'pairing' && tab !== 'settings') {
+  // Until this device is in a group, the setup screen is the app: there is no
+  // tab bar, because every other screen needs a group key to do anything and a
+  // tab that leads nowhere is worse than no tab. It takes the bottom inset
+  // itself, which the tab bar would otherwise have handled.
+  if (!session.inGroup) {
     return (
       <View style={[styles.screen, frame, { paddingBottom: insets.bottom }]}>
-        <SetupScreen onPair={() => setTab('pairing')} />
+        <SetupScreen />
       </View>
     );
   }

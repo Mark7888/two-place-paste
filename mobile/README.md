@@ -100,6 +100,29 @@ Where the platform will not say (it answers 0), the app does not guess: it says
 so and leaves the choice to the two directional buttons, because guessing here
 silently destroys whichever side it overwrites.
 
+## The two states of this app
+
+There is no third one, and the shell enforces it (`src/app/App.tsx`).
+
+**Not in a group.** The setup screen is the whole app: no tab bar, because
+every other screen needs a group key to do anything and a tab that leads
+nowhere is worse than no tab. It offers the only two ways in (SPEC §3) — join
+a group a member is inviting this device to, or create the first group from a
+relay's creation link — and one scanner that takes either code and works out
+which it is from the code itself (`classifyCode`).
+
+**In a group.** The five tabs. Pairing only ever *shows* a code, because that
+is the direction the payload travels: only a member can mint a pairing token
+against the relay, so the member displays and the joiner scans or pastes. A
+phone scans the QR; a desktop, which has no camera by design (SPEC §7.2),
+takes the string under it.
+
+A device holds one group key, so it belongs to one group. Moving it elsewhere
+is **Settings → delete this device's keys**, which returns the app to the
+setup screen with no restart — and is a local operation: the relay still lists
+the device until another device revokes it, which is what re-keys the group
+(SPEC §3.3).
+
 ## What this client refuses to do
 
 - **It never pulls history.** The History tab lists nothing until the fetch
@@ -139,20 +162,23 @@ What a reviewer should run, against a P4 relay, on an Android 12, 13 and 14
 device or emulator:
 
 1. Pair the phone from a desktop's QR code, then from a pasted code. Both are
-   the same string; both must work.
-2. Add the **Paste sync** tile to the quick-settings panel. Copy text in another
+   the same string; both must work. Then check the reverse direction: pair a
+   second device *from* the phone's Pairing tab.
+2. On a fresh install, confirm the setup screen has no tab bar, and that
+   scanning the creation link on the relay's admin page creates the group.
+3. Add the **Paste sync** tile to the quick-settings panel. Copy text in another
    app, pull down the shade, tap the tile: the app should flash, a toast should
    report what happened, and the tile's subtitle should keep saying it.
-3. Repeat with the screen locked: the tap should ask for the lock screen, and
+4. Repeat with the screen locked: the tap should ask for the lock screen, and
    the sync should complete after unlocking.
-4. Copy a screenshot and repeat, in both directions. An image arriving from a
+5. Copy a screenshot and repeat, in both directions. An image arriving from a
    desktop is staged in the app's cache and put on the clipboard as a
    FileProvider URI.
-5. Kill the app from recents and tap the tile: the cold-start path claims the
+6. Kill the app from recents and tap the tile: the cold-start path claims the
    pending request exactly once, so exactly one sync should happen.
-6. Revoke the phone from the desktop while the phone is in the background. Bring
+7. Revoke the phone from the desktop while the phone is in the background. Bring
    it forward: it should report that the relay is refusing it.
-7. Check the window's edges, in portrait and in landscape, with gesture
+8. Check the window's edges, in portrait and in landscape, with gesture
    navigation and with three-button navigation: the app is edge-to-edge, so its
    background should reach both bars while no title, button or tab label sits
    under the status bar, under the navigation bar, or under a display cutout.

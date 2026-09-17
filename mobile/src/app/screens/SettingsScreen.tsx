@@ -7,7 +7,7 @@ import React, { useState } from 'react';
 import { Alert, ScrollView, Text } from 'react-native';
 
 import { publicKey, toHex } from '../../core';
-import { secureStore, tile } from '../../platform';
+import { tile } from '../../platform';
 import { useSession } from '../SessionContext';
 import { failureMessage } from '../session';
 import { Button, Card, Status } from '../ui';
@@ -22,7 +22,7 @@ export function SettingsScreen(): React.JSX.Element {
   const forget = () => {
     Alert.alert(
       'Leave the group?',
-      'This device’s keys are deleted from this phone. Nothing is removed from the relay — to stop this device from reading new entries, remove it from another device instead, which re-keys the group.',
+      'This device’s keys are deleted from this phone and the app returns to its setup screen, where it can join or create another group.\n\nNothing is removed from the relay: to stop this device from reading what the group writes next, revoke it from another device, which re-keys the group.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -31,9 +31,9 @@ export function SettingsScreen(): React.JSX.Element {
           onPress: () => {
             void (async () => {
               try {
-                client?.disconnect();
-                await secureStore.clear('session');
-                setMessage('This device’s keys were deleted. Restart the app to start fresh.');
+                // The app follows the client: with no group key the shell
+                // shows the setup screen, so there is nothing to restart.
+                await session.forget();
               } catch (err) {
                 setMessage(failureMessage(err));
               }
@@ -82,6 +82,10 @@ export function SettingsScreen(): React.JSX.Element {
       </Card>
 
       <Card title="Leave the group">
+        <Text style={styles.muted}>
+          Deletes this device’s keys and returns the app to its setup screen. This is also how the
+          device is moved to another group: it can hold only one group key at a time.
+        </Text>
         <Button label="Delete this device’s keys" variant="danger" onPress={forget} />
         <Status message={message} />
       </Card>

@@ -245,6 +245,52 @@ describe('revocation and rekey (SPEC §3.3, spec/crypto.md §7)', () => {
   });
 });
 
+describe('leaving the group (the only way back to setup)', () => {
+  test('forget clears the group and the key, and issues a new identity', async () => {
+    const relay = new FakeRelay();
+    const store = new MemoryStore();
+    const laptop = await open(relay, store, 'laptop');
+    await laptop.createGroup(relay.creationURL);
+
+    const before = laptop.snapshot();
+    expect(laptop.inGroup).toBe(true);
+
+    await laptop.forget();
+
+    expect(laptop.inGroup).toBe(false);
+    expect(laptop.connected).toBe(false);
+    expect(laptop.epoch).toBe(0n);
+    expect(laptop.deviceId).toBe('');
+    expect(laptop.serverUrl).toBe('');
+    // The group key is gone, so nothing on this device can read the group's
+    // entries any more.
+    expect(laptop.snapshot().groupKey).toHaveLength(0);
+    // And this is a new device as far as any future group is concerned.
+    expect(laptop.snapshot().devicePrivateKey).not.toEqual(before.devicePrivateKey);
+
+    // Persisted, not just in memory: a restart must not resurrect the group.
+    const persisted = store.peek('session') ?? '';
+    expect(persisted).not.toContain(before.deviceId);
+    const restarted = await open(relay, store, 'laptop');
+    expect(restarted.inGroup).toBe(false);
+  });
+
+  test('a forgotten device can pair into a group again', async () => {
+    const relay = new FakeRelay();
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const phone = await open(relay, new MemoryStore(), 'phone');
+    await pair(laptop, phone);
+
+    await phone.forget();
+    expect(phone.inGroup).toBe(false);
+
+    await pair(laptop, phone);
+    expect(phone.inGroup).toBe(true);
+    expect(phone.snapshot().groupKey).toEqual(laptop.snapshot().groupKey);
+  });
+});
+
 describe('what the client refuses locally', () => {
   test('every flow needs a group first', async () => {
     const client = await open(new FakeRelay(), new MemoryStore(), 'phone');

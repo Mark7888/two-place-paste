@@ -7,7 +7,7 @@
  * keeps a rekey from touching what the user has copied (SPEC §3.3).
  */
 
-import { Client, Handlers, Item, TppError, describe as describeError } from '../core';
+import { Client, Handlers, Item, TppError, classifyCode, describe as describeError } from '../core';
 import {
   clipboard,
   clipboardTimestamp,
@@ -135,3 +135,29 @@ export function describeItem(item: Item): string {
 
 /** failureMessage renders an error for a status line or a toast, with no cause chain and no secrets. */
 export const failureMessage = describeError;
+
+/**
+ * enterGroup acts on a code the user scanned or pasted, whichever of the two
+ * this system has it turns out to be: a creation link from a relay's admin
+ * page creates the group, and a pairing payload from a device already in one
+ * joins it (SPEC §3.1, §3.2).
+ *
+ * One entry point rather than two buttons the user has to choose between: the
+ * code says what it is, and being wrong about it is a decodable fact rather
+ * than a guess.
+ */
+export async function enterGroup(client: Client, code: string): Promise<string> {
+  switch (classifyCode(code)) {
+    case 'creation-url':
+      await client.createGroup(code.trim());
+      return 'The group was created and this device holds its first key.';
+    case 'pairing-code':
+      await client.joinPairing(code);
+      return 'This device is now in the group. It starts empty by design.';
+    default:
+      throw new TppError(
+        'invalid',
+        'That is neither a pairing code nor a creation link from a relay’s admin page.',
+      );
+  }
+}

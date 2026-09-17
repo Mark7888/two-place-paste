@@ -11,6 +11,7 @@ import {
   newState,
   saveState,
 } from '../state';
+import { classifyCode, encodePairingPayload } from '../pairing';
 import { normalizeServerURL, splitCreationURL, websocketURL } from '../urls';
 import { MemoryStore } from './fakeRelay';
 
@@ -80,5 +81,29 @@ describe('relay URLs', () => {
       'wss://relay.example.com/ws?device_id=device-1',
     );
     expect(websocketURL('http://127.0.0.1:8080', '')).toBe('ws://127.0.0.1:8080/ws');
+  });
+});
+
+describe('telling the system’s two QR codes apart', () => {
+  test('a creation link from the relay’s admin page', () => {
+    expect(classifyCode('https://relay.example.com/abc123')).toBe('creation-url');
+    expect(classifyCode('  http://127.0.0.1:8080/tok_1  ')).toBe('creation-url');
+  });
+
+  test('a pairing payload from a device that is already in a group', () => {
+    const payload = encodePairingPayload({
+      serverUrl: 'https://relay.example.com',
+      pairingToken: 'pair-1',
+      inviterEphemeralPublicKey: new Uint8Array(32).fill(3),
+    });
+    expect(classifyCode(payload)).toBe('pairing-code');
+    // What a clipboard adds must not change the answer.
+    expect(classifyCode(` ${payload}==\n`)).toBe('pairing-code');
+  });
+
+  test('anything else is unknown, and is never guessed at', () => {
+    for (const junk of ['', '   ', 'hello world', 'https://relay.example.com/', 'ftp://x/y']) {
+      expect(classifyCode(junk)).toBe('unknown');
+    }
   });
 });
