@@ -79,18 +79,26 @@ type Service struct {
 	backend   string
 	listen    int
 
-	mu        sync.Mutex
-	relay     Relay
-	settings  config.Settings
-	connected bool
-	revoked   bool
-	lastSync  time.Time
-	lastError string
-	plans     map[string]*plan
+	mu          sync.Mutex
+	relay       Relay
+	settings    config.Settings
+	connected   bool
+	revoked     bool
+	lastSync    time.Time
+	lastError   string
+	plans       map[string]*plan
+	offerPlans  map[string]*offerPlan
+	offer       Offer
+	offerCancel context.CancelFunc
 }
 
 type plan struct {
 	rev       Revocation
+	expiresAt time.Time
+}
+
+type offerPlan struct {
+	accept    OfferAcceptance
 	expiresAt time.Time
 }
 
@@ -105,15 +113,16 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("service: an autostart manager is required")
 	}
 	s := &Service{
-		clip:      opts.Clipboard,
-		auto:      opts.Autostart,
-		logger:    opts.Logger,
-		now:       opts.Now,
-		configDir: opts.ConfigDir,
-		backend:   opts.KeystoreBackend,
-		listen:    opts.ListenPort,
-		settings:  opts.Settings,
-		plans:     map[string]*plan{},
+		clip:       opts.Clipboard,
+		auto:       opts.Autostart,
+		logger:     opts.Logger,
+		now:        opts.Now,
+		configDir:  opts.ConfigDir,
+		backend:    opts.KeystoreBackend,
+		listen:     opts.ListenPort,
+		settings:   opts.Settings,
+		plans:      map[string]*plan{},
+		offerPlans: map[string]*offerPlan{},
 	}
 	if s.logger == nil {
 		s.logger = slog.Default()
@@ -574,6 +583,157 @@ func (s *Service) sweepPlansLocked() {
 			delete(s.plans, id)
 		}
 	}
+	for id, p := range s.offerPlans {
+		if now.After(p.expiresAt) {
+			delete(s.offerPlans, id)
+		}
+	}
+}
+
+// StartOffer implements localui.API: this device, which is in no group, shows
+// a code for a member of one to accept
+// (docs/plans/joiner-emitted-pairing.md §3 steps 1-3).
+//
+// The relay URL is the one thing the user supplies in this direction, because
+// a device with no group has no relay URL either. Showing a second code
+// withdraws the first: two live codes for one device would be two ways in,
+// and only one of them is on screen.
+func (s *Service) StartOffer(ctx context.Context, serverURL string) (localui.OfferView, error) {
+	s.mu.Lock()
+	relay := s.relay
+	s.mu.Unlock()
+	if relay == nil {
+		return localui.OfferView{}, localui.Errorf(http.StatusServiceUnavailable, nil, "the service is still starting")
+	}
+
+	dialCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	offer, err := relay.StartOffer(dialCtx, strings.TrimSpace(serverURL))
+	if err != nil {
+		return localui.OfferView{}, s.relayError("show a pairing code", err)
+	}
+
+	// The wait outlives this request: the code stays on screen until a member
+	// reads it, which is minutes, not the seconds a round trip gets.
+	waitCtx, stop := context.WithCancel(context.WithoutCancel(ctx))
+	s.replaceOffer(offer, stop)
+	go s.awaitOffer(waitCtx, offer)
+
+	return localui.OfferView{Code: offer.Code(), ExpiresAt: offer.ExpiresAt()}, nil
+}
+
+// CancelOffer implements localui.API. Withdrawing a code the user is no longer
+// showing is not housekeeping: the socket it holds open is the only way the
+// relay can reach this device, and leaving it open leaves a way in.
+func (s *Service) CancelOffer(context.Context) error {
+	s.replaceOffer(nil, nil)
+	return nil
+}
+
+// replaceOffer installs the offer this device is showing and gives up whatever
+// it was showing before.
+func (s *Service) replaceOffer(offer Offer, cancel context.CancelFunc) {
+	s.mu.Lock()
+	previous, previousCancel := s.offer, s.offerCancel
+	s.offer, s.offerCancel = offer, cancel
+	s.mu.Unlock()
+
+	if previousCancel != nil {
+		previousCancel()
+	}
+	if previous != nil {
+		previous.Close()
+	}
+}
+
+// awaitOffer blocks until a member accepts the code this device is showing,
+// and tells the UI either way.
+func (s *Service) awaitOffer(ctx context.Context, offer Offer) {
+	err := offer.Wait(ctx)
+
+	s.mu.Lock()
+	current := s.offer == offer
+	if current {
+		s.offer, s.offerCancel = nil, nil
+	}
+	s.mu.Unlock()
+	if !current {
+		// Superseded or withdrawn: the user is looking at something else, and
+		// saying anything about this one would be noise.
+		return
+	}
+
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		s.logger.WarnContext(ctx, "a pairing offer ended without being accepted", "error", err)
+		s.hub.publish(localui.Event{Kind: localui.EventOffer, Message: err.Error()})
+		return
+	}
+	s.logger.InfoContext(ctx, "this device was admitted to a group from a pairing offer")
+	s.hub.publish(localui.Event{Kind: localui.EventConnected, Message: "paired"})
+}
+
+// PrepareAcceptOffer implements localui.API. It changes nothing: it returns
+// the name and fingerprint the confirmation dialog must render
+// (docs/plans/joiner-emitted-pairing.md §5).
+func (s *Service) PrepareAcceptOffer(ctx context.Context, code string) (localui.OfferPlan, error) {
+	relay, err := s.ready()
+	if err != nil {
+		return localui.OfferPlan{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+
+	accept, err := relay.PrepareAcceptOffer(ctx, strings.TrimSpace(code))
+	if err != nil {
+		return localui.OfferPlan{}, s.relayError("read that pairing code", err)
+	}
+	id, err := planID()
+	if err != nil {
+		return localui.OfferPlan{}, err
+	}
+	expires := s.now().Add(planTTL)
+
+	s.mu.Lock()
+	s.sweepPlansLocked()
+	s.offerPlans[id] = &offerPlan{accept: accept, expiresAt: expires}
+	s.mu.Unlock()
+
+	return localui.OfferPlan{
+		ID:          id,
+		DeviceName:  accept.DeviceName(),
+		Fingerprint: accept.Fingerprint(),
+		ExpiresAt:   expires,
+	}, nil
+}
+
+// ConfirmAcceptOffer implements localui.API: it admits the device a plan
+// describes, and it is the only way a device is admitted this way.
+func (s *Service) ConfirmAcceptOffer(ctx context.Context, planID string) (localui.DeviceView, error) {
+	if _, err := s.ready(); err != nil {
+		return localui.DeviceView{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+
+	s.mu.Lock()
+	s.sweepPlansLocked()
+	p, ok := s.offerPlans[planID]
+	delete(s.offerPlans, planID)
+	s.mu.Unlock()
+	if !ok {
+		return localui.DeviceView{}, localui.Errorf(http.StatusConflict, nil,
+			"that pairing code is no longer pending; read it again and try once more")
+	}
+
+	device, err := p.accept.Confirm(ctx)
+	if err != nil {
+		return localui.DeviceView{}, s.relayError("admit that device", err)
+	}
+	s.logger.InfoContext(ctx, "device admitted from a pairing offer", "device_id", device.ID)
+	return deviceView(device), nil
 }
 
 // StartPairing implements localui.API.

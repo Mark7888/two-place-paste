@@ -40,6 +40,9 @@ import {
   PairingComplete,
   PairingJoinRequest,
   PairingJoinNotice,
+  PairingOfferAcceptRequest,
+  PairingOfferRequest,
+  PairingOfferResponse,
   PairingStartResponse,
   PairingWrappedKeyUpload,
 } from '../../../protocol/gen/tpp/v1/pairing';
@@ -48,6 +51,14 @@ import { Socket, SocketFactory } from '../connection';
 interface StoredEntry {
   meta: EntryMeta;
   ciphertext: Uint8Array;
+}
+
+interface StoredOffer {
+  name: string;
+  publicKey: Uint8Array;
+  /** socket is the offering device's own, which is the only way to reach it: it has no identity yet. */
+  socket: RelaySocket;
+  consumed?: boolean;
 }
 
 interface StoredDevice {
@@ -66,6 +77,7 @@ export class FakeRelay {
   private sockets = new Map<string, RelaySocket>();
   private entries: StoredEntry[] = [];
   private pairings = new Map<string, string>(); // pairing token -> inviter device id
+  private offers = new Map<string, StoredOffer>(); // offer code -> what the joiner registered
   private nextId = 1;
 
   /** creationURL is what an operator hands a user (SPEC §3.1). */
@@ -177,6 +189,65 @@ export class FakeRelay {
         });
         this.joiners.delete(request.pairingToken);
         this.pairings.delete(request.pairingToken);
+        reply(MessageType.MESSAGE_TYPE_PAIRING_COMPLETE, complete);
+        return;
+      }
+
+      case MessageType.MESSAGE_TYPE_PAIRING_OFFER_REQUEST: {
+        const request = PairingOfferRequest.decode(env.payload);
+        if (request.devicePublicKey.length === 0) {
+          fail(ErrorCode.ERROR_CODE_INVALID_ARGUMENT, 'device_public_key is required');
+          return;
+        }
+        const code = `offer-${this.nextId++}`;
+        // The public key is stored at mint time precisely so the accept can be
+        // checked against it, which is the real relay's whole defence here.
+        this.offers.set(code, {
+          name: request.deviceName,
+          publicKey: request.devicePublicKey,
+          socket,
+        });
+        reply(
+          MessageType.MESSAGE_TYPE_PAIRING_OFFER_RESPONSE,
+          PairingOfferResponse.encode({
+            offerCode: code,
+            expiresAtUnixMs: (Date.now() + 300_000).toString(),
+          }).finish(),
+        );
+        return;
+      }
+
+      case MessageType.MESSAGE_TYPE_PAIRING_OFFER_ACCEPT_REQUEST: {
+        const request = PairingOfferAcceptRequest.decode(env.payload);
+        const offer = this.offers.get(request.offerCode);
+        if (offer === undefined) {
+          fail(ErrorCode.ERROR_CODE_TOKEN_EXPIRED, 'no such offer');
+          return;
+        }
+        if (offer.consumed === true) {
+          fail(ErrorCode.ERROR_CODE_TOKEN_CONSUMED, 'this offer has already admitted a device');
+          return;
+        }
+        // Byte for byte: a member that wrapped to a key the offer was not made
+        // with cannot complete the pairing.
+        if (toBase64URL(request.devicePublicKey) !== toBase64URL(offer.publicKey)) {
+          fail(ErrorCode.ERROR_CODE_INVALID_ARGUMENT, 'that is not the key this offer was made with');
+          return;
+        }
+        offer.consumed = true;
+
+        const deviceId = this.addDevice(offer.name, offer.publicKey);
+        const complete = PairingComplete.encode({
+          groupId: this.groupId,
+          deviceId,
+          epoch: this.epoch.toString(),
+          wrappedGroupKey: request.wrappedGroupKey,
+        }).finish();
+        offer.socket.push({
+          id: 'complete',
+          type: MessageType.MESSAGE_TYPE_PAIRING_COMPLETE,
+          payload: complete,
+        });
         reply(MessageType.MESSAGE_TYPE_PAIRING_COMPLETE, complete);
         return;
       }

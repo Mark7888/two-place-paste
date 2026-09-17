@@ -9,10 +9,15 @@
 // # Connection authentication
 //
 // A connection establishes its device identity at connect time, from the
-// `device_id` query parameter, and keeps it for the life of the socket. Two
-// frames — CreateGroupRequest and PairingJoinRequest — are legal without an
-// identity, because they are how a device gets one; every other frame from an
-// unauthenticated connection is answered with ERROR_CODE_UNAUTHENTICATED.
+// `device_id` query parameter, and keeps it for the life of the socket. Three
+// frames — CreateGroupRequest, PairingJoinRequest and PairingOfferRequest — are
+// legal without an identity, because they are how a device gets one; every
+// other frame from an unauthenticated connection is answered with
+// ERROR_CODE_UNAUTHENTICATED.
+//
+// PairingOfferRequest is the only one of the three that hands out something
+// before the sender has proved anything, so it is the only one this package
+// rate limits: see offersPerConn in handlers.go.
 //
 // The device identifier is therefore a bearer credential. That is a deliberate
 // MVP decision, made because the wire contract (ROADMAP P1) carries no
@@ -53,6 +58,10 @@ type Store interface {
 	GetPairing(ctx context.Context, token string) (store.Pairing, error)
 	ConsumePairing(ctx context.Context, token, joinerDeviceID string) (store.Pairing, error)
 	DeletePairing(ctx context.Context, token string) error
+	CreateOffer(ctx context.Context, name string, publicKey []byte, ttl time.Duration) (store.PairingOffer, error)
+	GetOffer(ctx context.Context, code string) (store.PairingOffer, error)
+	AcceptOffer(ctx context.Context, code, groupID string, publicKey, wrappedGroupKey []byte) (store.PairingOffer, store.Device, error)
+	DeleteOffer(ctx context.Context, code string) error
 	TouchLastSeen(ctx context.Context, deviceID string) error
 }
 

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -408,6 +409,103 @@ func (s *RedisStore) ConsumePairing(ctx context.Context, token, joinerDeviceID s
 func (s *RedisStore) DeletePairing(ctx context.Context, token string) error {
 	if err := s.rdb.Del(ctx, pairingKey(token)).Err(); err != nil {
 		return fmt.Errorf("delete pairing: %w", err)
+	}
+	return nil
+}
+
+// CreateOffer implements Store.
+func (s *RedisStore) CreateOffer(ctx context.Context, name string, publicKey []byte, ttl time.Duration) (PairingOffer, error) {
+	now := s.now()
+	o := PairingOffer{
+		Code:       newID(),
+		DeviceName: name,
+		PublicKey:  bytes.Clone(publicKey),
+		CreatedAt:  now,
+		ExpiresAt:  now.Add(ttl),
+	}
+
+	// The second key in this package that carries a TTL, and so the second one
+	// volatile-lru may evict early. Losing an offer costs a retry; the device
+	// showing it holds nothing yet.
+	pipe := s.rdb.TxPipeline()
+	pipe.HSet(ctx, offerKey(o.Code),
+		"device_name", o.DeviceName,
+		"pubkey", string(o.PublicKey),
+		"created_at", msString(o.CreatedAt),
+		"expires_at", msString(o.ExpiresAt),
+	)
+	pipe.PExpireAt(ctx, offerKey(o.Code), o.ExpiresAt)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return PairingOffer{}, fmt.Errorf("create pairing offer: %w", err)
+	}
+	return o, nil
+}
+
+// GetOffer implements Store.
+func (s *RedisStore) GetOffer(ctx context.Context, code string) (PairingOffer, error) {
+	fields, err := s.rdb.HGetAll(ctx, offerKey(code)).Result()
+	if err != nil {
+		return PairingOffer{}, fmt.Errorf("get pairing offer: %w", err)
+	}
+	if len(fields) == 0 {
+		return PairingOffer{}, ErrNotFound
+	}
+	return PairingOffer{
+		Code:       code,
+		DeviceName: fields["device_name"],
+		PublicKey:  []byte(fields["pubkey"]),
+		GroupID:    fields["group_id"],
+		DeviceID:   fields["device_id"],
+		CreatedAt:  msTime(fields["created_at"]),
+		ExpiresAt:  msTime(fields["expires_at"]),
+	}, nil
+}
+
+// AcceptOffer implements Store.
+func (s *RedisStore) AcceptOffer(ctx context.Context, code, groupID string, publicKey, wrappedGroupKey []byte) (PairingOffer, Device, error) {
+	deviceID := newID()
+	now := s.now()
+
+	keys := []string{
+		offerKey(code),
+		groupKey(groupID),
+		groupDevicesKey(groupID),
+		deviceKey(deviceID),
+		wrappedKeyKey(deviceID),
+	}
+	result, err := acceptOfferScript.Run(ctx, s.rdb, keys,
+		groupID, deviceID, string(publicKey), string(wrappedGroupKey), msString(now)).Int64()
+	if err != nil {
+		return PairingOffer{}, Device{}, fmt.Errorf("accept pairing offer: %w", err)
+	}
+	switch result {
+	case 1:
+		return PairingOffer{}, Device{}, ErrNotFound
+	case 2:
+		return PairingOffer{}, Device{}, ErrOfferConsumed
+	case 3:
+		return PairingOffer{}, Device{}, ErrOfferKeyMismatch
+	case 4:
+		return PairingOffer{}, Device{}, fmt.Errorf("accept pairing offer into group %s: %w", groupID, ErrNotFound)
+	}
+
+	offer, err := s.GetOffer(ctx, code)
+	if err != nil {
+		return PairingOffer{}, Device{}, err
+	}
+	return offer, Device{
+		ID:        deviceID,
+		GroupID:   groupID,
+		Name:      offer.DeviceName,
+		PublicKey: bytes.Clone(offer.PublicKey),
+		CreatedAt: now,
+	}, nil
+}
+
+// DeleteOffer implements Store.
+func (s *RedisStore) DeleteOffer(ctx context.Context, code string) error {
+	if err := s.rdb.Del(ctx, offerKey(code)).Err(); err != nil {
+		return fmt.Errorf("delete pairing offer: %w", err)
 	}
 	return nil
 }

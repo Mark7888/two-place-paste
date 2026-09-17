@@ -111,6 +111,41 @@ describeInterop('the phone and the Go client are one implementation of one contr
     expect(item.contentType).toBe('text/plain; charset=utf-8');
   });
 
+  test('a second phone pairs the other way round: it shows, the Go client accepts', async () => {
+    // The direction the wire contract could not express before
+    // docs/plans/joiner-emitted-pairing.md, and the one that proves the two
+    // implementations agree on PairingCode: this phone encodes the offer, the
+    // Go client decodes it, and the group key travels back.
+    const second = await Client.open({
+      store: new InMemoryStore(),
+      deviceName: 'Anna — second phone',
+    });
+    try {
+      const offer = await second.startOffer(relay.baseUrl);
+
+      // Reading the code changes nothing: it returns what a dialog renders,
+      // and nothing is admitted until the confirm below.
+      const read = await go.send(`read-offer ${offer.code}`);
+      expect(read.device_name).toBe('Anna — second phone');
+      expect(String(read.fingerprint)).toMatch(/^[0-9A-F]{4}( [0-9A-F]{4}){3}$/);
+      expect(second.inGroup).toBe(false);
+
+      const admitted = await go.send('accept-offer');
+      await offer.accepted;
+
+      expect(second.inGroup).toBe(true);
+      expect(second.deviceId).toBe(admitted.device_id);
+
+      // The group key really crossed: an entry the Go client wrote earlier
+      // stays unreadable, but one it writes now does not.
+      await go.send('put written for the second phone');
+      const item = await second.getLatest();
+      expect(fromUTF8(item.body)).toBe('written for the second phone');
+    } finally {
+      second.disconnect();
+    }
+  });
+
   test('a revocation by the Go client locks the phone out (SPEC §3.3)', async () => {
     const roster = (await go.send('devices')) as unknown as {
       devices: { id: string; name: string; this: boolean }[];

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"sync"
 
 	"github.com/coder/websocket"
@@ -26,10 +27,17 @@ type conn struct {
 	out chan []byte
 
 	// mu guards the identity fields, which the pairing and creation handlers
-	// set after the connection is already serving.
+	// set after the connection is already serving, and the offer codes this
+	// connection is waiting on.
 	mu       sync.Mutex
 	deviceID string
 	groupID  string
+
+	// offers are the pairing offers minted on this connection and not yet
+	// answered. A joiner holds its socket open waiting for PairingComplete,
+	// and it has no device identity to be reached by, so the offer code is
+	// what the hub routes on. The slice is also the rate limit: it only grows.
+	offers []string
 
 	closeOnce sync.Once
 	closed    chan struct{}
@@ -56,6 +64,24 @@ func (c *conn) setIdentity(deviceID, groupID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.deviceID, c.groupID = deviceID, groupID
+}
+
+// addOffer records a pairing offer this connection is waiting on and returns
+// how many it has now minted. The count only ever grows, so it bounds one
+// socket's offers for the life of the socket rather than over a window: an
+// unauthenticated connection that wants more reconnects, which costs it a dial.
+func (c *conn) addOffer(code string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.offers = append(c.offers, code)
+	return len(c.offers)
+}
+
+// offerCodes returns the offers this connection is waiting on.
+func (c *conn) offerCodes() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.offers)
 }
 
 // send queues a frame. It never blocks: a full queue means the client is not

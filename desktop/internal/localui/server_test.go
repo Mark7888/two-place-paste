@@ -20,15 +20,20 @@ import (
 // request that gets this far has passed both guards, which is what these tests
 // are about.
 type stubAPI struct {
-	mu      sync.Mutex
-	calls   []string
-	events  chan Event
-	plans   map[string]RevokePlan
-	nextErr error
+	mu         sync.Mutex
+	calls      []string
+	events     chan Event
+	plans      map[string]RevokePlan
+	offerPlans map[string]OfferPlan
+	nextErr    error
 }
 
 func newStubAPI() *stubAPI {
-	return &stubAPI{events: make(chan Event, 4), plans: map[string]RevokePlan{}}
+	return &stubAPI{
+		events:     make(chan Event, 4),
+		plans:      map[string]RevokePlan{},
+		offerPlans: map[string]OfferPlan{},
+	}
 }
 
 func (s *stubAPI) record(name string) {
@@ -108,6 +113,39 @@ func (s *stubAPI) JoinPairing(context.Context, string) error {
 	return s.nextErr
 }
 
+func (s *stubAPI) StartOffer(_ context.Context, serverURL string) (OfferView, error) {
+	s.record("offer-start")
+	if serverURL == "" {
+		return OfferView{}, Errorf(http.StatusBadRequest, nil, "a relay URL is required")
+	}
+	return OfferView{Code: "tpp1:offer"}, s.nextErr
+}
+
+func (s *stubAPI) CancelOffer(context.Context) error {
+	s.record("offer-cancel")
+	return s.nextErr
+}
+
+func (s *stubAPI) PrepareAcceptOffer(context.Context, string) (OfferPlan, error) {
+	s.record("offer-prepare")
+	plan := OfferPlan{ID: "offer-plan-1", DeviceName: "phone", Fingerprint: "6668 7AAD F862 BD77"}
+	s.mu.Lock()
+	s.offerPlans[plan.ID] = plan
+	s.mu.Unlock()
+	return plan, nil
+}
+
+func (s *stubAPI) ConfirmAcceptOffer(_ context.Context, planID string) (DeviceView, error) {
+	s.record("offer-confirm")
+	s.mu.Lock()
+	_, ok := s.offerPlans[planID]
+	s.mu.Unlock()
+	if !ok {
+		return DeviceView{}, Errorf(http.StatusConflict, nil, "that pairing code is no longer pending")
+	}
+	return DeviceView{ID: "d3", Name: "phone"}, nil
+}
+
 func (s *stubAPI) CreateGroup(context.Context, string) error {
 	s.record("create")
 	return s.nextErr
@@ -160,6 +198,10 @@ func TestOriginIsValidatedOnEveryRequest(t *testing.T) {
 		{"POST", "/api/devices/revoke/confirm", `{"plan_id":"plan-1"}`},
 		{"POST", "/api/pairing/start", `{}`},
 		{"POST", "/api/pairing/join", `{"payload":"tpp1:abc"}`},
+		{"POST", "/api/pairing/offer/start", `{"server_url":"https://tpp.example.com"}`},
+		{"POST", "/api/pairing/offer/cancel", `{}`},
+		{"POST", "/api/pairing/offer/accept/prepare", `{"code":"tpp1:offer"}`},
+		{"POST", "/api/pairing/offer/accept/confirm", `{"plan_id":"offer-plan-1"}`},
 		{"POST", "/api/group/create", `{"creation_url":"https://relay.example/t"}`},
 		{"GET", "/api/settings", ""},
 		{"POST", "/api/settings", `{"auto_watch":true}`},
@@ -342,6 +384,52 @@ func TestRevocationNeedsAPlan(t *testing.T) {
 	rec = do(t, srv, "POST", "/api/devices/revoke/confirm", `{"plan_id":"`+plan.ID+`"}`, headers)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("confirming a prepared revocation = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+// TestAcceptingAnOfferNeedsAPlan is the same gate as the one above, over the
+// flow where it matters more: a revocation the user did not mean costs the
+// group a rekey, but admitting a device the user did not look at hands a
+// stranger the group key (docs/plans/joiner-emitted-pairing.md §5).
+func TestAcceptingAnOfferNeedsAPlan(t *testing.T) {
+	t.Parallel()
+
+	srv, api := newTestServer(t)
+	origin := fmt.Sprintf("http://127.0.0.1:%d", srv.Port())
+	headers := map[string]string{"Origin": origin, tokenHeader: "test-token"}
+
+	// There is no endpoint that takes the code itself. Without a plan id there
+	// is no way to admit anything, so a screen cannot skip the dialog.
+	rec := do(t, srv, "POST", "/api/pairing/offer/accept/confirm", `{"plan_id":""}`, headers)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("confirming with no plan = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if api.called("offer-confirm") {
+		t.Fatal("an acceptance with no plan reached the service")
+	}
+
+	rec = do(t, srv, "POST", "/api/pairing/offer/accept/confirm", `{"plan_id":"made-up"}`, headers)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("confirming an unknown plan = %d, want %d", rec.Code, http.StatusConflict)
+	}
+
+	rec = do(t, srv, "POST", "/api/pairing/offer/accept/prepare", `{"code":"tpp1:offer"}`, headers)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preparing an acceptance = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var plan OfferPlan
+	if err := json.NewDecoder(rec.Body).Decode(&plan); err != nil {
+		t.Fatalf("decoding the plan: %v", err)
+	}
+	// The dialog cannot be rendered without both: a name the user recognises,
+	// and the fingerprint that is the only part of it that proves anything.
+	if plan.DeviceName == "" || plan.Fingerprint == "" {
+		t.Fatalf("the plan does not carry a dialog to show: %+v", plan)
+	}
+
+	rec = do(t, srv, "POST", "/api/pairing/offer/accept/confirm", `{"plan_id":"`+plan.ID+`"}`, headers)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("confirming a prepared acceptance = %d, want %d", rec.Code, http.StatusOK)
 	}
 }
 

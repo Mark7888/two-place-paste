@@ -7,7 +7,7 @@
 import { fromUTF8, utf8 } from '../../bytes';
 import { Client } from '../client';
 import { TppError, describe as describeError } from '../errors';
-import { decodePairingPayload } from '../pairing';
+import { classifyCode, decodePairingPayload, fingerprint } from '../pairing';
 import { FakeRelay, MemoryStore } from './fakeRelay';
 
 /**
@@ -113,6 +113,113 @@ describe('pairing (SPEC §3.2)', () => {
     // Pairing pulled no history: the count is still whatever the tests asked
     // for explicitly, which is none.
     expect(relay.historyRequests).toBe(0);
+  });
+});
+
+describe('joiner-emitted pairing (docs/plans/joiner-emitted-pairing.md)', () => {
+  test('the device with no group key shows the code, and ends at the member’s epoch', async () => {
+    const relay = new FakeRelay();
+    const member = await open(relay, new MemoryStore(), 'laptop');
+    await member.createGroup(relay.creationURL);
+    const joiner = await open(relay, new MemoryStore(), 'phone');
+
+    // The relay URL is the one thing the user supplies in this direction: a
+    // device with no group has no relay URL either.
+    const offer = await joiner.startOffer('https://relay.test');
+    expect(classifyCode(offer.code)).toBe('offer-code');
+
+    const prepared = await member.prepareAcceptOffer(offer.code);
+    expect(prepared.deviceName).toBe('phone');
+    // The fingerprint the member would show is the one the offering device
+    // would show for its own key. That comparison is the user's protection.
+    expect(prepared.fingerprint).toBe(fingerprint(joiner.publicKey));
+
+    const admitted = await prepared.confirm();
+    await offer.accepted;
+
+    expect(joiner.inGroup).toBe(true);
+    expect(joiner.epoch).toBe(member.epoch);
+    expect(joiner.snapshot().groupKey).toEqual(member.snapshot().groupKey);
+    expect(admitted.id).toBe(joiner.deviceId);
+  });
+
+  test('preparing changes nothing: only confirm admits a device', async () => {
+    const relay = new FakeRelay();
+    const member = await open(relay, new MemoryStore(), 'laptop');
+    await member.createGroup(relay.creationURL);
+    const joiner = await open(relay, new MemoryStore(), 'phone');
+    const before = relay.deviceIds.length;
+
+    const offer = await joiner.startOffer('https://relay.test');
+    const prepared = await member.prepareAcceptOffer(offer.code);
+
+    // This is the gate of §5, asserted in the client rather than in a screen:
+    // the user can still decide against it after reading the dialog, and until
+    // they say yes the group is untouched.
+    expect(relay.deviceIds).toHaveLength(before);
+    expect(joiner.inGroup).toBe(false);
+
+    await prepared.confirm();
+    await offer.accepted;
+    expect(relay.deviceIds).toHaveLength(before + 1);
+
+    // One code, one device: a double-tapped dialog admits one.
+    await expect(prepared.confirm()).rejects.toThrow();
+    expect(relay.deviceIds).toHaveLength(before + 1);
+
+    offer.cancel();
+  });
+
+  test('a second member holding the same code is refused', async () => {
+    const relay = new FakeRelay();
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const desktop = await open(relay, new MemoryStore(), 'desktop');
+    await pair(laptop, desktop);
+    const joiner = await open(relay, new MemoryStore(), 'phone');
+
+    const offer = await joiner.startOffer('https://relay.test');
+    const first = await laptop.prepareAcceptOffer(offer.code);
+    const second = await desktop.prepareAcceptOffer(offer.code);
+
+    await first.confirm();
+    await offer.accepted;
+    await expect(second.confirm()).rejects.toThrow();
+  });
+
+  test('the two kinds of code are told apart, and neither is mistaken for the other', async () => {
+    const relay = new FakeRelay();
+    const member = await open(relay, new MemoryStore(), 'laptop');
+    await member.createGroup(relay.creationURL);
+    const joiner = await open(relay, new MemoryStore(), 'phone');
+
+    const invitation = await member.startPairing();
+    const offer = await joiner.startOffer('https://relay.test');
+
+    expect(classifyCode(invitation.payload)).toBe('pairing-code');
+    expect(classifyCode(offer.code)).toBe('offer-code');
+    expect(classifyCode(relay.creationURL)).toBe('creation-url');
+    expect(classifyCode('not a code at all')).toBe('unknown');
+
+    // The whole reason PairingCode exists: without a discriminator, protobuf
+    // would decode an offer as an invitation with a nonsense token rather than
+    // refusing it.
+    await expect(member.prepareAcceptOffer(invitation.payload)).rejects.toThrow();
+    expect(() => decodePairingPayload(offer.code)).toThrow();
+
+    // And what a clipboard adds is still tolerated.
+    const prepared = await member.prepareAcceptOffer(`  ${offer.code}==\n`);
+    expect(prepared.deviceName).toBe('phone');
+
+    offer.cancel();
+  });
+
+  test('a device that already holds a group key cannot offer itself elsewhere', async () => {
+    const relay = new FakeRelay();
+    const member = await open(relay, new MemoryStore(), 'laptop');
+    await member.createGroup(relay.creationURL);
+
+    await expect(member.startOffer('https://relay.test')).rejects.toThrow(TppError);
   });
 });
 

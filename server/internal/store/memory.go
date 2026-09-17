@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"maps"
 	"slices"
@@ -26,6 +27,7 @@ type MemoryStore struct {
 	devices  map[string]Device
 	wrapped  map[string]WrappedKey
 	pairings map[string]Pairing
+	offers   map[string]PairingOffer
 }
 
 // NewMemoryStore returns an empty in-memory Store.
@@ -38,6 +40,7 @@ func NewMemoryStore() *MemoryStore {
 		devices:  make(map[string]Device),
 		wrapped:  make(map[string]WrappedKey),
 		pairings: make(map[string]Pairing),
+		offers:   make(map[string]PairingOffer),
 	}
 }
 
@@ -335,6 +338,97 @@ func (m *MemoryStore) DeletePairing(_ context.Context, token string) error {
 	defer m.mu.Unlock()
 
 	delete(m.pairings, token)
+	return nil
+}
+
+// CreateOffer implements Store.
+func (m *MemoryStore) CreateOffer(_ context.Context, name string, publicKey []byte, ttl time.Duration) (PairingOffer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := m.now()
+	o := PairingOffer{
+		Code:       newID(),
+		DeviceName: name,
+		PublicKey:  bytes.Clone(publicKey),
+		CreatedAt:  now,
+		ExpiresAt:  now.Add(ttl),
+	}
+	m.offers[o.Code] = o
+	return o, nil
+}
+
+// GetOffer implements Store.
+func (m *MemoryStore) GetOffer(_ context.Context, code string) (PairingOffer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.getOfferLocked(code)
+}
+
+func (m *MemoryStore) getOfferLocked(code string) (PairingOffer, error) {
+	o, ok := m.offers[code]
+	if !ok {
+		return PairingOffer{}, ErrNotFound
+	}
+	// Redis expires the key; here the read enforces the deadline.
+	if !m.now().Before(o.ExpiresAt) {
+		delete(m.offers, code)
+		return PairingOffer{}, ErrNotFound
+	}
+	return o, nil
+}
+
+// AcceptOffer implements Store. Like the Lua script it mirrors, it validates
+// everything before it writes anything: the whole operation happens under one
+// lock, so two members racing to accept one offer admit exactly one device.
+func (m *MemoryStore) AcceptOffer(_ context.Context, code, groupID string, publicKey, wrappedGroupKey []byte) (PairingOffer, Device, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	o, err := m.getOfferLocked(code)
+	if err != nil {
+		return PairingOffer{}, Device{}, err
+	}
+	if o.DeviceID != "" {
+		return PairingOffer{}, Device{}, ErrOfferConsumed
+	}
+	// Byte for byte: the accepting member wrapped to a key it read out of
+	// band, and this is the check that stops the relay substituting one of its
+	// own. A plain comparison, not a constant-time one — a public key is
+	// public, and the secret in this flow is the offer code, which was already
+	// looked up above.
+	if !bytes.Equal(o.PublicKey, publicKey) {
+		return PairingOffer{}, Device{}, ErrOfferKeyMismatch
+	}
+	group, ok := m.groups[groupID]
+	if !ok {
+		return PairingOffer{}, Device{}, ErrNotFound
+	}
+
+	device := Device{
+		ID:        newID(),
+		GroupID:   groupID,
+		Name:      o.DeviceName,
+		PublicKey: bytes.Clone(o.PublicKey),
+		CreatedAt: m.now(),
+	}
+	m.devices[device.ID] = device
+	m.members[groupID][device.ID] = struct{}{}
+	m.wrapped[device.ID] = WrappedKey{Epoch: group.Epoch, Key: bytes.Clone(wrappedGroupKey)}
+
+	o.GroupID = groupID
+	o.DeviceID = device.ID
+	m.offers[code] = o
+	return o, device, nil
+}
+
+// DeleteOffer implements Store.
+func (m *MemoryStore) DeleteOffer(_ context.Context, code string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.offers, code)
 	return nil
 }
 

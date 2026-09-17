@@ -1,39 +1,45 @@
 /**
- * Inviting another device into this group (SPEC §3.2).
+ * Bringing another device into this group (SPEC §3.2,
+ * docs/plans/joiner-emitted-pairing.md).
  *
- * This screen only ever *shows* a code. That is not a simplification of the
- * spec, it is the shape of the flow: the payload travels from the device that
- * is already in the group to the one that is not, because only a member can
- * mint a pairing token against the relay. So the member displays, and the
- * joiner scans or pastes — a phone scans this screen's QR, and a desktop,
- * which has no camera by design (SPEC §7.2), pastes the string under it.
+ * Pairing runs in both directions, and this screen has both, because which one
+ * the user wants depends on which device has the screen they are looking at.
  *
- * Both forms are the same string, which is why they sit together: whichever
- * the joining device can take, it is reading the same payload.
+ * **Showing a code.** This phone holds the group key, mints a pairing token and
+ * displays it. The joining device scans it, or — a desktop has no camera by
+ * design (SPEC §7.2) — pastes the string under it. Both forms are the same
+ * string, which is why they sit together.
  *
- * There is deliberately no scanner here, for two separate reasons.
+ * **Reading a code.** The other device holds no group key, so it cannot mint a
+ * token; the relay holds an *offer* for it instead, and this phone admits it.
+ * That is the half that needs a confirmation, and needs it normatively.
  *
- * A device holding a group key cannot join another group without discarding
- * that key, so the way to move this phone elsewhere is Settings — not a
- * button that would have to mean "leave the group" in disguise.
+ * The asymmetry is worth being plain about. A hostile code a *joiner* reads
+ * costs it a failed pairing: it holds no key to lose. A hostile code a *member*
+ * reads costs the group its key, because accepting admits a device and hands it
+ * everything this group copies from now on. So the button that admits anything
+ * does not exist until the code has been read and this screen has rendered the
+ * offering device's name and the fingerprint of its public key — and the client
+ * enforces that too, in `prepareAcceptOffer`, rather than trusting this screen
+ * to remember (SPEC §3.3 step 2, applied here for the same reason).
  *
- * And the other direction — an unpaired device showing a code that this one
- * accepts — is not in the wire contract at all: only an authenticated
- * connection may mint a pairing token, so a device with no group key has
- * nothing to show. Making pairing symmetric needs new message types and a
- * confirmation gate on the accepting member; the plan is
- * docs/plans/joiner-emitted-pairing.md.
+ * There is deliberately no scanner for *joining another group* here. A device
+ * holding a group key cannot join a second one without discarding the key it
+ * has, so the way to move this phone elsewhere is Settings — not a button that
+ * would have to mean "leave the group" in disguise.
  */
 
 import React, { useState } from 'react';
-import { Linking, ScrollView, Text, View } from 'react-native';
+import { Linking, PermissionsAndroid, Platform, ScrollView, Text, TextInput, View } from 'react-native';
+import { Camera, CameraType } from 'react-native-camera-kit';
 import QRCode from 'react-native-qrcode-svg';
 
-import type { Invitation } from '../../core';
+import type { Invitation, OfferAcceptance } from '../../core';
+import { classifyCode } from '../../core';
 import { useSession } from '../SessionContext';
 import { failureMessage } from '../session';
 import { Button, Card, Status } from '../ui';
-import { styles } from '../theme';
+import { colors, styles } from '../theme';
 
 export function PairingScreen(): React.JSX.Element {
   const session = useSession();
@@ -41,6 +47,9 @@ export function PairingScreen(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [ok, setOk] = useState(true);
+  const [typed, setTyped] = useState('');
+  const [scanning, setScanning] = useState(false);
+  const [pending, setPending] = useState<OfferAcceptance | null>(null);
 
   const show = () => {
     const client = session.client;
@@ -70,6 +79,96 @@ export function PairingScreen(): React.JSX.Element {
     })();
   };
 
+  // read decodes a code and stops. Nothing is wrapped and no device is
+  // admitted here: that is `admit`, below, and it only exists once this has
+  // produced something to show the user.
+  const read = (code: string) => {
+    const client = session.client;
+    if (client === null || busy || code.trim() === '') {
+      return;
+    }
+    setBusy(true);
+    setScanning(false);
+    void (async () => {
+      try {
+        if (classifyCode(code) !== 'offer-code') {
+          // Telling the user which code they are holding beats a failure
+          // further in: an invitation here is one this device could have shown
+          // itself, and a creation link belongs to a device with no group.
+          throw new Error(
+            'That is not a code from a device waiting to join. Open this app on that device and use “Show a code”.',
+          );
+        }
+        setPending(await client.prepareAcceptOffer(code));
+        setOk(true);
+        setMessage('');
+      } catch (err) {
+        setOk(false);
+        setMessage(failureMessage(err));
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
+
+  const admit = () => {
+    if (pending === null || busy) {
+      return;
+    }
+    setBusy(true);
+    void (async () => {
+      try {
+        const device = await pending.confirm();
+        setPending(null);
+        setTyped('');
+        setOk(true);
+        setMessage(`${device.name} was added to the group.`);
+        session.refresh();
+      } catch (err) {
+        setOk(false);
+        setMessage(failureMessage(err));
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
+
+  const scan = () => {
+    void (async () => {
+      if (Platform.OS === 'android') {
+        const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.CAMERA);
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+          setOk(false);
+          setMessage('Scanning needs the camera. You can paste the code instead.');
+          return;
+        }
+      }
+      setMessage('');
+      setScanning(true);
+    })();
+  };
+
+  // While the scanner is open it is the screen: a viewfinder and one way out.
+  if (scanning) {
+    return (
+      <View style={styles.screen}>
+        <Camera
+          style={{ flex: 1 }}
+          cameraType={CameraType.Back}
+          scanBarcode
+          onReadCode={(event) => read(event.nativeEvent.codeStringValue)}
+        />
+        <View style={styles.content}>
+          <Text style={styles.muted}>
+            Point the camera at the code the joining device is showing. Nothing is added until you
+            have read its name and fingerprint and said yes.
+          </Text>
+          <Button label="Cancel" variant="secondary" onPress={() => setScanning(false)} />
+        </View>
+      </View>
+    );
+  }
+
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Pairing</Text>
@@ -77,8 +176,7 @@ export function PairingScreen(): React.JSX.Element {
       <Card title="Add a device to this group">
         <Text style={styles.muted}>
           The code is short-lived and pairs exactly one device. The joining device scans it, or
-          pastes the same string — codes always travel from a device that is in the group to one
-          that is not.
+          pastes the same string.
         </Text>
         <Button
           label={invitation === null ? 'Show a pairing code' : 'New pairing code'}
@@ -104,6 +202,60 @@ export function PairingScreen(): React.JSX.Element {
           </View>
         )}
       </Card>
+
+      <Card title="Or read a code the other device is showing">
+        <Text style={styles.muted}>
+          The other way round, for when that device is the one with the screen you are looking at —
+          a desktop, which cannot scan. It shows a code; read it here.
+        </Text>
+        <Button label="Scan its code" variant="secondary" onPress={scan} disabled={busy} />
+        <TextInput
+          style={styles.input}
+          value={typed}
+          onChangeText={(text) => {
+            setTyped(text);
+            setPending(null);
+          }}
+          placeholder="Or paste the code here"
+          placeholderTextColor={colors.muted}
+          autoCapitalize="none"
+          autoCorrect={false}
+          multiline
+        />
+        <Button
+          label="Read the code"
+          variant="secondary"
+          onPress={() => read(typed)}
+          disabled={busy || typed.trim() === ''}
+        />
+      </Card>
+
+      {/*
+        The confirmation of docs/plans/joiner-emitted-pairing.md §5. It is the
+        whole of the user's protection here, so it says what is at stake and it
+        shows the fingerprint, which is the only part of this that a hostile
+        code cannot choose freely.
+      */}
+      {pending !== null && (
+        <Card title={`Add ${pending.deviceName} to this group?`}>
+          <Text style={styles.muted}>
+            This gives that device the group key, and everything this group copies from now on. The
+            name above is whatever it calls itself; the fingerprint below is what actually
+            identifies it.
+          </Text>
+          <Text style={styles.muted}>Check that it matches the fingerprint that device is showing:</Text>
+          <Text style={styles.mono} selectable>
+            {pending.fingerprint}
+          </Text>
+          <Button label={`Add ${pending.deviceName}`} onPress={admit} disabled={busy} />
+          <Button
+            label="Cancel"
+            variant="secondary"
+            onPress={() => setPending(null)}
+            disabled={busy}
+          />
+        </Card>
+      )}
 
       <Status message={message} ok={ok} />
 

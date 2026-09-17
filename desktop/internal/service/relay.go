@@ -11,6 +11,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/Mark7888/two-place-paste/pkg/tppclient"
 )
@@ -44,6 +45,13 @@ type Relay interface {
 	// JoinPairing joins with a payload from another device.
 	JoinPairing(ctx context.Context, payload string) error
 
+	// StartOffer shows a code from a device that is in no group yet, for a
+	// member to accept (docs/plans/joiner-emitted-pairing.md).
+	StartOffer(ctx context.Context, serverURL string) (Offer, error)
+
+	// PrepareAcceptOffer decodes an offer and changes nothing.
+	PrepareAcceptOffer(ctx context.Context, code string) (OfferAcceptance, error)
+
 	// Devices returns the group roster (SPEC §3.3 step 1).
 	Devices(ctx context.Context) (tppclient.Roster, error)
 
@@ -63,6 +71,41 @@ type Relay interface {
 	GetEntry(ctx context.Context, entryID string) (tppclient.Item, error)
 }
 
+// Offer is a pairing offer this device is showing while it waits for a member
+// to accept it. It is the library's Offer narrowed to what a UI needs.
+type Offer interface {
+	// Code is the string to render as a QR code and to show as text. The two
+	// are one string.
+	Code() string
+
+	// ExpiresAt is when the relay stops holding the offer.
+	ExpiresAt() time.Time
+
+	// Wait blocks until a member accepts, installs the group key and brings
+	// the client online.
+	Wait(ctx context.Context) error
+
+	// Close gives up an offer the user is no longer showing.
+	Close()
+}
+
+// OfferAcceptance is a scanned or pasted offer waiting for the user's consent,
+// the mirror of Revocation below and split for a sharper reason: accepting
+// hands over the group key, so nothing is wrapped until Confirm.
+type OfferAcceptance interface {
+	// DeviceName is what the offering device calls itself. Display text from a
+	// device that is not in the group yet; it proves nothing.
+	DeviceName() string
+
+	// Fingerprint is the offered public key rendered for a person to compare
+	// with what that device is showing. This is the part that identifies it.
+	Fingerprint() string
+
+	// Confirm admits the device (docs/plans/joiner-emitted-pairing.md §3
+	// step 5).
+	Confirm(ctx context.Context) (tppclient.Device, error)
+}
+
 // Revocation is a prepared revocation waiting for the user's consent. It is
 // the library's Revocation narrowed to what a UI needs, so that this package
 // can be tested without one.
@@ -80,9 +123,9 @@ type Revocation interface {
 	Confirm(ctx context.Context) (tppclient.Roster, error)
 }
 
-// NewRelay adapts a client to Relay. The adaptation is one method deep: only
-// Revoke needs it, because the library returns a struct whose Confirm is the
-// consent gate this package must be able to fake.
+// NewRelay adapts a client to Relay. The adaptation is one method deep, and
+// only for the three that return a struct whose Confirm or Wait is a gate this
+// package must be able to fake: Revoke, StartOffer and PrepareAcceptOffer.
 func NewRelay(c *tppclient.Client) Relay { return clientRelay{c} }
 
 type clientRelay struct{ *tppclient.Client }
@@ -93,6 +136,48 @@ func (c clientRelay) Revoke(ctx context.Context, deviceID string) (Revocation, e
 		return nil, fmt.Errorf("service: prepare the revocation of device %s: %w", deviceID, err)
 	}
 	return clientRevocation{rev}, nil
+}
+
+func (c clientRelay) StartOffer(ctx context.Context, serverURL string) (Offer, error) {
+	offer, err := c.Client.StartOffer(ctx, serverURL)
+	if err != nil {
+		return nil, fmt.Errorf("service: show a pairing offer: %w", err)
+	}
+	return clientOffer{offer}, nil
+}
+
+type clientOffer struct{ offer *tppclient.Offer }
+
+func (o clientOffer) Code() string         { return o.offer.Code }
+func (o clientOffer) ExpiresAt() time.Time { return o.offer.ExpiresAt }
+func (o clientOffer) Close()               { o.offer.Close() }
+
+func (o clientOffer) Wait(ctx context.Context) error {
+	if err := o.offer.Wait(ctx); err != nil {
+		return fmt.Errorf("service: wait for a member to accept the pairing offer: %w", err)
+	}
+	return nil
+}
+
+func (c clientRelay) PrepareAcceptOffer(ctx context.Context, code string) (OfferAcceptance, error) {
+	accept, err := c.Client.PrepareAcceptOffer(ctx, code)
+	if err != nil {
+		return nil, fmt.Errorf("service: read that pairing offer: %w", err)
+	}
+	return clientAcceptance{accept}, nil
+}
+
+type clientAcceptance struct{ accept *tppclient.OfferAcceptance }
+
+func (a clientAcceptance) DeviceName() string  { return a.accept.DeviceName }
+func (a clientAcceptance) Fingerprint() string { return a.accept.Fingerprint }
+
+func (a clientAcceptance) Confirm(ctx context.Context) (tppclient.Device, error) {
+	device, err := a.accept.Confirm(ctx)
+	if err != nil {
+		return tppclient.Device{}, fmt.Errorf("service: admit the offering device: %w", err)
+	}
+	return device, nil
 }
 
 type clientRevocation struct{ rev *tppclient.Revocation }

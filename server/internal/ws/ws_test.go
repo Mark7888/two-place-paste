@@ -31,9 +31,15 @@ type harness struct {
 	url     string
 	store   store.Store
 	entries *entries.Service
+	server  *ws.Server
 }
 
 func newHarness(t *testing.T) *harness {
+	t.Helper()
+	return newHarnessWithOptions(t, ws.Options{Logger: slog.New(slog.DiscardHandler)})
+}
+
+func newHarnessWithOptions(t *testing.T, opts ws.Options) *harness {
 	t.Helper()
 
 	st := store.NewMemoryStore()
@@ -41,14 +47,34 @@ func newHarness(t *testing.T) *harness {
 		InlineMaxBytes: testInlineMax,
 		MaxBytes:       testMaxBytes,
 	})
-	server := ws.New(st, svc, ws.Options{Logger: slog.New(slog.DiscardHandler)})
+	server := ws.New(st, svc, opts)
 
 	mux := http.NewServeMux()
 	server.Register(mux)
 	httpSrv := httptest.NewServer(mux)
 	t.Cleanup(httpSrv.Close)
 
-	return &harness{url: "ws" + strings.TrimPrefix(httpSrv.URL, "http") + ws.DefaultPath, store: st, entries: svc}
+	return &harness{
+		url:     "ws" + strings.TrimPrefix(httpSrv.URL, "http") + ws.DefaultPath,
+		store:   st,
+		entries: svc,
+		server:  server,
+	}
+}
+
+// waitFor polls until cond holds. A socket closing is observed by the server
+// on its own goroutine, so a test that depends on the server having noticed
+// has to wait for it rather than assume it.
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for the server to catch up")
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func (h *harness) token(t *testing.T) string {
@@ -354,17 +380,21 @@ func TestProtocolEndToEnd(t *testing.T) {
 	}
 }
 
-func TestUnauthenticatedConnectionIsLimitedToTwoFrames(t *testing.T) {
+func TestUnauthenticatedConnectionIsLimitedToThreeFrames(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
 	c := h.dial(t, "")
 
-	// Everything but group creation and pairing-join needs an identity.
+	// Everything but group creation, pairing-join and offer minting needs an
+	// identity. Accepting an offer is on this list deliberately: it hands over
+	// the group key, so it is the one half of the joiner-emitted flow that a
+	// connection with nothing to prove may not send.
 	for _, typ := range []tppv1.MessageType{
 		tppv1.MessageType_MESSAGE_TYPE_DEVICE_LIST_REQUEST,
 		tppv1.MessageType_MESSAGE_TYPE_ENTRY_LATEST_REQUEST,
 		tppv1.MessageType_MESSAGE_TYPE_PAIRING_START_REQUEST,
+		tppv1.MessageType_MESSAGE_TYPE_PAIRING_OFFER_ACCEPT_REQUEST,
 		tppv1.MessageType_MESSAGE_TYPE_REKEY_REQUEST,
 	} {
 		c.send("unauth", typ, &tppv1.DeviceListRequest{})
@@ -763,5 +793,255 @@ func TestGroupsAreIsolated(t *testing.T) {
 	two.await(tppv1.MessageType_MESSAGE_TYPE_ENTRY_LATEST_RESPONSE, &latest)
 	if latest.GetMeta() != nil {
 		t.Error("a second group saw another group's entry as its latest")
+	}
+}
+
+// offer runs the joiner-emitted flow of docs/plans/joiner-emitted-pairing.md and
+// returns the offering device's connection, the code it would display, and the
+// completion it receives once the member accepts.
+func (h *harness) offer(t *testing.T, name string) (*client, *tppv1.PairingOfferResponse) {
+	t.Helper()
+
+	joiner := h.dial(t, "")
+	joiner.send("offer-1", tppv1.MessageType_MESSAGE_TYPE_PAIRING_OFFER_REQUEST, &tppv1.PairingOfferRequest{
+		DeviceName:      name,
+		DevicePublicKey: []byte("pk-" + name),
+	})
+	var offered tppv1.PairingOfferResponse
+	joiner.await(tppv1.MessageType_MESSAGE_TYPE_PAIRING_OFFER_RESPONSE, &offered)
+	if offered.GetOfferCode() == "" || offered.GetExpiresAtUnixMs() <= time.Now().UnixMilli() {
+		t.Fatalf("PairingOfferResponse = %+v, want a code with a future expiry", &offered)
+	}
+	return joiner, &offered
+}
+
+// TestOfferPairsInTheJoinerEmittedDirection is the flow the member-emitted
+// pairing above cannot express: the device with no group key mints the code,
+// and a member admits it.
+func TestOfferPairsInTheJoinerEmittedDirection(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	laptop, created := h.createGroup(t, "laptop")
+
+	joiner, offered := h.offer(t, "phone")
+
+	laptop.send("accept", tppv1.MessageType_MESSAGE_TYPE_PAIRING_OFFER_ACCEPT_REQUEST, &tppv1.PairingOfferAcceptRequest{
+		OfferCode:       offered.GetOfferCode(),
+		DevicePublicKey: []byte("pk-phone"),
+		WrappedGroupKey: []byte("wrapped-for-phone"),
+	})
+
+	// Both sides are told, and both are told the same thing: the member learns
+	// the identifier of the device it admitted, and the joiner learns
+	// everything it needs to become a member.
+	var memberSaw, joinerSaw tppv1.PairingComplete
+	laptop.await(tppv1.MessageType_MESSAGE_TYPE_PAIRING_COMPLETE, &memberSaw)
+	joiner.await(tppv1.MessageType_MESSAGE_TYPE_PAIRING_COMPLETE, &joinerSaw)
+
+	if joinerSaw.GetGroupId() != created.GetGroupId() {
+		t.Errorf("joiner's group = %q, want %q", joinerSaw.GetGroupId(), created.GetGroupId())
+	}
+	if joinerSaw.GetEpoch() != 1 {
+		t.Errorf("joiner's epoch = %d, want 1", joinerSaw.GetEpoch())
+	}
+	if string(joinerSaw.GetWrappedGroupKey()) != "wrapped-for-phone" {
+		t.Errorf("joiner's wrapped key = %q, want the member's own bytes relayed verbatim",
+			joinerSaw.GetWrappedGroupKey())
+	}
+	if memberSaw.GetDeviceId() != joinerSaw.GetDeviceId() || joinerSaw.GetDeviceId() == "" {
+		t.Errorf("device id: member saw %q, joiner saw %q; want one non-empty id",
+			memberSaw.GetDeviceId(), joinerSaw.GetDeviceId())
+	}
+
+	// The admitted device is a member: it can dial with its new identity and
+	// the group's roster names it.
+	h.dial(t, joinerSaw.GetDeviceId())
+	devices, err := h.store.ListDevices(context.Background(), created.GetGroupId())
+	if err != nil {
+		t.Fatalf("ListDevices() error = %v", err)
+	}
+	if len(devices) != 2 {
+		t.Fatalf("group has %d devices, want 2", len(devices))
+	}
+	if devices[1].Name != "phone" || string(devices[1].PublicKey) != "pk-phone" {
+		t.Errorf("admitted device = %+v, want the offered name and key", devices[1])
+	}
+}
+
+// TestOfferAdmitsExactlyOneDevice covers both ways a second accept can arrive:
+// a member retrying, and two members racing. Either way the group gains one
+// device, never two.
+func TestOfferAdmitsExactlyOneDevice(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	laptop, created := h.createGroup(t, "laptop")
+	desktop, _ := h.pair(t, laptop, "desktop")
+
+	joiner, offered := h.offer(t, "phone")
+	accept := &tppv1.PairingOfferAcceptRequest{
+		OfferCode:       offered.GetOfferCode(),
+		DevicePublicKey: []byte("pk-phone"),
+		WrappedGroupKey: []byte("wrapped-for-phone"),
+	}
+
+	laptop.send("accept", tppv1.MessageType_MESSAGE_TYPE_PAIRING_OFFER_ACCEPT_REQUEST, accept)
+	laptop.await(tppv1.MessageType_MESSAGE_TYPE_PAIRING_COMPLETE, nil)
+	joiner.await(tppv1.MessageType_MESSAGE_TYPE_PAIRING_COMPLETE, nil)
+
+	// The second member holds the same code — it could have scanned the same
+	// screen — and is refused rather than admitting the device a second time.
+	desktop.send("accept", tppv1.MessageType_MESSAGE_TYPE_PAIRING_OFFER_ACCEPT_REQUEST, accept)
+	if got := desktop.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_TOKEN_CONSUMED {
+		t.Errorf("second accept = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_TOKEN_CONSUMED)
+	}
+
+	devices, err := h.store.ListDevices(context.Background(), created.GetGroupId())
+	if err != nil {
+		t.Fatalf("ListDevices() error = %v", err)
+	}
+	if len(devices) != 3 {
+		t.Fatalf("group has %d devices, want 3 (laptop, desktop and one phone)", len(devices))
+	}
+}
+
+// TestOfferRefusesASubstitutedPublicKey is the check that keeps the relay out
+// of the trust path: the member must wrap to the key the offer was minted
+// with, byte for byte, or the accept does not complete.
+func TestOfferRefusesASubstitutedPublicKey(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	laptop, created := h.createGroup(t, "laptop")
+	_, offered := h.offer(t, "phone")
+
+	laptop.send("accept", tppv1.MessageType_MESSAGE_TYPE_PAIRING_OFFER_ACCEPT_REQUEST, &tppv1.PairingOfferAcceptRequest{
+		OfferCode:       offered.GetOfferCode(),
+		DevicePublicKey: []byte("pk-phone-but-not-quite"),
+		WrappedGroupKey: []byte("wrapped-for-somebody-else"),
+	})
+	if got := laptop.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT {
+		t.Errorf("accept with a substituted key = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT)
+	}
+
+	devices, err := h.store.ListDevices(context.Background(), created.GetGroupId())
+	if err != nil {
+		t.Fatalf("ListDevices() error = %v", err)
+	}
+	if len(devices) != 1 {
+		t.Errorf("group has %d devices, want 1: a refused accept admits nobody", len(devices))
+	}
+
+	// And the offer survives: a mismatch is the member's mistake, not the
+	// offering device's, so the code it is showing still works.
+	if _, err := h.store.GetOffer(context.Background(), offered.GetOfferCode()); err != nil {
+		t.Errorf("GetOffer() after a refused accept = %v, want the offer still live", err)
+	}
+}
+
+// TestExpiredOfferIsRefused proves the TTL is load-bearing rather than
+// decorative, and that the joiner is told why.
+func TestExpiredOfferIsRefused(t *testing.T) {
+	t.Parallel()
+
+	// A TTL that has already passed by the time the accept arrives.
+	h := newHarnessWithOptions(t, ws.Options{
+		Logger:     slog.New(slog.DiscardHandler),
+		PairingTTL: time.Nanosecond,
+	})
+	laptop, _ := h.createGroup(t, "laptop")
+
+	joiner := h.dial(t, "")
+	joiner.send("offer", tppv1.MessageType_MESSAGE_TYPE_PAIRING_OFFER_REQUEST, &tppv1.PairingOfferRequest{
+		DeviceName:      "phone",
+		DevicePublicKey: []byte("pk-phone"),
+	})
+	var offered tppv1.PairingOfferResponse
+	joiner.await(tppv1.MessageType_MESSAGE_TYPE_PAIRING_OFFER_RESPONSE, &offered)
+
+	laptop.send("accept", tppv1.MessageType_MESSAGE_TYPE_PAIRING_OFFER_ACCEPT_REQUEST, &tppv1.PairingOfferAcceptRequest{
+		OfferCode:       offered.GetOfferCode(),
+		DevicePublicKey: []byte("pk-phone"),
+		WrappedGroupKey: []byte("wrapped-for-phone"),
+	})
+	if got := laptop.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_TOKEN_EXPIRED {
+		t.Errorf("accept of an expired offer = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_TOKEN_EXPIRED)
+	}
+}
+
+// TestOfferRequiresTheOfferingDeviceToBeConnected covers the one rollback in
+// this flow: a joiner that has gone away holds neither an identity nor a key,
+// so a device admitted for it could never read anything.
+func TestOfferRequiresTheOfferingDeviceToBeConnected(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	laptop, created := h.createGroup(t, "laptop")
+
+	joiner, offered := h.offer(t, "phone")
+	_ = joiner.sock.CloseNow()
+	waitFor(t, func() bool {
+		devices, err := h.store.ListDevices(context.Background(), created.GetGroupId())
+		return err == nil && len(devices) == 1
+	})
+
+	laptop.send("accept", tppv1.MessageType_MESSAGE_TYPE_PAIRING_OFFER_ACCEPT_REQUEST, &tppv1.PairingOfferAcceptRequest{
+		OfferCode:       offered.GetOfferCode(),
+		DevicePublicKey: []byte("pk-phone"),
+		WrappedGroupKey: []byte("wrapped-for-phone"),
+	})
+	if got := laptop.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_NOT_FOUND {
+		t.Fatalf("accept for a departed joiner = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_NOT_FOUND)
+	}
+
+	devices, err := h.store.ListDevices(context.Background(), created.GetGroupId())
+	if err != nil {
+		t.Fatalf("ListDevices() error = %v", err)
+	}
+	if len(devices) != 1 {
+		t.Errorf("group has %d devices, want 1: the admission is rolled back", len(devices))
+	}
+}
+
+// TestOfferMintingIsRateLimited bounds the one frame this server answers for a
+// caller that has proved nothing at all.
+func TestOfferMintingIsRateLimited(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	c := h.dial(t, "")
+
+	for i := range ws.OffersPerConn {
+		c.send("offer", tppv1.MessageType_MESSAGE_TYPE_PAIRING_OFFER_REQUEST, &tppv1.PairingOfferRequest{
+			DeviceName:      "phone",
+			DevicePublicKey: []byte("pk-phone"),
+		})
+		var offered tppv1.PairingOfferResponse
+		c.await(tppv1.MessageType_MESSAGE_TYPE_PAIRING_OFFER_RESPONSE, &offered)
+		if offered.GetOfferCode() == "" {
+			t.Fatalf("offer %d returned no code", i)
+		}
+	}
+
+	c.send("offer", tppv1.MessageType_MESSAGE_TYPE_PAIRING_OFFER_REQUEST, &tppv1.PairingOfferRequest{
+		DeviceName:      "phone",
+		DevicePublicKey: []byte("pk-phone"),
+	})
+	if got := c.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_RATE_LIMITED {
+		t.Errorf("offer %d = %s, want %s", ws.OffersPerConn+1, got.GetCode(), tppv1.ErrorCode_ERROR_CODE_RATE_LIMITED)
+	}
+}
+
+// TestOfferRejectsAKeylessRequest: without a public key there is nothing for a
+// member to wrap to, so the offer is refused rather than stored half-formed.
+func TestOfferRejectsAKeylessRequest(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	c := h.dial(t, "")
+	c.send("offer", tppv1.MessageType_MESSAGE_TYPE_PAIRING_OFFER_REQUEST, &tppv1.PairingOfferRequest{DeviceName: "phone"})
+	if got := c.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT {
+		t.Errorf("offer with no public key = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT)
 	}
 }

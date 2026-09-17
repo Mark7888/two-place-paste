@@ -469,6 +469,380 @@ func (x *PairingComplete) GetWrappedGroupKey() []byte {
 	return nil
 }
 
+// PairingOffer is what an unpaired device displays and a member scans or
+// pastes. It is the joiner-emitted counterpart of PairingPayload and, like it,
+// never travels over the WebSocket.
+//
+// It carries the joiner's *device* public key rather than an ephemeral one:
+// that key is what the member wraps the group key to, and the relay refuses an
+// accept whose key does not match the stored offer byte for byte. A relay that
+// substituted a key of its own would have to make it match an offer it did not
+// create, which is what keeps the relay outside the trust path in this
+// direction too.
+type PairingOffer struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Base URL of the relay holding this offer, e.g. "https://tpp.example.com".
+	//
+	// An unpaired device has no relay URL of its own, so the user supplies it
+	// once on the joining device; the code carries it so the member does not
+	// have to type it as well.
+	ServerUrl string `protobuf:"bytes,1,opt,name=server_url,json=serverUrl,proto3" json:"server_url,omitempty"`
+	// Short-lived, single-use code from PairingOfferResponse.
+	OfferCode string `protobuf:"bytes,2,opt,name=offer_code,json=offerCode,proto3" json:"offer_code,omitempty"`
+	// The joining device's public key. The member wraps the group key to this
+	// key, read out of band, and never to one the relay supplied.
+	DevicePublicKey []byte `protobuf:"bytes,3,opt,name=device_public_key,json=devicePublicKey,proto3" json:"device_public_key,omitempty"`
+	// Human-chosen name for the joining device, so the member's confirmation
+	// dialog can name what it is about to admit. It is display text from an
+	// untrusted source: the fingerprint of device_public_key is what actually
+	// identifies the device.
+	DeviceName    string `protobuf:"bytes,4,opt,name=device_name,json=deviceName,proto3" json:"device_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PairingOffer) Reset() {
+	*x = PairingOffer{}
+	mi := &file_tpp_v1_pairing_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PairingOffer) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PairingOffer) ProtoMessage() {}
+
+func (x *PairingOffer) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_pairing_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PairingOffer.ProtoReflect.Descriptor instead.
+func (*PairingOffer) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_pairing_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *PairingOffer) GetServerUrl() string {
+	if x != nil {
+		return x.ServerUrl
+	}
+	return ""
+}
+
+func (x *PairingOffer) GetOfferCode() string {
+	if x != nil {
+		return x.OfferCode
+	}
+	return ""
+}
+
+func (x *PairingOffer) GetDevicePublicKey() []byte {
+	if x != nil {
+		return x.DevicePublicKey
+	}
+	return nil
+}
+
+func (x *PairingOffer) GetDeviceName() string {
+	if x != nil {
+		return x.DeviceName
+	}
+	return ""
+}
+
+// PairingCode is the discriminated union of everything a scan or a paste may
+// carry. It exists because protobuf decodes by field number, not by name: a
+// bare PairingOffer decodes as a PairingPayload without error, so a second kind
+// of code needs an explicit discriminator rather than a second bare message.
+//
+// Clients decode PairingCode first and fall back to a bare PairingPayload, so
+// a code shown by a build that predates this message still pairs.
+type PairingCode struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Code:
+	//
+	//	*PairingCode_Invite
+	//	*PairingCode_Offer
+	Code          isPairingCode_Code `protobuf_oneof:"code"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PairingCode) Reset() {
+	*x = PairingCode{}
+	mi := &file_tpp_v1_pairing_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PairingCode) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PairingCode) ProtoMessage() {}
+
+func (x *PairingCode) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_pairing_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PairingCode.ProtoReflect.Descriptor instead.
+func (*PairingCode) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_pairing_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *PairingCode) GetCode() isPairingCode_Code {
+	if x != nil {
+		return x.Code
+	}
+	return nil
+}
+
+func (x *PairingCode) GetInvite() *PairingPayload {
+	if x != nil {
+		if x, ok := x.Code.(*PairingCode_Invite); ok {
+			return x.Invite
+		}
+	}
+	return nil
+}
+
+func (x *PairingCode) GetOffer() *PairingOffer {
+	if x != nil {
+		if x, ok := x.Code.(*PairingCode_Offer); ok {
+			return x.Offer
+		}
+	}
+	return nil
+}
+
+type isPairingCode_Code interface {
+	isPairingCode_Code()
+}
+
+type PairingCode_Invite struct {
+	// Member-emitted, as before.
+	Invite *PairingPayload `protobuf:"bytes,1,opt,name=invite,proto3,oneof"`
+}
+
+type PairingCode_Offer struct {
+	// Joiner-emitted.
+	Offer *PairingOffer `protobuf:"bytes,2,opt,name=offer,proto3,oneof"`
+}
+
+func (*PairingCode_Invite) isPairingCode_Code() {}
+
+func (*PairingCode_Offer) isPairingCode_Code() {}
+
+// PairingOfferRequest asks the relay to hold an offer for a device that has no
+// group key yet. It is sent on an unauthenticated connection — the joiner has
+// no credential at this point, which is the whole reason this message exists.
+//
+// The joiner keeps the socket open afterwards, exactly as PairingJoinRequest
+// does: PairingComplete is pushed to it once a member accepts.
+type PairingOfferRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Human-chosen name for the joining device, shown in the member's
+	// confirmation dialog.
+	DeviceName string `protobuf:"bytes,1,opt,name=device_name,json=deviceName,proto3" json:"device_name,omitempty"`
+	// The joiner's device public key. The relay stores it and later refuses any
+	// accept whose key is not byte-for-byte identical.
+	DevicePublicKey []byte `protobuf:"bytes,2,opt,name=device_public_key,json=devicePublicKey,proto3" json:"device_public_key,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *PairingOfferRequest) Reset() {
+	*x = PairingOfferRequest{}
+	mi := &file_tpp_v1_pairing_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PairingOfferRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PairingOfferRequest) ProtoMessage() {}
+
+func (x *PairingOfferRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_pairing_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PairingOfferRequest.ProtoReflect.Descriptor instead.
+func (*PairingOfferRequest) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_pairing_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *PairingOfferRequest) GetDeviceName() string {
+	if x != nil {
+		return x.DeviceName
+	}
+	return ""
+}
+
+func (x *PairingOfferRequest) GetDevicePublicKey() []byte {
+	if x != nil {
+		return x.DevicePublicKey
+	}
+	return nil
+}
+
+// PairingOfferResponse returns the registered offer. The joiner combines it
+// with its server URL and public key into a PairingOffer.
+type PairingOfferResponse struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	OfferCode string                 `protobuf:"bytes,1,opt,name=offer_code,json=offerCode,proto3" json:"offer_code,omitempty"`
+	// Milliseconds since the Unix epoch, UTC. The lifetime matches the 5 minutes
+	// of SPEC §3.2; the server is the authority and the client shows the
+	// countdown from this value rather than assuming the duration.
+	ExpiresAtUnixMs int64 `protobuf:"varint,2,opt,name=expires_at_unix_ms,json=expiresAtUnixMs,proto3" json:"expires_at_unix_ms,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *PairingOfferResponse) Reset() {
+	*x = PairingOfferResponse{}
+	mi := &file_tpp_v1_pairing_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PairingOfferResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PairingOfferResponse) ProtoMessage() {}
+
+func (x *PairingOfferResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_pairing_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PairingOfferResponse.ProtoReflect.Descriptor instead.
+func (*PairingOfferResponse) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_pairing_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *PairingOfferResponse) GetOfferCode() string {
+	if x != nil {
+		return x.OfferCode
+	}
+	return ""
+}
+
+func (x *PairingOfferResponse) GetExpiresAtUnixMs() int64 {
+	if x != nil {
+		return x.ExpiresAtUnixMs
+	}
+	return 0
+}
+
+// PairingOfferAcceptRequest is a member admitting the offered device into its
+// group. It is legal only on an authenticated connection: accepting hands over
+// the group key, which is the strongest thing any actor in this system can be
+// given.
+//
+// A client MUST NOT send this until the user has confirmed a dialog naming the
+// offered device and showing a fingerprint of its public key (SPEC §3.3 step 2
+// applies here, normatively): in this direction the risk sits with the member,
+// who admits a device rather than merely failing to join one.
+type PairingOfferAcceptRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	OfferCode string                 `protobuf:"bytes,1,opt,name=offer_code,json=offerCode,proto3" json:"offer_code,omitempty"`
+	// Echoed from the scanned code. The relay compares it with the stored offer
+	// byte for byte and refuses a mismatch, so a member that wrapped to a
+	// substituted key cannot complete the pairing.
+	DevicePublicKey []byte `protobuf:"bytes,2,opt,name=device_public_key,json=devicePublicKey,proto3" json:"device_public_key,omitempty"`
+	// The current group key wrapped to device_public_key at the group's current
+	// epoch (/spec/crypto.md §4.2). The relay cannot unwrap it.
+	WrappedGroupKey []byte `protobuf:"bytes,3,opt,name=wrapped_group_key,json=wrappedGroupKey,proto3" json:"wrapped_group_key,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *PairingOfferAcceptRequest) Reset() {
+	*x = PairingOfferAcceptRequest{}
+	mi := &file_tpp_v1_pairing_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PairingOfferAcceptRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PairingOfferAcceptRequest) ProtoMessage() {}
+
+func (x *PairingOfferAcceptRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_pairing_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PairingOfferAcceptRequest.ProtoReflect.Descriptor instead.
+func (*PairingOfferAcceptRequest) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_pairing_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *PairingOfferAcceptRequest) GetOfferCode() string {
+	if x != nil {
+		return x.OfferCode
+	}
+	return ""
+}
+
+func (x *PairingOfferAcceptRequest) GetDevicePublicKey() []byte {
+	if x != nil {
+		return x.DevicePublicKey
+	}
+	return nil
+}
+
+func (x *PairingOfferAcceptRequest) GetWrappedGroupKey() []byte {
+	if x != nil {
+		return x.WrappedGroupKey
+	}
+	return nil
+}
+
 var File_tpp_v1_pairing_proto protoreflect.FileDescriptor
 
 const file_tpp_v1_pairing_proto_rawDesc = "" +
@@ -502,7 +876,32 @@ const file_tpp_v1_pairing_proto_rawDesc = "" +
 	"\bgroup_id\x18\x01 \x01(\tR\agroupId\x12\x1b\n" +
 	"\tdevice_id\x18\x02 \x01(\tR\bdeviceId\x12\x14\n" +
 	"\x05epoch\x18\x03 \x01(\x04R\x05epoch\x12*\n" +
-	"\x11wrapped_group_key\x18\x04 \x01(\fR\x0fwrappedGroupKeyBHZFgithub.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1b\x06proto3"
+	"\x11wrapped_group_key\x18\x04 \x01(\fR\x0fwrappedGroupKey\"\x99\x01\n" +
+	"\fPairingOffer\x12\x1d\n" +
+	"\n" +
+	"server_url\x18\x01 \x01(\tR\tserverUrl\x12\x1d\n" +
+	"\n" +
+	"offer_code\x18\x02 \x01(\tR\tofferCode\x12*\n" +
+	"\x11device_public_key\x18\x03 \x01(\fR\x0fdevicePublicKey\x12\x1f\n" +
+	"\vdevice_name\x18\x04 \x01(\tR\n" +
+	"deviceName\"u\n" +
+	"\vPairingCode\x120\n" +
+	"\x06invite\x18\x01 \x01(\v2\x16.tpp.v1.PairingPayloadH\x00R\x06invite\x12,\n" +
+	"\x05offer\x18\x02 \x01(\v2\x14.tpp.v1.PairingOfferH\x00R\x05offerB\x06\n" +
+	"\x04code\"b\n" +
+	"\x13PairingOfferRequest\x12\x1f\n" +
+	"\vdevice_name\x18\x01 \x01(\tR\n" +
+	"deviceName\x12*\n" +
+	"\x11device_public_key\x18\x02 \x01(\fR\x0fdevicePublicKey\"b\n" +
+	"\x14PairingOfferResponse\x12\x1d\n" +
+	"\n" +
+	"offer_code\x18\x01 \x01(\tR\tofferCode\x12+\n" +
+	"\x12expires_at_unix_ms\x18\x02 \x01(\x03R\x0fexpiresAtUnixMs\"\x92\x01\n" +
+	"\x19PairingOfferAcceptRequest\x12\x1d\n" +
+	"\n" +
+	"offer_code\x18\x01 \x01(\tR\tofferCode\x12*\n" +
+	"\x11device_public_key\x18\x02 \x01(\fR\x0fdevicePublicKey\x12*\n" +
+	"\x11wrapped_group_key\x18\x03 \x01(\fR\x0fwrappedGroupKeyBHZFgithub.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1b\x06proto3"
 
 var (
 	file_tpp_v1_pairing_proto_rawDescOnce sync.Once
@@ -516,22 +915,29 @@ func file_tpp_v1_pairing_proto_rawDescGZIP() []byte {
 	return file_tpp_v1_pairing_proto_rawDescData
 }
 
-var file_tpp_v1_pairing_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_tpp_v1_pairing_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_tpp_v1_pairing_proto_goTypes = []any{
-	(*PairingPayload)(nil),          // 0: tpp.v1.PairingPayload
-	(*PairingStartRequest)(nil),     // 1: tpp.v1.PairingStartRequest
-	(*PairingStartResponse)(nil),    // 2: tpp.v1.PairingStartResponse
-	(*PairingJoinRequest)(nil),      // 3: tpp.v1.PairingJoinRequest
-	(*PairingJoinNotice)(nil),       // 4: tpp.v1.PairingJoinNotice
-	(*PairingWrappedKeyUpload)(nil), // 5: tpp.v1.PairingWrappedKeyUpload
-	(*PairingComplete)(nil),         // 6: tpp.v1.PairingComplete
+	(*PairingPayload)(nil),            // 0: tpp.v1.PairingPayload
+	(*PairingStartRequest)(nil),       // 1: tpp.v1.PairingStartRequest
+	(*PairingStartResponse)(nil),      // 2: tpp.v1.PairingStartResponse
+	(*PairingJoinRequest)(nil),        // 3: tpp.v1.PairingJoinRequest
+	(*PairingJoinNotice)(nil),         // 4: tpp.v1.PairingJoinNotice
+	(*PairingWrappedKeyUpload)(nil),   // 5: tpp.v1.PairingWrappedKeyUpload
+	(*PairingComplete)(nil),           // 6: tpp.v1.PairingComplete
+	(*PairingOffer)(nil),              // 7: tpp.v1.PairingOffer
+	(*PairingCode)(nil),               // 8: tpp.v1.PairingCode
+	(*PairingOfferRequest)(nil),       // 9: tpp.v1.PairingOfferRequest
+	(*PairingOfferResponse)(nil),      // 10: tpp.v1.PairingOfferResponse
+	(*PairingOfferAcceptRequest)(nil), // 11: tpp.v1.PairingOfferAcceptRequest
 }
 var file_tpp_v1_pairing_proto_depIdxs = []int32{
-	0, // [0:0] is the sub-list for method output_type
-	0, // [0:0] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	0, // 0: tpp.v1.PairingCode.invite:type_name -> tpp.v1.PairingPayload
+	7, // 1: tpp.v1.PairingCode.offer:type_name -> tpp.v1.PairingOffer
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_tpp_v1_pairing_proto_init() }
@@ -539,13 +945,17 @@ func file_tpp_v1_pairing_proto_init() {
 	if File_tpp_v1_pairing_proto != nil {
 		return
 	}
+	file_tpp_v1_pairing_proto_msgTypes[8].OneofWrappers = []any{
+		(*PairingCode_Invite)(nil),
+		(*PairingCode_Offer)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_tpp_v1_pairing_proto_rawDesc), len(file_tpp_v1_pairing_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

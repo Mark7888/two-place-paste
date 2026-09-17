@@ -185,6 +185,73 @@ func (s *Server) handleJoinPairing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// handleStartOffer shows a code for a member to accept. serverURL is the one
+// thing the user has to supply in this direction: a device with no group has
+// no relay URL either.
+func (s *Server) handleStartOffer(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ServerURL string `json:"server_url"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	view, err := s.api.StartOffer(r.Context(), body.ServerURL)
+	if err != nil {
+		s.fail(w, r, "show a pairing code", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+func (s *Server) handleCancelOffer(w http.ResponseWriter, r *http.Request) {
+	if err := s.api.CancelOffer(r.Context()); err != nil {
+		s.fail(w, r, "withdraw that pairing code", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handlePrepareAcceptOffer(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Code string `json:"code"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.Code == "" {
+		writeError(w, http.StatusBadRequest, "code is required")
+		return
+	}
+	plan, err := s.api.PrepareAcceptOffer(r.Context(), body.Code)
+	if err != nil {
+		s.fail(w, r, "read that pairing code", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
+}
+
+func (s *Server) handleConfirmAcceptOffer(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		PlanID string `json:"plan_id"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.PlanID == "" {
+		// Accepting hands over the group key, so there is no endpoint here
+		// that takes a code: the confirmation dialog's plan id is the only way
+		// in (docs/plans/joiner-emitted-pairing.md §5).
+		writeError(w, http.StatusBadRequest, "plan_id is required")
+		return
+	}
+	device, err := s.api.ConfirmAcceptOffer(r.Context(), body.PlanID)
+	if err != nil {
+		s.fail(w, r, "admit that device", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, device)
+}
+
 func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		CreationURL string `json:"creation_url"`

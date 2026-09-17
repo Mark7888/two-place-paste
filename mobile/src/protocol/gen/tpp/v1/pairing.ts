@@ -113,6 +113,122 @@ export interface PairingComplete {
   wrappedGroupKey: Uint8Array;
 }
 
+/**
+ * PairingOffer is what an unpaired device displays and a member scans or
+ * pastes. It is the joiner-emitted counterpart of PairingPayload and, like it,
+ * never travels over the WebSocket.
+ *
+ * It carries the joiner's *device* public key rather than an ephemeral one:
+ * that key is what the member wraps the group key to, and the relay refuses an
+ * accept whose key does not match the stored offer byte for byte. A relay that
+ * substituted a key of its own would have to make it match an offer it did not
+ * create, which is what keeps the relay outside the trust path in this
+ * direction too.
+ */
+export interface PairingOffer {
+  /**
+   * Base URL of the relay holding this offer, e.g. "https://tpp.example.com".
+   *
+   * An unpaired device has no relay URL of its own, so the user supplies it
+   * once on the joining device; the code carries it so the member does not
+   * have to type it as well.
+   */
+  serverUrl: string;
+  /** Short-lived, single-use code from PairingOfferResponse. */
+  offerCode: string;
+  /**
+   * The joining device's public key. The member wraps the group key to this
+   * key, read out of band, and never to one the relay supplied.
+   */
+  devicePublicKey: Uint8Array;
+  /**
+   * Human-chosen name for the joining device, so the member's confirmation
+   * dialog can name what it is about to admit. It is display text from an
+   * untrusted source: the fingerprint of device_public_key is what actually
+   * identifies the device.
+   */
+  deviceName: string;
+}
+
+/**
+ * PairingCode is the discriminated union of everything a scan or a paste may
+ * carry. It exists because protobuf decodes by field number, not by name: a
+ * bare PairingOffer decodes as a PairingPayload without error, so a second kind
+ * of code needs an explicit discriminator rather than a second bare message.
+ *
+ * Clients decode PairingCode first and fall back to a bare PairingPayload, so
+ * a code shown by a build that predates this message still pairs.
+ */
+export interface PairingCode {
+  /** Member-emitted, as before. */
+  invite?:
+    | PairingPayload
+    | undefined;
+  /** Joiner-emitted. */
+  offer?: PairingOffer | undefined;
+}
+
+/**
+ * PairingOfferRequest asks the relay to hold an offer for a device that has no
+ * group key yet. It is sent on an unauthenticated connection — the joiner has
+ * no credential at this point, which is the whole reason this message exists.
+ *
+ * The joiner keeps the socket open afterwards, exactly as PairingJoinRequest
+ * does: PairingComplete is pushed to it once a member accepts.
+ */
+export interface PairingOfferRequest {
+  /**
+   * Human-chosen name for the joining device, shown in the member's
+   * confirmation dialog.
+   */
+  deviceName: string;
+  /**
+   * The joiner's device public key. The relay stores it and later refuses any
+   * accept whose key is not byte-for-byte identical.
+   */
+  devicePublicKey: Uint8Array;
+}
+
+/**
+ * PairingOfferResponse returns the registered offer. The joiner combines it
+ * with its server URL and public key into a PairingOffer.
+ */
+export interface PairingOfferResponse {
+  offerCode: string;
+  /**
+   * Milliseconds since the Unix epoch, UTC. The lifetime matches the 5 minutes
+   * of SPEC §3.2; the server is the authority and the client shows the
+   * countdown from this value rather than assuming the duration.
+   */
+  expiresAtUnixMs: string;
+}
+
+/**
+ * PairingOfferAcceptRequest is a member admitting the offered device into its
+ * group. It is legal only on an authenticated connection: accepting hands over
+ * the group key, which is the strongest thing any actor in this system can be
+ * given.
+ *
+ * A client MUST NOT send this until the user has confirmed a dialog naming the
+ * offered device and showing a fingerprint of its public key (SPEC §3.3 step 2
+ * applies here, normatively): in this direction the risk sits with the member,
+ * who admits a device rather than merely failing to join one.
+ */
+export interface PairingOfferAcceptRequest {
+  offerCode: string;
+  /**
+   * Echoed from the scanned code. The relay compares it with the stored offer
+   * byte for byte and refuses a mismatch, so a member that wrapped to a
+   * substituted key cannot complete the pairing.
+   */
+  devicePublicKey: Uint8Array;
+  /**
+   * The current group key wrapped to device_public_key at the group's current
+   * epoch (/spec/crypto.md §4.2). The relay cannot unwrap it.
+   */
+  wrappedGroupKey: Uint8Array;
+}
+
 function createBasePairingPayload(): PairingPayload {
   return { serverUrl: "", pairingToken: "", inviterEphemeralPublicKey: new Uint8Array(0) };
 }
@@ -854,6 +970,527 @@ export const PairingComplete: MessageFns<PairingComplete> = {
     message.groupId = object.groupId ?? "";
     message.deviceId = object.deviceId ?? "";
     message.epoch = object.epoch ?? "0";
+    message.wrappedGroupKey = object.wrappedGroupKey ?? new Uint8Array(0);
+    return message;
+  },
+};
+
+function createBasePairingOffer(): PairingOffer {
+  return { serverUrl: "", offerCode: "", devicePublicKey: new Uint8Array(0), deviceName: "" };
+}
+
+export const PairingOffer: MessageFns<PairingOffer> = {
+  encode(message: PairingOffer, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.serverUrl !== "") {
+      writer.uint32(10).string(message.serverUrl);
+    }
+    if (message.offerCode !== "") {
+      writer.uint32(18).string(message.offerCode);
+    }
+    if (message.devicePublicKey.length !== 0) {
+      writer.uint32(26).bytes(message.devicePublicKey);
+    }
+    if (message.deviceName !== "") {
+      writer.uint32(34).string(message.deviceName);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PairingOffer {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBasePairingOffer();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.serverUrl = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.offerCode = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.devicePublicKey = reader.bytes();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.deviceName = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): PairingOffer {
+    return {
+      serverUrl: isSet(object.serverUrl)
+        ? globalThis.String(object.serverUrl)
+        : isSet(object.server_url)
+        ? globalThis.String(object.server_url)
+        : "",
+      offerCode: isSet(object.offerCode)
+        ? globalThis.String(object.offerCode)
+        : isSet(object.offer_code)
+        ? globalThis.String(object.offer_code)
+        : "",
+      devicePublicKey: isSet(object.devicePublicKey)
+        ? bytesFromBase64(object.devicePublicKey)
+        : isSet(object.device_public_key)
+        ? bytesFromBase64(object.device_public_key)
+        : new Uint8Array(0),
+      deviceName: isSet(object.deviceName)
+        ? globalThis.String(object.deviceName)
+        : isSet(object.device_name)
+        ? globalThis.String(object.device_name)
+        : "",
+    };
+  },
+
+  toJSON(message: PairingOffer): unknown {
+    const obj: any = {};
+    if (message.serverUrl !== "") {
+      obj.serverUrl = message.serverUrl;
+    }
+    if (message.offerCode !== "") {
+      obj.offerCode = message.offerCode;
+    }
+    if (message.devicePublicKey.length !== 0) {
+      obj.devicePublicKey = base64FromBytes(message.devicePublicKey);
+    }
+    if (message.deviceName !== "") {
+      obj.deviceName = message.deviceName;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PairingOffer>, I>>(base?: I): PairingOffer {
+    return PairingOffer.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PairingOffer>, I>>(object: I): PairingOffer {
+    const message = createBasePairingOffer();
+    message.serverUrl = object.serverUrl ?? "";
+    message.offerCode = object.offerCode ?? "";
+    message.devicePublicKey = object.devicePublicKey ?? new Uint8Array(0);
+    message.deviceName = object.deviceName ?? "";
+    return message;
+  },
+};
+
+function createBasePairingCode(): PairingCode {
+  return { invite: undefined, offer: undefined };
+}
+
+export const PairingCode: MessageFns<PairingCode> = {
+  encode(message: PairingCode, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.invite !== undefined) {
+      PairingPayload.encode(message.invite, writer.uint32(10).fork()).join();
+    }
+    if (message.offer !== undefined) {
+      PairingOffer.encode(message.offer, writer.uint32(18).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PairingCode {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBasePairingCode();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.invite = PairingPayload.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.offer = PairingOffer.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): PairingCode {
+    return {
+      invite: isSet(object.invite) ? PairingPayload.fromJSON(object.invite) : undefined,
+      offer: isSet(object.offer) ? PairingOffer.fromJSON(object.offer) : undefined,
+    };
+  },
+
+  toJSON(message: PairingCode): unknown {
+    const obj: any = {};
+    if (message.invite !== undefined) {
+      obj.invite = PairingPayload.toJSON(message.invite);
+    }
+    if (message.offer !== undefined) {
+      obj.offer = PairingOffer.toJSON(message.offer);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PairingCode>, I>>(base?: I): PairingCode {
+    return PairingCode.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PairingCode>, I>>(object: I): PairingCode {
+    const message = createBasePairingCode();
+    message.invite = (object.invite !== undefined && object.invite !== null)
+      ? PairingPayload.fromPartial(object.invite)
+      : undefined;
+    message.offer = (object.offer !== undefined && object.offer !== null)
+      ? PairingOffer.fromPartial(object.offer)
+      : undefined;
+    return message;
+  },
+};
+
+function createBasePairingOfferRequest(): PairingOfferRequest {
+  return { deviceName: "", devicePublicKey: new Uint8Array(0) };
+}
+
+export const PairingOfferRequest: MessageFns<PairingOfferRequest> = {
+  encode(message: PairingOfferRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.deviceName !== "") {
+      writer.uint32(10).string(message.deviceName);
+    }
+    if (message.devicePublicKey.length !== 0) {
+      writer.uint32(18).bytes(message.devicePublicKey);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PairingOfferRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBasePairingOfferRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.deviceName = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.devicePublicKey = reader.bytes();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): PairingOfferRequest {
+    return {
+      deviceName: isSet(object.deviceName)
+        ? globalThis.String(object.deviceName)
+        : isSet(object.device_name)
+        ? globalThis.String(object.device_name)
+        : "",
+      devicePublicKey: isSet(object.devicePublicKey)
+        ? bytesFromBase64(object.devicePublicKey)
+        : isSet(object.device_public_key)
+        ? bytesFromBase64(object.device_public_key)
+        : new Uint8Array(0),
+    };
+  },
+
+  toJSON(message: PairingOfferRequest): unknown {
+    const obj: any = {};
+    if (message.deviceName !== "") {
+      obj.deviceName = message.deviceName;
+    }
+    if (message.devicePublicKey.length !== 0) {
+      obj.devicePublicKey = base64FromBytes(message.devicePublicKey);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PairingOfferRequest>, I>>(base?: I): PairingOfferRequest {
+    return PairingOfferRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PairingOfferRequest>, I>>(object: I): PairingOfferRequest {
+    const message = createBasePairingOfferRequest();
+    message.deviceName = object.deviceName ?? "";
+    message.devicePublicKey = object.devicePublicKey ?? new Uint8Array(0);
+    return message;
+  },
+};
+
+function createBasePairingOfferResponse(): PairingOfferResponse {
+  return { offerCode: "", expiresAtUnixMs: "0" };
+}
+
+export const PairingOfferResponse: MessageFns<PairingOfferResponse> = {
+  encode(message: PairingOfferResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.offerCode !== "") {
+      writer.uint32(10).string(message.offerCode);
+    }
+    if (message.expiresAtUnixMs !== "0") {
+      writer.uint32(16).int64(message.expiresAtUnixMs);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PairingOfferResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBasePairingOfferResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.offerCode = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.expiresAtUnixMs = reader.int64().toString();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): PairingOfferResponse {
+    return {
+      offerCode: isSet(object.offerCode)
+        ? globalThis.String(object.offerCode)
+        : isSet(object.offer_code)
+        ? globalThis.String(object.offer_code)
+        : "",
+      expiresAtUnixMs: isSet(object.expiresAtUnixMs)
+        ? globalThis.String(object.expiresAtUnixMs)
+        : isSet(object.expires_at_unix_ms)
+        ? globalThis.String(object.expires_at_unix_ms)
+        : "0",
+    };
+  },
+
+  toJSON(message: PairingOfferResponse): unknown {
+    const obj: any = {};
+    if (message.offerCode !== "") {
+      obj.offerCode = message.offerCode;
+    }
+    if (message.expiresAtUnixMs !== "0") {
+      obj.expiresAtUnixMs = message.expiresAtUnixMs;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PairingOfferResponse>, I>>(base?: I): PairingOfferResponse {
+    return PairingOfferResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PairingOfferResponse>, I>>(object: I): PairingOfferResponse {
+    const message = createBasePairingOfferResponse();
+    message.offerCode = object.offerCode ?? "";
+    message.expiresAtUnixMs = object.expiresAtUnixMs ?? "0";
+    return message;
+  },
+};
+
+function createBasePairingOfferAcceptRequest(): PairingOfferAcceptRequest {
+  return { offerCode: "", devicePublicKey: new Uint8Array(0), wrappedGroupKey: new Uint8Array(0) };
+}
+
+export const PairingOfferAcceptRequest: MessageFns<PairingOfferAcceptRequest> = {
+  encode(message: PairingOfferAcceptRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.offerCode !== "") {
+      writer.uint32(10).string(message.offerCode);
+    }
+    if (message.devicePublicKey.length !== 0) {
+      writer.uint32(18).bytes(message.devicePublicKey);
+    }
+    if (message.wrappedGroupKey.length !== 0) {
+      writer.uint32(26).bytes(message.wrappedGroupKey);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PairingOfferAcceptRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBasePairingOfferAcceptRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.offerCode = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.devicePublicKey = reader.bytes();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.wrappedGroupKey = reader.bytes();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): PairingOfferAcceptRequest {
+    return {
+      offerCode: isSet(object.offerCode)
+        ? globalThis.String(object.offerCode)
+        : isSet(object.offer_code)
+        ? globalThis.String(object.offer_code)
+        : "",
+      devicePublicKey: isSet(object.devicePublicKey)
+        ? bytesFromBase64(object.devicePublicKey)
+        : isSet(object.device_public_key)
+        ? bytesFromBase64(object.device_public_key)
+        : new Uint8Array(0),
+      wrappedGroupKey: isSet(object.wrappedGroupKey)
+        ? bytesFromBase64(object.wrappedGroupKey)
+        : isSet(object.wrapped_group_key)
+        ? bytesFromBase64(object.wrapped_group_key)
+        : new Uint8Array(0),
+    };
+  },
+
+  toJSON(message: PairingOfferAcceptRequest): unknown {
+    const obj: any = {};
+    if (message.offerCode !== "") {
+      obj.offerCode = message.offerCode;
+    }
+    if (message.devicePublicKey.length !== 0) {
+      obj.devicePublicKey = base64FromBytes(message.devicePublicKey);
+    }
+    if (message.wrappedGroupKey.length !== 0) {
+      obj.wrappedGroupKey = base64FromBytes(message.wrappedGroupKey);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PairingOfferAcceptRequest>, I>>(base?: I): PairingOfferAcceptRequest {
+    return PairingOfferAcceptRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PairingOfferAcceptRequest>, I>>(object: I): PairingOfferAcceptRequest {
+    const message = createBasePairingOfferAcceptRequest();
+    message.offerCode = object.offerCode ?? "";
+    message.devicePublicKey = object.devicePublicKey ?? new Uint8Array(0);
     message.wrappedGroupKey = object.wrappedGroupKey ?? new Uint8Array(0);
     return message;
   },

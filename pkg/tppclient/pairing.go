@@ -252,6 +252,12 @@ func (c *conn) expectError() <-chan *tppv1.Envelope {
 // Both client implementations must produce this identically or a phone cannot
 // read a desktop's QR code, which is why the shape lives in the wire contract
 // rather than in either client.
+//
+// An invitation is still emitted bare, deliberately, even though PairingCode
+// can carry one. Wrapping it would buy nothing and would stop every build that
+// predates the wrapper from reading a code this one shows — the compatibility
+// problem the wrapper exists to avoid, pointed the other way. Only an offer,
+// which no such build understands at all, is wrapped.
 func EncodePairingPayload(p *tppv1.PairingPayload) (string, error) {
 	raw, err := proto.Marshal(p)
 	if err != nil {
@@ -261,19 +267,90 @@ func EncodePairingPayload(p *tppv1.PairingPayload) (string, error) {
 }
 
 // DecodePairingPayload parses a scanned or pasted pairing payload.
+//
+// It accepts both encodings: a PairingCode wrapping an invite, and the bare
+// PairingPayload older builds show. DecodeCode is the entry point that also
+// recognises an offer; this one exists for callers that want an invite or an
+// error.
 func DecodePairingPayload(s string) (*tppv1.PairingPayload, error) {
+	code, err := DecodeCode(s)
+	if err != nil {
+		return nil, err
+	}
+	invite := code.GetInvite()
+	if invite == nil {
+		return nil, fmt.Errorf("tppclient: this is a pairing offer, not an invitation")
+	}
+	return invite, nil
+}
+
+// EncodePairingOffer serializes a joiner-emitted offer to the string that
+// travels out of band: a PairingCode wrapping it, base64url without padding.
+//
+// The wrapper is not optional. Protobuf decodes by field number, so a bare
+// PairingOffer decodes as a PairingPayload without complaint — an offer shown
+// unwrapped would be read by the other side as an invitation with a nonsense
+// token.
+func EncodePairingOffer(o *tppv1.PairingOffer) (string, error) {
+	return encodeCode(&tppv1.PairingCode{Code: &tppv1.PairingCode_Offer{Offer: o}})
+}
+
+// DecodeCode parses a scanned or pasted code and reports which of the two
+// kinds it is.
+//
+// Protobuf decodes by field number, not by name, so neither form can simply be
+// tried and trusted: a bare PairingPayload is a syntactically fine PairingCode
+// and the reverse holds too. The order below is what makes it unambiguous in
+// practice.
+//
+//  1. An offer is only ever emitted wrapped, so a wrapper carrying a usable
+//     offer is an offer, full stop.
+//  2. An invitation is only ever emitted bare, so that is tried next. This is
+//     also the fallback the plan asks for: a code from a build that predates
+//     PairingCode is exactly this case and still pairs.
+//  3. A wrapper carrying a usable invitation is accepted last, for an
+//     implementation that chose to wrap one. Reaching here means the bare
+//     reading produced nothing usable, so there is nothing to be ambiguous
+//     with.
+func DecodeCode(s string) (*tppv1.PairingCode, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(trimPayload(s))
 	if err != nil {
 		return nil, fmt.Errorf("tppclient: the pairing code is not valid base64url")
 	}
-	var p tppv1.PairingPayload
-	if err := proto.Unmarshal(raw, &p); err != nil {
-		return nil, fmt.Errorf("tppclient: the pairing code is not a pairing payload")
+
+	var wrapped tppv1.PairingCode
+	wrappedOK := proto.Unmarshal(raw, &wrapped) == nil
+	if wrappedOK && validOffer(wrapped.GetOffer()) {
+		return &wrapped, nil
 	}
-	if p.GetServerUrl() == "" || p.GetPairingToken() == "" {
-		return nil, fmt.Errorf("tppclient: the pairing code carries no server URL or token")
+
+	var bare tppv1.PairingPayload
+	if proto.Unmarshal(raw, &bare) == nil && validInvite(&bare) {
+		return &tppv1.PairingCode{Code: &tppv1.PairingCode_Invite{Invite: &bare}}, nil
 	}
-	return &p, nil
+
+	if wrappedOK && validInvite(wrapped.GetInvite()) {
+		return &wrapped, nil
+	}
+	return nil, fmt.Errorf("tppclient: the pairing code is neither an invitation nor an offer")
+}
+
+func validInvite(p *tppv1.PairingPayload) bool {
+	return p != nil && p.GetServerUrl() != "" && p.GetPairingToken() != ""
+}
+
+func validOffer(o *tppv1.PairingOffer) bool {
+	return o != nil && o.GetServerUrl() != "" && o.GetOfferCode() != "" && len(o.GetDevicePublicKey()) > 0
+}
+
+// encodeCode is the one place a code becomes a string, so both kinds are
+// encoded identically.
+func encodeCode(code *tppv1.PairingCode) (string, error) {
+	raw, err := proto.Marshal(code)
+	if err != nil {
+		return "", fmt.Errorf("tppclient: encode the pairing code: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
 // trimPayload tolerates what a user's clipboard adds: surrounding whitespace,

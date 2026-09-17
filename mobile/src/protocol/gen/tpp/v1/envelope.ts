@@ -39,6 +39,15 @@ export enum MessageType {
   MESSAGE_TYPE_PAIRING_JOIN_NOTICE = 23,
   MESSAGE_TYPE_PAIRING_WRAPPED_KEY_UPLOAD = 24,
   MESSAGE_TYPE_PAIRING_COMPLETE = 25,
+  /**
+   * MESSAGE_TYPE_PAIRING_OFFER_REQUEST - Joiner-emitted pairing: the same exchange with the roles swapped, so that
+   * the device without a group key can be the one that shows a code
+   * (docs/plans/joiner-emitted-pairing.md). PairingComplete above is reused
+   * unchanged as the last step of both directions.
+   */
+  MESSAGE_TYPE_PAIRING_OFFER_REQUEST = 26,
+  MESSAGE_TYPE_PAIRING_OFFER_RESPONSE = 27,
+  MESSAGE_TYPE_PAIRING_OFFER_ACCEPT_REQUEST = 28,
   /** MESSAGE_TYPE_DEVICE_LIST_REQUEST - Devices and rekey (SPEC §3.3). */
   MESSAGE_TYPE_DEVICE_LIST_REQUEST = 30,
   MESSAGE_TYPE_DEVICE_LIST_RESPONSE = 31,
@@ -92,6 +101,15 @@ export function messageTypeFromJSON(object: any): MessageType {
     case 25:
     case "MESSAGE_TYPE_PAIRING_COMPLETE":
       return MessageType.MESSAGE_TYPE_PAIRING_COMPLETE;
+    case 26:
+    case "MESSAGE_TYPE_PAIRING_OFFER_REQUEST":
+      return MessageType.MESSAGE_TYPE_PAIRING_OFFER_REQUEST;
+    case 27:
+    case "MESSAGE_TYPE_PAIRING_OFFER_RESPONSE":
+      return MessageType.MESSAGE_TYPE_PAIRING_OFFER_RESPONSE;
+    case 28:
+    case "MESSAGE_TYPE_PAIRING_OFFER_ACCEPT_REQUEST":
+      return MessageType.MESSAGE_TYPE_PAIRING_OFFER_ACCEPT_REQUEST;
     case 30:
     case "MESSAGE_TYPE_DEVICE_LIST_REQUEST":
       return MessageType.MESSAGE_TYPE_DEVICE_LIST_REQUEST;
@@ -166,6 +184,12 @@ export function messageTypeToJSON(object: MessageType): string {
       return "MESSAGE_TYPE_PAIRING_WRAPPED_KEY_UPLOAD";
     case MessageType.MESSAGE_TYPE_PAIRING_COMPLETE:
       return "MESSAGE_TYPE_PAIRING_COMPLETE";
+    case MessageType.MESSAGE_TYPE_PAIRING_OFFER_REQUEST:
+      return "MESSAGE_TYPE_PAIRING_OFFER_REQUEST";
+    case MessageType.MESSAGE_TYPE_PAIRING_OFFER_RESPONSE:
+      return "MESSAGE_TYPE_PAIRING_OFFER_RESPONSE";
+    case MessageType.MESSAGE_TYPE_PAIRING_OFFER_ACCEPT_REQUEST:
+      return "MESSAGE_TYPE_PAIRING_OFFER_ACCEPT_REQUEST";
     case MessageType.MESSAGE_TYPE_DEVICE_LIST_REQUEST:
       return "MESSAGE_TYPE_DEVICE_LIST_REQUEST";
     case MessageType.MESSAGE_TYPE_DEVICE_LIST_RESPONSE:

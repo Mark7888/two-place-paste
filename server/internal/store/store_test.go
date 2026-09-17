@@ -294,3 +294,121 @@ func TestPairing(t *testing.T) {
 		}
 	})
 }
+
+// TestPairingOffer is the mirror of TestPairing: there the member mints and
+// the joiner consumes, here the joiner mints and the member consumes.
+func TestPairingOffer(t *testing.T) {
+	t.Parallel()
+
+	forEachStore(t, func(t *testing.T, s store.Store) {
+		ctx := context.Background()
+		tok := mustToken(ctx, t, s)
+		created, err := s.CreateGroup(ctx, tok.Value, store.NewDevice{
+			Name: "member", PublicKey: []byte("pk-member"), WrappedGroupKey: []byte("wrapped-member"),
+		})
+		if err != nil {
+			t.Fatalf("CreateGroup() error = %v", err)
+		}
+
+		offer, err := s.CreateOffer(ctx, "joiner", []byte("pk-joiner"), time.Minute)
+		if err != nil {
+			t.Fatalf("CreateOffer() error = %v", err)
+		}
+
+		got, err := s.GetOffer(ctx, offer.Code)
+		if err != nil {
+			t.Fatalf("GetOffer() error = %v", err)
+		}
+		if got.DeviceName != "joiner" || string(got.PublicKey) != "pk-joiner" {
+			t.Errorf("GetOffer() = %+v, want the offered name and key", got)
+		}
+		if got.DeviceID != "" {
+			t.Errorf("GetOffer().DeviceID = %q, want empty before any accept", got.DeviceID)
+		}
+
+		// A key that is not the offered one is refused, and nothing is written:
+		// this is the check that keeps a relay from substituting a key of its
+		// own for the one the member read out of band.
+		if _, _, err := s.AcceptOffer(ctx, offer.Code, created.Group.ID, []byte("pk-somebody-else"), []byte("wrapped")); !errors.Is(err, store.ErrOfferKeyMismatch) {
+			t.Errorf("AcceptOffer(wrong key) error = %v, want %v", err, store.ErrOfferKeyMismatch)
+		}
+		devices, err := s.ListDevices(ctx, created.Group.ID)
+		if err != nil {
+			t.Fatalf("ListDevices() error = %v", err)
+		}
+		if len(devices) != 1 {
+			t.Fatalf("group has %d devices after a refused accept, want 1", len(devices))
+		}
+
+		accepted, device, err := s.AcceptOffer(ctx, offer.Code, created.Group.ID, []byte("pk-joiner"), []byte("wrapped-joiner"))
+		if err != nil {
+			t.Fatalf("AcceptOffer() error = %v", err)
+		}
+		if accepted.DeviceID != device.ID || accepted.GroupID != created.Group.ID {
+			t.Errorf("AcceptOffer() offer = %+v, want it to name device %q in group %q",
+				accepted, device.ID, created.Group.ID)
+		}
+		if device.Name != "joiner" || string(device.PublicKey) != "pk-joiner" {
+			t.Errorf("AcceptOffer() device = %+v, want the offered name and key", device)
+		}
+
+		// The device is a member, with its wrapped key at the group's epoch.
+		key, err := s.GetWrappedKey(ctx, device.ID)
+		if err != nil {
+			t.Fatalf("GetWrappedKey() error = %v", err)
+		}
+		if key.Epoch != created.Group.Epoch || string(key.Key) != "wrapped-joiner" {
+			t.Errorf("GetWrappedKey() = %+v, want epoch %d and the member's bytes", key, created.Group.Epoch)
+		}
+		roster, err := s.ListDevices(ctx, created.Group.ID)
+		if err != nil {
+			t.Fatalf("ListDevices() error = %v", err)
+		}
+		if len(roster) != 2 {
+			t.Errorf("group has %d devices, want 2", len(roster))
+		}
+
+		// One offer, one device: a second accept is refused whoever sends it.
+		if _, _, err := s.AcceptOffer(ctx, offer.Code, created.Group.ID, []byte("pk-joiner"), []byte("wrapped-again")); !errors.Is(err, store.ErrOfferConsumed) {
+			t.Errorf("second AcceptOffer() error = %v, want %v", err, store.ErrOfferConsumed)
+		}
+		if _, _, err := s.AcceptOffer(ctx, "no-such-offer", created.Group.ID, []byte("pk-joiner"), []byte("wrapped")); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("AcceptOffer(unknown) error = %v, want %v", err, store.ErrNotFound)
+		}
+
+		if err := s.DeleteOffer(ctx, offer.Code); err != nil {
+			t.Fatalf("DeleteOffer() error = %v", err)
+		}
+		if _, err := s.GetOffer(ctx, offer.Code); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetOffer(deleted) error = %v, want %v", err, store.ErrNotFound)
+		}
+	})
+}
+
+// TestPairingOfferExpires proves the TTL is enforced on read rather than only
+// declared: an expired offer is indistinguishable from one that never existed.
+func TestPairingOfferExpires(t *testing.T) {
+	t.Parallel()
+
+	forEachStore(t, func(t *testing.T, s store.Store) {
+		ctx := context.Background()
+		tok := mustToken(ctx, t, s)
+		created, err := s.CreateGroup(ctx, tok.Value, store.NewDevice{Name: "member", PublicKey: []byte("pk-member")})
+		if err != nil {
+			t.Fatalf("CreateGroup() error = %v", err)
+		}
+
+		offer, err := s.CreateOffer(ctx, "joiner", []byte("pk-joiner"), time.Millisecond)
+		if err != nil {
+			t.Fatalf("CreateOffer() error = %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+
+		if _, err := s.GetOffer(ctx, offer.Code); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetOffer(expired) error = %v, want %v", err, store.ErrNotFound)
+		}
+		if _, _, err := s.AcceptOffer(ctx, offer.Code, created.Group.ID, []byte("pk-joiner"), []byte("wrapped")); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("AcceptOffer(expired) error = %v, want %v", err, store.ErrNotFound)
+		}
+	})
+}

@@ -41,6 +41,18 @@ curl -fsS http://127.0.0.1:8080/healthz     # -> ok
 The published port is bound to `127.0.0.1` on purpose: the reverse proxy is
 the only thing that should reach the server.
 
+`TPP_HOST_BIND_ADDR` moves that binding when the proxy is not on this host's
+loopback — a proxy on another machine over a private network, or a host with
+several addresses where only one should carry this traffic:
+
+```sh
+TPP_HOST_BIND_ADDR=10.0.0.4      # the interface the proxy reaches, and no other
+```
+
+Name one interface. The server speaks plain HTTP (SPEC §4.1), so an address the
+internet can reach publishes clipboard traffic with no TLS in front of it, and
+`0.0.0.0` is every interface at once.
+
 Every variable is documented in `deploy/.env.example`. Two of them are
 required and have no default:
 

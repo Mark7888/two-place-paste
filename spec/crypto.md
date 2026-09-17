@@ -1,7 +1,7 @@
 # TwoPlacePaste — Cryptography Specification
 
 **Profile:** `tpp-crypto-v1`
-**Version:** 1.1
+**Version:** 1.2
 **Status:** normative for MVP
 **Companion to:** [`docs/SPECS.md`](../docs/SPECS.md) §2, §3
 **Vectors:** [`spec/vectors/`](vectors/) — 42 vectors, 6 suites
@@ -394,6 +394,8 @@ Mapping this document onto the group lifecycle in SPEC §3:
 | §3.2 step 2 — joiner joins | generate device keypair, send public key | §3 |
 | §3.2 step 4 — inviter wraps to joiner | wrap the current group key at the current epoch | §4.2 |
 | §3.2 step 5 — joiner is a member | unwrap, install `(epoch, group_key)` | §4.4 |
+| §3.2 joiner-emitted step 1 — joiner offers | generate device keypair, send public key | §3 |
+| §3.2 joiner-emitted step 4 — member accepts | wrap the current group key at the current epoch | §4.2 |
 | §3.3 step 3 — rekey | generate a new group key at epoch+1, wrap once per remaining device | §4.1, §4.2 |
 | §3.3 step 4 — atomic upload | all wrapped keys in one request; the server applies them or none | server-side, Phase 3a |
 | §6 — put an entry | choose the entry id, frame, derive content key, seal | §5.3, §6, §5.1, §5.2 |
@@ -404,6 +406,23 @@ the QR payload) and the wrap ephemeral keypair of §4.2 are **different keys wit
 different lifetimes**. The pairing key authenticates the pairing channel and is
 Phase 3c's concern; the wrap key exists for the duration of a single 81-byte
 container.
+
+The two joiner-emitted rows are the same wrap as the two above them, and that is
+the point: **the wrap target may be learned from either side's out-of-band
+code.** In the member-emitted direction the member reads the joiner's public key
+from a relay frame after the joiner has consumed the member's token; in the
+joiner-emitted direction it reads the key from the code it scanned or pasted.
+Neither changes §4.2, its byte layout, or what is bound into `wrap_info` —
+`recipient_public` is the joining device's public key in both, and there is no
+joiner-emitted variant of anything in §4.
+
+What the direction does change is where the out-of-band channel has to be
+trusted, and that is a protocol rather than a crypto property: the relay stores
+the offered public key and refuses to complete an accept whose key does not
+match it byte for byte, so a relay cannot substitute a key it controls for the
+one the member read. A code carrying the *wrong* key is still a wrong key — it
+is the user reading a name and a fingerprint that catches that, exactly as
+§11.4 says of the roster.
 
 ---
 
@@ -555,3 +574,4 @@ cannot be confused on the wire.
 |---|---|
 | 1.0 | Initial profile. |
 | 1.1 | §5.3: the entry id bound into the AAD is chosen by the writing client, not assigned by the server, with the form and uniqueness rules a server enforces. No byte layout, derivation or primitive changed, so the profile is still `tpp-crypto-v1`, the version byte is still `0x01` and every vector in `spec/vectors/` is byte-identical — this states who supplies a value the format always had. It lands with the `EntryPutRequest.entry_id` field that makes it constructible. |
+| 1.2 | §8: two rows for joiner-emitted pairing, where the code travels from the device without a group key to a member, and a note that the wrap target may be learned from either side's out-of-band code. The wrap is §4.2 exactly as it stands: no byte layout, domain-separation string, derivation or primitive changed, the profile is still `tpp-crypto-v1`, the version byte is still `0x01`, and every vector in `spec/vectors/` is byte-identical. It lands with the `PairingOffer` message types that make the other direction expressible. |

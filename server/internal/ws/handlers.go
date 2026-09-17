@@ -20,8 +20,9 @@ import (
 // dispatch routes one decoded envelope to its handler and returns the frame to
 // send back, if any.
 //
-// Only two message types are legal without a device identity: they are the two
-// ways a device acquires one (SPEC §3.1, §3.2). Everything else needs an
+// Only three message types are legal without a device identity: they are the
+// three ways a device acquires one (SPEC §3.1, §3.2, and the joiner-emitted
+// direction of docs/plans/joiner-emitted-pairing.md). Everything else needs an
 // authenticated connection.
 func (s *Server) dispatch(ctx context.Context, c *conn, env *tppv1.Envelope) ([]byte, error) {
 	switch env.GetType() {
@@ -29,6 +30,8 @@ func (s *Server) dispatch(ctx context.Context, c *conn, env *tppv1.Envelope) ([]
 		return s.handleCreateGroup(ctx, c, env)
 	case tppv1.MessageType_MESSAGE_TYPE_PAIRING_JOIN_REQUEST:
 		return s.handlePairingJoin(ctx, c, env)
+	case tppv1.MessageType_MESSAGE_TYPE_PAIRING_OFFER_REQUEST:
+		return s.handlePairingOffer(ctx, c, env)
 	}
 
 	deviceID, groupID := c.identity()
@@ -42,6 +45,8 @@ func (s *Server) dispatch(ctx context.Context, c *conn, env *tppv1.Envelope) ([]
 		return s.handlePairingStart(ctx, env, deviceID, groupID)
 	case tppv1.MessageType_MESSAGE_TYPE_PAIRING_WRAPPED_KEY_UPLOAD:
 		return s.handlePairingWrappedKey(ctx, env, deviceID, groupID)
+	case tppv1.MessageType_MESSAGE_TYPE_PAIRING_OFFER_ACCEPT_REQUEST:
+		return s.handlePairingOfferAccept(ctx, env, groupID)
 	case tppv1.MessageType_MESSAGE_TYPE_DEVICE_LIST_REQUEST:
 		return s.handleDeviceList(ctx, env, groupID)
 	case tppv1.MessageType_MESSAGE_TYPE_REKEY_REQUEST:
@@ -250,6 +255,135 @@ func (s *Server) handlePairingWrappedKey(ctx context.Context, env *tppv1.Envelop
 
 	// The same message acknowledges the inviter's upload, echoing its id: the
 	// wire contract has no separate ack and the inviter authored every field.
+	return encode(env.GetId(), tppv1.MessageType_MESSAGE_TYPE_PAIRING_COMPLETE, complete)
+}
+
+// offersPerConn bounds how many pairing offers one unauthenticated socket may
+// mint. Minting is the only thing this server does for a caller that has
+// proved nothing at all, so it is the only frame here with a limit of its own;
+// a legitimate joiner mints one, and shows a second only if the first expired.
+const offersPerConn = 5
+
+// handlePairingOffer registers an offer minted by a device that holds no group
+// key, so that a member can admit it
+// (docs/plans/joiner-emitted-pairing.md §3 steps 1-2).
+//
+// This is the mirror of handlePairingStart, and the connection it arrives on is
+// deliberately not authenticated: a device with no group key is exactly the
+// device this exists for. The socket stays open afterwards — PairingComplete is
+// pushed to it once a member accepts, and the hub routes on the offer code
+// because there is no device identity to route on yet.
+func (s *Server) handlePairingOffer(ctx context.Context, c *conn, env *tppv1.Envelope) ([]byte, error) {
+	var req tppv1.PairingOfferRequest
+	if err := decode(env, &req); err != nil {
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "payload could not be decoded")
+	}
+	if len(req.GetDevicePublicKey()) == 0 {
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "device_public_key is required")
+	}
+
+	offer, err := s.store.CreateOffer(ctx, req.GetDeviceName(), req.GetDevicePublicKey(), s.pairingTTL)
+	if err != nil {
+		return nil, fmt.Errorf("create pairing offer: %w", err)
+	}
+	if n := c.addOffer(offer.Code); n > offersPerConn {
+		// Counted after the mint so the record carries a TTL and expires on its
+		// own; the caller gets nothing back, so nothing can be shown or used.
+		if delErr := s.store.DeleteOffer(ctx, offer.Code); delErr != nil {
+			s.logger.WarnContext(ctx, "deleting a rate-limited pairing offer failed", slog.Any("error", delErr))
+		}
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_RATE_LIMITED,
+			"this connection has minted %d pairing offers; reconnect before minting another", offersPerConn)
+	}
+	s.hub.waitForOffer(offer.Code, c)
+
+	return encode(env.GetId(), tppv1.MessageType_MESSAGE_TYPE_PAIRING_OFFER_RESPONSE, &tppv1.PairingOfferResponse{
+		OfferCode:       offer.Code,
+		ExpiresAtUnixMs: offer.ExpiresAt.UnixMilli(),
+	})
+}
+
+// handlePairingOfferAccept admits the offered device into the accepting
+// member's group (docs/plans/joiner-emitted-pairing.md §3 steps 5-7).
+//
+// Accepting hands over the group key, so this is legal only on an
+// authenticated connection — the dispatch above is what enforces that. The
+// public key is checked against the stored offer byte for byte inside the
+// store's atomic accept: the member wrapped to a key it read out of band, and
+// a relay that substituted one would have to make it match an offer it did not
+// create.
+func (s *Server) handlePairingOfferAccept(ctx context.Context, env *tppv1.Envelope, groupID string) ([]byte, error) {
+	var req tppv1.PairingOfferAcceptRequest
+	if err := decode(env, &req); err != nil {
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "payload could not be decoded")
+	}
+	if req.GetOfferCode() == "" || len(req.GetDevicePublicKey()) == 0 || len(req.GetWrappedGroupKey()) == 0 {
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
+			"offer_code, device_public_key and wrapped_group_key are all required")
+	}
+
+	// One operation: the offer is checked and consumed, the device is created
+	// and its wrapped key is stored, or none of it happens. Two members racing
+	// to accept the same offer therefore admit exactly one device.
+	offer, device, err := s.store.AcceptOffer(ctx, req.GetOfferCode(), groupID,
+		req.GetDevicePublicKey(), req.GetWrappedGroupKey())
+	switch {
+	case errors.Is(err, store.ErrOfferConsumed):
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_TOKEN_CONSUMED, "this pairing offer has already admitted a device")
+	case errors.Is(err, store.ErrOfferKeyMismatch):
+		// Named plainly: the member wrapped to a key that is not the one the
+		// offering device registered, and completing would hand out a key
+		// nobody can open.
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
+			"device_public_key is not the key this pairing offer was made with")
+	case errors.Is(err, store.ErrNotFound):
+		// Expired and never-existed are the same answer, as for a pairing
+		// token: the code is short lived by design.
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_TOKEN_EXPIRED, "pairing offer is expired or unknown")
+	case err != nil:
+		return nil, fmt.Errorf("accept pairing offer: %w", err)
+	}
+
+	group, err := s.store.GetGroup(ctx, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("read group: %w", err)
+	}
+
+	// The epoch is the group's, read after the accept: the member wrapped at
+	// the epoch it believed current, and a rekey that landed in between makes
+	// the unwrap fail on the joiner rather than silently install a key from a
+	// generation the group has left. That is the same window the inviter-side
+	// hand-off has, and it closes the same way — the user tries again.
+	complete := &tppv1.PairingComplete{
+		GroupId:         groupID,
+		DeviceId:        device.ID,
+		Epoch:           group.Epoch,
+		WrappedGroupKey: req.GetWrappedGroupKey(),
+	}
+	joinerFrame, err := encode(newCorrelationID(), tppv1.MessageType_MESSAGE_TYPE_PAIRING_COMPLETE, complete)
+	if err != nil {
+		return nil, err
+	}
+	if !s.hub.sendToOffer(offer.Code, joinerFrame) {
+		// The offering device is gone, and unlike a device that missed a rekey
+		// it has nothing to come back to: it holds no identity and no key. The
+		// admission is undone so the group does not keep a member that can
+		// never read anything.
+		s.removeDevice(ctx, groupID, device.ID)
+		s.hub.forgetOffer(offer.Code)
+		if delErr := s.store.DeleteOffer(ctx, offer.Code); delErr != nil {
+			s.logger.WarnContext(ctx, "deleting an unclaimed pairing offer failed", slog.Any("error", delErr))
+		}
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_NOT_FOUND, "the offering device is not connected")
+	}
+
+	s.logger.InfoContext(ctx, "device admitted from a pairing offer",
+		slog.String("group_id", groupID),
+		slog.String("device_id", device.ID))
+
+	// The same message acknowledges the accepting member, echoing its id: the
+	// wire contract has no separate ack, and this is how the member learns the
+	// identifier of the device it just admitted.
 	return encode(env.GetId(), tppv1.MessageType_MESSAGE_TYPE_PAIRING_COMPLETE, complete)
 }
 

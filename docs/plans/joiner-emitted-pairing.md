@@ -1,7 +1,7 @@
 # Plan — joiner-emitted pairing (pairing in both directions)
 
-**Status:** not implemented. Needs a wire contract change, so it cannot land inside a
-feature phase (ROADMAP §3) — it is its own PR, or a short series of them.
+**Status:** implemented. It needed a wire contract change, so it landed as its own change
+rather than inside a feature phase (ROADMAP §3).
 **Raised by:** ROADMAP P7 review. The Android client implements every direction the
 current contract allows; this document is the other half.
 **Touches:** `/proto/**` (P1), `/server/**` (P3), `/pkg/tppclient/**` (P5),
@@ -17,19 +17,19 @@ copied text, in any combination — but the *direction* is fixed, because
 `PairingStartRequest` is only legal on an authenticated connection
 (`server/internal/ws/handlers.go`): only a member can mint a pairing token.
 
-| # | Wanted | Direction | Today |
-|---|---|---|---|
-| 1 | Desktop paired: desktop shows QR, phone scans | member → joiner | ✅ |
-| 2 | Desktop paired: desktop shows code, phone pastes | member → joiner | ✅ |
-| 3 | Desktop paired: **phone generates code, desktop pastes** | joiner → member | ❌ |
-| 4 | Phone paired: **desktop shows QR, phone scans** | joiner → member | ❌ |
-| 5 | Phone paired: **desktop shows code, phone pastes** | joiner → member | ❌ |
-| 6 | Phone paired: phone generates code, desktop pastes | member → joiner | ✅ |
-| 7 | Phone A paired: A shows, B scans or pastes | member → joiner | ✅ |
-| 8 | Phone A paired: **B shows, A scans or pastes** | joiner → member | ❌ |
+| # | Wanted | Direction | Before | Now |
+|---|---|---|---|---|
+| 1 | Desktop paired: desktop shows QR, phone scans | member → joiner | ✅ | ✅ |
+| 2 | Desktop paired: desktop shows code, phone pastes | member → joiner | ✅ | ✅ |
+| 3 | Desktop paired: **phone generates code, desktop pastes** | joiner → member | ❌ | ✅ |
+| 4 | Phone paired: **desktop shows QR, phone scans** | joiner → member | ❌ | ✅ |
+| 5 | Phone paired: **desktop shows code, phone pastes** | joiner → member | ❌ | ✅ |
+| 6 | Phone paired: phone generates code, desktop pastes | member → joiner | ✅ | ✅ |
+| 7 | Phone A paired: A shows, B scans or pastes | member → joiner | ✅ | ✅ |
+| 8 | Phone A paired: **B shows, A scans or pastes** | joiner → member | ❌ | ✅ |
 
-Every ❌ is the same missing flow, not five of them: **an unpaired device emitting a code
-that a member consumes.** Nothing about QR versus text is involved — that is already
+Every ❌ was the same missing flow, not five of them: **an unpaired device emitting a code
+that a member consumes.** Nothing about QR versus text was involved — that was already
 symmetric, and the desktop deliberately has no scanner (SPEC §7.2), which is why the
 text form has to keep working in both directions.
 
@@ -161,13 +161,37 @@ get wrong.
 7. **E2E** (`/e2e`, P8): the eight rows of §1, in both directions, across desktop↔phone
    and phone↔phone.
 
+Steps 1-6 landed. Step 7 did not and could not: `/e2e` does not exist yet — P8 has not
+started (ROADMAP §1) — so there is no suite to add the eight rows to. It belongs to P8
+along with the rest of that harness. What stands in for it until then is
+`mobile/src/interop`, which runs the real server binary against a real Redis and pairs
+the TypeScript client with the Go one in **both** directions, and
+`pkg/tppclient`'s integration tests, which do the same against a real relay.
+
 ## 8. Acceptance
 
-- [ ] Every row of the table in §1 passes, including the five that fail today.
-- [ ] A member cannot admit a device without confirming a named, fingerprinted dialog —
-      asserted in the client's own tests, not only in the UI.
-- [ ] An offer pairs exactly one device; a second accept of the same code is refused.
-- [ ] An expired offer is refused, and the joiner is told why.
-- [ ] A code shown by a build that predates `PairingCode` still pairs.
-- [ ] The relay still cannot unwrap anything: the threat-model review of SPEC §2.3 is
-      re-run over the new frames.
+- [x] Every row of the table in §1 passes, including the five that used to fail.
+- [x] A member cannot admit a device without confirming a named, fingerprinted dialog —
+      asserted in the client's own tests, not only in the UI. In the Go client the gate is
+      `PrepareAcceptOffer` → `Confirm`; in the TypeScript client it is
+      `prepareAcceptOffer` → `confirm`; on the desktop it is a plan id the HTTP API will
+      not admit a device without. Each has its own test.
+- [x] An offer pairs exactly one device; a second accept of the same code is refused.
+      Asserted at the store (including a 50-way race against a real Redis), at the
+      relay's handlers, and in both clients.
+- [x] An expired offer is refused, and the joiner is told why —
+      `ERROR_CODE_TOKEN_EXPIRED`, the same answer a stale pairing token gets.
+- [x] A code shown by a build that predates `PairingCode` still pairs, and a code this
+      build shows is still readable by one — an invitation is deliberately still emitted
+      bare, and only an offer is wrapped. Pinned by a test in each client.
+- [x] The relay still cannot unwrap anything: the new frames carry a wrapped key it has
+      no key for, a public key it compares but cannot use, and a code that names neither.
+      The one new thing it holds is an offer — a name, a public key and a deadline — and
+      §5 explains why a stolen one is a nuisance rather than a disclosure.
+
+### What is not covered
+
+- The `/e2e` suite of step 7, for the reason above.
+- SPEC §2.3's threat-model review is a reading, not a test. The frames were written
+  against it and the reasoning is in §5 and in `spec/crypto.md` §8, but nobody has re-run
+  the review itself; that is P8's to do with the rest of the hardening pass.

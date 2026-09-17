@@ -19,6 +19,8 @@
 //	create <creation-url>   create a group and connect
 //	pair                    start a pairing and print the payload
 //	await-join              wait for a device to join the pending pairing
+//	read-offer <code>       read a joiner-emitted code; changes nothing
+//	accept-offer            admit the device the last read-offer described
 //	put <text>              write a text entry
 //	latest                  read the group's latest entry
 //	devices                 list the group roster
@@ -81,7 +83,10 @@ func run() error {
 	}
 	defer func() { _ = client.Close() }()
 
-	var pending *tppclient.Invitation
+	var (
+		pending      *tppclient.Invitation
+		pendingOffer *tppclient.OfferAcceptance
+	)
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64<<10), 16<<20)
 
@@ -120,6 +125,37 @@ func run() error {
 				break
 			}
 			pending = nil
+			reply(map[string]any{"ok": true, "device_id": device.ID, "device_name": device.Name})
+
+		case "read-offer":
+			// The consent gate of docs/plans/joiner-emitted-pairing.md §5,
+			// across the process boundary: reading a code changes nothing and
+			// returns only what a dialog would render.
+			accept, err := client.PrepareAcceptOffer(ctx, argument)
+			if err != nil {
+				reply(failure(err))
+				break
+			}
+			pendingOffer = accept
+			reply(map[string]any{
+				"ok":          true,
+				"device_name": accept.DeviceName,
+				"fingerprint": accept.Fingerprint,
+			})
+
+		case "accept-offer":
+			if pendingOffer == nil {
+				reply(map[string]any{"ok": false, "error": "no offer has been read"})
+				break
+			}
+			// The confirmation a user gives on a screen is given here by the
+			// test: no key is wrapped until this call.
+			device, err := pendingOffer.Confirm(ctx)
+			if err != nil {
+				reply(failure(err))
+				break
+			}
+			pendingOffer = nil
 			reply(map[string]any{"ok": true, "device_id": device.ID, "device_name": device.Name})
 
 		case "put":
