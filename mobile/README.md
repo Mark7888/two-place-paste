@@ -117,6 +117,12 @@ against the relay, so the member displays and the joiner scans or pastes. A
 phone scans the QR; a desktop, which has no camera by design (SPEC §7.2),
 takes the string under it.
 
+Every transport is symmetric — QR or copied text, desktop↔phone or
+phone↔phone — but the direction is not: an unpaired device cannot show a code
+for a member to accept, because minting a pairing token needs an authenticated
+connection. That is a wire-contract limit, not a client one. The plan for
+making it symmetric is [`docs/plans/joiner-emitted-pairing.md`](../docs/plans/joiner-emitted-pairing.md).
+
 A device holds one group key, so it belongs to one group. Moving it elsewhere
 is **Settings → delete this device's keys**, which returns the app to the
 setup screen with no restart — and is a local operation: the relay still lists

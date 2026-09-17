@@ -901,6 +901,21 @@ to keep current for a stack one level deep.
 
 ---
 
+## Queued contract change — joiner-emitted pairing
+
+Pairing works in every transport (QR, copied text) but only in one direction: the device
+that already holds a group key emits the code, and the device without one consumes it.
+`PairingStartRequest` is legal only on an authenticated connection, so a joiner cannot
+mint a token and cannot show a code a member could accept.
+
+Making it symmetric needs new message types, relay-held offers, and a named confirmation
+on the accepting member — a shared-contract change, so it is its own PR and not part of
+any feature phase (§3). The mechanism, the wire additions, the security consequence of
+moving the risk onto the member, and the work split are in
+[`docs/plans/joiner-emitted-pairing.md`](plans/joiner-emitted-pairing.md).
+
+---
+
 ## Deferred backlog — do not let agents start these
 
 | Item | Spec ref |

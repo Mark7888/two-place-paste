@@ -11,10 +11,18 @@
  * Both forms are the same string, which is why they sit together: whichever
  * the joining device can take, it is reading the same payload.
  *
- * There is deliberately no scanner here. A device holding a group key cannot
- * join another group without discarding that key, so the way to move this
- * phone elsewhere is Settings, and this screen says so rather than offering a
+ * There is deliberately no scanner here, for two separate reasons.
+ *
+ * A device holding a group key cannot join another group without discarding
+ * that key, so the way to move this phone elsewhere is Settings — not a
  * button that would have to mean "leave the group" in disguise.
+ *
+ * And the other direction — an unpaired device showing a code that this one
+ * accepts — is not in the wire contract at all: only an authenticated
+ * connection may mint a pairing token, so a device with no group key has
+ * nothing to show. Making pairing symmetric needs new message types and a
+ * confirmation gate on the accepting member; the plan is
+ * docs/plans/joiner-emitted-pairing.md.
  */
 
 import React, { useState } from 'react';
@@ -69,7 +77,8 @@ export function PairingScreen(): React.JSX.Element {
       <Card title="Add a device to this group">
         <Text style={styles.muted}>
           The code is short-lived and pairs exactly one device. The joining device scans it, or
-          pastes the same string.
+          pastes the same string — codes always travel from a device that is in the group to one
+          that is not.
         </Text>
         <Button
           label={invitation === null ? 'Show a pairing code' : 'New pairing code'}
