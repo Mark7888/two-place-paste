@@ -7,13 +7,13 @@
  * that skipped the dialog would have nothing to confirm with.
  */
 
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 
 import type { Device, Revocation } from '../../core';
 import { useSession } from '../SessionContext';
 import { failureMessage } from '../session';
-import { Button, Card, Status } from '../ui';
+import { Button, Card, Notice, Sheet } from '../ui';
 import { colors, styles } from '../theme';
 
 export function DevicesScreen(): React.JSX.Element {
@@ -24,9 +24,13 @@ export function DevicesScreen(): React.JSX.Element {
   const [message, setMessage] = useState('');
   const [ok, setOk] = useState(true);
 
-  const load = () => {
-    const client = session.client;
-    if (client === null || busy) {
+  const client = session.client;
+
+  // Opening the screen is the ask. The roster is names and timestamps the
+  // relay already holds — it is not clipboard content, and nothing here is
+  // fetched while the screen is closed.
+  const load = useCallback(() => {
+    if (client === null) {
       return;
     }
     setBusy(true);
@@ -36,7 +40,7 @@ export function DevicesScreen(): React.JSX.Element {
         const roster = await client.devices();
         setDevices(roster.devices);
         setOk(true);
-        setMessage(`${roster.devices.length} devices at epoch ${roster.epoch}.`);
+        setMessage('');
       } catch (err) {
         setOk(false);
         setMessage(failureMessage(err));
@@ -44,10 +48,13 @@ export function DevicesScreen(): React.JSX.Element {
         setBusy(false);
       }
     })();
-  };
+  }, [client]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   const prepare = (device: Device) => {
-    const client = session.client;
     if (client === null || busy) {
       return;
     }
@@ -92,31 +99,51 @@ export function DevicesScreen(): React.JSX.Element {
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Devices</Text>
-      <Button label="Load the group’s devices" onPress={load} disabled={busy} />
-      <Status message={message} ok={ok} />
+      <Text style={styles.lede}>
+        Everything that holds this group’s key. Removing one re-keys the group, so the removed
+        device cannot read anything written afterwards.
+      </Text>
+      {message !== '' && <Notice message={message} tone={ok ? 'ok' : 'error'} />}
+      <Button
+        label={busy ? 'Loading…' : 'Refresh'}
+        variant="secondary"
+        onPress={load}
+        disabled={busy}
+      />
 
-      {plan !== null && (
-        <Card title={`Remove ${plan.target.name}?`}>
-          <Text style={styles.text}>
-            A new group key will be generated and handed to every device below. Anything written
-            before now becomes unreadable to all of them and expires within 24 hours.
-          </Text>
-          {plan.remaining.map((device) => (
-            <Text key={device.id} style={styles.muted}>
-              • {device.name}
-              {device.self ? ' (this device)' : ''}
+      {/*
+        The confirmation is a sheet rather than a card in the flow: it is the
+        one thing on screen waiting for an answer, and as a card it could be
+        scrolled away from while it waited.
+      */}
+      <Sheet
+        visible={plan !== null}
+        title={plan === null ? 'Remove' : `Remove ${plan.target.name}?`}
+        onClose={() => setPlan(null)}
+      >
+        {plan !== null && (
+          <>
+            <Text style={styles.text}>
+              A new group key will be generated and handed to every device below. Anything written
+              before now becomes unreadable to all of them and expires within 24 hours.
             </Text>
-          ))}
-          <View style={styles.row}>
-            <View style={{ flex: 1 }}>
-              <Button label="Cancel" variant="secondary" onPress={() => setPlan(null)} />
+            {plan.remaining.map((device) => (
+              <Text key={device.id} style={styles.muted}>
+                • {device.name}
+                {device.self ? ' (this device)' : ''}
+              </Text>
+            ))}
+            <View style={styles.inline}>
+              <View style={{ flex: 1 }}>
+                <Button label="Cancel" variant="secondary" onPress={() => setPlan(null)} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Button label="Remove" variant="danger" onPress={confirm} disabled={busy} />
+              </View>
             </View>
-            <View style={{ flex: 1 }}>
-              <Button label="Remove" variant="danger" onPress={confirm} disabled={busy} />
-            </View>
-          </View>
-        </Card>
-      )}
+          </>
+        )}
+      </Sheet>
 
       {(devices ?? []).map((device) => (
         <Card key={device.id} title={device.name}>

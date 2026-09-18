@@ -55,6 +55,19 @@ class TileModule(reactContext: ReactApplicationContext) :
         )
     }
 
+    /**
+     * closeOverlay dismisses the panel a tile tap opened.
+     *
+     * JavaScript calls it when the sync it was opened for has finished or the
+     * user has declined it. It is a no-op when no panel is showing — a sync
+     * started from inside the app reaches the same code and must not close
+     * anything.
+     */
+    @ReactMethod
+    fun closeOverlay() {
+        SyncOverlayActivity.close()
+    }
+
     /** addListener and removeListeners exist because NativeEventEmitter requires them. */
     @ReactMethod
     fun addListener(eventName: String) = Unit

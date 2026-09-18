@@ -39,6 +39,27 @@
         </activity>
 
         <!--
+          The window a tile tap opens (SPEC §7.1): a transparent panel over
+          whatever the user is doing, rather than the whole app.
+
+          It is not exported — only this app's own tile starts it. Its own
+          task affinity and excludeFromRecents keep a one-shot panel out of
+          the recents list and stop it becoming what the launcher returns to
+          instead of the app. `singleTask` means a second tap reuses the panel
+          that is already up.
+        -->
+        <activity
+            android:name=".SyncOverlayActivity"
+            android:theme="@style/AppTheme.Overlay"
+            android:label="@string/tile_label"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:launchMode="singleTask"
+            android:taskAffinity=".SyncOverlay"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="false" />
+
+        <!--
           The quick-settings tile (SPEC §7.1). android:exported is required for
           a TileService, and BIND_QUICK_SETTINGS_TILE means only the system may
           bind it.

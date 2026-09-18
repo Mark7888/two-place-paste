@@ -31,4 +31,8 @@ export const tile: TilePort = {
   async pending(): Promise<boolean> {
     return (await TppTile?.consumePendingRequest()) ?? false;
   },
+
+  closeOverlay(): void {
+    TppTile?.closeOverlay();
+  },
 };

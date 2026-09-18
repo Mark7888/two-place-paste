@@ -1,26 +1,27 @@
 /**
- * The app's session: one client, its connection state, and the rule that the
- * socket is held only while the app is foregrounded (SPEC §5.2).
+ * The React face of the session.
  *
- * The tile's sync runs through this same session when the app is already
- * running, which is why the connection lifecycle lives here rather than in a
- * screen.
+ * The session itself lives in `sessionStore`, outside any component tree, so
+ * that the client, the socket and the tile handler exist before a window does
+ * — see the note at the top of that file. This is the thin part: it subscribes
+ * a component tree to that store and hands screens the same `useSession` they
+ * always had.
  */
 
-import React, {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
-import { AppState, type AppStateStatus } from 'react-native';
+import React, { createContext, useContext, useMemo, useSyncExternalStore } from 'react';
 
 import type { Client } from '../core';
-import { tile } from '../platform';
-import { failureMessage, openSession, sync } from './session';
+import {
+  answerDirection,
+  forget,
+  getSnapshot,
+  init,
+  refresh,
+  setNotice,
+  subscribe,
+  type DirectionChoice,
+  type Question,
+} from './sessionStore';
 
 /** SessionState is what the screens render from. */
 export interface SessionState {
@@ -34,7 +35,13 @@ export interface SessionState {
   notice: string;
   /** probablyRevoked is set when the relay is up but refuses this device's socket (SPEC §3.3 step 5). */
   probablyRevoked: boolean;
-  /** refresh re-reads the client's own state into React after a flow changed it. */
+  /** syncing is true while a sync the store started — a tile tap — is running. */
+  syncing: boolean;
+  /** question is a sync waiting on the user to pick a direction. */
+  question: Question | null;
+  /** answer resolves that question. Dismissing is an answer: nothing is synced. */
+  answer(id: number, choice: DirectionChoice | null): void;
+  /** refresh re-reads the client's own state after a flow changed it. */
   refresh(): void;
   setNotice(message: string): void;
   /**
@@ -57,146 +64,28 @@ export function useSession(): SessionState {
 }
 
 export function SessionProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
-  const [client, setClient] = useState<Client | null>(null);
-  const [ready, setReady] = useState(false);
-  const [version, setVersion] = useState(0);
-  const [notice, setNotice] = useState('');
-  const [probablyRevoked, setProbablyRevoked] = useState(false);
-  const syncing = useRef(false);
-
-  const refresh = useCallback(() => setVersion((v) => v + 1), []);
-
-  const forget = useCallback(async () => {
-    if (client === null) {
-      return;
-    }
-    await client.forget();
-    setProbablyRevoked(false);
-    setNotice('');
-    refresh();
-  }, [client, refresh]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const opened = await openSession({
-          onConnected: () => refresh(),
-          onDisconnected: () => refresh(),
-          onEpoch: (epoch) => {
-            // A rekey installs a key and nothing else: the local clipboard is
-            // never touched here (SPEC §3.3).
-            setNotice(`The group was re-keyed; this device is at epoch ${epoch}.`);
-            refresh();
-          },
-          onDeviceRevoked: () => {
-            setNotice('A device was removed from the group.');
-            refresh();
-          },
-          onDevicePaired: (device) => setNotice(`${device.name} joined the group.`),
-          onProbablyRevoked: () => setProbablyRevoked(true),
-        });
-        if (cancelled) {
-          return;
-        }
-        setClient(opened);
-        setReady(true);
-        if (opened.inGroup) {
-          await opened.connect().catch((err: unknown) => setNotice(failureMessage(err)));
-          refresh();
-        }
-      } catch (err) {
-        setNotice(failureMessage(err));
-        setReady(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [refresh]);
-
-  // The socket follows the foreground, which is the whole of SPEC §5.2 for
-  // this platform: connected while the user is here, gone when they leave.
-  useEffect(() => {
-    if (client === null) {
-      return;
-    }
-    const onChange = (state: AppStateStatus) => {
-      if (!client.inGroup) {
-        return;
-      }
-      if (state === 'active') {
-        void client.connect().catch(() => setNotice('The relay could not be reached.'));
-      } else {
-        client.disconnect();
-      }
-      refresh();
-    };
-    const subscription = AppState.addEventListener('change', onChange);
-    return () => {
-      subscription.remove();
-      client.disconnect();
-    };
-  }, [client, refresh]);
-
-  // A tile tap that reaches a running app: one sync, then the tile is told how
-  // it went (SPEC §7.1).
-  useEffect(() => {
-    if (client === null || !tile.available) {
-      return;
-    }
-    const runOnce = () => {
-      if (syncing.current) {
-        return;
-      }
-      syncing.current = true;
-      void (async () => {
-        try {
-          if (!client.inGroup) {
-            tile.report(false, 'TwoPlacePaste is not paired yet.');
-            return;
-          }
-          await client.connect();
-          const result = await sync(client);
-          tile.report(result.direction !== 'nothing', result.message);
-          setNotice(result.message);
-        } catch (err) {
-          tile.report(false, failureMessage(err));
-          setNotice(failureMessage(err));
-        } finally {
-          syncing.current = false;
-          refresh();
-        }
-      })();
-    };
-
-    const unsubscribe = tile.requests(runOnce);
-    // A cold start: the tap that launched the app is waiting to be claimed.
-    void tile.pending().then((pending) => {
-      if (pending) {
-        runOnce();
-      }
-    });
-    return unsubscribe;
-  }, [client, refresh]);
+  // Opening is idempotent: two surfaces — the app and the tile's panel — mount
+  // two providers over one session, and the second call does nothing.
+  init();
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot);
 
   const value = useMemo<SessionState>(
     () => ({
-      client,
-      ready,
-      inGroup: client?.inGroup ?? false,
-      connected: client?.connected ?? false,
-      epoch: client?.epoch ?? 0n,
-      notice,
-      probablyRevoked,
+      client: snapshot.client,
+      ready: snapshot.ready,
+      inGroup: snapshot.inGroup,
+      connected: snapshot.connected,
+      epoch: snapshot.epoch,
+      notice: snapshot.notice,
+      probablyRevoked: snapshot.probablyRevoked,
+      syncing: snapshot.syncing,
+      question: snapshot.question,
+      answer: answerDirection,
       refresh,
       setNotice,
       forget,
     }),
-    // `version` is the dependency that makes a change inside the client — a new
-    // epoch, a dropped socket — reach React, since the client is mutable and
-    // is deliberately not a React value.
-    [client, ready, notice, probablyRevoked, refresh, forget, version],
+    [snapshot],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

@@ -16,8 +16,15 @@ import {
   type ClipboardItem,
 } from '../platform';
 
-/** Direction is what one sync did, which is what the UI reports back. */
-export type Direction = 'uploaded' | 'downloaded' | 'nothing';
+/**
+ * Direction is what one sync did, which is what the UI reports back.
+ *
+ * `ambiguous` is not a failure and not "nothing happened": it is the one
+ * outcome that needs the user. It means the comparison SPEC §6 defines could
+ * not be made, so the caller must ask which way to go rather than report a
+ * dead end — which is what the screen and the quick-settings tile both now do.
+ */
+export type Direction = 'uploaded' | 'downloaded' | 'nothing' | 'ambiguous';
 
 /** SyncResult is the outcome of one sync, in the words a screen or a toast shows. */
 export interface SyncResult {
@@ -97,9 +104,10 @@ export async function upload(client: Client): Promise<SyncResult> {
  * Android is the one platform in this system where that comparison is
  * available: `ClipDescription.getTimestamp()` records when the clip was placed
  * on the clipboard (API 26+). Where it is not — an OS that returns nothing, a
- * clipboard set before the app was installed — this returns `nothing` and says
- * so, because the two explicit directional buttons exist for exactly that case
- * and guessing would silently destroy whichever side it overwrote.
+ * clipboard set before the app was installed — this returns `ambiguous` rather
+ * than guessing, because guessing silently destroys whichever side it
+ * overwrites. The caller then puts the question to the user: on the Sync
+ * screen as a dialog, and on a tile tap as the overlay's two buttons.
  *
  * It compares against the newest entry's *metadata*, not the entry: deciding a
  * direction should not cost a 10 MB download. That listing is one entry deep
@@ -115,7 +123,7 @@ export async function sync(client: Client): Promise<SyncResult> {
   }
   if (localMs === null) {
     return {
-      direction: 'nothing',
+      direction: 'ambiguous',
       message:
         'This device cannot say when its clipboard was last set, so the direction is yours to choose.',
     };

@@ -11,4 +11,6 @@ export const tile: TilePort = {
   requests: () => () => {},
   report: () => {},
   pending: async () => false,
+  // No tile means no overlay to close.
+  closeOverlay: () => {},
 };

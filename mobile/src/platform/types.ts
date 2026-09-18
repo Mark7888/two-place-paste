@@ -61,4 +61,15 @@ export interface TilePort {
 
   /** pending returns a tile request that arrived while the app was starting, if there was one. */
   pending(): Promise<boolean>;
+
+  /**
+   * closeOverlay dismisses the panel a tile tap opened, once the sync it asked
+   * for has finished or the user has declined it.
+   *
+   * The panel is a window over whatever the user was doing, so closing it is
+   * the app's job the moment it has nothing left to say. It is a no-op where
+   * there is no overlay — on another platform, or when the sync was started
+   * from inside the app rather than from the tile.
+   */
+  closeOverlay(): void;
 }
