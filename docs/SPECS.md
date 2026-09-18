@@ -404,7 +404,8 @@ tap is answered whether or not the app is mounted, and never by a second client.
 **Features:**
 - Quick-settings tile for one-tap sync, answered in a panel over the current screen
 - Manual sync button in-app
-- History tab, listed when the tab is opened; tap an entry to copy it locally
+- History tab, listed when the tab is opened; tap an entry to preview it — text
+  and images, at the current epoch only — and copy it locally from there
 - Device management: list group devices, revoke (with the confirmation from §3.3)
 - Pairing: show QR, scan QR, paste token
 

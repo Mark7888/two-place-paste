@@ -154,6 +154,10 @@ export function HistoryPanel({
               const readable = e.epoch === epoch;
               const expanded = open === e.id;
               const preview = previews[e.id];
+              // The content type lives inside the ciphertext, so the relay's
+              // listing cannot carry it. It appears on the row once the entry
+              // has been opened, and stays there.
+              const type = preview && !("error" in preview) ? preview.content_type : null;
               return (
                 <div key={e.id}>
                   <div className="item">
@@ -163,6 +167,7 @@ export function HistoryPanel({
                       </div>
                       <div className="muted small">
                         {bytes(e.size)} · epoch {e.epoch}
+                        {type ? ` · ${type}` : ""}
                         {readable ? "" : " · predates the last re-key"}
                       </div>
                     </div>

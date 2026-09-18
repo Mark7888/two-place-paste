@@ -186,8 +186,10 @@ the device until another device revokes it, which is what re-keys the group
 - **It never pulls history in the background.** The History tab lists the
   group's entries when it is opened — opening it *is* the request — and nothing
   lists them on connect, on a rekey, or while the tab is closed. What a listing
-  carries is metadata the relay already holds; an entry's body is fetched only
-  when the user taps that entry (SPEC §6).
+  carries is metadata the relay already holds — not even the content type,
+  which is inside the ciphertext; an entry's body is fetched and decrypted only
+  when the user opens that entry, and an entry from an older epoch cannot be
+  opened at all (SPEC §6).
 - **A new device starts empty.** It cannot read what predates it and does not
   ask for it (SPEC §3.2).
 - **It keeps exactly one (epoch, group key) pair.** An entry from an older

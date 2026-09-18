@@ -148,6 +148,21 @@ export const styles = StyleSheet.create({
   tabLabel: { color: colors.muted, fontSize: 11, fontWeight: '500' },
   tabLabelActive: { color: colors.accent, fontWeight: '700' },
 
+  /** A decrypted entry's body, shown in the history list. */
+  previewBox: {
+    backgroundColor: colors.background,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    maxHeight: 220,
+  },
+  previewText: { color: colors.text, fontSize: 13, lineHeight: 19 },
+  previewImage: {
+    borderRadius: 10,
+    maxHeight: 280,
+    backgroundColor: colors.background,
+  },
+
   inline: { flexDirection: 'row', gap: 10, alignItems: 'center' },
   status: { paddingHorizontal: 16, paddingVertical: 8 },
 
