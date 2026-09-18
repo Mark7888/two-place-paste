@@ -11,10 +11,13 @@
     <div class="field">
       <label for="name">Name</label>
       <input type="text" id="name" name="name" maxlength="120" placeholder="e.g. Anna — laptop" required>
-      <span class="hint">Only you see this. It is how you tell one token from another.</span>
     </div>
     <button type="submit">Generate token</button>
   </div>
+  <!-- The hint sits outside the row on purpose. Inside the field it became the
+       field's bottom edge, and the row aligns its items to that — which is why
+       the button used to sit a line lower than the input it belongs to. -->
+  <span class="hint">Only you see this. It is how you tell one token from another.</span>
 </form>
 
 <div class="section-head">

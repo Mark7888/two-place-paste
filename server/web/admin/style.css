@@ -200,6 +200,11 @@ h1 {
   min-width: 0;
 }
 
+/* A control and the button that acts on it, side by side.
+ *
+ * `align-items: flex-end` lines the button up with the bottom of the field,
+ * which is only the bottom of the *input* if nothing else is in the field —
+ * so a hint belongs after the row, not inside it. */
 .form-row {
   display: flex;
   flex-wrap: wrap;
@@ -218,6 +223,7 @@ label {
 .hint {
   color: var(--muted);
   font-size: 0.82rem;
+  margin-top: -0.35rem;
 }
 
 /* --- controls ------------------------------------------------------------ */
