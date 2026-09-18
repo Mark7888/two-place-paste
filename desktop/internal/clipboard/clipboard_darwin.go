@@ -52,6 +52,8 @@ func (c darwinClipboard) Read(ctx context.Context) (Content, error) {
 	} else if !errors.Is(err, ErrEmpty) {
 		return Content{}, err
 	}
+	// ErrEmpty here means "no file on the pasteboard", not "nothing on the
+	// pasteboard": the image and text flavours below are still to come.
 
 	if png, err := c.readPNG(ctx); err == nil {
 		return Content{ContentType: TypeImagePNG, Body: png}, nil
@@ -108,20 +110,50 @@ func (darwinClipboard) writeVia(ctx context.Context, name string, body []byte, s
 	return nil
 }
 
+// readFilePath returns the path of a file on the pasteboard, or ErrEmpty when
+// there is none.
+//
+// The flavour check in front of the coercion is the whole point of this
+// function. `the clipboard as «class furl»` does not fail when the pasteboard
+// holds only text: AppleScript coerces the text to a file reference, reads it
+// as an HFS path, and hands back a path that was never a file — copying the
+// word "Group" yielded "/Group", and every read after that failed with "open
+// /Group: no such file or directory" until the clipboard changed. `clipboard
+// info for` asks what is actually on the pasteboard and answers {} rather than
+// inventing a flavour, so the coercion only ever runs on something that really
+// is a file. Both flavours count: an application that offers only the older
+// «class hfs » has a file on the pasteboard just as much as one that offers a
+// file URL, and the coercion reaches a path from either.
 func (darwinClipboard) readFilePath(ctx context.Context) (string, error) {
-	out, err := run(ctx, "/usr/bin/osascript", "-e", `POSIX path of (the clipboard as «class furl»)`)
+	out, err := run(ctx, "/usr/bin/osascript",
+		"-e", `if (clipboard info for «class furl») is {} and (clipboard info for «class hfs ») is {} then return ""`,
+		"-e", `POSIX path of (the clipboard as «class furl»)`)
 	if err != nil {
 		// osascript exits non-zero when the clipboard holds no file, which is
 		// the ordinary case rather than a failure worth reporting.
 		return "", ErrEmpty
 	}
 	path := strings.TrimSpace(string(out))
-	if path == "" {
+	if !usableFile(path) {
+		// A relative path, a directory or something that has since been moved
+		// is not a payload this service can carry, and it is not a reason to
+		// refuse to read the pasteboard at all: the caller falls through to
+		// the image and text flavours.
 		return "", ErrEmpty
 	}
 	return path, nil
 }
 
+// readPNG returns the pasteboard's image as PNG, or ErrEmpty when it holds no
+// image.
+//
+// Unlike readFilePath this one coerces unguarded, deliberately. A screenshot
+// arrives as TIFF and nothing else, and the coercion is what turns it into the
+// one encoding both platforms round-trip (SPEC §7.2); requiring the PNGf
+// flavour first would quietly stop carrying screenshots. It is also safe to
+// ask for: AppleScript cannot make raw image data out of text the way it makes
+// a file reference out of it, so text on the pasteboard fails here rather than
+// coercing into something plausible.
 func (darwinClipboard) readPNG(ctx context.Context) ([]byte, error) {
 	out, err := run(ctx, "/usr/bin/osascript", "-e", `the clipboard as «class PNGf»`)
 	if err != nil {

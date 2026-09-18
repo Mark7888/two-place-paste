@@ -486,3 +486,86 @@ func TestOfferIsRefusedAfterItHasAdmittedADevice(t *testing.T) {
 		t.Errorf("the group has %d devices, want 3 (desktop, laptop and one phone)", len(roster.Devices))
 	}
 }
+
+// TestForgetLeavesTheGroupAndTheDeviceCanPairAgain covers the desktop's
+// "leave the group" button end to end.
+//
+// Two properties matter and neither is obvious from the state struct alone.
+// The keys must really be gone — from memory and from the keystore, so a
+// restart does not resurrect them — and the client must still work afterwards:
+// forgetting stops the supervisor that was serving the old identity, and a
+// client that could not pair again after that would strand the user on a
+// screen with no way back.
+func TestForgetLeavesTheGroupAndTheDeviceCanPairAgain(t *testing.T) {
+	relay := startRelay(t)
+	ctx := testContext(t)
+
+	desktop, _ := newClient(t, "desktop", tppclient.Options{})
+	if err := desktop.CreateGroup(ctx, relay.creationURL(t, "Anna")); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	phone, store := newClient(t, "phone", tppclient.Options{})
+	pair(ctx, t, desktop, phone)
+	before := phone.State()
+
+	if err := phone.Forget(); err != nil {
+		t.Fatalf("Forget: %v", err)
+	}
+
+	after := phone.State()
+	switch {
+	case phone.InGroup():
+		t.Error("the device is still in a group after Forget")
+	case after.GroupID != "" || after.DeviceID != "" || after.ServerURL != "":
+		t.Errorf("Forget left %s", after)
+	case len(after.GroupKey) != 0:
+		t.Error("Forget left the group key behind")
+	case bytes.Equal(after.DevicePrivateKey, before.DevicePrivateKey):
+		t.Error("Forget kept the old device keypair; pairing again would look like the same device")
+	case after.DeviceName != before.DeviceName:
+		t.Errorf("Forget renamed the device to %q, want %q", after.DeviceName, before.DeviceName)
+	}
+
+	// Gone from the keystore too, or a restart would walk back into the group.
+	stored, err := tppclient.LoadState(store, "")
+	if err != nil {
+		t.Fatalf("LoadState after Forget: %v", err)
+	}
+	if stored.InGroup() || len(stored.GroupKey) != 0 {
+		t.Errorf("the keystore still holds %s", stored)
+	}
+	if !bytes.Equal(stored.DevicePrivateKey, after.DevicePrivateKey) {
+		t.Error("the keystore holds a different keypair from the one in memory")
+	}
+	if err := phone.Connect(ctx); !errors.Is(err, tppclient.ErrNoGroup) {
+		t.Errorf("Connect after Forget = %v, want ErrNoGroup", err)
+	}
+
+	// The relay has not been told anything, so the device it lists is the old
+	// one: leaving is local (SPEC §3.3), and only a revocation re-keys.
+	roster, err := desktop.Devices(ctx)
+	if err != nil {
+		t.Fatalf("Devices: %v", err)
+	}
+	if len(roster.Devices) != 2 {
+		t.Errorf("the relay lists %d devices after Forget, want 2: leaving is local", len(roster.Devices))
+	}
+
+	// And the client is still a working client: it pairs again, as a new
+	// device, and reads what the group writes next.
+	rejoined := pair(ctx, t, desktop, phone)
+	if rejoined.ID == before.DeviceID {
+		t.Errorf("the device rejoined as %s, the identity it left with", rejoined.ID)
+	}
+	item := tppclient.Item{ContentType: "text/plain; charset=utf-8", Body: []byte("after leaving")}
+	if _, err := desktop.PutEntry(ctx, item); err != nil {
+		t.Fatalf("PutEntry: %v", err)
+	}
+	got, err := phone.GetLatest(ctx)
+	if err != nil {
+		t.Fatalf("GetLatest after pairing again: %v", err)
+	}
+	if !bytes.Equal(got.Body, item.Body) {
+		t.Errorf("read %q after pairing again, want %q", got.Body, item.Body)
+	}
+}

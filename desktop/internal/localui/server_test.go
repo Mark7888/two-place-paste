@@ -42,6 +42,12 @@ func (s *stubAPI) record(name string) {
 	s.calls = append(s.calls, name)
 }
 
+func (s *stubAPI) reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = nil
+}
+
 func (s *stubAPI) called(name string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -151,6 +157,11 @@ func (s *stubAPI) CreateGroup(context.Context, string) error {
 	return s.nextErr
 }
 
+func (s *stubAPI) Forget(context.Context) error {
+	s.record("forget")
+	return s.nextErr
+}
+
 func (s *stubAPI) Settings(context.Context) SettingsView {
 	s.record("settings")
 	return SettingsView{Port: 0, ListenPort: 47821}
@@ -203,6 +214,7 @@ func TestOriginIsValidatedOnEveryRequest(t *testing.T) {
 		{"POST", "/api/pairing/offer/accept/prepare", `{"code":"tpp1:offer"}`},
 		{"POST", "/api/pairing/offer/accept/confirm", `{"plan_id":"offer-plan-1"}`},
 		{"POST", "/api/group/create", `{"creation_url":"https://relay.example/t"}`},
+		{"POST", "/api/group/forget", `{}`},
 		{"GET", "/api/settings", ""},
 		{"POST", "/api/settings", `{"auto_watch":true}`},
 		{"GET", "/api/events", ""},
@@ -609,4 +621,41 @@ func do(t *testing.T, srv *Server, method, path, body string, headers map[string
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 	return rec
+}
+
+// TestForgetIsReachableAndDestructive pins the one endpoint whose whole job is
+// to throw something away. It takes no body — a device holds one group key at
+// a time, so there is nothing to name — and a POST is the only method that
+// reaches it: a GET that deleted the user's keys would be one prefetch away
+// from firing by itself.
+func TestForgetIsReachableAndDestructive(t *testing.T) {
+	t.Parallel()
+
+	srv, api := newTestServer(t)
+	origin := fmt.Sprintf("http://127.0.0.1:%d", srv.Port())
+	headers := map[string]string{"Origin": origin, tokenHeader: "test-token"}
+
+	rec := do(t, srv, "POST", "/api/group/forget", `{}`, headers)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/group/forget = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body)
+	}
+	if !api.called("forget") {
+		t.Error("POST /api/group/forget did not reach the API")
+	}
+
+	// A GET falls through to the asset handler, as any unrouted path does, and
+	// what matters is that it never reaches the API: keys the user did not ask
+	// to delete must not go because something prefetched a link.
+	api.reset()
+	do(t, srv, "GET", "/api/group/forget", "", headers)
+	if api.called("forget") {
+		t.Error("GET /api/group/forget reached the API, want the POST route only")
+	}
+
+	// A failure reaches the page as a failure, not as a silent success: a user
+	// who is told they have left the group must have left it.
+	api.nextErr = errors.New("the keystore is unwritable")
+	if rec := do(t, srv, "POST", "/api/group/forget", `{}`, headers); rec.Code != http.StatusInternalServerError {
+		t.Errorf("a failing forget answered %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
 }

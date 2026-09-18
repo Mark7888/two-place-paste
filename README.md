@@ -248,6 +248,17 @@ They are stored in `desktop.json` under your per-user config directory
 Support/TwoPlacePaste/` on macOS). The file is plain JSON on purpose: the port
 has to be editable by hand after a bind failure. Nothing secret is in it.
 
+**Leave the group** (Settings) disconnects this device and deletes the keys it
+holds — the device private key and the group key both — leaving the app at its
+setup screen with a new identity. It is how a desktop is moved from one group
+to another: a device holds exactly one group key at a time.
+
+It is local, and only local. Nothing is removed from the relay: the group still
+lists the device, and the group key it held is still the group's key. To stop a
+device that has left from reading what the group writes next, revoke it from
+another device, which re-keys the group. Your clipboard is not touched, and
+neither are the settings above.
+
 ---
 
 ## 4. Development

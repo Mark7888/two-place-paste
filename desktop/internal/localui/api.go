@@ -54,6 +54,11 @@ type API interface {
 	// CreateGroup turns an admin creation URL into a group (SPEC §3.1).
 	CreateGroup(ctx context.Context, creationURL string) error
 
+	// Forget disconnects this device from its group and deletes the keys it
+	// held. It is local: nothing is removed from the relay, which still lists
+	// this device until another one revokes it (SPEC §3.3).
+	Forget(ctx context.Context) error
+
 	// Settings returns the settings screen's model.
 	Settings(ctx context.Context) SettingsView
 

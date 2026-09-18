@@ -39,6 +39,11 @@ type Relay interface {
 	// CreateGroup turns an admin creation URL into a group (SPEC §3.1).
 	CreateGroup(ctx context.Context, creationURL string) error
 
+	// Forget discards this device's group, group key and keypair, leaving the
+	// client as a first launch would. It is local: the relay still lists this
+	// device until another one revokes it.
+	Forget() error
+
 	// StartPairing mints a pairing token (SPEC §3.2 step 1).
 	StartPairing(ctx context.Context) (*tppclient.Invitation, error)
 

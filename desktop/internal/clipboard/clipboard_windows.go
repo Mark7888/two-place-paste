@@ -2,6 +2,7 @@ package clipboard
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -72,12 +73,20 @@ func (windowsClipboard) Read(ctx context.Context) (Content, error) {
 
 	// Files first, then image, then text: an image copied from a file offers
 	// several flavours and the richest one is the one the user meant.
+	//
+	// A drop this service cannot carry — a copied folder, a file that has
+	// since been moved — falls through to the other flavours rather than
+	// failing the read. The clipboard still holds something; refusing to look
+	// at it would leave the whole UI showing an error until the user copied
+	// something else.
 	if formatAvailable(cfHDrop) {
 		c, err := readDrop()
 		if err == nil {
 			return c, nil
 		}
-		return Content{}, err
+		if !errors.Is(err, ErrEmpty) {
+			return Content{}, err
+		}
 	}
 	if png := pngFormat(); png != 0 && formatAvailable(png) {
 		b, err := readBytes(png)
@@ -256,6 +265,12 @@ func readDrop() (Content, error) {
 		return Content{}, ErrEmpty
 	}
 	path := windows.UTF16ToString(buf[:n])
+	if !usableFile(path) {
+		// A folder, or a file that no longer exists. Neither is a payload this
+		// service can carry, and neither is a failure: the caller falls
+		// through to the image and text flavours.
+		return Content{}, ErrEmpty
+	}
 	body, err := os.ReadFile(path)
 	if err != nil {
 		return Content{}, fmt.Errorf("clipboard: read the copied file: %w", err)

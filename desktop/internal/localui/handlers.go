@@ -270,6 +270,18 @@ func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// handleForget deletes this device's group keys. It takes no body: there is
+// nothing to name — a device holds one group key at a time — and the
+// confirmation belongs to the screen, which is the only place that can tell
+// the user what is and is not removed by it.
+func (s *Server) handleForget(w http.ResponseWriter, r *http.Request) {
+	if err := s.api.Forget(r.Context()); err != nil {
+		s.fail(w, r, "leave the group", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.api.Settings(r.Context()))
 }

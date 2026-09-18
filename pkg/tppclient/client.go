@@ -116,11 +116,17 @@ type Client struct {
 	ready       chan struct{} // closed while a connection is live
 	invitations []*Invitation
 
+	// The supervisor's lifetime, and everything scoped to it. Forget replaces
+	// all four so the next Connect starts a fresh supervisor, which is why
+	// nothing reads them outside the mutex: a reader that cached runCtx across
+	// a Forget would be watching a context nobody cancels any more.
 	runCtx    context.Context
 	runCancel context.CancelFunc
 	started   bool
 	revoked   bool
 	stopped   chan struct{} // closed when the supervisor gives up for good
+
+	closed    bool
 	closeOnce sync.Once
 	wg        sync.WaitGroup
 }
@@ -221,17 +227,81 @@ func (c *Client) InGroup() bool {
 // reused afterwards.
 func (c *Client) Close() error {
 	c.closeOnce.Do(func() {
-		c.runCancel()
 		c.mu.Lock()
-		conn := c.conn
+		c.closed = true
+		cancel, conn := c.runCancel, c.conn
 		c.conn = nil
 		c.mu.Unlock()
+		cancel()
 		if conn != nil {
 			conn.close("client closing")
 		}
 		c.wg.Wait()
 	})
 	return nil
+}
+
+// Forget discards this device's identity: the group, the group key and the
+// device keypair are replaced by the ones a first launch would have.
+//
+// It is a local operation, and it is the only one. The relay still lists this
+// device, and the group key it held is still the group's key — only a
+// revocation from another device changes that (SPEC §3.3), which is why the
+// screen that offers this says so. What Forget does guarantee is that the
+// group key is gone from this machine, so nothing here can read what the group
+// writes next.
+//
+// The new keypair is not the old one, because this is a new identity: pairing
+// again should look to the group like a new device, not like the one that
+// left. The client stays usable — with no group it is a first launch, ready to
+// create a group, join a pairing or show an offer.
+func (c *Client) Forget() error {
+	c.mu.Lock()
+	cancel, conn, started, closed := c.runCancel, c.conn, c.started, c.closed
+	c.conn = nil
+	c.mu.Unlock()
+
+	// The supervisor is stopped before the state goes, not after: a reconnect
+	// racing this would re-dial with the credential being discarded.
+	if started {
+		cancel()
+		if conn != nil {
+			conn.close("this device is leaving the group")
+		}
+		c.wg.Wait()
+	}
+
+	priv, err := tppcrypto.GenerateKey()
+	if err != nil {
+		return fmt.Errorf("tppclient: generate this device's keypair: %w", err)
+	}
+
+	c.mu.Lock()
+	c.state = State{DeviceName: c.state.DeviceName, DevicePrivateKey: priv}
+	c.invitations = nil
+	c.conn = nil
+	c.ready = make(chan struct{})
+	c.revoked = false
+	c.started = false
+	if !closed {
+		// A fresh generation for the next Connect. A closed client stays
+		// closed: Forget clears the secrets, it does not resurrect anything.
+		c.stopped = make(chan struct{})
+		c.runCtx, c.runCancel = context.WithCancel(context.Background())
+	}
+	c.mu.Unlock()
+
+	c.logger.Info("this device left its group; its keys have been replaced")
+	return c.persist()
+}
+
+// runContext is the current supervisor generation's context. Forget replaces
+// it, so a caller that needs "for as long as this client is live" must read it
+// under the mutex rather than cache it.
+func (c *Client) runContext() context.Context {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.runCtx
 }
 
 // persist writes state through to the keystore, if there is one.
@@ -263,7 +333,16 @@ func (c *Client) Connect(ctx context.Context) error {
 	if !c.started {
 		c.started = true
 		c.wg.Add(1)
-		go c.supervise()
+		// The generation's context and stop channel are handed over here, not
+		// read from the struct inside the loop: Forget replaces both, and a
+		// supervisor that read the replacements would close a channel its
+		// successor owns.
+		//
+		//nolint:contextcheck // The supervisor's lifetime is the client's, not
+		// this call's: Connect returns once the first connection is up, and
+		// reconnecting must outlive the ctx that asked for it. Close and
+		// Forget are what cancel runCtx.
+		go c.supervise(c.runCtx, c.stopped)
 	}
 	c.mu.Unlock()
 
@@ -272,22 +351,22 @@ func (c *Client) Connect(ctx context.Context) error {
 }
 
 // supervise dials, serves the connection, and re-dials with backoff until the
-// client is closed or the device is revoked.
-func (c *Client) supervise() {
+// client is closed, the device is revoked, or the group is forgotten.
+func (c *Client) supervise(runCtx context.Context, stopped chan struct{}) {
 	defer c.wg.Done()
 	// Waiters block on `ready`, which nothing closes once this loop is gone;
 	// closing `stopped` is what turns "waiting to reconnect" into an answer
 	// for a client that will never reconnect.
-	defer close(c.stopped)
+	defer close(stopped)
 
 	backoff := c.minBackoff
 	for {
-		if c.runCtx.Err() != nil {
+		if runCtx.Err() != nil {
 			return
 		}
-		err := c.serveOnce()
+		err := c.serveOnce(runCtx)
 		switch {
-		case c.runCtx.Err() != nil:
+		case runCtx.Err() != nil:
 			return
 		case errors.Is(err, ErrRevoked):
 			// The credential is gone for good: reconnecting cannot fix it, and
@@ -305,7 +384,7 @@ func (c *Client) supervise() {
 		}
 
 		select {
-		case <-c.runCtx.Done():
+		case <-runCtx.Done():
 			return
 		case <-time.After(jitter(backoff)):
 		}
@@ -316,7 +395,7 @@ func (c *Client) supervise() {
 }
 
 // serveOnce holds one connection open until it fails.
-func (c *Client) serveOnce() error {
+func (c *Client) serveOnce(runCtx context.Context) error {
 	c.mu.Lock()
 	deviceID, base := c.state.DeviceID, c.state.ServerURL
 	c.mu.Unlock()
@@ -325,7 +404,7 @@ func (c *Client) serveOnce() error {
 	if err != nil {
 		return err
 	}
-	conn, err := c.dial(c.runCtx, endpoint)
+	conn, err := c.dial(runCtx, endpoint)
 	if err != nil {
 		return err
 	}
@@ -339,7 +418,7 @@ func (c *Client) serveOnce() error {
 		c.handlers.OnConnected()
 	}
 
-	readErr := conn.readLoop(c.runCtx, c.onEvent)
+	readErr := conn.readLoop(runCtx, c.onEvent)
 
 	c.mu.Lock()
 	c.conn = nil
@@ -368,8 +447,12 @@ func (c *Client) dial(ctx context.Context, endpoint string) (*conn, error) {
 // connection waits for a live connection.
 func (c *Client) connection(ctx context.Context) (*conn, error) {
 	for {
+		// runCtx and stopped are read here, with conn and ready, because
+		// Forget swaps the whole set: a select on one generation's context and
+		// the next generation's stop channel would wait on neither.
 		c.mu.Lock()
 		conn, ready, revoked := c.conn, c.ready, c.revoked
+		runCtx, stopped := c.runCtx, c.stopped
 		c.mu.Unlock()
 		switch {
 		case revoked:
@@ -380,9 +463,9 @@ func (c *Client) connection(ctx context.Context) (*conn, error) {
 		select {
 		case <-ctx.Done():
 			return nil, fmt.Errorf("tppclient: waiting for a connection to the relay: %w", ctx.Err())
-		case <-c.runCtx.Done():
+		case <-runCtx.Done():
 			return nil, ErrClosed
-		case <-c.stopped:
+		case <-stopped:
 			// The supervisor has given up: loop once more to read why, then
 			// answer instead of waiting for a connection that is not coming.
 			c.mu.Lock()

@@ -185,6 +185,7 @@ func (s *Server) routes() http.Handler {
 	api("POST /api/pairing/offer/accept/prepare", s.handlePrepareAcceptOffer)
 	api("POST /api/pairing/offer/accept/confirm", s.handleConfirmAcceptOffer)
 	api("POST /api/group/create", s.handleCreateGroup)
+	api("POST /api/group/forget", s.handleForget)
 	api("GET /api/settings", s.handleGetSettings)
 	api("POST /api/settings", s.handleUpdateSettings)
 
