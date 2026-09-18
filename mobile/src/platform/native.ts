@@ -2,9 +2,9 @@
  * The two native modules this app ships, declared once.
  *
  * `TppTile` is the bridge to the quick-settings tile (SPEC §7.1); `TppClipboard`
- * fills the one gap the clipboard library leaves on Android — it can read an
- * image from the clipboard but only write one on iOS, and an image that can be
- * received but not pasted would be half a feature.
+ * fills the gap the clipboard library leaves on Android — its image methods are
+ * iOS-only in both directions, so on this platform an image can be neither read
+ * from the clipboard nor put back on it without native code of our own.
  *
  * Both are optional at runtime. A JS bundle running in a host that does not
  * carry them — a test, a future platform — sees `null` and the app degrades
@@ -23,6 +23,13 @@ export interface TppTileModule {
 
 /** TppClipboardModule is implemented by `android/app/src/main/java/.../ClipboardModule.kt`. */
 export interface TppClipboardModule {
+  /**
+   * readImagePNG returns the clipboard's image as base64 PNG, or "" when the
+   * clipboard holds no image. It rejects only when a clip that says it is an
+   * image cannot be read as one.
+   */
+  readImagePNG(): Promise<string>;
+
   /** setImagePNG puts a PNG on the clipboard as a content URI the pasting app may read. */
   setImagePNG(base64: string): Promise<void>;
 

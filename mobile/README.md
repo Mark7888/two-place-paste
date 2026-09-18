@@ -87,6 +87,28 @@ device the tap opens the shade's tile, the system asks for the lock screen, and
 the sync runs once the device is unlocked. **This table is written from the
 platform contracts, not from a device run — see "What could not be executed".**
 
+## Images on the Android clipboard
+
+`@react-native-clipboard/clipboard` is a text clipboard on Android. Its image
+methods — `hasImage`, `getImagePNG` and `setImage` — are iOS-only and reject
+with "not supported on Android", so **both** directions go through this app's
+own `TppClipboard` native module instead. Reading through `hasImage` was what
+broke every sync: the rejection took the ordinary text case down with it, since
+the image check ran first.
+
+Android carries an image as a `content://` URI with a read grant attached to the
+clip, never as bytes. `readImagePNG` reads through the resolver, and only for a
+clip that describes itself as `image/*` — a URI to anything else is a file
+reference this client does not carry. Bytes that are already PNG are passed
+through untouched; anything else is re-encoded, because PNG is the one image
+type every client in this system round-trips without a colour-space argument.
+The read is bounded at the relay's per-entry cap, so a clipboard this app did
+not fill cannot decide how much memory it takes.
+
+`setImagePNG` is the other half: it stages the PNG in the app's cache and puts a
+FileProvider URI on the clipboard with a read grant attached to the clip. The
+provider is not exported, so without that grant nothing can read the file.
+
 ## Sync direction
 
 SPEC §6 says upload if the local clipboard is newer, otherwise download.
