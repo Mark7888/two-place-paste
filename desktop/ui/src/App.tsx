@@ -78,7 +78,7 @@ export function App() {
       {tab === "History" ? <HistoryPanel inGroup={status?.in_group ?? false} /> : null}
       {tab === "Devices" ? <DevicesPanel inGroup={status?.in_group ?? false} onChanged={refresh} /> : null}
       {tab === "Pairing" ? <PairingPanel status={status} onChanged={refresh} /> : null}
-      {tab === "Settings" ? <SettingsPanel status={status} /> : null}
+      {tab === "Settings" ? <SettingsPanel status={status} onChanged={refresh} /> : null}
     </div>
   );
 }

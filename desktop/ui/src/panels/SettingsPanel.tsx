@@ -1,11 +1,19 @@
 import { useEffect, useState } from "react";
 import { api, type SettingsView, type Status } from "../api";
 
-export function SettingsPanel({ status }: { status: Status | null }) {
+export function SettingsPanel({
+  status,
+  onChanged,
+}: {
+  status: Status | null;
+  onChanged: () => void;
+}) {
   const [settings, setSettings] = useState<SettingsView | null>(null);
   const [port, setPort] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [confirmingLeave, setConfirmingLeave] = useState(false);
+  const [leaving, setLeaving] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -28,6 +36,26 @@ export function SettingsPanel({ status }: { status: Status | null }) {
       if (s.restart_required) setNotice("The port changes at the next launch.");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  // Leaving is two clicks, not one, and the second one spells out what does
+  // and does not happen: the keys go from this machine, and nothing at all is
+  // removed from the relay, which still lists this device until another one
+  // revokes it (SPEC §3.3).
+  const leave = async () => {
+    setError("");
+    setNotice("");
+    setLeaving(true);
+    try {
+      await api.forgetGroup();
+      setConfirmingLeave(false);
+      setNotice("This device left the group. Its keys are gone; pair again from the Pairing tab.");
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLeaving(false);
     }
   };
 
@@ -125,6 +153,56 @@ export function SettingsPanel({ status }: { status: Status | null }) {
             keys in {status.keystore}
           </p>
         ) : null}
+      </div>
+
+      <div style={{ marginTop: "1rem" }}>
+        <strong>Group</strong>
+        {status?.in_group ? (
+          <p className="muted">
+            Connected to {status.server_url || "a relay"} at epoch {status.epoch}. Leaving deletes
+            this device&apos;s keys from this machine and returns it to the setup screen. This is
+            also how the device is moved to another group: it can hold only one group key at a time.
+          </p>
+        ) : (
+          <p className="muted">
+            This device is not in a group. Create one or pair with a device that is, from the
+            Pairing tab.
+          </p>
+        )}
+        {confirmingLeave ? (
+          <div className="panel">
+            <h2>Leave the group?</h2>
+            <p>
+              This device&apos;s private key and the group key are deleted from this machine, and a
+              new identity is generated. Nothing here can read what the group writes next.
+            </p>
+            <p className="muted">
+              Nothing is removed from the relay. The group still lists this device, and the group
+              key it held is still the group&apos;s key — to change that, revoke this device from
+              another one, which re-keys the group. Your clipboard is not touched.
+            </p>
+            <div className="row">
+              <button className="action danger" disabled={leaving} onClick={() => void leave()}>
+                {leaving ? "Leaving…" : "Delete this device’s keys"}
+              </button>
+              <button
+                className="action"
+                disabled={leaving}
+                onClick={() => setConfirmingLeave(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            className="action danger"
+            disabled={!status?.in_group}
+            onClick={() => setConfirmingLeave(true)}
+          >
+            Leave the group…
+          </button>
+        )}
       </div>
     </div>
   );

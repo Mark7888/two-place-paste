@@ -97,7 +97,7 @@ func (c *Client) StartPairing(ctx context.Context) (*Invitation, error) {
 // key at the current epoch and uploads it. The relay cannot unwrap what it
 // relays.
 func (c *Client) completePairing(notice *tppv1.PairingJoinNotice) {
-	ctx, cancel := context.WithTimeout(c.runCtx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(c.runContext(), 30*time.Second)
 	defer cancel()
 
 	state := c.State()

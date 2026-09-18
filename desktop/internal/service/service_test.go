@@ -30,6 +30,7 @@ type fakeRelay struct {
 	rev     *fakeRevocation
 	offer   *fakeOffer
 	accept  *fakeAcceptance
+	forgot  bool
 }
 
 func newFakeRelay(now func() time.Time) *fakeRelay {
@@ -44,6 +45,17 @@ func (f *fakeRelay) Epoch() uint64                             { return 3 }
 func (f *fakeRelay) Connect(context.Context) error             { return nil }
 func (f *fakeRelay) CreateGroup(context.Context, string) error { return nil }
 func (f *fakeRelay) JoinPairing(context.Context, string) error { return nil }
+
+// Forget mirrors the real client: the group goes, and the device is left as a
+// first launch would leave it.
+func (f *fakeRelay) Forget() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.forgot = true
+	f.inGroup = false
+	f.entries = nil
+	return nil
+}
 
 func (f *fakeRelay) StartPairing(context.Context) (*tppclient.Invitation, error) {
 	return &tppclient.Invitation{Payload: "tpp-pair-payload"}, nil
@@ -761,5 +773,87 @@ func TestShowingAnOfferNeedsARelayURL(t *testing.T) {
 	f := newFixture(t)
 	if _, err := f.svc.StartOffer(context.Background(), "   "); err == nil {
 		t.Error("StartOffer with no relay URL succeeded, want it refused")
+	}
+}
+
+// TestForgetLeavesTheGroupAndTidiesUpAfterIt covers the Settings panel's
+// "leave the group" button at the service level.
+//
+// The client core is what deletes the keys, and it has its own test. What this
+// package owes the user is the tidying either side of that: a pairing code
+// still on screen is withdrawn, because the socket holding it open is a way
+// into a device that is about to have no identity; a prepared revocation is
+// dropped, because it describes a group this device has left; and the UI is
+// told, because nothing else would tell it.
+func TestForgetLeavesTheGroupAndTidiesUpAfterIt(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := context.Background()
+	events, stop := f.svc.Subscribe()
+	defer stop()
+
+	plan, err := f.svc.PrepareRevoke(ctx, "d2")
+	if err != nil {
+		t.Fatalf("PrepareRevoke() error = %v", err)
+	}
+	if _, err := f.svc.StartOffer(ctx, "https://relay.example"); err != nil {
+		t.Fatalf("StartOffer() error = %v", err)
+	}
+	offer := f.relay.offer
+
+	if err := f.svc.Forget(ctx); err != nil {
+		t.Fatalf("Forget() error = %v", err)
+	}
+
+	if !f.relay.forgot {
+		t.Error("Forget() did not reach the client core")
+	}
+	if !offer.closed.Load() {
+		t.Error("the pairing code this device was showing is still live after leaving")
+	}
+	if _, err := f.svc.ConfirmRevoke(ctx, plan.ID); err == nil {
+		t.Error("a revocation prepared before leaving is still confirmable")
+	}
+
+	status := f.svc.Status(ctx)
+	switch {
+	case status.InGroup:
+		t.Error("Status() still reports a group after leaving")
+	case status.Connected:
+		t.Error("Status() still reports a connection after leaving")
+	case status.LastSync != nil:
+		t.Errorf("Status() still reports a last sync at %s", status.LastSync)
+	}
+
+	// The UI is pushed to, not left to notice: the panel it is showing is
+	// about a group that no longer exists on this machine.
+	select {
+	case ev := <-events:
+		if ev.Kind != localui.EventDisconnected {
+			t.Errorf("Forget() published a %q event, want %q", ev.Kind, localui.EventDisconnected)
+		}
+	default:
+		t.Error("Forget() published no event")
+	}
+}
+
+// TestForgetBeforeTheRelayIsAttached is the service starting up: the UI is
+// reachable before Attach, and a button press then must say so rather than
+// panic on a nil relay.
+func TestForgetBeforeTheRelayIsAttached(t *testing.T) {
+	t.Parallel()
+
+	svc, err := New(Options{
+		Clipboard: newMemClipboard(),
+		Autostart: noAutostart{},
+		ConfigDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	var se *localui.StatusError
+	if err := svc.Forget(context.Background()); !errors.As(err, &se) || se.Code != http.StatusServiceUnavailable {
+		t.Errorf("Forget() before Attach = %v, want a 503", err)
 	}
 }

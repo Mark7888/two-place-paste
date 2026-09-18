@@ -788,6 +788,49 @@ func (s *Service) CreateGroup(ctx context.Context, creationURL string) error {
 	return nil
 }
 
+// Forget implements localui.API: it disconnects this device from its group and
+// deletes the keys it held, which is the only way to move a desktop from one
+// group to another — a device holds exactly one group key at a time
+// (/spec/crypto.md §7).
+//
+// Three things are cleaned up here rather than in the client core, because
+// they are this shell's and not the protocol's: a pairing code still on screen
+// (the socket holding it open is the relay's only way to reach a device with
+// no identity), a prepared revocation or offer acceptance whose plan is about
+// a group this device has just left, and the connection state the UI renders.
+// The clipboard is not touched, and neither is the settings file: leaving a
+// group is not a reason to forget the port or the device's name.
+func (s *Service) Forget(context.Context) error {
+	s.mu.Lock()
+	relay := s.relay
+	s.mu.Unlock()
+	if relay == nil {
+		return localui.Errorf(http.StatusServiceUnavailable, nil, "the service is still starting")
+	}
+
+	s.replaceOffer(nil, nil)
+	if err := relay.Forget(); err != nil {
+		return localui.Errorf(http.StatusInternalServerError, err,
+			"this device's keys could not be deleted")
+	}
+
+	s.mu.Lock()
+	s.connected = false
+	s.revoked = false
+	s.lastError = ""
+	s.lastSync = time.Time{}
+	s.plans = map[string]*plan{}
+	s.offerPlans = map[string]*offerPlan{}
+	s.mu.Unlock()
+
+	s.logger.Info("this device left its group at the user's request")
+	s.hub.publish(localui.Event{
+		Kind:    localui.EventDisconnected,
+		Message: "this device left the group; its keys have been deleted",
+	})
+	return nil
+}
+
 // Settings implements localui.API.
 func (s *Service) Settings(context.Context) localui.SettingsView {
 	s.mu.Lock()

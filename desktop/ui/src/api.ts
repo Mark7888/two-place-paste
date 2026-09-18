@@ -199,6 +199,10 @@ export const api = {
     request<DeviceView>("POST", "/api/pairing/offer/accept/confirm", { plan_id: planId }),
   createGroup: (creationUrl: string) =>
     request<{ ok: boolean }>("POST", "/api/group/create", { creation_url: creationUrl }),
+  // forgetGroup takes no argument: a device holds one group key at a time, so
+  // there is nothing to name. It is destructive and is never called without
+  // the confirmation the Settings panel puts in front of it.
+  forgetGroup: () => request<{ ok: boolean }>("POST", "/api/group/forget", {}),
   settings: () => request<SettingsView>("GET", "/api/settings"),
   updateSettings: (patch: SettingsPatch) => request<SettingsView>("POST", "/api/settings", patch),
 };

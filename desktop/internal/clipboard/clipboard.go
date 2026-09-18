@@ -18,6 +18,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -114,6 +116,24 @@ func (c Content) Digest() [32]byte {
 	var out [32]byte
 	copy(out[:], h.Sum(nil))
 	return out
+}
+
+// usableFile reports whether a path from the clipboard names a regular file
+// whose bytes this service can carry.
+//
+// Both platforms hand out paths that are not payloads. A folder copied in
+// Finder or Explorer is a file reference like any other; a file dragged to the
+// clipboard and then moved leaves a path that no longer resolves; and on macOS
+// AppleScript will coerce plain text into a file reference if it is asked to,
+// which is how "/Group" once reached os.ReadFile. None of those is a failure
+// worth refusing the whole read for, so the platform reads fall through to the
+// image and text flavours instead.
+func usableFile(path string) bool {
+	if path == "" || !filepath.IsAbs(path) {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 // Clipboard is the OS clipboard. Implementations are per-GOOS and are chosen

@@ -99,7 +99,10 @@ func (c *Client) StartOffer(ctx context.Context, serverURL string) (*Offer, erro
 	if err != nil {
 		return nil, err
 	}
-	go func() { _ = conn.readLoop(c.runCtx, nil) }()
+	//nolint:contextcheck // Deliberate, and stated above: ctx bounds the mint,
+	// while the socket must stay open until a member accepts. The client's own
+	// context is the only one with that lifetime.
+	go func() { _ = conn.readLoop(c.runContext(), nil) }()
 
 	// Registered before the request goes out: a member watching the screen can
 	// accept fast enough that PairingComplete arrives while Wait is still
