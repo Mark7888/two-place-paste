@@ -12,19 +12,24 @@
       that the dimming covers all of it and a tap outside the panel is a tap
       this app receives.
 
-      The system's own `windowBackgroundDimEnabled` is off on purpose. The
-      window already fills the screen, so the dim is drawn by the view inside
-      it — one scrim, the same one the in-app sheets use, rather than the
-      system's and ours stacked into something nearly black.
+      The system's own `backgroundDimEnabled` is off on purpose (note the
+      name: it is `backgroundDimEnabled`, not `windowBackgroundDimEnabled` —
+      the latter does not exist, and aapt2 fails the build on it). The window
+      already fills the screen, so the dim is drawn by the view inside it — one
+      scrim, the same one the in-app sheets use, rather than the system's and
+      ours stacked into something nearly black.
+
+      There is no statusBarColor or navigationBarColor here. A translucent
+      window already leaves both bars showing whatever is behind it, and under
+      the edge-to-edge this app targets those two attributes no longer do
+      anything anyway.
     -->
     <style name="AppTheme.Overlay" parent="Theme.AppCompat.DayNight.NoActionBar">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowContentOverlay">@null</item>
-        <item name="android:windowBackgroundDimEnabled">false</item>
+        <item name="android:backgroundDimEnabled">false</item>
         <item name="android:windowAnimationStyle">@null</item>
         <item name="android:windowShowWallpaper">false</item>
-        <item name="android:statusBarColor">@android:color/transparent</item>
-        <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
 </resources>

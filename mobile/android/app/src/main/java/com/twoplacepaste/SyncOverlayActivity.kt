@@ -66,10 +66,10 @@ class SyncOverlayActivity : ReactActivity() {
      * app sliding away over a screen it never belonged to, and the panel's job
      * is to be gone the moment it has nothing left to say.
      */
+    @Suppress("DEPRECATION")
     private fun finishQuietly() {
         if (!isFinishing) {
             finish()
-            @Suppress("DEPRECATION")
             overridePendingTransition(0, 0)
         }
     }
