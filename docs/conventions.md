@@ -166,7 +166,10 @@ refactor:
 
 - The desktop localhost server binds `127.0.0.1`, **never** `0.0.0.0`, and
   validates the `Origin` header on every request including WebSocket upgrades
-  (SPEC §7.2).
+  (SPEC §7.2). Validating it means refusing a foreign one, not demanding one:
+  a browser sends no `Origin` on a same-origin `GET`, and no token on a
+  `<script>` or a `<link>`. A rule that ignores either is a rule that refuses
+  the app itself.
 - Admin session cookies are `HttpOnly`, `Secure`, `SameSite=Strict` (SPEC §4.4).
 - `GET /<creation-token>` returns 404; only `POST` consumes a token (SPEC §3.1).
 - Size limits are enforced at the reader with `io.LimitReader`, before
@@ -185,6 +188,14 @@ refactor:
   cannot reproduce the vectors does not ship.
 - All platform access sits behind `src/platform/` with per-OS files, so iOS
   stays addable without restructuring (SPEC §7.3).
+- `src/core` runs on Hermes, and Jest runs it on Node. Where the two disagree,
+  Node is the one that lies: the tests pass and the app does not. Do not use a
+  global that React Native only half-provides — `URL` and `URLSearchParams` are
+  regex-backed shims with getters and **no setters**, and Metro emits sloppy
+  mode, so `url.protocol = 'wss:'` is not an error there, it is a silent
+  no-op. `Buffer`, `TextEncoder` and `atob` are not guaranteed at all. Write
+  the few lines by hand (`src/core/bytes.ts`, `src/core/protocol/urls.ts`) and
+  have the test take the global away, so the suite is testing what ships.
 
 ## 12. Commits and PRs
 

@@ -621,6 +621,9 @@ the installer that ships them are one product and one review.
       because a recorder cannot prove a handshake is guarded.
       `TestTokenIsRequiredOnEveryRequest` covers the three ways the token may arrive and
       asserts that a refused request never reached the service.
+      `TestSameOriginReadsCarryNoOrigin`, `TestACrossSiteRequestIsRefusedWithoutAnOrigin`,
+      `TestTheShellIsServedWithoutAToken` and `TestTheBrowserLoadSequence` pin what those
+      two rules must **not** refuse — see "Delivered" below.
       `TestPortInUseIsVisible` pins the distinct `ErrPortInUse` the tray renders.
 - [x] Loop test proving a service-originated clipboard write does not trigger an upload.
       Two of them: `clipboard.TestWatcherServiceWriteDoesNotUpload` at the watcher (both
@@ -646,14 +649,33 @@ the installer that ships them are one product and one review.
 **`internal/localui`** — the localhost server, and the phase's security surface. Any page
 in the user's browser can reach `127.0.0.1`, so: the listener is `127.0.0.1` written out
 (`TestListenerIsLoopbackOnly`), a 32-byte token generated per launch and never persisted
-is required on every request and compared in constant time, and the `Origin` header is
-checked on every route. The `Origin` rule is two rules, and the split is the interesting
-part: the API and the event stream **require** a matching `Origin`, because a browser
-always attaches one to a scripted request, while the two navigations that legitimately
-carry none — opening `/app` and loading its assets — accept its absence but still refuse
-a foreign one, and still require the token. The UI is `go:embed`ed with an `all:` pattern
-so a checkout with no UI build still compiles, and a binary built that way serves a page
-saying so rather than a blank screen.
+guards everything that reads or changes something and is compared in constant time, and a
+foreign `Origin` is refused on every route.
+
+The split between the API and the static shell is the interesting part, and the first
+version of it got both halves wrong.
+
+The shell — `/app` and the script and stylesheet it pulls in — is served **without** the
+token. A browser cannot put a header or a query string on a `<script>` or a `<link>`, so
+guarding those with the token did not protect anything (the bundle is the same bytes for
+every user, sitting in the binary and on disk); it only made the page 401 before it ever
+ran, which is what "the token is in the URL but everything says unauthorized" looked like
+from the outside. It also means a plain browser reload works: the page erases the token
+from the address bar on load, so a refresh arrives without one and now reaches the app,
+which says so and points at the tray.
+
+The API and the event stream require the token, and refuse a foreign `Origin`, but they
+do not require `Origin` to be **present**. The Fetch standard attaches it to a
+cross-origin request and to any request whose method is neither `GET` nor `HEAD` — a
+same-origin `fetch` that only reads attaches nothing — so demanding it refused every read
+the app makes. What stands in its place where it is absent: the request must be a read,
+and `Sec-Fetch-Site`, which the page making the request cannot set, must not say the
+request came from somewhere else. `TestTheBrowserLoadSequence` walks the whole sequence a
+browser makes to get this UI running, with the headers it actually sends, because the
+per-rule tests each passed while the app as a whole did not start.
+
+The UI is `go:embed`ed with an `all:` pattern so a checkout with no UI build still
+compiles, and a binary built that way serves a page saying so rather than a blank screen.
 
 **`internal/clipboard`** — text, images and file references on both platforms, with no
 cgo: macOS goes through `pbpaste`/`pbcopy` and `osascript`, Windows through `user32`

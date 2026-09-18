@@ -169,7 +169,7 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 
 	api := func(pattern string, h http.HandlerFunc) {
-		mux.Handle(pattern, s.guard(originRequired, h))
+		mux.Handle(pattern, s.guard(originScripted, tokenRequired, h))
 	}
 	api("GET /api/status", s.handleStatus)
 	api("POST /api/sync", s.handleSync)
@@ -191,18 +191,28 @@ func (s *Server) routes() http.Handler {
 	// The event stream is a WebSocket, and its upgrade goes through exactly
 	// the same guard as everything else: an upgrade request from a foreign
 	// page is the one a naive server forgets to check.
-	mux.Handle("GET /api/events", s.guard(originRequired, http.HandlerFunc(s.handleEvents)))
+	mux.Handle("GET /api/events", s.guard(originScripted, tokenRequired, http.HandlerFunc(s.handleEvents)))
 
-	mux.Handle("GET /app", s.guard(originMatchIfPresent, http.HandlerFunc(s.handleApp)))
-	mux.Handle("GET /app/", s.guard(originMatchIfPresent, http.HandlerFunc(s.handleApp)))
-	mux.Handle("/", s.guard(originMatchIfPresent, http.HandlerFunc(s.handleRoot)))
+	// The shell is the page and the files it pulls in. It is the same bytes
+	// for every launch and every user, and a browser cannot put a token on a
+	// <script> or a <link>, so it is served without one; see tokenOptional.
+	shell := func(pattern string, h http.HandlerFunc) {
+		mux.Handle(pattern, s.guard(originMatchIfPresent, tokenOptional, h))
+	}
+	shell("GET /app", s.handleApp)
+	shell("GET /app/", s.handleApp)
+	shell("/", s.handleRoot)
 	return mux
 }
 
 // handleRoot serves the built assets, and sends a bare "/" to the app.
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/" {
-		http.Redirect(w, r, "/app?token="+url.QueryEscape(r.URL.Query().Get("token")), http.StatusSeeOther)
+		target := "/app"
+		if token := r.URL.Query().Get("token"); token != "" {
+			target += "?token=" + url.QueryEscape(token)
+		}
+		http.Redirect(w, r, target, http.StatusSeeOther)
 		return
 	}
 	s.assets.ServeHTTP(w, r)
