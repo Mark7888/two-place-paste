@@ -1,3 +1,7 @@
+[![Go](https://github.com/Mark7888/two-place-paste/actions/workflows/go.yml/badge.svg)](https://github.com/Mark7888/two-place-paste/actions/workflows/go.yml)
+[![Desktop](https://github.com/Mark7888/two-place-paste/actions/workflows/desktop.yml/badge.svg)](https://github.com/Mark7888/two-place-paste/actions/workflows/desktop.yml)
+[![Android](https://github.com/Mark7888/two-place-paste/actions/workflows/android.yml/badge.svg)](https://github.com/Mark7888/two-place-paste/actions/workflows/android.yml)
+
 # TwoPlacePaste
 
 Share your clipboard across devices.
