@@ -61,6 +61,8 @@ html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
   background: var(--bg);
   color: var(--fg);
   font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -104,7 +106,45 @@ main {
   width: min(64rem, 100%);
   margin: 0 auto;
   padding: clamp(1.25rem, 4vw, 2rem) clamp(0.9rem, 4vw, 1.75rem) 1rem;
+  /* Takes the space the header and footer do not, which is what lets the sign-in
+     screen centre itself without anyone hard-coding the height of the bar. */
+  flex: 1 1 auto;
 }
+
+/* The sign-in screen: one narrow column, centred in what is left of the
+   viewport. It has no card, because a card groups a form against something
+   else on the page and there is nothing else on this page. */
+main.centered {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.auth { width: min(20rem, 100%); }
+
+.auth h1 {
+  font-size: 1.5rem;
+  text-align: center;
+  margin: 0 0 0.35rem;
+}
+
+.auth .lede {
+  text-align: center;
+  margin: 0 0 1.5rem;
+}
+
+.auth form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.auth button[type="submit"] { width: 100%; }
+
+/* The error sits above the form and shares its width, rather than stretching
+   to the whole centred column. */
+main.centered .notice { width: min(20rem, 100%); text-align: center; }
 
 footer {
   width: min(64rem, 100%);
@@ -145,15 +185,19 @@ h1 {
 
 .card.narrow { max-width: 25rem; }
 
-/* A form laid out as label-above-control pairs that wrap onto one line when
-   there is room for them. `min-width: 0` on the field is what stops a long
-   placeholder from pushing the button off the card. */
+/* A label-above-control pair. `min-width: 0` is what stops a long placeholder
+   from pushing the button out of a row.
+
+   No `flex` shorthand here, and that is the whole point: a `.field` sits
+   inside a column flex container as often as a row one, and in a column a
+   flex-basis is a HEIGHT. A `flex: 1 1 16rem` on this rule put sixteen rems of
+   nothing under the login field — the same mistake as the twenty-row-tall
+   password box, one level up. Growth belongs to the row that wants it. */
 .field {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
   min-width: 0;
-  flex: 1 1 16rem;
 }
 
 .form-row {
@@ -162,6 +206,9 @@ h1 {
   align-items: flex-end;
   gap: 0.75rem;
 }
+
+/* Only here, where the main axis is horizontal and a basis is a width. */
+.form-row .field { flex: 1 1 16rem; }
 
 label {
   font-weight: 600;

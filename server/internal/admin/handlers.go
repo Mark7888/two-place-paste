@@ -61,7 +61,7 @@ func (s *Server) handleLoginForm(w http.ResponseWriter, r *http.Request) {
 		s.redirect(w, r, "/admin/")
 		return
 	}
-	s.render(w, r, http.StatusOK, "login.html", pageData{Title: "Sign in"})
+	s.render(w, r, http.StatusOK, "login.html", pageData{Title: "Sign in", Centered: true})
 }
 
 // handleLogin verifies the admin password and starts a session.
@@ -78,8 +78,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			slog.String("client_ip", ip), slog.String("scope", scope))
 		w.Header().Set("Retry-After", "60")
 		s.render(w, r, http.StatusTooManyRequests, "login.html", pageData{
-			Title: "Sign in",
-			Error: "Too many sign-in attempts. Wait a minute and try again.",
+			Title:    "Sign in",
+			Centered: true,
+			Error:    "Too many sign-in attempts. Wait a minute and try again.",
 		})
 		return
 	}
@@ -87,8 +88,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBodyBytes)
 	if err := r.ParseForm(); err != nil {
 		s.render(w, r, http.StatusBadRequest, "login.html", pageData{
-			Title: "Sign in",
-			Error: "That request could not be read.",
+			Title:    "Sign in",
+			Centered: true,
+			Error:    "That request could not be read.",
 		})
 		return
 	}
@@ -96,8 +98,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if subtle.ConstantTimeCompare([]byte(r.PostFormValue("password")), s.password) != 1 {
 		s.logger.WarnContext(r.Context(), "admin login failed", slog.String("client_ip", ip))
 		s.render(w, r, http.StatusUnauthorized, "login.html", pageData{
-			Title: "Sign in",
-			Error: "Incorrect password.",
+			Title:    "Sign in",
+			Centered: true,
+			Error:    "Incorrect password.",
 		})
 		return
 	}

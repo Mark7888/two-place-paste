@@ -18,13 +18,15 @@
   </form>
   {{end}}
 </header>
-<main>
+<main{{if .Centered}} class="centered"{{end}}>
 {{if .Error}}<p class="notice error" role="alert">{{.Error}}</p>{{end}}
 {{template "content" .}}
 </main>
+{{if .Authenticated}}
 <footer>
   The server relays ciphertext only. This screen can list creation tokens and
   nothing else — there is no content access here by construction (SPEC §4.4).
 </footer>
+{{end}}
 </body>
 </html>{{end}}

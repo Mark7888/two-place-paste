@@ -16,6 +16,11 @@ type pageData struct {
 	CSRF          string
 	Error         string
 	Tokens        []tokenView
+
+	// Centered puts the page in the middle of the viewport rather than at the
+	// top of a document column. It is for the sign-in screen, which is one
+	// short form and nothing else; every other screen is a document.
+	Centered bool
 }
 
 // tokenView is one row of the token listing (SPEC §4.4). It carries no
