@@ -202,18 +202,23 @@ export function SyncPanel({ status, onChanged }: { status: Status | null; onChan
           clipboard content arrived, and it has not seen this clipboard change since it started.
           Whichever you pick overwrites the other side, so it is yours to choose.
         </p>
-        <div className="choice-grid">
+        {/*
+          The icon is a sibling of the text rather than part of the title, so
+          it forms its own column and the two lines of text line up with each
+          other instead of with the glyph.
+        */}
+        <div className="choice-list">
           <button
             className="action choice"
             disabled={busy !== null}
             onClick={() => void run("upload")}
           >
-            <span className="choice-title">
-              <Icon name="upload" size={16} />
-              Sync up
-            </span>
-            <span className="choice-why">
-              Send this machine&apos;s clipboard to the group. It becomes the latest entry.
+            <Icon name="upload" size={18} />
+            <span className="choice-body">
+              <span className="choice-title">Sync up</span>
+              <span className="choice-why">
+                Send this machine&apos;s clipboard to the group. It becomes the latest entry.
+              </span>
             </span>
           </button>
           <button
@@ -221,12 +226,12 @@ export function SyncPanel({ status, onChanged }: { status: Status | null; onChan
             disabled={busy !== null}
             onClick={() => void run("download")}
           >
-            <span className="choice-title">
-              <Icon name="download" size={16} />
-              Sync down
-            </span>
-            <span className="choice-why">
-              Copy the group&apos;s latest entry here, replacing this machine&apos;s clipboard.
+            <Icon name="download" size={18} />
+            <span className="choice-body">
+              <span className="choice-title">Sync down</span>
+              <span className="choice-why">
+                Copy the group&apos;s latest entry here, replacing this machine&apos;s clipboard.
+              </span>
             </span>
           </button>
         </div>

@@ -449,8 +449,16 @@ label.toggle:has(input:disabled) { cursor: not-allowed; opacity: 0.6; }
 
 .preview-image {
   display: block;
+  /* `.entry-detail` is a flex column, and a flex container stretches a replaced
+     child whose cross size is auto — so the image was pulled to the full width
+     of the row while max-height held its height down, which is the squash. Two
+     rules undo it: don't stretch, and keep the ratio whatever the box does. */
+  align-self: flex-start;
+  width: auto;
+  height: auto;
   max-width: 100%;
-  max-height: 14rem;
+  max-height: 16rem;
+  object-fit: contain;
   border-radius: var(--radius-sm);
   border: 1px solid var(--line-soft);
   background:
@@ -511,25 +519,64 @@ dialog.modal::backdrop { background: rgba(8, 10, 16, 0.45); }
 
 .icon-button:hover { color: var(--ink); background: var(--surface-sunken); }
 
-/* The direction chooser: two equal targets, because the whole point is that
-   neither of them is the safe default. */
-.choice-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
-@media (max-width: 30rem) { .choice-grid { grid-template-columns: 1fr; } }
+/* The direction chooser: two equal targets, stacked.
+ *
+ * Stacked and not side by side. Side by side they are read as a question with
+ * a default and a cancel, which is exactly what this is not — neither is the
+ * safe one, and the eye should land on both before the hand moves. Full width
+ * also gives each one's consequence a line of its own instead of two narrow
+ * columns of wrapped text.
+ *
+ * `.choice` overrides the fixed height, the centring and the nowrap that
+ * `button.action` sets for an ordinary button, so the rules below are written
+ * out rather than inherited. */
+.choice-list { display: flex; flex-direction: column; gap: 0.5rem; }
 
-.choice {
+/* Written as `button.action.choice`, not `.choice`. `button.action` is an
+   element plus a class, so it outranks a lone class: a bare `.choice` loses
+   every one of the overrides below — the fixed height, the centring, and above
+   all `white-space: nowrap`, which ran each consequence off the right edge of
+   its own button. */
+button.action.choice {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: flex-start;
-  gap: 0.3rem;
+  justify-content: flex-start;
+  gap: 0.7rem;
+  width: 100%;
   height: auto;
-  padding: 0.85rem;
+  min-height: 0;
+  padding: 0.8rem 0.9rem;
   text-align: left;
   white-space: normal;
   font-weight: 500;
+  line-height: 1.45;
 }
 
-.choice .choice-title { display: flex; align-items: center; gap: 0.45rem; font-weight: 650; }
-.choice .choice-why { color: var(--muted); font-size: 0.85rem; }
+button.action.choice:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* The icon is its own column, aligned to the title's first line rather than to
+   the middle of a two-line block. */
+button.action.choice > svg { flex: none; margin-top: 0.15rem; color: var(--accent); }
+
+button.action.choice .choice-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+button.action.choice .choice-title { font-weight: 650; }
+
+button.action.choice .choice-why {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 450;
+  line-height: 1.4;
+}
 
 .qr-holder {
   display: flex;
