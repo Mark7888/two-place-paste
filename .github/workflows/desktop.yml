@@ -1,10 +1,11 @@
-# Desktop packaging: UI build → embed → binary build → installer.
+# Desktop packaging: UI build → embed → binary build.
 #
 # The desktop job ROADMAP P6 owns. The Go and Node workflows already compile
 # and test this module; what happens here is the part that only makes sense on
-# the target operating systems — a .app in a .dmg for macOS and an NSIS
-# installer for Windows, each built around a binary with the React UI embedded
-# in it.
+# the target operating systems — a .app for macOS and a plain .exe for
+# Windows, each built around a binary with the React UI embedded in it. No
+# installers are produced here; the .app and .exe are uploaded as artifacts
+# as-is.
 #
 # Signing is deliberately conditional. A fork and a pull request have no
 # certificate, and a workflow that fails without one is a workflow nobody can
@@ -84,7 +85,7 @@ jobs:
           go build -trimpath -ldflags "-s -w" -o "../dist/tppdesktop${{ runner.os == 'Windows' && '.exe' || '' }}" ./cmd/tppdesktop
 
       # ----------------------------------------------------------------- macOS
-      - name: Build the .app and .dmg
+      - name: Build the .app
         if: runner.os == 'macOS'
         shell: bash
         run: |
@@ -102,30 +103,19 @@ jobs:
             echo "::notice::no signing identity configured; shipping an unsigned .app"
             codesign --force --deep --sign - "$APP" || true
           fi
-
-          hdiutil create -volname TwoPlacePaste -srcfolder "$APP" -ov -format UDZO \
-            dist/TwoPlacePaste.dmg
         env:
           MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
 
-      # --------------------------------------------------------------- Windows
-      - name: Build the installer
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
-            choco install nsis -y --no-progress
-            $env:PATH = "$env:PATH;C:\Program Files (x86)\NSIS"
-          }
-          Copy-Item desktop/packaging/windows/installer.nsi dist/installer.nsi
-          Push-Location dist
-          makensis /DVERSION=0.1.0 installer.nsi
-          Pop-Location
-
       - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS'
         with:
           name: tppdesktop-${{ matrix.name }}
           if-no-files-found: error
-          path: |
-            dist/*.dmg
-            dist/*Setup.exe
+          path: dist/TwoPlacePaste.app
+
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: tppdesktop-${{ matrix.name }}
+          if-no-files-found: error
+          path: dist/tppdesktop.exe
