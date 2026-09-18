@@ -25,6 +25,11 @@
  * waiting at connect time, advances it.
  */
 
+// Installs the UTF-8 the protobuf codec reaches for. It must be imported
+// above the generated messages below: on Hermes they cannot encode or
+// decode a single field without it.
+import './textEncoding';
+
 import {
   CreateGroupRequest,
   CreateGroupResponse,

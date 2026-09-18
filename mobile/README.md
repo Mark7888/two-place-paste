@@ -87,6 +87,28 @@ device the tap opens the shade's tile, the system asks for the lock screen, and
 the sync runs once the device is unlocked. **This table is written from the
 platform contracts, not from a device run — see "What could not be executed".**
 
+## Images on the Android clipboard
+
+`@react-native-clipboard/clipboard` is a text clipboard on Android. Its image
+methods — `hasImage`, `getImagePNG` and `setImage` — are iOS-only and reject
+with "not supported on Android", so **both** directions go through this app's
+own `TppClipboard` native module instead. Reading through `hasImage` was what
+broke every sync: the rejection took the ordinary text case down with it, since
+the image check ran first.
+
+Android carries an image as a `content://` URI with a read grant attached to the
+clip, never as bytes. `readImagePNG` reads through the resolver, and only for a
+clip that describes itself as `image/*` — a URI to anything else is a file
+reference this client does not carry. Bytes that are already PNG are passed
+through untouched; anything else is re-encoded, because PNG is the one image
+type every client in this system round-trips without a colour-space argument.
+The read is bounded at the relay's per-entry cap, so a clipboard this app did
+not fill cannot decide how much memory it takes.
+
+`setImagePNG` is the other half: it stages the PNG in the app's cache and puts a
+FileProvider URI on the clipboard with a read grant attached to the clip. The
+provider is not exported, so without that grant nothing can read the file.
+
 ## Sync direction
 
 SPEC §6 says upload if the local clipboard is newer, otherwise download.
@@ -162,6 +184,32 @@ holds and this process can use but not extract. No biometric prompt is attached
 — the tile's one-tap promise cannot survive a dialog, and the device lock is
 the boundary this relies on. Neither key is ever rendered, logged or exported;
 the Settings screen shows the public half only.
+
+## What Hermes does not have
+
+Node is not the runtime this ships on, and the gaps are not the ones a
+typecheck or `npm test` finds. Three have already cost a release:
+
+| Missing on Hermes | What reached for it | What it looked like |
+| --- | --- | --- |
+| `crypto.getRandomValues` | every key and nonce | `index.js` imports `react-native-get-random-values` first, on its own line |
+| WHATWG `URL` setters | `websocketURL` | the phone dialled the relay's admin page instead of `/ws` |
+| `TextDecoder` | `@bufbuild/protobuf`, for every `string` field | "undefined cannot be used as a constructor" on every encode and decode |
+
+The last one took both ways into a group with it — creating one surfaced the
+TypeError, and scanning a desktop's code reported that it was not a code,
+because `decodePairingCode` reads a throwing `decode` as "not this kind". The
+fix is `src/core/protocol/textEncoding.ts`: the codec is pointed at the UTF-8 in
+`src/core/bytes.ts`, which was written for this exact reason and is pinned
+against the Go client by the crypto vectors. The three modules that encode or
+decode a message import it above their generated-message imports.
+
+The lesson each time is the same: a global that Node supplies and Hermes does
+not will pass every test here. `src/core/bytes.ts` implements hex, UTF-8 and
+base64url by hand rather than through `Buffer`, `TextEncoder` or `atob` for that
+reason, and a dependency that reaches for one of them needs the same treatment.
+`textEncoding.test.ts` is the shape of the test that catches it: take the global
+away, then run the flow.
 
 ## What could not be executed
 

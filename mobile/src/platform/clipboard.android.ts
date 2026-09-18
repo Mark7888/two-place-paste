@@ -13,6 +13,12 @@
  * `content://` URI whose lifetime is a permission grant to the copying app, and
  * reading it from here would need the SAF permissions the desktop client does
  * not need either. A URI on the clipboard is carried as the text it is.
+ *
+ * Images go through this app's own native module in **both** directions. The
+ * clipboard library's `hasImage`, `getImagePNG` and `setImage` are iOS-only and
+ * reject on Android with "not supported on Android" — which is what every sync
+ * hit, because `read` asked `hasImage` first and the rejection took the text
+ * case down with it.
  */
 
 import Clipboard from '@react-native-clipboard/clipboard';
@@ -38,11 +44,15 @@ const toStandardBase64 = (b: Uint8Array): string => {
 
 export const clipboard: ClipboardPort = {
   async read(): Promise<ClipboardItem | null> {
-    // Images first: a screenshot copied from another app puts a bitmap on the
-    // clipboard and an empty string on the text side, and reading the text
+    // Images first: a screenshot copied from another app puts a content URI on
+    // the clipboard and an empty string on the text side, and reading the text
     // side first would upload nothing.
-    if (await Clipboard.hasImage()) {
-      const png = await Clipboard.getImagePNG();
+    //
+    // A build with no native module cannot see an image at all and falls
+    // through to the text side, which is the same way `write` and the clipboard
+    // timestamp degrade. It is never the app on a phone.
+    if (TppClipboard !== null) {
+      const png = await TppClipboard.readImagePNG();
       if (png !== '') {
         return {
           contentType: PNG_CONTENT_TYPE,

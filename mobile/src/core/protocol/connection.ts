@@ -8,6 +8,11 @@
  * handler instead.
  */
 
+// Installs the UTF-8 the protobuf codec reaches for. It must be imported
+// above the generated messages below: on Hermes they cannot encode or
+// decode a single field without it.
+import './textEncoding';
+
 import { toBase64URL } from '../bytes';
 import { randomBytes } from '../random';
 import { Envelope, MessageType } from '../../protocol/gen/tpp/v1/envelope';

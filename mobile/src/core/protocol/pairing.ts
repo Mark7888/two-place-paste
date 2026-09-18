@@ -9,6 +9,11 @@
  * byte for byte: the protobuf bytes, base64url without padding.
  */
 
+// Installs the UTF-8 the protobuf codec reaches for. It must be imported
+// above the generated messages below: on Hermes they cannot encode or
+// decode a single field without it.
+import './textEncoding';
+
 import { sha256 } from '@noble/hashes/sha2.js';
 
 import { fromBase64URL, toBase64URL, toHex } from '../bytes';
