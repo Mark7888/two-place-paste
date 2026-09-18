@@ -31,6 +31,11 @@ const planTTL = 10 * time.Minute
 // response helps nobody.
 const previewRunes = 240
 
+// maxPreviewImageBytes bounds an image the history screen inlines as a data
+// URL. Base64 costs a third on top, and everything past this is a thumbnail
+// nobody is squinting at anyway.
+const maxPreviewImageBytes = 4 << 20
+
 // requestTimeout bounds one relay round trip made on the UI's behalf.
 const requestTimeout = 30 * time.Second
 
@@ -434,7 +439,11 @@ func (s *Service) applyToClipboard(ctx context.Context, d localui.Direction, ite
 		return localui.SyncResult{}, localui.Errorf(http.StatusInternalServerError, err,
 			"the clipboard could not be written")
 	}
-	s.watcher.Rebase(ctx)
+	// The clipboard now holds this entry, so it is as of when the entry was
+	// written, not as of whenever the watcher last saw a user copy. Telling
+	// the watcher that is what keeps "changed 2 minutes ago" on the status
+	// screen honest after a download.
+	s.watcher.Rebase(ctx, item.Meta.CreatedAt)
 	s.noteSync(s.now())
 
 	s.logger.InfoContext(ctx, "entry written to the clipboard",
@@ -466,6 +475,66 @@ func (s *Service) CopyEntry(ctx context.Context, entryID string) (localui.SyncRe
 		return localui.SyncResult{}, s.relayError("fetch that entry", err)
 	}
 	return s.applyToClipboard(ctx, localui.DirectionDownload, item)
+}
+
+// EntryPreview implements localui.API: it decrypts one entry and describes it
+// for the screen, without touching the clipboard.
+//
+// An entry from an older epoch has no preview, and that is not an omission: a
+// rekey replaced the key it was written under, so this device cannot read it
+// at all (SPEC §3.3). The UI is told the same thing it would be told for a
+// copy, so a history list can offer previews only for the rows it can honour.
+func (s *Service) EntryPreview(ctx context.Context, entryID string) (localui.EntryPreview, error) {
+	relay, err := s.ready()
+	if err != nil {
+		return localui.EntryPreview{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+
+	item, err := relay.GetEntry(ctx, entryID)
+	switch {
+	case errors.Is(err, tppclient.ErrStaleEntry):
+		return localui.EntryPreview{}, localui.Errorf(http.StatusGone, err,
+			"that entry predates this device's group key and cannot be opened")
+	case err != nil:
+		return localui.EntryPreview{}, s.relayError("fetch that entry", err)
+	}
+
+	c := clipboard.Content{ContentType: item.ContentType, Body: item.Body}
+	if item.Filename != "" {
+		c.Filename = clipboard.SafeName(item.Filename)
+	}
+
+	view := localui.EntryPreview{
+		ID:          item.Meta.ID,
+		Epoch:       item.Meta.Epoch,
+		ContentType: item.ContentType,
+		Filename:    c.Filename,
+		Bytes:       len(item.Body),
+		Kind:        string(c.Kind()),
+	}
+
+	switch c.Kind() {
+	case clipboard.KindText:
+		text := c.Text()
+		view.Text = preview(c)
+		view.Truncated = utf8.RuneCountInString(text) > previewRunes
+	case clipboard.KindImage:
+		// Inlined as a data URL so the page renders it without a second
+		// request for a decrypted body. Past the bound the screen says how big
+		// it is instead: a browser that has to parse 20 MB of base64 to draw a
+		// thumbnail is a browser that stops answering.
+		if len(item.Body) > maxPreviewImageBytes {
+			view.ImageTooLarge = true
+			break
+		}
+		view.ImageDataURL = "data:" + item.ContentType + ";base64," +
+			base64.StdEncoding.EncodeToString(item.Body)
+	}
+
+	s.logger.DebugContext(ctx, "entry previewed", "entry_id", item.Meta.ID, "kind", view.Kind)
+	return view, nil
 }
 
 // History implements localui.API.

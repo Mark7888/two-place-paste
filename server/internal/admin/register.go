@@ -23,6 +23,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("GET /admin/", s.handleIndex)
 	mux.HandleFunc("GET /admin/style.css", s.handleStyle)
+	mux.HandleFunc("GET /admin/app.js", s.handleScript)
 	mux.HandleFunc("GET /admin/login", s.handleLoginForm)
 	mux.HandleFunc("POST /admin/login", s.handleLogin)
 	mux.HandleFunc("POST /admin/logout", s.handleLogout)

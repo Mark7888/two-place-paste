@@ -1,38 +1,102 @@
 {{define "content"}}
 <h1>Creation tokens</h1>
+<p class="lede">
+  One token creates exactly one group. Generate one, hand its link or QR code to
+  the first device, and it is spent.
+</p>
 
-<form method="post" action="/admin/tokens" class="card row">
+<form method="post" action="/admin/tokens" class="card">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
-  <label for="name">Name</label>
-  <input type="text" id="name" name="name" maxlength="120" placeholder="e.g. Anna — laptop" required>
-  <button type="submit">Generate token</button>
+  <div class="form-row">
+    <div class="field">
+      <label for="name">Name</label>
+      <input type="text" id="name" name="name" maxlength="120" placeholder="e.g. Anna — laptop" required>
+      <span class="hint">Only you see this. It is how you tell one token from another.</span>
+    </div>
+    <button type="submit">Generate token</button>
+  </div>
 </form>
 
+<div class="section-head">
+  <h2>Tokens</h2>
+  {{if .Tokens}}<span class="count">{{len .Tokens}} total</span>{{end}}
+</div>
+
 {{if .Tokens}}
-<table>
-  <thead>
-    <tr><th>Name</th><th>Created</th><th>Status</th><th>Group</th><th>Onboarding</th></tr>
-  </thead>
-  <tbody>
-  {{range .Tokens}}
-    <tr>
-      <td>{{.Name}}</td>
-      <td>{{.Created}}</td>
-      <td>{{if .Used}}<span class="tag used">used</span>{{else}}<span class="tag open">unused</span>{{end}}</td>
-      <td>{{if .Used}}<code class="wrap">{{.GroupID}}</code>{{else}}<span class="muted">—</span>{{end}}</td>
-      <td>
-        {{if .Used}}
-          <span class="muted">This token has created its group. One token creates exactly one group.</span>
-        {{else}}
-          <img class="qr" width="180" height="180" alt="QR code for the creation URL" src="/admin/tokens/{{.Value}}/qr.png">
-          <code class="wrap">{{.URL}}</code>
-        {{end}}
-      </td>
-    </tr>
-  {{end}}
-  </tbody>
-</table>
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Created</th>
+        <th>Status</th>
+        <th>Group</th>
+        <th><span class="sr-only">Code</span></th>
+      </tr>
+    </thead>
+    <tbody>
+    {{range .Tokens}}
+      <tr>
+        <td class="name" data-label="Name">{{.Name}}</td>
+        <td data-label="Created">{{.Created}}</td>
+        <td data-label="Status">
+          {{if .Used}}<span class="tag used">used</span>{{else}}<span class="tag open">unused</span>{{end}}
+        </td>
+        <td data-label="Group">
+          {{if .Used}}<code class="wrap">{{.GroupID}}</code>{{else}}<span class="muted">—</span>{{end}}
+        </td>
+        <td class="actions" data-label="Code">
+          {{if .Used}}
+            <span class="muted">Spent</span>
+          {{else}}
+            <button type="button" class="secondary small"
+                    data-token-dialog
+                    {{if .Fresh}}data-autoshow{{end}}
+                    data-name="{{.Name}}"
+                    data-url="{{.URL}}"
+                    data-qr="{{.QRPath}}">Show code</button>
+            <noscript>
+              <div class="noscript-reveal" data-js-hide>
+                <img class="qr" width="200" height="200" alt="QR code for the creation URL" src="{{.QRPath}}">
+                <code class="wrap">{{.URL}}</code>
+              </div>
+            </noscript>
+          {{end}}
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
 {{else}}
-<p class="muted">No tokens yet. Generate one above and send its URL to the user.</p>
+<p class="empty">No tokens yet. Generate one above and send its link to the first device.</p>
 {{end}}
+
+<!--
+  One dialog for the whole page. It is filled from the button that opened it and
+  emptied when it closes, so a token's QR — a live credential — is fetched only
+  while it is on screen (see app.js).
+-->
+<dialog id="token-dialog" aria-labelledby="token-dialog-title">
+  <div class="dialog-head">
+    <h2 id="token-dialog-title">Creation code</h2>
+    <form method="dialog">
+      <button type="submit" class="icon-button" aria-label="Close">&times;</button>
+    </form>
+  </div>
+  <div class="dialog-body">
+    <img class="qr" id="token-dialog-qr" width="200" height="200" alt="QR code for the creation URL">
+    <p class="scan-hint">Scan this from the device, or send it the link.</p>
+    <div class="copy-row">
+      <code class="value mono" id="token-dialog-url"></code>
+      <button type="button" class="secondary" data-copy="token-dialog-url" data-copy-status="token-dialog-copied">
+        <span data-copy-label>Copy</span>
+      </button>
+    </div>
+    <p class="copied" id="token-dialog-copied" role="status" aria-live="polite"></p>
+  </div>
+  <div class="dialog-foot">
+    <form method="dialog"><button type="submit" class="secondary">Done</button></form>
+  </div>
+</dialog>
 {{end}}

@@ -857,3 +857,93 @@ func TestForgetBeforeTheRelayIsAttached(t *testing.T) {
 		t.Errorf("Forget() before Attach = %v, want a 503", err)
 	}
 }
+
+// TestDownloadUpdatesTheClipboardTimestamp is the bug the status screen showed:
+// after a download the clipboard holds something new, and "changed …" went on
+// reporting whenever the watcher had last seen the user copy something — or
+// nothing at all, on a fresh start.
+func TestDownloadUpdatesTheClipboardTimestamp(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := context.Background()
+
+	// Another device wrote the group's latest entry; this one has seen no copy
+	// of its own, so it has no local timestamp at all.
+	if _, err := f.relay.PutEntry(ctx, tppclient.Item{
+		ContentType: clipboard.TypeText,
+		Body:        []byte("from the phone"),
+		CreatedAt:   f.now(),
+	}); err != nil {
+		t.Fatalf("PutEntry() error = %v", err)
+	}
+	if before := f.svc.Status(ctx); before.Clipboard.ChangedAt != nil {
+		t.Fatalf("Status().Clipboard.ChangedAt = %v before any change, want nil", before.Clipboard.ChangedAt)
+	}
+
+	if _, err := f.svc.Sync(ctx, localui.DirectionDownload); err != nil {
+		t.Fatalf("Sync(download) error = %v", err)
+	}
+
+	after := f.svc.Status(ctx)
+	if after.Clipboard.ChangedAt == nil {
+		t.Fatal("Status().Clipboard.ChangedAt is nil after a download; the screen cannot say when this clipboard was set")
+	}
+	if got, want := *after.Clipboard.ChangedAt, after.Latest.CreatedAt; !got.Equal(want) {
+		t.Errorf("Status().Clipboard.ChangedAt = %v, want the downloaded entry's time %v", got, want)
+	}
+	// And the direction is now a comparison rather than a shrug: the clipboard
+	// holds the group's latest entry, which is something this device knows.
+	if !after.DirectionKnown {
+		t.Error("Status().DirectionKnown = false after a download, want true")
+	}
+}
+
+// TestEntryPreviewReadsWithoutCopying is what makes the history list usable:
+// an entry can be looked at without becoming what the user has copied.
+func TestEntryPreviewReadsWithoutCopying(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := context.Background()
+	f.clip.set(textContent("what the user has now"))
+
+	meta, err := f.relay.PutEntry(ctx, tppclient.Item{
+		ContentType: clipboard.TypeText,
+		Body:        []byte("an older note"),
+		CreatedAt:   f.now(),
+	})
+	if err != nil {
+		t.Fatalf("PutEntry() error = %v", err)
+	}
+
+	view, err := f.svc.EntryPreview(ctx, meta.ID)
+	if err != nil {
+		t.Fatalf("EntryPreview() error = %v", err)
+	}
+	if view.Kind != "text" || view.Text != "an older note" {
+		t.Errorf("EntryPreview() = %+v, want the entry's text", view)
+	}
+	if view.Truncated {
+		t.Error("EntryPreview() reports a short entry as truncated")
+	}
+	if f.clip.writes != 0 {
+		t.Errorf("a preview wrote the clipboard %d times, want 0", f.clip.writes)
+	}
+	if got := string(f.clip.content.Body); got != "what the user has now" {
+		t.Errorf("clipboard after a preview = %q, want it untouched", got)
+	}
+}
+
+// TestEntryPreviewRefusesAStaleEntry: an entry from before a rekey cannot be
+// read at all, so the history list must be told rather than shown an empty box.
+func TestEntryPreviewRefusesAStaleEntry(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	f.relay.getErr = tppclient.ErrStaleEntry
+
+	if _, err := f.svc.EntryPreview(context.Background(), "e1"); err == nil {
+		t.Fatal("EntryPreview() of a stale entry = nil error, want a refusal")
+	}
+}

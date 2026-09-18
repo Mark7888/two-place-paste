@@ -1,18 +1,31 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, events, hasToken, type Status } from "./api";
+import { api, events, hasToken, type ServiceEvent, type Status } from "./api";
+import { Icon, type IconName } from "./components/Icon";
 import { SyncPanel } from "./panels/SyncPanel";
 import { HistoryPanel } from "./panels/HistoryPanel";
 import { DevicesPanel } from "./panels/DevicesPanel";
 import { PairingPanel } from "./panels/PairingPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
 
-const tabs = ["Sync", "History", "Devices", "Pairing", "Settings"] as const;
-type Tab = (typeof tabs)[number];
+const tabs = [
+  { id: "sync", label: "Sync", icon: "sync" },
+  { id: "history", label: "History", icon: "history" },
+  { id: "devices", label: "Devices", icon: "devices" },
+  { id: "pairing", label: "Pairing", icon: "link" },
+  { id: "settings", label: "Settings", icon: "settings" },
+] as const satisfies readonly { id: string; label: string; icon: IconName }[];
+
+type Tab = (typeof tabs)[number]["id"];
 
 export function App() {
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState<string>("");
-  const [tab, setTab] = useState<Tab>("Sync");
+  const [tab, setTab] = useState<Tab>("sync");
+
+  // lastEvent is how a panel knows the service did something without each of
+  // them opening its own socket. It changes identity on every push, which is
+  // all an effect needs to depend on.
+  const [lastEvent, setLastEvent] = useState<ServiceEvent | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -29,21 +42,33 @@ export function App() {
 
   // The service pushes; the UI does not poll. Every event is a refresh hint,
   // never content.
-  useEffect(() => events(() => void refresh()), [refresh]);
+  useEffect(
+    () =>
+      events((ev) => {
+        setLastEvent(ev);
+        void refresh();
+      }),
+    [refresh],
+  );
 
   const connection = useMemo(() => {
     if (!status) return { cls: "", text: "connecting…" };
     if (status.revoked) return { cls: "off", text: "revoked" };
-    if (!status.in_group) return { cls: "", text: "no group yet" };
+    if (!status.in_group) return { cls: "", text: "no group" };
     return status.connected ? { cls: "on", text: "connected" } : { cls: "off", text: "offline" };
   }, [status]);
 
   if (!hasToken) {
     return (
-      <div className="app">
-        <div className="notice error">
-          This page was opened without a token. Open TwoPlacePaste from the tray icon: the token is
-          generated per launch and the tray is the only thing that has it.
+      <div className="app" style={{ display: "block", padding: "3rem 1rem" }}>
+        <div className="page">
+          <div className="notice error">
+            <Icon name="alert" />
+            <span>
+              This page was opened without a token. Open TwoPlacePaste from the tray icon: the token
+              is generated per launch and the tray is the only thing that has it.
+            </span>
+          </div>
         </div>
       </div>
     );
@@ -51,34 +76,72 @@ export function App() {
 
   return (
     <div className="app">
-      <header className="top">
-        <h1>TwoPlacePaste</h1>
-        <span className={`dot ${connection.cls}`} />
-        <span className="muted">{connection.text}</span>
-        {status?.device_name ? <span className="muted">· {status.device_name}</span> : null}
+      <header className="titlebar">
+        <span className="name">TwoPlacePaste</span>
+        <span className="spacer" />
+        {status?.device_name ? <span className="device-name">{status.device_name}</span> : null}
+        <span className={`pill ${connection.cls}`}>
+          <span className="dot" />
+          {connection.text}
+        </span>
       </header>
 
-      {error ? <div className="notice error">{error}</div> : null}
-      {status?.revoked ? (
-        <div className="notice error">
-          This device was revoked. Its credentials are gone; pair it again from a device that is still
-          in the group.
-        </div>
-      ) : null}
-
-      <nav className="tabs">
+      {/*
+        One nav element, one source of truth. The previous version set
+        aria-selected on plain buttons with role="tab" and no tablist around
+        them, which is why assistive tech and the stylesheet could disagree
+        about which one was current — and why a mis-sized hit area could leave
+        a tab looking clickable without being it. Here the button is the whole
+        row, and `aria-current` is set from the same state that renders it.
+      */}
+      <nav className="rail" aria-label="Sections">
         {tabs.map((t) => (
-          <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
-            {t}
+          <button
+            key={t.id}
+            type="button"
+            aria-current={tab === t.id ? "page" : undefined}
+            title={t.label}
+            onClick={() => setTab(t.id)}
+          >
+            <Icon name={t.icon} size={18} />
+            <span>{t.label}</span>
           </button>
         ))}
       </nav>
 
-      {tab === "Sync" ? <SyncPanel status={status} onChanged={refresh} /> : null}
-      {tab === "History" ? <HistoryPanel inGroup={status?.in_group ?? false} /> : null}
-      {tab === "Devices" ? <DevicesPanel inGroup={status?.in_group ?? false} onChanged={refresh} /> : null}
-      {tab === "Pairing" ? <PairingPanel status={status} onChanged={refresh} /> : null}
-      {tab === "Settings" ? <SettingsPanel status={status} onChanged={refresh} /> : null}
+      <main className="content">
+        <div className="page">
+          {error ? (
+            <div className="notice error">
+              <Icon name="alert" />
+              <span>{error}</span>
+            </div>
+          ) : null}
+          {status?.revoked ? (
+            <div className="notice error">
+              <Icon name="alert" />
+              <span>
+                This device was revoked. Its credentials are gone; pair it again from a device that
+                is still in the group.
+              </span>
+            </div>
+          ) : null}
+
+          {tab === "sync" ? <SyncPanel status={status} onChanged={refresh} /> : null}
+          {tab === "history" ? (
+            <HistoryPanel
+              inGroup={status?.in_group ?? false}
+              epoch={status?.epoch ?? 0}
+              lastEvent={lastEvent}
+            />
+          ) : null}
+          {tab === "devices" ? (
+            <DevicesPanel inGroup={status?.in_group ?? false} onChanged={refresh} />
+          ) : null}
+          {tab === "pairing" ? <PairingPanel status={status} onChanged={refresh} /> : null}
+          {tab === "settings" ? <SettingsPanel status={status} onChanged={refresh} /> : null}
+        </div>
+      </main>
     </div>
   );
 }

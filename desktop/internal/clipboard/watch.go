@@ -254,7 +254,15 @@ func (w *Watcher) Run(ctx context.Context) {
 // platform hands them back in a different form — a pasteboard that re-encodes
 // an image, say — which would otherwise look like a user copy and be uploaded
 // straight back.
-func (w *Watcher) Rebase(ctx context.Context) {
+//
+// `at` is when the content it is adopting came to be — for a downloaded entry,
+// when that entry was created. It is recorded as the last change because the
+// clipboard genuinely did change: leaving lastChange alone made the screen go
+// on reporting the previous change for content that was no longer there, and
+// made the next direction comparison judge the new clipboard by the old one's
+// age. A zero `at` leaves the timestamp alone, which is what a caller that
+// only wants the baseline moved asks for.
+func (w *Watcher) Rebase(ctx context.Context, at time.Time) {
 	if seq, err := w.cb.Sequence(ctx); err == nil {
 		w.mu.Lock()
 		w.seq, w.haveSeq = seq, true
@@ -268,4 +276,7 @@ func (w *Watcher) Rebase(ctx context.Context) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.digest, w.primed = c.Digest(), true
+	if !at.IsZero() {
+		w.lastChange = at
+	}
 }

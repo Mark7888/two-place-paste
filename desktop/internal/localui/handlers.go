@@ -109,6 +109,28 @@ func (s *Server) handleCopyEntry(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+// handleEntryPreview renders one entry for a look. It is a POST because it
+// decrypts a body, which is not a thing to put behind a URL a browser may
+// prefetch, revisit or keep in history.
+func (s *Server) handleEntryPreview(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		EntryID string `json:"entry_id"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.EntryID == "" {
+		writeError(w, http.StatusBadRequest, "entry_id is required")
+		return
+	}
+	view, err := s.api.EntryPreview(r.Context(), body.EntryID)
+	if err != nil {
+		s.fail(w, r, "preview an entry", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	roster, err := s.api.Devices(r.Context())
 	if err != nil {

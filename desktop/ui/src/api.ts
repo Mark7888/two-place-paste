@@ -86,6 +86,22 @@ export interface RevokePlan {
   expires_at: string;
 }
 
+// EntryPreview is one history entry rendered for a look rather than a paste.
+// Fetching it decrypts that entry on this machine; nothing about it is stored,
+// and an entry from before a rekey has none at all.
+export interface EntryPreview {
+  id: string;
+  epoch: number;
+  content_type: string;
+  filename?: string;
+  bytes: number;
+  kind: "text" | "image" | "file";
+  text?: string;
+  truncated?: boolean;
+  image_data_url?: string;
+  image_too_large?: boolean;
+}
+
 export interface HistoryPage {
   entries: EntryView[];
   next_before?: string;
@@ -183,6 +199,10 @@ export const api = {
       `/api/history?limit=50${before ? `&before=${encodeURIComponent(before)}` : ""}`,
     ),
   copyEntry: (entryId: string) => request<SyncResult>("POST", "/api/entries/copy", { entry_id: entryId }),
+  // A POST, not a GET: it decrypts a body, and a URL that does that is a URL a
+  // browser may prefetch, revisit from history or keep in a cache.
+  previewEntry: (entryId: string) =>
+    request<EntryPreview>("POST", "/api/entries/preview", { entry_id: entryId }),
   devices: () => request<RosterView>("GET", "/api/devices"),
   prepareRevoke: (deviceId: string) =>
     request<RevokePlan>("POST", "/api/devices/revoke/prepare", { device_id: deviceId }),

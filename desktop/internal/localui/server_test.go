@@ -79,6 +79,11 @@ func (s *stubAPI) CopyEntry(context.Context, string) (SyncResult, error) {
 	return SyncResult{Direction: DirectionDownload, Changed: true}, nil
 }
 
+func (s *stubAPI) EntryPreview(context.Context, string) (EntryPreview, error) {
+	s.record("preview")
+	return EntryPreview{ID: "e1", Kind: "text", ContentType: "text/plain", Bytes: 5, Text: "hello"}, nil
+}
+
 func (s *stubAPI) Devices(context.Context) (RosterView, error) {
 	s.record("devices")
 	return RosterView{Epoch: 3, Devices: []DeviceView{{ID: "d1", Name: "laptop", This: true}, {ID: "d2", Name: "phone"}}}, nil

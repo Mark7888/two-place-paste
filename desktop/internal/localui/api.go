@@ -19,6 +19,12 @@ type API interface {
 	// clipboard — what a history browser does when the user picks an entry.
 	CopyEntry(ctx context.Context, entryID string) (SyncResult, error)
 
+	// EntryPreview decrypts one entry and renders it for display only. It
+	// never touches the clipboard — that is CopyEntry's job, and keeping the
+	// two apart is what lets a user look at an entry without replacing what
+	// they have copied.
+	EntryPreview(ctx context.Context, entryID string) (EntryPreview, error)
+
 	// Devices returns the group roster (SPEC §3.3 step 1).
 	Devices(ctx context.Context) (RosterView, error)
 
