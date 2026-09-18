@@ -163,6 +163,32 @@ holds and this process can use but not extract. No biometric prompt is attached
 the boundary this relies on. Neither key is ever rendered, logged or exported;
 the Settings screen shows the public half only.
 
+## What Hermes does not have
+
+Node is not the runtime this ships on, and the gaps are not the ones a
+typecheck or `npm test` finds. Three have already cost a release:
+
+| Missing on Hermes | What reached for it | What it looked like |
+| --- | --- | --- |
+| `crypto.getRandomValues` | every key and nonce | `index.js` imports `react-native-get-random-values` first, on its own line |
+| WHATWG `URL` setters | `websocketURL` | the phone dialled the relay's admin page instead of `/ws` |
+| `TextDecoder` | `@bufbuild/protobuf`, for every `string` field | "undefined cannot be used as a constructor" on every encode and decode |
+
+The last one took both ways into a group with it — creating one surfaced the
+TypeError, and scanning a desktop's code reported that it was not a code,
+because `decodePairingCode` reads a throwing `decode` as "not this kind". The
+fix is `src/core/protocol/textEncoding.ts`: the codec is pointed at the UTF-8 in
+`src/core/bytes.ts`, which was written for this exact reason and is pinned
+against the Go client by the crypto vectors. The three modules that encode or
+decode a message import it above their generated-message imports.
+
+The lesson each time is the same: a global that Node supplies and Hermes does
+not will pass every test here. `src/core/bytes.ts` implements hex, UTF-8 and
+base64url by hand rather than through `Buffer`, `TextEncoder` or `atob` for that
+reason, and a dependency that reaches for one of them needs the same treatment.
+`textEncoding.test.ts` is the shape of the test that catches it: take the global
+away, then run the flow.
+
 ## What could not be executed
 
 The third acceptance criterion — "tile sync works from a locked-then-unlocked
