@@ -419,8 +419,17 @@ macOS and a registry Run key on Windows.
 - On bind failure, the tray displays an error and allows the port to be overridden via
   a config file. The service must not fail silently.
 - The tray opens `http://127.0.0.1:47821/app?token=<short-lived-token>`. The token is
-  generated per launch and required on every request.
-- Validate the `Origin` header on every request.
+  generated per launch and required on every request that reads or changes something —
+  the API and the event stream. It is **not** required for the static shell (the page,
+  its script, its stylesheet): a browser cannot attach a token to a `<script>` or a
+  `<link>`, the bundle is the same bytes for every user, and requiring one there only
+  stops the page from loading at all.
+- Validate the `Origin` header on every request: a foreign one is refused everywhere.
+  Do **not** require its presence. A browser attaches `Origin` to a cross-origin request
+  and to any request whose method is neither `GET` nor `HEAD`; a same-origin `fetch` that
+  reads attaches none, so requiring it refuses the app's own reads. Where `Origin` is
+  absent, refuse anything that is not a read, and refuse a `Sec-Fetch-Site` that says the
+  request came from elsewhere.
 
 ### 7.3 iOS (deferred)
 

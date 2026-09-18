@@ -81,6 +81,47 @@ describe('relay URLs', () => {
       'wss://relay.example.com/ws?device_id=device-1',
     );
     expect(websocketURL('http://127.0.0.1:8080', '')).toBe('ws://127.0.0.1:8080/ws');
+    expect(websocketURL('https://Relay.Example.COM:8443', 'a b+c')).toBe(
+      'wss://relay.example.com:8443/ws?device_id=a%20b%2Bc',
+    );
+    expect(websocketURL('http://[::1]:8080', '')).toBe('ws://[::1]:8080/ws');
+  });
+
+  test.each(['https://relay.example.com:0', 'https://relay.example.com:99999', 'https://u:p@relay.example.com'])(
+    'refuses %s',
+    (raw) => {
+      expect(() => normalizeServerURL(raw)).toThrow();
+    },
+  );
+
+  /**
+   * These helpers must not touch the platform's `URL`. Node's is
+   * WHATWG-compliant and React Native's is a shim with getters and no setters,
+   * so a helper that used it passed here and, on a phone, silently produced
+   * the base URL back — `https://relay/` dialled as a WebSocket, which fails
+   * with nothing but "socket error". Taking `URL` away is the only way this
+   * suite can tell the difference.
+   */
+  test('the URL helpers do not depend on the platform’s URL class', () => {
+    const real = globalThis.URL;
+    Object.defineProperty(globalThis, 'URL', {
+      configurable: true,
+      value: function forbidden(): never {
+        throw new Error('the URL helpers must not use the platform URL class');
+      },
+    });
+    try {
+      expect(normalizeServerURL('https://relay.example.com:8443/some/path?x=1')).toBe(
+        'https://relay.example.com:8443',
+      );
+      expect(splitCreationURL('https://relay.example.com/abc123').token).toBe('abc123');
+      expect(websocketURL('https://relay.example.com', 'device-1')).toBe(
+        'wss://relay.example.com/ws?device_id=device-1',
+      );
+      expect(classifyCode('https://relay.example.com/abc123')).toBe('creation-url');
+    } finally {
+      Object.defineProperty(globalThis, 'URL', { configurable: true, value: real });
+    }
   });
 });
 

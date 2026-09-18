@@ -981,10 +981,14 @@ func TestOfferRequiresTheOfferingDeviceToBeConnected(t *testing.T) {
 
 	joiner, offered := h.offer(t, "phone")
 	_ = joiner.sock.CloseNow()
-	waitFor(t, func() bool {
-		devices, err := h.store.ListDevices(context.Background(), created.GetGroupId())
-		return err == nil && len(devices) == 1
-	})
+	// Wait for the fact this test turns on: that the server has noticed the
+	// close and dropped its route to the offering device. The device count was
+	// the wrong thing to watch — an offering device is not a member, so the
+	// group already had its one device before the socket closed, and the wait
+	// returned having observed nothing. The accept then raced the server's
+	// unregister, and when it won, the server admitted the device and replied
+	// PAIRING_COMPLETE instead of taking the rollback path below.
+	waitFor(t, func() bool { return h.server.WaitingOffers() == 0 })
 
 	laptop.send("accept", tppv1.MessageType_MESSAGE_TYPE_PAIRING_OFFER_ACCEPT_REQUEST, &tppv1.PairingOfferAcceptRequest{
 		OfferCode:       offered.GetOfferCode(),

@@ -240,25 +240,139 @@ func TestOriginIsValidatedOnEveryRequest(t *testing.T) {
 	}
 }
 
-func TestMissingOriginIsRefusedOnTheAPI(t *testing.T) {
+// TestSameOriginReadsCarryNoOrigin is the shape of a bug that made the whole
+// UI unusable: a browser does not attach Origin to a same-origin GET, so an
+// API that demanded one refused every read the app makes.
+func TestSameOriginReadsCarryNoOrigin(t *testing.T) {
 	t.Parallel()
 
 	srv, _ := newTestServer(t)
 
-	// The API and the event stream are scripted: a browser always attaches an
-	// Origin to them, so its absence means the caller is not the app.
-	for _, path := range []string{"/api/status", "/api/events"} {
-		rec := do(t, srv, "GET", path, "", map[string]string{tokenHeader: "test-token"})
-		if rec.Code != http.StatusForbidden {
-			t.Errorf("GET %s with no Origin = %d, want %d", path, rec.Code, http.StatusForbidden)
+	// What the app's own fetch() actually sends for a read: the token, no
+	// Origin, and the browser's own account of where it came from.
+	for _, path := range []string{"/api/status", "/api/history", "/api/devices", "/api/settings"} {
+		rec := do(t, srv, "GET", path, "", map[string]string{
+			tokenHeader:      "test-token",
+			"Sec-Fetch-Site": "same-origin",
+			"Sec-Fetch-Mode": "cors",
+			"Sec-Fetch-Dest": "empty",
+		})
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s as the app sends it = %d, want %d", path, rec.Code, http.StatusOK)
 		}
 	}
 
-	// A navigation carries no Origin, and refusing it would mean the tray
-	// could not open the UI at all.
-	rec := do(t, srv, "GET", "/app", "", map[string]string{tokenHeader: "test-token"})
+	// A navigation carries no Origin either, and refusing it would mean the
+	// tray could not open the UI at all.
+	rec := do(t, srv, "GET", "/app", "", map[string]string{"Sec-Fetch-Site": "none"})
 	if rec.Code != http.StatusOK {
 		t.Errorf("GET /app with no Origin = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+// TestACrossSiteRequestIsRefusedWithoutAnOrigin covers what is left once a
+// missing Origin is tolerated: a page elsewhere can make a request that
+// carries none — a no-cors GET — and the browser still says where it came
+// from, which is enough to refuse it before the token is even considered.
+func TestACrossSiteRequestIsRefusedWithoutAnOrigin(t *testing.T) {
+	t.Parallel()
+
+	srv, api := newTestServer(t)
+
+	for _, site := range []string{"cross-site", "same-site"} {
+		rec := do(t, srv, "GET", "/api/status", "", map[string]string{
+			tokenHeader:      "test-token",
+			"Sec-Fetch-Site": site,
+		})
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("a %s GET = %d, want %d", site, rec.Code, http.StatusForbidden)
+		}
+	}
+
+	// A write without an Origin never came from a browser's own page: the
+	// Fetch standard attaches one to every method but GET and HEAD.
+	rec := do(t, srv, "POST", "/api/group/create", `{"creation_url":"https://relay.example/t"}`,
+		map[string]string{tokenHeader: "test-token"})
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("POST with no Origin = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	if api.called("create") {
+		t.Error("a request with no Origin reached the service")
+	}
+}
+
+// TestTheShellIsServedWithoutAToken is the other half of the same outage. A
+// browser cannot put a token on the <script> and <link> the page pulls in, so
+// guarding those with one meant the page 401'd before it ever ran.
+func TestTheShellIsServedWithoutAToken(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := newTestServer(t)
+
+	// The page itself, as the tray opens it and as a reload re-opens it once
+	// the page has erased the token from the address bar.
+	for _, path := range []string{"/app", "/app?token=test-token", "/"} {
+		rec := do(t, srv, "GET", path, "", map[string]string{"Sec-Fetch-Site": "none"})
+		if rec.Code == http.StatusUnauthorized {
+			t.Errorf("GET %s with no token = %d; the shell must not need one", path, rec.Code)
+		}
+	}
+
+	// And what the page then asks for on its own behalf, which carries no
+	// Origin and no token and cannot be made to carry either.
+	rec := do(t, srv, "GET", "/assets/app.js", "", map[string]string{
+		"Sec-Fetch-Site": "same-origin",
+		"Sec-Fetch-Dest": "script",
+	})
+	if rec.Code == http.StatusUnauthorized {
+		t.Errorf("GET /assets/app.js with no token = %d; a <script> cannot send one", rec.Code)
+	}
+
+	// A foreign Origin is still refused, token or no token.
+	rec = do(t, srv, "GET", "/assets/app.js", "", map[string]string{"Origin": "https://evil.example"})
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("GET /assets/app.js from https://evil.example = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+// TestTheBrowserLoadSequence walks the requests a browser actually makes to
+// get this UI running, in order and with the headers it actually sends. Every
+// guard test above tests one rule; this one tests that the rules together
+// leave a working app, which is what they failed to do.
+func TestTheBrowserLoadSequence(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := newTestServer(t)
+	origin := fmt.Sprintf("http://127.0.0.1:%d", srv.Port())
+
+	steps := []struct {
+		what, method, path, body string
+		headers                  map[string]string
+	}{
+		{what: "the tray's navigation", method: "GET", path: "/app?token=test-token", headers: map[string]string{
+			"Sec-Fetch-Site": "none", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}},
+		{what: "the page's module script", method: "GET", path: "/assets/app.js", headers: map[string]string{
+			"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "script"}},
+		{what: "the page's stylesheet", method: "GET", path: "/assets/index.css", headers: map[string]string{
+			"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "style"}},
+		{what: "the first status read", method: "GET", path: "/api/status", headers: map[string]string{
+			tokenHeader: "test-token", "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Dest": "empty"}},
+		{what: "the settings screen", method: "GET", path: "/api/settings", headers: map[string]string{
+			tokenHeader: "test-token", "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Dest": "empty"}},
+		{what: "a sync", method: "POST", path: "/api/sync", body: `{"direction":"upload"}`, headers: map[string]string{
+			tokenHeader: "test-token", "Origin": origin, "Content-Type": "application/json",
+			"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Dest": "empty"}},
+		// The page erases the token from the address bar on load, so a reload
+		// arrives without one. It gets the app, which says so.
+		{what: "a reload", method: "GET", path: "/app", headers: map[string]string{
+			"Sec-Fetch-Site": "none", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}},
+	}
+
+	for _, step := range steps {
+		rec := do(t, srv, step.method, step.path, step.body, step.headers)
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s (%s %s) = %d, want %d", step.what, step.method, step.path, rec.Code, http.StatusOK)
+		}
 	}
 }
 
