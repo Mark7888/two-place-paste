@@ -22,6 +22,12 @@ type Hub struct {
 	// a second connection replaces the first, so a client that reconnects
 	// without a clean close does not leave a phantom behind.
 	devices map[string]*conn
+
+	// offers maps a pairing offer code to the unauthenticated connection
+	// waiting on it. A device that minted an offer has no identity yet — that
+	// is the whole point of the flow — so this is the only way to reach it
+	// with the PairingComplete a member's accept produces.
+	offers map[string]*conn
 }
 
 // NewHub returns an empty hub.
@@ -29,6 +35,7 @@ func NewHub() *Hub {
 	return &Hub{
 		groups:  make(map[string]map[*conn]struct{}),
 		devices: make(map[string]*conn),
+		offers:  make(map[string]*conn),
 	}
 }
 
@@ -57,9 +64,13 @@ func (h *Hub) register(c *conn) {
 	}
 }
 
-// unregister removes a connection.
+// unregister removes a connection, including any pairing offers it was waiting
+// on: an offer whose joiner has gone away can no longer be completed, and a
+// member that accepts it is told so rather than admitting a device that will
+// never learn its key.
 func (h *Hub) unregister(c *conn) {
 	deviceID, groupID := c.identity()
+	codes := c.offerCodes()
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -73,6 +84,41 @@ func (h *Hub) unregister(c *conn) {
 	if h.devices[deviceID] == c {
 		delete(h.devices, deviceID)
 	}
+	for _, code := range codes {
+		if h.offers[code] == c {
+			delete(h.offers, code)
+		}
+	}
+}
+
+// waitForOffer records that c is holding its socket open for one offer.
+func (h *Hub) waitForOffer(code string, c *conn) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.offers[code] = c
+}
+
+// sendToOffer queues a frame for the connection waiting on an offer and
+// reports whether it was queued. Unlike sendTo, a false result is fatal to the
+// flow: the offering device holds no group key and no device identity, so
+// there is nothing for it to pick up later.
+func (h *Hub) sendToOffer(code string, frame []byte) bool {
+	h.mu.Lock()
+	c := h.offers[code]
+	delete(h.offers, code)
+	h.mu.Unlock()
+
+	if c == nil {
+		return false
+	}
+	return c.send(frame)
+}
+
+// forgetOffer drops an offer's route without sending anything.
+func (h *Hub) forgetOffer(code string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.offers, code)
 }
 
 // sendTo queues a frame for one device and reports whether it was queued. A

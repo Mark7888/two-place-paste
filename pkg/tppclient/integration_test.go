@@ -341,3 +341,148 @@ func pair(ctx context.Context, t *testing.T, inviter, joiner *tppclient.Client) 
 	}
 	return device
 }
+
+// TestOfferPairsInTheJoinerEmittedDirection is the direction the flow above
+// cannot express: the device with no group key shows the code, and the member
+// accepts it after a confirmation it cannot skip.
+func TestOfferPairsInTheJoinerEmittedDirection(t *testing.T) {
+	relay := startRelay(t)
+	ctx := testContext(t)
+
+	desktop, _ := newClient(t, "Anna — desktop", tppclient.Options{})
+	if err := desktop.CreateGroup(ctx, relay.creationURL(t, "Anna")); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+
+	// The phone has no group and no relay URL of its own: the URL is the one
+	// thing the user supplies in this direction.
+	phone, _ := newClient(t, "Anna — phone", tppclient.Options{})
+	offer, err := phone.StartOffer(ctx, relay.baseURL)
+	if err != nil {
+		t.Fatalf("StartOffer: %v", err)
+	}
+	if offer.Code == "" {
+		t.Fatal("StartOffer returned nothing to show")
+	}
+	if offer.ExpiresAt.Before(time.Now()) {
+		t.Errorf("the offer is already expired at %s", offer.ExpiresAt)
+	}
+
+	// The phone holds its socket open while the desktop reads the code.
+	waited := make(chan error, 1)
+	go func() { waited <- offer.Wait(ctx) }()
+
+	prepared, err := desktop.PrepareAcceptOffer(ctx, offer.Code)
+	if err != nil {
+		t.Fatalf("PrepareAcceptOffer: %v", err)
+	}
+	if prepared.DeviceName != "Anna — phone" {
+		t.Errorf("the dialog would name %q, want %q", prepared.DeviceName, "Anna — phone")
+	}
+	// The fingerprint the desktop shows is the one the phone would show for
+	// its own key: that is the comparison the user is asked to make.
+	phonePub, err := phone.State().PublicKey()
+	if err != nil {
+		t.Fatalf("phone public key: %v", err)
+	}
+	if prepared.Fingerprint != tppclient.Fingerprint(phonePub) {
+		t.Errorf("the dialog would show fingerprint %q, want %q", prepared.Fingerprint, tppclient.Fingerprint(phonePub))
+	}
+
+	admitted, err := prepared.Confirm(ctx)
+	if err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	if err := <-waited; err != nil {
+		t.Fatalf("waiting for the member to accept: %v", err)
+	}
+
+	if !phone.InGroup() {
+		t.Fatal("the offering device is not in a group")
+	}
+	if phone.Epoch() != desktop.Epoch() {
+		t.Errorf("phone is at epoch %d, desktop at %d", phone.Epoch(), desktop.Epoch())
+	}
+	if admitted.ID != phone.State().DeviceID {
+		t.Errorf("the desktop was told device %q was admitted, the phone thinks it is %q",
+			admitted.ID, phone.State().DeviceID)
+	}
+
+	// The group key really arrived: an entry the desktop writes is readable on
+	// the phone, which is the only proof that matters here.
+	sent := tppclient.Item{ContentType: "text/plain; charset=utf-8", Body: []byte("ssh anna@build-01")}
+	if _, err := desktop.PutEntry(ctx, sent); err != nil {
+		t.Fatalf("PutEntry: %v", err)
+	}
+	got, err := phone.GetLatest(ctx)
+	if err != nil {
+		t.Fatalf("GetLatest on the newly admitted device: %v", err)
+	}
+	if !bytes.Equal(got.Body, sent.Body) {
+		t.Errorf("the phone read %q, want %q", got.Body, sent.Body)
+	}
+
+	// One offer, one device. A second Confirm of the same acceptance is
+	// refused by the client, and the roster shows two devices, not three.
+	if _, err := prepared.Confirm(ctx); err == nil {
+		t.Error("a second Confirm succeeded, want it refused")
+	}
+	roster, err := desktop.Devices(ctx)
+	if err != nil {
+		t.Fatalf("Devices: %v", err)
+	}
+	if len(roster.Devices) != 2 {
+		t.Errorf("the group has %d devices, want 2", len(roster.Devices))
+	}
+}
+
+// TestOfferIsRefusedAfterItHasAdmittedADevice covers the relay's half of "one
+// offer, one device": a second member holding the same code is refused, not
+// quietly given a way in.
+func TestOfferIsRefusedAfterItHasAdmittedADevice(t *testing.T) {
+	relay := startRelay(t)
+	ctx := testContext(t)
+
+	desktop, _ := newClient(t, "Anna — desktop", tppclient.Options{})
+	if err := desktop.CreateGroup(ctx, relay.creationURL(t, "Anna")); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	laptop, _ := newClient(t, "Anna — laptop", tppclient.Options{})
+	pair(ctx, t, desktop, laptop)
+
+	phone, _ := newClient(t, "Anna — phone", tppclient.Options{})
+	offer, err := phone.StartOffer(ctx, relay.baseURL)
+	if err != nil {
+		t.Fatalf("StartOffer: %v", err)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- offer.Wait(ctx) }()
+
+	// Both members read the same screen. Both prepare; only one can confirm.
+	first, err := desktop.PrepareAcceptOffer(ctx, offer.Code)
+	if err != nil {
+		t.Fatalf("PrepareAcceptOffer on the desktop: %v", err)
+	}
+	second, err := laptop.PrepareAcceptOffer(ctx, offer.Code)
+	if err != nil {
+		t.Fatalf("PrepareAcceptOffer on the laptop: %v", err)
+	}
+
+	if _, err := first.Confirm(ctx); err != nil {
+		t.Fatalf("the first Confirm: %v", err)
+	}
+	if err := <-waited; err != nil {
+		t.Fatalf("waiting for the member to accept: %v", err)
+	}
+	if _, err := second.Confirm(ctx); !errors.Is(err, tppclient.ErrTokenConsumed) {
+		t.Errorf("the second Confirm = %v, want ErrTokenConsumed", err)
+	}
+
+	roster, err := desktop.Devices(ctx)
+	if err != nil {
+		t.Fatalf("Devices: %v", err)
+	}
+	if len(roster.Devices) != 3 {
+		t.Errorf("the group has %d devices, want 3 (desktop, laptop and one phone)", len(roster.Devices))
+	}
+}

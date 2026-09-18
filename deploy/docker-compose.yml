@@ -44,9 +44,17 @@ services:
       TPP_BLOB_ROOT: /var/lib/tpp/blobs
       TPP_HTTP_ADDR: ":8080"
     ports:
-      # Bound to loopback: the reverse proxy is the only thing that should
-      # reach this, and the server speaks plain HTTP (SPEC §4.1).
-      - "127.0.0.1:${TPP_HOST_PORT:-8080}:8080"
+      # Bound to loopback by default: the reverse proxy is the only thing that
+      # should reach this, and the server speaks plain HTTP (SPEC §4.1).
+      #
+      # TPP_HOST_BIND_ADDR moves that binding for a deployment whose proxy is
+      # not on this host's loopback — a second machine on a private network, or
+      # a host with several addresses where the proxy reaches only one of them.
+      # Setting it to an address the internet can reach publishes an
+      # unencrypted HTTP port, so set it to the interface the proxy uses and
+      # nothing wider. "0.0.0.0" is every interface, which is that mistake by
+      # another name.
+      - "${TPP_HOST_BIND_ADDR:-127.0.0.1}:${TPP_HOST_PORT:-8080}:8080"
     volumes:
       - blob-data:/var/lib/tpp/blobs
     # The image's own USER; restated here so it survives an image change.

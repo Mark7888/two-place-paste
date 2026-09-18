@@ -93,3 +93,113 @@ message PairingComplete {
   uint64 epoch = 3;
   bytes wrapped_group_key = 4;
 }
+
+// ---------------------------------------------------------------------------
+// Joiner-emitted pairing (docs/plans/joiner-emitted-pairing.md)
+//
+// The mirror image of the flow above: the device that holds no group key mints
+// the code, and a member consumes it. Everything below exists because a joiner
+// cannot mint a PairingStartResponse — that takes an authenticated connection —
+// so the relay has to be able to hold what an unpaired device wants to show.
+//
+// The wrap itself is unchanged (/spec/crypto.md §4.2) and PairingComplete is
+// reused verbatim: only the direction the out-of-band code travels differs.
+// ---------------------------------------------------------------------------
+
+// PairingOffer is what an unpaired device displays and a member scans or
+// pastes. It is the joiner-emitted counterpart of PairingPayload and, like it,
+// never travels over the WebSocket.
+//
+// It carries the joiner's *device* public key rather than an ephemeral one:
+// that key is what the member wraps the group key to, and the relay refuses an
+// accept whose key does not match the stored offer byte for byte. A relay that
+// substituted a key of its own would have to make it match an offer it did not
+// create, which is what keeps the relay outside the trust path in this
+// direction too.
+message PairingOffer {
+  // Base URL of the relay holding this offer, e.g. "https://tpp.example.com".
+  //
+  // An unpaired device has no relay URL of its own, so the user supplies it
+  // once on the joining device; the code carries it so the member does not
+  // have to type it as well.
+  string server_url = 1;
+
+  // Short-lived, single-use code from PairingOfferResponse.
+  string offer_code = 2;
+
+  // The joining device's public key. The member wraps the group key to this
+  // key, read out of band, and never to one the relay supplied.
+  bytes device_public_key = 3;
+
+  // Human-chosen name for the joining device, so the member's confirmation
+  // dialog can name what it is about to admit. It is display text from an
+  // untrusted source: the fingerprint of device_public_key is what actually
+  // identifies the device.
+  string device_name = 4;
+}
+
+// PairingCode is the discriminated union of everything a scan or a paste may
+// carry. It exists because protobuf decodes by field number, not by name: a
+// bare PairingOffer decodes as a PairingPayload without error, so a second kind
+// of code needs an explicit discriminator rather than a second bare message.
+//
+// Clients decode PairingCode first and fall back to a bare PairingPayload, so
+// a code shown by a build that predates this message still pairs.
+message PairingCode {
+  oneof code {
+    // Member-emitted, as before.
+    PairingPayload invite = 1;
+
+    // Joiner-emitted.
+    PairingOffer offer = 2;
+  }
+}
+
+// PairingOfferRequest asks the relay to hold an offer for a device that has no
+// group key yet. It is sent on an unauthenticated connection — the joiner has
+// no credential at this point, which is the whole reason this message exists.
+//
+// The joiner keeps the socket open afterwards, exactly as PairingJoinRequest
+// does: PairingComplete is pushed to it once a member accepts.
+message PairingOfferRequest {
+  // Human-chosen name for the joining device, shown in the member's
+  // confirmation dialog.
+  string device_name = 1;
+
+  // The joiner's device public key. The relay stores it and later refuses any
+  // accept whose key is not byte-for-byte identical.
+  bytes device_public_key = 2;
+}
+
+// PairingOfferResponse returns the registered offer. The joiner combines it
+// with its server URL and public key into a PairingOffer.
+message PairingOfferResponse {
+  string offer_code = 1;
+
+  // Milliseconds since the Unix epoch, UTC. The lifetime matches the 5 minutes
+  // of SPEC §3.2; the server is the authority and the client shows the
+  // countdown from this value rather than assuming the duration.
+  int64 expires_at_unix_ms = 2;
+}
+
+// PairingOfferAcceptRequest is a member admitting the offered device into its
+// group. It is legal only on an authenticated connection: accepting hands over
+// the group key, which is the strongest thing any actor in this system can be
+// given.
+//
+// A client MUST NOT send this until the user has confirmed a dialog naming the
+// offered device and showing a fingerprint of its public key (SPEC §3.3 step 2
+// applies here, normatively): in this direction the risk sits with the member,
+// who admits a device rather than merely failing to join one.
+message PairingOfferAcceptRequest {
+  string offer_code = 1;
+
+  // Echoed from the scanned code. The relay compares it with the stored offer
+  // byte for byte and refuses a mismatch, so a member that wrapped to a
+  // substituted key cannot complete the pairing.
+  bytes device_public_key = 2;
+
+  // The current group key wrapped to device_public_key at the group's current
+  // epoch (/spec/crypto.md §4.2). The relay cannot unwrap it.
+  bytes wrapped_group_key = 3;
+}

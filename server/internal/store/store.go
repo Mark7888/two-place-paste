@@ -35,6 +35,17 @@ var (
 	// by a joining device. Pairing tokens are single-use (SPEC §3.2).
 	ErrPairingConsumed = errors.New("store: pairing already consumed")
 
+	// ErrOfferConsumed is returned when a pairing offer has already admitted a
+	// device. One offer pairs exactly one device: two members racing to accept
+	// the same code must produce one member, not two.
+	ErrOfferConsumed = errors.New("store: pairing offer already consumed")
+
+	// ErrOfferKeyMismatch is returned when an accept names a public key that is
+	// not the one the offer was minted with. The comparison is byte for byte,
+	// and it is what keeps the relay out of the trust path: a relay that
+	// substituted a key would have to make it match an offer it did not create.
+	ErrOfferKeyMismatch = errors.New("store: pairing offer public key mismatch")
+
 	// ErrEpochConflict is returned when a rekey's expected epoch is not the
 	// group's current one: another device rekeyed first (SPEC §3.3 step 4).
 	ErrEpochConflict = errors.New("store: epoch conflict")
@@ -135,6 +146,35 @@ type Pairing struct {
 	ExpiresAt time.Time
 }
 
+// PairingOffer is a short-lived offer minted by a device that holds no group
+// key, for a member to accept (docs/plans/joiner-emitted-pairing.md).
+//
+// It is the mirror image of Pairing: there the member mints and the joiner
+// consumes, here the joiner mints and the member consumes. The joiner's public
+// key is stored at mint time precisely so that the accept can be checked
+// against it.
+type PairingOffer struct {
+	Code string
+
+	// DeviceName is what the accepting member's confirmation dialog shows. It
+	// is display text from a device that is not yet trusted; PublicKey is what
+	// identifies it.
+	DeviceName string
+
+	// PublicKey is the offering device's public key, exactly as it was minted.
+	// An accept naming anything else is refused.
+	PublicKey []byte
+
+	// GroupID and DeviceID are empty until a member has accepted the offer.
+	// They name the group it was admitted to and the device record created for
+	// it, which is what the joiner's PairingComplete is built from.
+	GroupID  string
+	DeviceID string
+
+	CreatedAt time.Time
+	ExpiresAt time.Time
+}
+
 // Store is the persistent zone behind an interface so that handlers can be
 // tested without Redis. Implementations must be safe for concurrent use.
 type Store interface {
@@ -209,6 +249,27 @@ type Store interface {
 	// DeletePairing removes a pairing once the hand-off has completed. It is
 	// best-effort: the record carries a TTL regardless.
 	DeletePairing(ctx context.Context, token string) error
+
+	// CreateOffer mints a single-use pairing offer valid for ttl, on behalf of
+	// a device that is in no group yet.
+	CreateOffer(ctx context.Context, name string, publicKey []byte, ttl time.Duration) (PairingOffer, error)
+
+	// GetOffer returns an offer without consuming it.
+	GetOffer(ctx context.Context, code string) (PairingOffer, error)
+
+	// AcceptOffer atomically checks that the offer exists, is unconsumed and
+	// unexpired and was minted with publicKey, creates the joining device in
+	// groupID with the given wrapped key at the group's current epoch, and
+	// marks the offer consumed. Either all of that happens or none of it does:
+	// two members racing to accept one offer must admit exactly one device.
+	//
+	// It returns ErrNotFound when the offer or the group is gone,
+	// ErrOfferConsumed when another accept won, and ErrOfferKeyMismatch when
+	// publicKey is not the offer's own.
+	AcceptOffer(ctx context.Context, code, groupID string, publicKey, wrappedGroupKey []byte) (PairingOffer, Device, error)
+
+	// DeleteOffer removes an offer. Best-effort: the record carries a TTL.
+	DeleteOffer(ctx context.Context, code string) error
 
 	// TouchLastSeen records that a device connected.
 	TouchLastSeen(ctx context.Context, deviceID string) error

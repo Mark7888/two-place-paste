@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,6 +28,8 @@ type fakeRelay struct {
 	getErr  error
 	now     func() time.Time
 	rev     *fakeRevocation
+	offer   *fakeOffer
+	accept  *fakeAcceptance
 }
 
 func newFakeRelay(now func() time.Time) *fakeRelay {
@@ -135,6 +138,66 @@ func (f *fakeRelay) push(item tppclient.Item) {
 	defer f.mu.Unlock()
 	item.Meta = tppclient.EntryMeta{ID: "pushed", Epoch: 3, Size: int64(len(item.Body)), CreatedAt: item.CreatedAt}
 	f.entries = append(f.entries, item)
+}
+
+func (f *fakeRelay) StartOffer(_ context.Context, serverURL string) (Offer, error) {
+	if serverURL == "" {
+		return nil, fmt.Errorf("a relay URL is required")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.offer = &fakeOffer{code: "tpp-offer-code", accepted: make(chan struct{})}
+	return f.offer, nil
+}
+
+func (f *fakeRelay) PrepareAcceptOffer(_ context.Context, code string) (OfferAcceptance, error) {
+	if code == "" {
+		return nil, tppclient.ErrNotFound
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.accept = &fakeAcceptance{name: "phone", fingerprint: "6668 7AAD F862 BD77"}
+	return f.accept, nil
+}
+
+// fakeOffer stands in for a code this device is showing. Wait blocks until the
+// test either accepts it or closes it, which is what the real one does.
+type fakeOffer struct {
+	code     string
+	accepted chan struct{}
+	closed   atomic.Bool
+}
+
+func (o *fakeOffer) Code() string         { return o.code }
+func (o *fakeOffer) ExpiresAt() time.Time { return time.Time{} }
+
+func (o *fakeOffer) Wait(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-o.accepted:
+		return nil
+	}
+}
+
+func (o *fakeOffer) Close() {
+	if o.closed.CompareAndSwap(false, true) {
+		close(o.accepted)
+	}
+}
+
+type fakeAcceptance struct {
+	name        string
+	fingerprint string
+	confirmed   atomic.Int32
+}
+
+func (a *fakeAcceptance) DeviceName() string  { return a.name }
+func (a *fakeAcceptance) Fingerprint() string { return a.fingerprint }
+
+func (a *fakeAcceptance) Confirm(context.Context) (tppclient.Device, error) {
+	a.confirmed.Add(1)
+	return tppclient.Device{ID: "d3", Name: a.name}, nil
 }
 
 type fakeRevocation struct {
@@ -604,3 +667,99 @@ func TestEventsReachSubscribers(t *testing.T) {
 
 func boolPtr(b bool) *bool { return &b }
 func intPtr(i int) *int    { return &i }
+
+// TestAcceptingAnOfferNeedsTheDialog is the consent gate of
+// docs/plans/joiner-emitted-pairing.md §5 at the service level: nothing is
+// wrapped until a plan the dialog produced comes back, and each plan admits a
+// device exactly once.
+func TestAcceptingAnOfferNeedsTheDialog(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := context.Background()
+
+	// A plan id nobody prepared is refused, and reaches no acceptance at all.
+	if _, err := f.svc.ConfirmAcceptOffer(ctx, "made-up"); err == nil {
+		t.Fatal("confirming an unprepared acceptance succeeded, want it refused")
+	}
+	if f.relay.accept != nil {
+		t.Fatal("a code the user never read was decoded")
+	}
+
+	plan, err := f.svc.PrepareAcceptOffer(ctx, "tpp-offer-code")
+	if err != nil {
+		t.Fatalf("PrepareAcceptOffer() error = %v", err)
+	}
+	if plan.DeviceName == "" || plan.Fingerprint == "" {
+		t.Fatalf("the plan does not carry a dialog to show: %+v", plan)
+	}
+	// Preparing changes nothing: the whole point is that the user can still
+	// decide against it after reading the name and the fingerprint.
+	if got := f.relay.accept.confirmed.Load(); got != 0 {
+		t.Fatalf("preparing admitted %d devices, want 0", got)
+	}
+
+	device, err := f.svc.ConfirmAcceptOffer(ctx, plan.ID)
+	if err != nil {
+		t.Fatalf("ConfirmAcceptOffer() error = %v", err)
+	}
+	if device.Name != "phone" {
+		t.Errorf("admitted device = %+v, want the offered name", device)
+	}
+	if got := f.relay.accept.confirmed.Load(); got != 1 {
+		t.Errorf("confirming admitted %d devices, want 1", got)
+	}
+
+	// The plan is spent. A double-submitted dialog admits one device, not two.
+	if _, err := f.svc.ConfirmAcceptOffer(ctx, plan.ID); err == nil {
+		t.Error("confirming the same plan twice succeeded, want it refused")
+	}
+	if got := f.relay.accept.confirmed.Load(); got != 1 {
+		t.Errorf("after a repeat confirm, %d devices were admitted, want 1", got)
+	}
+}
+
+// TestShowingASecondOfferWithdrawsTheFirst: the socket an offer holds open is
+// the relay's only route to a device with no identity, so an offer that is no
+// longer on screen must not stay live. Two live codes for one device would be
+// two ways in, and only one of them is being shown to anybody.
+func TestShowingASecondOfferWithdrawsTheFirst(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := context.Background()
+
+	if _, err := f.svc.StartOffer(ctx, "https://relay.example"); err != nil {
+		t.Fatalf("StartOffer() error = %v", err)
+	}
+	first := f.relay.offer
+
+	if _, err := f.svc.StartOffer(ctx, "https://relay.example"); err != nil {
+		t.Fatalf("second StartOffer() error = %v", err)
+	}
+	if f.relay.offer == first {
+		t.Fatal("the second call returned the first offer")
+	}
+	if !first.closed.Load() {
+		t.Error("the first offer is still live after a second was shown")
+	}
+
+	// And withdrawing gives up the one that is showing.
+	if err := f.svc.CancelOffer(ctx); err != nil {
+		t.Fatalf("CancelOffer() error = %v", err)
+	}
+	if !f.relay.offer.closed.Load() {
+		t.Error("the offer is still live after being withdrawn")
+	}
+}
+
+// TestShowingAnOfferNeedsARelayURL is the one real cost of this direction: a
+// device with no group has no relay URL either, so the user supplies it.
+func TestShowingAnOfferNeedsARelayURL(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	if _, err := f.svc.StartOffer(context.Background(), "   "); err == nil {
+		t.Error("StartOffer with no relay URL succeeded, want it refused")
+	}
+}

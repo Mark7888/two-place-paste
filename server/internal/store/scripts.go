@@ -2,10 +2,10 @@ package store
 
 import "github.com/redis/go-redis/v9"
 
-// Lua scripts for the two operations that must not be observable half-done.
+// Lua scripts for the operations that must not be observable half-done.
 //
-// Both construct some key names inside the script from a prefix in ARGV rather
-// than receiving every key in KEYS. That is safe here and only here: the
+// Two of them construct some key names inside the script from a prefix in ARGV
+// rather than receiving every key in KEYS. That is safe here and only here: the
 // deployment is a single Redis instance (SPEC §4.1), never a cluster, so key
 // hashing across slots does not arise. If Redis Cluster ever becomes a target,
 // these scripts must be revisited before anything else.
@@ -112,5 +112,52 @@ var consumePairingScript = redis.NewScript(`
 if redis.call('EXISTS', KEYS[1]) == 0 then return 1 end
 if redis.call('HGET', KEYS[1], 'joiner_device_id') ~= false then return 2 end
 redis.call('HSET', KEYS[1], 'joiner_device_id', ARGV[1])
+return 0
+`)
+
+// acceptOfferScript admits the device an offer describes into a group, in one
+// step (docs/plans/joiner-emitted-pairing.md §3 step 6).
+//
+// Everything is validated before anything is written, so two members racing to
+// accept one offer admit exactly one device: the loser sees the offer already
+// consumed and nothing of its attempt survives.
+//
+// Return codes: 0 accepted, 1 no such offer (or expired), 2 already consumed,
+// 3 the public key is not the one the offer was minted with, 4 no such group.
+//
+//	KEYS[1] offer key            ARGV[1] group id
+//	KEYS[2] group key            ARGV[2] device id to create
+//	KEYS[3] group devices set    ARGV[3] device public key, as offered
+//	KEYS[4] device key           ARGV[4] wrapped group key
+//	KEYS[5] device wrapped key   ARGV[5] now, unix ms
+//
+// The public key is compared byte for byte rather than in constant time: a
+// public key is public, and the secret here is the offer code, which KEYS[1]
+// already required.
+var acceptOfferScript = redis.NewScript(`
+if redis.call('EXISTS', KEYS[1]) == 0 then return 1 end
+if redis.call('HGET', KEYS[1], 'device_id') ~= false then return 2 end
+if redis.call('HGET', KEYS[1], 'pubkey') ~= ARGV[3] then return 3 end
+if redis.call('EXISTS', KEYS[2]) == 0 then return 4 end
+
+local epoch = redis.call('HGET', KEYS[2], 'epoch')
+-- The fallback is for a field that was never written: HGET answers false
+-- there, and HSET would refuse it.
+local name = redis.call('HGET', KEYS[1], 'device_name') or ''
+
+redis.call('SADD', KEYS[3], ARGV[2])
+redis.call('HSET', KEYS[4],
+  'group_id', ARGV[1],
+  'name', name,
+  'pubkey', ARGV[3],
+  'created_at', ARGV[5],
+  'last_seen', '0')
+redis.call('HSET', KEYS[5], 'epoch', epoch, 'key', ARGV[4])
+
+-- Last, and only once the device exists: the offer is the thing every other
+-- accept checks, so consuming it earlier would let a failure here leave an
+-- offer spent on a device that was never created.
+redis.call('HSET', KEYS[1], 'group_id', ARGV[1], 'device_id', ARGV[2])
+
 return 0
 `)

@@ -55,6 +55,9 @@ import {
   PairingComplete,
   PairingJoinNotice,
   PairingJoinRequest,
+  PairingOfferAcceptRequest,
+  PairingOfferRequest,
+  PairingOfferResponse,
   PairingStartRequest,
   PairingStartResponse,
   PairingWrappedKeyUpload,
@@ -75,7 +78,13 @@ import {
 } from '../crypto';
 import { Connection, SocketFactory, webSocketFactory } from './connection';
 import { ProtocolError, TppError } from './errors';
-import { encodePairingPayload, decodePairingPayload } from './pairing';
+import {
+  decodePairingOffer,
+  decodePairingPayload,
+  encodePairingOffer,
+  encodePairingPayload,
+  fingerprint,
+} from './pairing';
 import {
   ClientState,
   SecureStore,
@@ -96,6 +105,13 @@ const MAX_BACKOFF_MS = 30_000;
 
 /** PAIRING_WRAP_TIMEOUT_MS bounds a joiner's wait for the inviter to hand over the group key. */
 export const PAIRING_WRAP_TIMEOUT_MS = 120_000;
+
+/**
+ * OFFER_WAIT_TIMEOUT_MS bounds a device's wait for a member to accept the code
+ * it is showing. It matches the offer's own lifetime, because the wait is over
+ * either way once the relay stops holding it (SPEC §3.2: five minutes).
+ */
+export const OFFER_WAIT_TIMEOUT_MS = 5 * 60_000;
 
 /** Device is one member of the group, as the relay reports it — what a revocation dialog renders, by name. */
 export interface Device {
@@ -184,6 +200,48 @@ export interface Invitation {
   expiresAt: Date;
   /** joined resolves when a device joins with this invitation. */
   joined: Promise<Device>;
+}
+
+/**
+ * Offer is a pairing offer this device is showing while it waits for a member
+ * of some group to accept it (docs/plans/joiner-emitted-pairing.md).
+ *
+ * `code` is what the user transports out of band: rendered as a QR code, or
+ * copied as text. The two are one string, exactly as for an invitation.
+ *
+ * The socket that minted it stays open for as long as the offer is live:
+ * PairingComplete is pushed to it when a member accepts, and the relay has no
+ * other way to reach a device with no identity. `accepted` consumes that;
+ * `cancel` gives it up.
+ */
+export interface Offer {
+  code: string;
+  offerCode: string;
+  expiresAt: Date;
+  /** accepted resolves once a member has accepted and this device is in the group. */
+  accepted: Promise<void>;
+  /** cancel withdraws an offer the user is no longer showing. */
+  cancel(): void;
+}
+
+/**
+ * OfferAcceptance is a scanned or pasted offer waiting for the user's consent.
+ * It is the shape of Revocation below, split for a sharper reason.
+ *
+ * A hostile invitation costs a joiner nothing: it holds no key to lose. A
+ * hostile offer is accepted by a *member*, who hands over the group key. So
+ * nothing is wrapped and no device is admitted until `confirm` is called, and a
+ * screen that has not rendered `deviceName` and `fingerprint` has nothing to
+ * confirm with.
+ */
+export interface OfferAcceptance {
+  /** deviceName is what the offering device calls itself. Display text from a device that is not in the group yet. */
+  deviceName: string;
+  /** fingerprint is the offered public key rendered for a person to compare with what that device shows. */
+  fingerprint: string;
+  /** publicKey is the key the group key will be wrapped to, read out of band rather than from the relay. */
+  publicKey: Uint8Array;
+  confirm(): Promise<Device>;
 }
 
 /**
@@ -298,6 +356,18 @@ export class Client {
   /** deviceId is this device's identifier on the relay, or "". */
   get deviceId(): string {
     return this.state.deviceId;
+  }
+
+  /**
+   * publicKey is this device's X25519 public key.
+   *
+   * It is public, and it is here for one reason: a device showing a pairing
+   * offer has to render its own fingerprint, so the user can check it against
+   * the one the accepting device is about to show them. Nothing secret is
+   * reachable through this.
+   */
+  get publicKey(): Uint8Array {
+    return devicePublicKey(this.state);
   }
 
   // -------------------------------------------------------------------------
@@ -656,6 +726,172 @@ export class Client {
       conn.close('pairing complete');
     }
 
+    await this.installPairingComplete(base, complete);
+  }
+
+  /**
+   * startOffer asks the relay to hold an offer for this device and returns the
+   * code to show (docs/plans/joiner-emitted-pairing.md §3 steps 1-3).
+   *
+   * This is the direction the flows above cannot express: a device with no
+   * group key cannot mint a pairing token, because that takes an authenticated
+   * connection, so the relay holds an offer for it instead and a member accepts
+   * it. Which way round the code travels is a question of which screen the user
+   * is looking at, not of the protocol.
+   *
+   * `serverUrl` is the one real cost of this direction: a device with no group
+   * has no relay URL either, so the user supplies it once. An empty value falls
+   * back to the one this client already knows, if any.
+   *
+   * The returned offer holds a socket open. Await `accepted`, or call `cancel`
+   * to give it up.
+   */
+  async startOffer(serverUrl: string): Promise<Offer> {
+    if (this.inGroup) {
+      // A device holding a group key cannot offer itself to another group
+      // without discarding the key it has, and discarding it is a separate,
+      // deliberate act — `forget`, from the Settings screen.
+      throw new TppError('invalid', 'this device is already in a group');
+    }
+    const base = normalizeServerURL(serverUrl.trim() === '' ? this.state.serverUrl : serverUrl);
+    const publicKey = devicePublicKey(this.state);
+
+    // Offer minting is the third frame an unauthenticated connection may send.
+    // The socket must stay open afterwards: PairingComplete is pushed to it
+    // once a member accepts.
+    const conn = await Connection.connect(this.socketFactory, websocketURL(base, ''));
+
+    // Registered before the request goes out: a member watching the screen can
+    // accept fast enough that the completion arrives while the mint is still in
+    // flight. Nothing awaits these until the mint has succeeded, so a rejection
+    // is claimed below rather than left to crash the app.
+    const completed = conn.expect(MessageType.MESSAGE_TYPE_PAIRING_COMPLETE, OFFER_WAIT_TIMEOUT_MS);
+    const failed = conn.expect(MessageType.MESSAGE_TYPE_ERROR, OFFER_WAIT_TIMEOUT_MS);
+    completed.catch(() => undefined);
+    failed.catch(() => undefined);
+
+    let response: PairingOfferResponse;
+    try {
+      response = await conn.call(
+        MessageType.MESSAGE_TYPE_PAIRING_OFFER_REQUEST,
+        {
+          codec: PairingOfferRequest,
+          message: { deviceName: this.state.deviceName, devicePublicKey: publicKey },
+        },
+        PairingOfferResponse,
+      );
+    } catch (err) {
+      conn.close('the pairing offer was refused');
+      throw err;
+    }
+
+    const code = encodePairingOffer({
+      serverUrl: base,
+      offerCode: response.offerCode,
+      devicePublicKey: publicKey,
+      deviceName: this.state.deviceName,
+    });
+
+    const accepted = (async (): Promise<void> => {
+      try {
+        const env = await Promise.race([completed, failed]);
+        if (env.type === MessageType.MESSAGE_TYPE_ERROR) {
+          const frame = ErrorFrame.decode(env.payload);
+          throw new ProtocolError(frame.code, frame.message);
+        }
+        await this.installPairingComplete(base, PairingComplete.decode(env.payload));
+      } finally {
+        conn.close('pairing offer answered');
+      }
+    })();
+    // Nothing is lost if the screen never awaits this — a withdrawn offer
+    // rejects — but an unhandled rejection would crash the app.
+    accepted.catch(() => undefined);
+
+    return {
+      code,
+      offerCode: response.offerCode,
+      expiresAt: msToDate(response.expiresAtUnixMs) ?? this.now(),
+      accepted,
+      cancel: () => conn.close('the pairing offer was withdrawn'),
+    };
+  }
+
+  /**
+   * prepareAcceptOffer decodes an offer and returns what the confirmation
+   * dialog must show (docs/plans/joiner-emitted-pairing.md §5). It contacts
+   * nothing and changes nothing.
+   *
+   * The split is the client's half of the rule, not the screen's: `confirm` is
+   * the only thing that wraps a key, so a screen cannot admit a device without
+   * having had something to render.
+   */
+  async prepareAcceptOffer(codeText: string): Promise<OfferAcceptance> {
+    this.requireGroup();
+    const offer = decodePairingOffer(codeText);
+    const base = normalizeServerURL(offer.serverUrl);
+    if (base !== this.state.serverUrl) {
+      // The accept travels over this client's own connection, so an offer held
+      // by another relay could not be completed anyway. Saying so is better
+      // than a not-found from a relay that never saw the code.
+      throw new TppError(
+        'invalid',
+        `that code is held by ${base}, and this device is paired with ${this.state.serverUrl}`,
+      );
+    }
+
+    let done = false;
+    const confirm = async (): Promise<Device> => {
+      if (done) {
+        throw new TppError('invalid', 'that code has already been accepted');
+      }
+      this.requireGroup();
+      // The wrap targets the key the user just confirmed, never one the relay
+      // supplied — and the relay refuses an accept whose key is not the one the
+      // offer was minted with, so a substituted key cannot complete the pairing
+      // either.
+      const wrapped = wrap(this.state.groupKey, offer.devicePublicKey, this.state.epoch);
+      const conn = await this.connection();
+      const complete = await conn.call(
+        MessageType.MESSAGE_TYPE_PAIRING_OFFER_ACCEPT_REQUEST,
+        {
+          codec: PairingOfferAcceptRequest,
+          message: {
+            offerCode: offer.offerCode,
+            devicePublicKey: offer.devicePublicKey,
+            wrappedGroupKey: wrapped,
+          },
+        },
+        PairingComplete,
+      );
+      done = true;
+
+      const device: Device = {
+        id: complete.deviceId,
+        name: offer.deviceName,
+        publicKey: offer.devicePublicKey,
+        createdAt: this.now(),
+        lastSeen: null,
+        self: false,
+      };
+      this.handlers.onDevicePaired?.(device);
+      return device;
+    };
+
+    return {
+      deviceName: offer.deviceName,
+      fingerprint: fingerprint(offer.devicePublicKey),
+      publicKey: offer.devicePublicKey,
+      confirm,
+    };
+  }
+
+  /**
+   * installPairingComplete is the last step of both pairing directions: unwrap
+   * the group key, install `(epoch, group key)` and come online. It is one
+   * function because the two directions differ only in who showed the code.
+   */
+  private async installPairingComplete(base: string, complete: PairingComplete): Promise<void> {
     const epoch = asBigInt(complete.epoch);
     const groupKey = unwrap(complete.wrappedGroupKey, this.state.devicePrivateKey, epoch);
     this.state = {

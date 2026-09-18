@@ -6,6 +6,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 
@@ -83,5 +84,72 @@ func TestConsumeTokenConcurrent(t *testing.T) {
 		if !errors.Is(err, store.ErrTokenConsumed) {
 			t.Errorf("losing ConsumeToken() error = %v, want %v", err, store.ErrTokenConsumed)
 		}
+	}
+}
+
+// TestAcceptOfferConcurrent is the race the accept script exists for: two
+// members that scanned the same code must admit exactly one device, not two
+// devices sharing one offer.
+func TestAcceptOfferConcurrent(t *testing.T) {
+	t.Parallel()
+
+	s := newTestRedisStore(t)
+	ctx := context.Background()
+
+	tok, err := s.CreateToken(ctx, "contended offer")
+	if err != nil {
+		t.Fatalf("CreateToken() error = %v", err)
+	}
+	created, err := s.CreateGroup(ctx, tok.Value, store.NewDevice{Name: "member", PublicKey: []byte("pk-member")})
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	offer, err := s.CreateOffer(ctx, "joiner", []byte("pk-joiner"), time.Minute)
+	if err != nil {
+		t.Fatalf("CreateOffer() error = %v", err)
+	}
+
+	const callers = 50
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		okCount int
+		errs    []error
+	)
+	start := make(chan struct{})
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _, err := s.AcceptOffer(ctx, offer.Code, created.Group.ID, []byte("pk-joiner"), []byte("wrapped-joiner"))
+			mu.Lock()
+			defer mu.Unlock()
+			if err == nil {
+				okCount++
+			} else {
+				errs = append(errs, err)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if okCount != 1 {
+		t.Errorf("successful AcceptOffer() calls = %d, want 1", okCount)
+	}
+	for _, err := range errs {
+		if !errors.Is(err, store.ErrOfferConsumed) {
+			t.Errorf("losing AcceptOffer() error = %v, want %v", err, store.ErrOfferConsumed)
+		}
+	}
+
+	// And the group gained exactly one member on top of its creator.
+	devices, err := s.ListDevices(ctx, created.Group.ID)
+	if err != nil {
+		t.Fatalf("ListDevices() error = %v", err)
+	}
+	if len(devices) != 2 {
+		t.Errorf("group has %d devices, want 2", len(devices))
 	}
 }

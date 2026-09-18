@@ -96,6 +96,24 @@ export interface Invite {
   expires_at: string;
 }
 
+// Offer is a pairing code this device is showing while it waits for a member
+// of some group to accept it. The code is both the QR contents and the
+// copyable string.
+export interface Offer {
+  code: string;
+  expires_at: string;
+}
+
+// OfferPlan is a scanned or pasted offer waiting for the user's confirmation.
+// There is no endpoint that takes the code itself: admitting a device hands it
+// the group key, so the plan id the dialog produces is the only way in.
+export interface OfferPlan {
+  id: string;
+  device_name: string;
+  fingerprint: string;
+  expires_at: string;
+}
+
 export interface SettingsView {
   port: number;
   listen_port: number;
@@ -172,6 +190,13 @@ export const api = {
     request<RosterView>("POST", "/api/devices/revoke/confirm", { plan_id: planId }),
   startPairing: () => request<Invite>("POST", "/api/pairing/start", {}),
   joinPairing: (payload: string) => request<{ ok: boolean }>("POST", "/api/pairing/join", { payload }),
+  startOffer: (serverUrl: string) =>
+    request<Offer>("POST", "/api/pairing/offer/start", { server_url: serverUrl }),
+  cancelOffer: () => request<{ ok: boolean }>("POST", "/api/pairing/offer/cancel", {}),
+  prepareAcceptOffer: (code: string) =>
+    request<OfferPlan>("POST", "/api/pairing/offer/accept/prepare", { code }),
+  confirmAcceptOffer: (planId: string) =>
+    request<DeviceView>("POST", "/api/pairing/offer/accept/confirm", { plan_id: planId }),
   createGroup: (creationUrl: string) =>
     request<{ ok: boolean }>("POST", "/api/group/create", { creation_url: creationUrl }),
   settings: () => request<SettingsView>("GET", "/api/settings"),

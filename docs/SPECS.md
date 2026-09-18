@@ -117,6 +117,51 @@ Pairing tokens are short-lived (suggested: 5 minutes) and single-use.
 **New devices start empty.** They cannot decrypt entries created before they joined
 and do not attempt to fetch them.
 
+#### Joiner-emitted pairing
+
+The flow above is member-emitted: the device that holds a group key shows the
+code. The same exchange also runs with the roles swapped, so that the device
+*without* a key can be the one that shows something — a phone generating a code
+a paired desktop pastes, or a desktop showing a QR a paired phone scans. Which
+way round the code travels is a question of which screen the user is looking
+at, not of the protocol, and both directions end in the same `PairingComplete`.
+
+**Offer contents:** server URL · short-lived offer code · joining device's
+public key · joining device's name.
+
+**Flow:**
+
+1. The **joiner** learns the relay URL (it has no other way to know one: it
+   holds no group), dials an unauthenticated socket and asks the server to hold
+   an offer. The server answers with a single-use code and keeps the socket
+   open.
+2. The joiner displays the offer as a QR code and as the same copyable string.
+3. A **member** scans or pastes it. Before anything is wrapped, its UI shows the
+   joining device's name and a fingerprint of its public key, and the user
+   confirms — the rule of §3.3 step 2, applying here for the same reason: this
+   step admits a device to the group.
+4. The member wraps the **current** group key to the public key *from the code*
+   and sends it with the offer code. The server checks that the key matches the
+   stored offer byte for byte, registers the device in the member's group,
+   consumes the offer atomically and pushes the wrapped key to the joiner's
+   waiting socket.
+5. The joiner is now a group member at the current epoch, exactly as in step 5
+   above.
+
+The byte-for-byte check is what keeps the server outside the trust path: the
+member wraps to a key it read out of band, and a server that substituted one
+would have to make it match an offer it did not create.
+
+Offers are short-lived and single-use on the same terms as pairing tokens, and
+one offer admits exactly one device. Accepting an offer is legal only on an
+authenticated connection.
+
+**The risk moves.** A hostile *pairing token* costs a joiner nothing: it holds
+no key to lose. A hostile *offer* is accepted by a member, who hands over the
+group key — so the confirmation in step 3 is not advisory. A client MUST NOT
+wrap anything until the user has confirmed a dialog naming the device and
+showing a fingerprint of its public key.
+
 ### 3.3 Revocation and rekey
 
 Any device in a group may revoke any other device. There are no permission levels —

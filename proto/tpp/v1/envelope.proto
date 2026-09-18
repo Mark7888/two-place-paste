@@ -49,6 +49,14 @@ enum MessageType {
   MESSAGE_TYPE_PAIRING_WRAPPED_KEY_UPLOAD = 24;
   MESSAGE_TYPE_PAIRING_COMPLETE = 25;
 
+  // Joiner-emitted pairing: the same exchange with the roles swapped, so that
+  // the device without a group key can be the one that shows a code
+  // (docs/plans/joiner-emitted-pairing.md). PairingComplete above is reused
+  // unchanged as the last step of both directions.
+  MESSAGE_TYPE_PAIRING_OFFER_REQUEST = 26;
+  MESSAGE_TYPE_PAIRING_OFFER_RESPONSE = 27;
+  MESSAGE_TYPE_PAIRING_OFFER_ACCEPT_REQUEST = 28;
+
   // Devices and rekey (SPEC §3.3).
   MESSAGE_TYPE_DEVICE_LIST_REQUEST = 30;
   MESSAGE_TYPE_DEVICE_LIST_RESPONSE = 31;

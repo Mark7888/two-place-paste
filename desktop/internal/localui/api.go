@@ -35,6 +35,22 @@ type API interface {
 	// JoinPairing joins a group with a payload pasted from another device.
 	JoinPairing(ctx context.Context, payload string) error
 
+	// StartOffer shows a code for a member of some group to accept, which is
+	// how a device with no group key pairs when it is the one with a screen
+	// the user is looking at (docs/plans/joiner-emitted-pairing.md).
+	StartOffer(ctx context.Context, serverURL string) (OfferView, error)
+
+	// CancelOffer withdraws the offer this device is showing.
+	CancelOffer(ctx context.Context) error
+
+	// PrepareAcceptOffer decodes an offer and returns what the confirmation
+	// dialog must show. It changes nothing.
+	PrepareAcceptOffer(ctx context.Context, code string) (OfferPlan, error)
+
+	// ConfirmAcceptOffer admits the device a plan describes. It is the only
+	// way a device is admitted this way.
+	ConfirmAcceptOffer(ctx context.Context, planID string) (DeviceView, error)
+
 	// CreateGroup turns an admin creation URL into a group (SPEC §3.1).
 	CreateGroup(ctx context.Context, creationURL string) error
 

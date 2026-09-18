@@ -106,22 +106,29 @@ There is no third one, and the shell enforces it (`src/app/App.tsx`).
 
 **Not in a group.** The setup screen is the whole app: no tab bar, because
 every other screen needs a group key to do anything and a tab that leads
-nowhere is worse than no tab. It offers the only two ways in (SPEC §3) — join
-a group a member is inviting this device to, or create the first group from a
-relay's creation link — and one scanner that takes either code and works out
-which it is from the code itself (`classifyCode`).
+nowhere is worse than no tab. It offers the three ways in (SPEC §3,
+[`docs/plans/joiner-emitted-pairing.md`](../docs/plans/joiner-emitted-pairing.md))
+— read a code a member is showing, show a code of this phone's own for a
+member to accept, or create the first group from a relay's creation link — and
+one scanner that takes any of them and works out which it is from the code
+itself (`classifyCode`).
 
-**In a group.** The five tabs. Pairing only ever *shows* a code, because that
-is the direction the payload travels: only a member can mint a pairing token
-against the relay, so the member displays and the joiner scans or pastes. A
-phone scans the QR; a desktop, which has no camera by design (SPEC §7.2),
-takes the string under it.
+**In a group.** The five tabs. Pairing both shows a code and reads one, because
+pairing runs in both directions: a member can mint a pairing token for a device
+that has none, and a device that has none can register an *offer* the relay
+holds for a member to accept. Which way round the code travels is a question of
+which device has the screen the user is looking at, not of the protocol. A phone
+scans the QR; a desktop, which has no camera by design (SPEC §7.2), takes the
+string under it, or shows one of its own.
 
 Every transport is symmetric — QR or copied text, desktop↔phone or
-phone↔phone — but the direction is not: an unpaired device cannot show a code
-for a member to accept, because minting a pairing token needs an authenticated
-connection. That is a wire-contract limit, not a client one. The plan for
-making it symmetric is [`docs/plans/joiner-emitted-pairing.md`](../docs/plans/joiner-emitted-pairing.md).
+phone↔phone — and so now is the direction. What is *not* symmetric is the risk,
+and the UI says so. A hostile code a joiner reads costs it a failed pairing: it
+holds no group key to lose. A hostile code a **member** reads costs the group
+its key, because accepting admits a device. So reading a code on the Pairing tab
+never admits anything by itself: `prepareAcceptOffer` returns the offering
+device's name and a fingerprint of its public key, and only `confirm` wraps a
+key. The gate is in `src/core`, not in the screen, so a screen cannot skip it.
 
 A device holds one group key, so it belongs to one group. Moving it elsewhere
 is **Settings → delete this device's keys**, which returns the app to the
@@ -168,8 +175,12 @@ What a reviewer should run, against a P4 relay, on an Android 12, 13 and 14
 device or emulator:
 
 1. Pair the phone from a desktop's QR code, then from a pasted code. Both are
-   the same string; both must work. Then check the reverse direction: pair a
-   second device *from* the phone's Pairing tab.
+   the same string; both must work. Then check the other three directions: pair
+   a second device *from* the phone's Pairing tab; show a code from an unpaired
+   phone's setup screen and accept it on a paired desktop; and scan a code an
+   unpaired desktop is showing from a paired phone's Pairing tab. The last two
+   must each show the offering device's name and fingerprint and refuse to add
+   anything until that dialog is confirmed.
 2. On a fresh install, confirm the setup screen has no tab bar, and that
    scanning the creation link on the relay's admin page creates the group.
 3. Add the **Paste sync** tile to the quick-settings panel. Copy text in another

@@ -166,15 +166,35 @@ second attempt gets `409`.
 
 ### Add a device
 
-1. On a device already in the group: **Pairing** → **Show pairing code**. It
-   shows a QR code and the same payload as copyable text. The token is
-   single-use and expires in 5 minutes.
+Pairing runs in both directions. Which one you want depends on which device has
+the screen you are looking at — either way the code is a QR and the same string
+as copyable text, so whichever form the other device can take, it is reading one
+code.
+
+**The member shows.** Use this when the joining device can scan, or can paste.
+
+1. On a device already in the group: **Pairing** → **Show pairing code**. The
+   token is single-use and expires in 5 minutes.
 2. On the joining device: **Pairing** → *Join a group*, paste the payload,
    press **Join**.
 
 The inviting device holds the group key, so it wraps it for the joiner as soon
-as the relay reports the join. Keep the inviting device open until that
-happens.
+as the relay reports the join. Keep the inviting device open until that happens.
+
+**The joining device shows.** Use this when the *member* is the one that can
+read a code — a phone scanning a desktop that is not in the group yet, or a
+desktop pasting a code from a phone that is not.
+
+1. On the joining device: **Pairing** → *Show a code*. It asks for the relay's
+   address once, because a device with no group does not know one yet, and the
+   code carries it.
+2. On a device already in the group: **Pairing** → *Read the code*, then check
+   the dialog. It names the joining device and shows a fingerprint of its public
+   key; confirm only if that fingerprint matches the one that device is showing.
+
+That confirmation is not a formality. In this direction it is the **member** who
+acts, and adding a device hands it the group key, so nothing is wrapped until
+you say yes. Keep the joining device open until you do.
 
 ### Sync the clipboard
 

@@ -148,6 +148,37 @@ type Invite struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+// OfferView is a pairing offer this device is showing while it waits for a
+// member to accept it (docs/plans/joiner-emitted-pairing.md). The code is both
+// the QR contents and the copyable string: one string, whichever form the
+// accepting device can read.
+type OfferView struct {
+	Code      string    `json:"code"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// OfferPlan is a scanned or pasted offer waiting for the user's confirmation.
+//
+// It is handed out by PrepareAcceptOffer and is the only thing
+// ConfirmAcceptOffer accepts, for the same reason RevokePlan works that way —
+// and with more at stake. Accepting admits a device to the group and hands it
+// the group key, so a UI that has not fetched and rendered DeviceName and
+// Fingerprint has no plan id and cannot confirm anything.
+type OfferPlan struct {
+	ID string `json:"id"`
+
+	// DeviceName is what the offering device calls itself. Display text from a
+	// device that is not in the group yet; it proves nothing, which is why
+	// Fingerprint is beside it.
+	DeviceName string `json:"device_name"`
+
+	// Fingerprint is the offered public key rendered for a person to compare
+	// with what that device is showing.
+	Fingerprint string `json:"fingerprint"`
+
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
 // SettingsView is the settings screen's model.
 type SettingsView struct {
 	Port               int    `json:"port"`
@@ -189,6 +220,7 @@ const (
 	EventDisconnected  = "disconnected"
 	EventEpoch         = "epoch"
 	EventDevicePaired  = "device_paired"
+	EventOffer         = "offer"
 	EventDeviceRevoked = "device_revoked"
 	EventRevoked       = "revoked"
 	EventClipboard     = "clipboard"
