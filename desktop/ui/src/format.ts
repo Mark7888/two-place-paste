@@ -45,3 +45,32 @@ function parse(iso?: string): Date | null {
   if (Number.isNaN(t.getTime()) || t.getTime() === 0) return null;
   return t;
 }
+
+/**
+ * useExpiry reports whether an instant has passed, and re-renders when it does.
+ *
+ * A pairing code on screen after its expiry is worse than no code: it scans,
+ * it looks live, and the failure only arrives on the device that read it. The
+ * timer fires once, at the moment itself, rather than polling.
+ */
+export function useExpiry(iso?: string): boolean {
+  const at = iso ? new Date(iso).getTime() : Number.NaN;
+  const [expired, setExpired] = useState(() => Number.isFinite(at) && at <= Date.now());
+
+  useEffect(() => {
+    if (!Number.isFinite(at)) {
+      setExpired(false);
+      return;
+    }
+    const remaining = at - Date.now();
+    if (remaining <= 0) {
+      setExpired(true);
+      return;
+    }
+    setExpired(false);
+    const id = window.setTimeout(() => setExpired(true), remaining);
+    return () => window.clearTimeout(id);
+  }, [at]);
+
+  return expired;
+}

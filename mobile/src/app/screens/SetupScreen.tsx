@@ -33,6 +33,7 @@ import { fingerprint, pairingLink } from '../../core';
 import { useSession } from '../SessionContext';
 import { enterGroup, failureMessage } from '../session';
 import { Button, Card, CopyButton, Notice, Screen } from '../ui';
+import { useExpiry } from '../expiry';
 import { colors, styles } from '../theme';
 
 export function SetupScreen(): React.JSX.Element {
@@ -44,6 +45,8 @@ export function SetupScreen(): React.JSX.Element {
   const [ok, setOk] = useState(true);
   const [relayUrl, setRelayUrl] = useState('');
   const [offer, setOffer] = useState<Offer | null>(null);
+  // Hooks stay above the camera's early return (rules-of-hooks).
+  const offerExpired = useExpiry(offer?.expiresAt ?? null);
 
   // A code this device stops showing must stop being live: the socket it holds
   // open is the relay's only route to a device with no identity.
@@ -200,7 +203,12 @@ export function SetupScreen(): React.JSX.Element {
         />
         {offer !== null && (
           <View style={{ alignItems: 'center', gap: 10 }}>
-            <View style={{ backgroundColor: '#ffffff', padding: 12, borderRadius: 8 }}>
+            <View
+              style={[
+                { backgroundColor: '#ffffff', padding: 12, borderRadius: 8 },
+                offerExpired && styles.expiredCode,
+              ]}
+            >
               {/*
                 Rendered on device by a bundled library: a code carrying an
                 offer must not travel to a remote QR service to be drawn.
@@ -223,9 +231,13 @@ export function SetupScreen(): React.JSX.Element {
                 setMessage(text);
               }}
             />
-            <Text style={styles.muted}>
-              Valid until {offer.expiresAt.toLocaleTimeString()} · single use
-            </Text>
+            {offerExpired ? (
+              <Text style={styles.expiredTag}>Expired — show a new code</Text>
+            ) : (
+              <Text style={styles.muted}>
+                Valid until {offer.expiresAt.toLocaleTimeString()} · single use
+              </Text>
+            )}
             <Text style={styles.muted}>
               The other device will ask its user to confirm this device’s name and fingerprint
               before it adds anything. This device’s fingerprint is:

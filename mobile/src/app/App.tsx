@@ -45,6 +45,7 @@ import { ActivityIndicator, Pressable, StatusBar, Text, View } from 'react-nativ
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Icon, type IconName } from './icons';
+import { PairingRequest } from './PairingRequest';
 import { SessionProvider, useSession } from './SessionContext';
 import { DevicesScreen } from './screens/DevicesScreen';
 import { HistoryScreen } from './screens/HistoryScreen';
@@ -117,6 +118,12 @@ function Shell(): React.JSX.Element {
       <View style={{ flex: 1 }}>
         <Screen />
       </View>
+      {/*
+        Above every tab, not inside one: a scanned code can arrive while any
+        screen is showing, and a request the user cannot see is a request they
+        will not answer.
+      */}
+      <PairingRequest />
       <View
         accessibilityRole="tablist"
         style={[styles.tabBar, { paddingBottom: insets.bottom }]}

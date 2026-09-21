@@ -250,14 +250,25 @@ export function classifyCode(text: string): CodeKind {
   if (trimmed === '') {
     return 'unknown';
   }
-  try {
-    splitCreationURL(trimmed);
-    return 'creation-url';
-  } catch {
-    // Not a creation link; fall through to the two pairing codes.
+
+  // A fragment settles it: only a code link carries one, and a creation URL
+  // never does. Without this check a scanned `https://relay/pair#<code>` is a
+  // perfectly good creation URL — the URL parser stops the path at the `#`, so
+  // the token reads as the literal "pair" — and the relay answers "no such
+  // creation token" for every code the camera reads. The tpp:// form escaped
+  // it only by not being an http(s) URL at all.
+  const stripped = stripCodeEnvelope(trimmed);
+  if (stripped === trimmed) {
+    try {
+      splitCreationURL(trimmed);
+      return 'creation-url';
+    } catch {
+      // Not a creation link; fall through to the two pairing codes.
+    }
   }
+
   try {
-    return decodePairingCode(trimmed).offer !== undefined ? 'offer-code' : 'pairing-code';
+    return decodePairingCode(stripped).offer !== undefined ? 'offer-code' : 'pairing-code';
   } catch {
     return 'unknown';
   }

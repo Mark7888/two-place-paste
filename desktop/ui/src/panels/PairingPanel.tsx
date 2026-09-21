@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { api, type Invite, type Offer, type OfferPlan, type Status } from "../api";
-import { when } from "../format";
+import { useExpiry, when } from "../format";
 import { Icon } from "../components/Icon";
 import { Modal } from "../components/Modal";
 
@@ -129,6 +129,7 @@ function CopyButton({ value }: { value: string }) {
 // fragment, so the relay never receives it.
 function Code({ value, expiresAt }: { value: string; expiresAt: string }) {
   const canvas = useRef<HTMLCanvasElement | null>(null);
+  const expired = useExpiry(expiresAt);
 
   useEffect(() => {
     if (canvas.current) {
@@ -138,9 +139,19 @@ function Code({ value, expiresAt }: { value: string; expiresAt: string }) {
 
   return (
     <div className="stack" style={{ marginTop: "0.9rem", gap: "0.6rem" }}>
-      <div className="qr-holder">
+      {/*
+        An expired code is dimmed rather than removed. Taking it off screen
+        would leave the user wondering whether they had ever shown one; leaving
+        it live would let them keep presenting a code that can only fail on the
+        device that reads it.
+      */}
+      <div className={`qr-holder${expired ? " expired" : ""}`}>
         <canvas ref={canvas} />
-        <span className="muted small">Expires {when(expiresAt)}.</span>
+        {expired ? (
+          <span className="tag-expired">Expired — show a new code</span>
+        ) : (
+          <span className="muted small">Expires {when(expiresAt)}.</span>
+        )}
       </div>
       <div className="copy-row">
         <code className="value mono">{value}</code>
@@ -217,8 +228,10 @@ function AcceptOfferPanel({
           placeholder="tpp pairing code"
         />
         <div className="row">
+          {/* Primary once there is something to act on: this is the panel's
+              next step, not a secondary alternative to it. */}
           <button
-            className="action"
+            className={`action${code.trim() ? " primary" : ""}`}
             disabled={!code.trim() || busy}
             onClick={() =>
               void guard(async () => {
@@ -226,7 +239,7 @@ function AcceptOfferPanel({
               })
             }
           >
-            Read the code
+            Connect
           </button>
         </div>
       </div>

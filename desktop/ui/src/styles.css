@@ -629,3 +629,18 @@ button.action.choice .choice-why {
   white-space: nowrap;
   border: 0;
 }
+
+/* An expired pairing code. Dimmed rather than removed: taking it off screen
+   would leave the user unsure they had ever shown one, and leaving it looking
+   live would let them keep presenting a code that can only fail on the device
+   that reads it. */
+.qr-holder.expired canvas { filter: grayscale(1); opacity: 0.35; }
+
+.tag-expired {
+  font-size: 0.8rem;
+  font-weight: 650;
+  color: var(--danger);
+  background: var(--danger-soft);
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+}

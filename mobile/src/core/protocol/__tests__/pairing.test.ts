@@ -157,3 +157,19 @@ describe('code links', () => {
     );
   });
 });
+
+describe('a scanned pairing link is not a creation URL', () => {
+  // The bug the camera scanner hit: a creation URL is https://relay/<token>,
+  // and a pairing link is https://relay/pair#<code>. The URL parser stops the
+  // path at the fragment, so the link looked like a creation URL whose token
+  // was the literal "pair" — and the relay answered "no such creation token".
+  const code = 'AbCdEf-_123';
+
+  it('classifies an https pairing link as a pairing code', () => {
+    expect(classifyCode(pairingLink('https://tpp.example.com', code))).not.toBe('creation-url');
+  });
+
+  it('still classifies a real creation URL as one', () => {
+    expect(classifyCode('https://tpp.example.com/AbCdEf123')).toBe('creation-url');
+  });
+});

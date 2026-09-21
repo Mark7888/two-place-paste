@@ -163,6 +163,19 @@ export const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
 
+  /** An expired pairing code: dimmed, and said out loud. */
+  expiredCode: { opacity: 0.3 },
+  expiredTag: {
+    color: colors.danger,
+    backgroundColor: colors.dangerSoft,
+    fontSize: 13,
+    fontWeight: '700',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    overflow: 'hidden',
+  },
+
   inline: { flexDirection: 'row', gap: 10, alignItems: 'center' },
   status: { paddingHorizontal: 16, paddingVertical: 8 },
 
