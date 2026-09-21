@@ -37,15 +37,27 @@ const (
 	envLogLevel  = "TPP_DESKTOP_LOG"
 )
 
+// main exists only to turn start's exit code into a process exit.
+//
+// The split is not ceremony: os.Exit does not run deferred functions, so an
+// os.Exit inside the body would skip closing the log — on precisely the path
+// where the service failed to start and the log is the only account of why.
 func main() {
+	os.Exit(start())
+}
+
+// start runs the service and reports the process's exit code, with every
+// deferred cleanup guaranteed to have run by the time it returns.
+func start() int {
 	logger, closeLog := newLogger(os.Getenv(envConfigDir))
 	defer closeLog()
 	slog.SetDefault(logger)
 
 	if err := run(logger); err != nil {
 		logger.Error("the service stopped", "error", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 func run(logger *slog.Logger) error {
