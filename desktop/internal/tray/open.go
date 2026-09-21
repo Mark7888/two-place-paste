@@ -32,6 +32,10 @@ func launch(ctx context.Context, target string) error {
 	default:
 		cmd = exec.CommandContext(ctx, "xdg-open", target)
 	}
+	// On Windows the service has no console of its own, so a child process
+	// would be given one — a black window blinking on screen every time the UI
+	// is opened. Everywhere else this is nil.
+	cmd.SysProcAttr = hideWindow()
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("tray: open %s: %w", kindOf(target), err)
 	}

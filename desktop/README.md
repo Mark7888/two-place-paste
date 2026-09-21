@@ -63,3 +63,28 @@ Anything in the user's browser can reach `127.0.0.1`, so:
 
 Secrets are the keystore's, not this module's: the device private key and the group
 key never reach the settings file or a log.
+
+## Windows has no console, so there is a log file
+
+The Windows build is linked with `-H=windowsgui`. Without it the binary is a
+console application and Windows opens a black console window behind the tray
+icon for as long as the service runs.
+
+A GUI-subsystem process has no usable stderr, so the service writes
+`tppdesktop.log` beside its settings file and mirrors it to stderr where stderr
+works. The file is truncated at start-up once it passes 2 MiB: it exists to
+explain the launch that just failed, not to be an archive. It carries the same
+lines stderr would, which means no clipboard content and no key material.
+
+On macOS the shipped artefact is `TwoPlacePaste.app`, whose `Info.plist` sets
+`LSUIElement`, so there is no Dock icon and no window. Running the bare
+`tppdesktop` binary from a shell will of course keep that shell — that is the
+shell you started it from, not something the service opened.
+
+## The browser opens once, not every launch
+
+Startup opens the UI **only when this device is not in a group yet**, because
+that is the one state where nothing works until the user does something and the
+UI is the only place to do it. A paired device starts quietly into the tray: it
+is a background service, and one that throws a browser tab at you on every
+login is one you turn off. The tray's "Open UI" is how you reach it after that.

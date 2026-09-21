@@ -77,12 +77,21 @@ jobs:
         shell: bash
         run: test -f desktop/internal/localui/dist/index.html
 
+      # -H=windowsgui on Windows, and only there: without it the linker marks
+      # the binary as a console application and Windows opens a black console
+      # window behind the tray icon for as long as the service runs. A GUI
+      # subsystem process has no usable stderr, which is why the service also
+      # logs to a file beside its settings (cmd/tppdesktop: newLogger).
       - name: Build the binary
         working-directory: desktop
         shell: bash
         run: |
           mkdir -p ../dist
-          go build -trimpath -ldflags "-s -w" -o "../dist/tppdesktop${{ runner.os == 'Windows' && '.exe' || '' }}" ./cmd/tppdesktop
+          LDFLAGS="-s -w"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            LDFLAGS="$LDFLAGS -H=windowsgui"
+          fi
+          go build -trimpath -ldflags "$LDFLAGS" -o "../dist/tppdesktop${{ runner.os == 'Windows' && '.exe' || '' }}" ./cmd/tppdesktop
 
       # ----------------------------------------------------------------- macOS
       - name: Build the .app

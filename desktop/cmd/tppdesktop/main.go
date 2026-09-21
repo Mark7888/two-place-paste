@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -37,7 +38,8 @@ const (
 )
 
 func main() {
-	logger := newLogger()
+	logger, closeLog := newLogger(os.Getenv(envConfigDir))
+	defer closeLog()
 	slog.SetDefault(logger)
 
 	if err := run(logger); err != nil {
@@ -138,11 +140,15 @@ func run(logger *slog.Logger) error {
 			logger.Warn("could not connect to the relay yet", "error", err)
 		}
 	} else {
-		logger.Info("this device is not in a group yet; create one or pair from the UI")
-	}
-
-	if err := openUI(runCtx, srv.URL(), logger); err != nil {
-		logger.Warn("could not open the browser", "error", err)
+		// Nothing works until this device is in a group, and the only place to
+		// fix that is the UI — so this is the one launch that opens it. A
+		// paired device starts quietly into the tray instead: it is a
+		// background service, and a service that throws a browser tab at the
+		// user on every login is one they turn off.
+		logger.Info("this device is not in a group yet; opening the UI to pair or create one")
+		if err := openUI(runCtx, srv.URL(), logger); err != nil {
+			logger.Warn("could not open the browser", "error", err)
+		}
 	}
 
 	// The tray owns the main goroutine: the macOS menu bar is only addressable
@@ -165,7 +171,7 @@ func run(logger *slog.Logger) error {
 	return nil
 }
 
-// openUI opens the app on first launch. The URL carries the launch token and
+// openUI opens the app in the browser. The URL carries the launch token and
 // is therefore never logged.
 func openUI(ctx context.Context, url string, logger *slog.Logger) error {
 	logger.Info("opening the app in the default browser")
@@ -183,10 +189,70 @@ func defaultDeviceName() string {
 	return host
 }
 
-func newLogger() *slog.Logger {
+// maxLogBytes caps the log file. It is truncated at start-up rather than
+// rotated: this is a desktop service whose log exists to explain the launch
+// that just failed, and a rotation scheme is a feature to maintain.
+const maxLogBytes = 2 << 20
+
+// logFileName is the log beside the settings file.
+const logFileName = "tppdesktop.log"
+
+// newLogger builds the logger and returns a function that closes it.
+//
+// It writes to a file as well as to stderr, and the file is the part that
+// matters: the Windows build is linked with -H=windowsgui so that it does not
+// drag a console window onto the user's desktop, and a process with no console
+// has no usable stderr. Without a file, every diagnostic this service produces
+// on the platform where it most needs one would go nowhere.
+func newLogger(configDir string) (*slog.Logger, func()) {
 	level := slog.LevelInfo
 	if err := level.UnmarshalText([]byte(os.Getenv(envLogLevel))); err != nil {
 		level = slog.LevelInfo
 	}
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+
+	file, err := openLogFile(configDir)
+	if err != nil || file == nil {
+		// No log file is a degraded state, not a fatal one: the service still
+		// runs and the tray still reports what it can.
+		return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})), func() {}
+	}
+	handler := slog.NewTextHandler(tee{file}, &slog.HandlerOptions{Level: level})
+	return slog.New(handler), func() { _ = file.Close() }
+}
+
+func openLogFile(configDir string) (*os.File, error) {
+	settingsPath, err := config.Path(configDir)
+	if err != nil {
+		return nil, fmt.Errorf("locate the log directory: %w", err)
+	}
+	dir := filepath.Dir(settingsPath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("create the log directory: %w", err)
+	}
+	path := filepath.Join(dir, logFileName)
+
+	flags := os.O_CREATE | os.O_WRONLY | os.O_APPEND
+	if info, statErr := os.Stat(path); statErr == nil && info.Size() > maxLogBytes {
+		flags = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	}
+	file, err := os.OpenFile(path, flags, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open the log file: %w", err)
+	}
+	return file, nil
+}
+
+// tee writes to the log file and to stderr, and never fails.
+//
+// stderr is deliberately best-effort: under -H=windowsgui it is an invalid
+// handle and every write to it errors. An io.MultiWriter would stop at that
+// first error and the file — the whole point of this — would stay empty.
+type tee struct{ file *os.File }
+
+func (t tee) Write(p []byte) (int, error) {
+	if _, err := t.file.Write(p); err != nil {
+		return 0, fmt.Errorf("write the log file: %w", err)
+	}
+	_, _ = os.Stderr.Write(p)
+	return len(p), nil
 }
