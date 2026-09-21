@@ -688,7 +688,13 @@ func (s *Service) StartOffer(ctx context.Context, serverURL string) (localui.Off
 	s.replaceOffer(offer, stop)
 	go s.awaitOffer(waitCtx, offer)
 
-	return localui.OfferView{Code: offer.Code(), ExpiresAt: offer.ExpiresAt()}, nil
+	// The relay URL is the one the user just typed: a device with no group has
+	// no other way to know it, which is also why the offer carries it.
+	return localui.OfferView{
+		Code:      offer.Code(),
+		Link:      tppclient.PairingLink(strings.TrimSpace(serverURL), offer.Code()),
+		ExpiresAt: offer.ExpiresAt(),
+	}, nil
 }
 
 // CancelOffer implements localui.API. Withdrawing a code the user is no longer
@@ -818,7 +824,14 @@ func (s *Service) StartPairing(ctx context.Context) (localui.Invite, error) {
 	if err != nil {
 		return localui.Invite{}, s.relayError("start pairing", err)
 	}
-	return localui.Invite{Payload: inv.Payload, ExpiresAt: inv.ExpiresAt}, nil
+	// The link is built here rather than in the client core because only this
+	// side knows which relay this device is talking to, and a self-hosted
+	// deployment has no other name for it.
+	return localui.Invite{
+		Payload:   inv.Payload,
+		Link:      tppclient.PairingLink(relay.State().ServerURL, inv.Payload),
+		ExpiresAt: inv.ExpiresAt,
+	}, nil
 }
 
 // JoinPairing implements localui.API.

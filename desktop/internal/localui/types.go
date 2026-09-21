@@ -173,11 +173,19 @@ type RevokePlan struct {
 	ExpiresAt time.Time    `json:"expires_at"`
 }
 
-// Invite is a pairing invitation to show (SPEC §3.2 step 1). The payload is
-// both the QR contents and the copyable token: pairing is symmetric, and a
-// phone must be able to read what a desktop shows.
+// Invite is a pairing invitation to show (SPEC §3.2 step 1). Pairing is
+// symmetric, and a phone must be able to read what a desktop shows.
 type Invite struct {
-	Payload   string    `json:"payload"`
+	// Payload is the bare code. It stays in the response because anything that
+	// can already read one must keep working.
+	Payload string `json:"payload"`
+
+	// Link is what the QR carries and what the copy button copies: the same
+	// code wrapped in a link to this group's relay (SPEC §6a). A bare
+	// base64url string is unreadable to a general-purpose scanner — Google
+	// Lens shows it as text and offers nothing to open.
+	Link string `json:"link"`
+
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
@@ -186,7 +194,9 @@ type Invite struct {
 // the QR contents and the copyable string: one string, whichever form the
 // accepting device can read.
 type OfferView struct {
+	// Code is the bare code; Link wraps it for a scanner, as with Invite.
 	Code      string    `json:"code"`
+	Link      string    `json:"link"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
 

@@ -115,12 +115,32 @@ jobs:
         env:
           MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
 
+      # Zipped here rather than by upload-artifact, which uploads a directory's
+      # *contents* and so loses the .app wrapper: what came down was a folder
+      # of Contents/… with no bundle to double-click, which is why the only
+      # runnable thing in it looked like a bare executable in MacOS/.
+      #
+      # `ditto -c -k --keepParent` is the tool Apple ships for this. `zip`
+      # would do it too, but ditto is the one that preserves the symlinks and
+      # the executable bits a bundle needs, and it is what notarisation
+      # expects later (ROADMAP P8).
+      - name: Zip the .app
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ditto -c -k --keepParent dist/TwoPlacePaste.app dist/TwoPlacePaste.zip
+          # Prove the wrapper survived, because this is exactly what broke.
+          unzip -l dist/TwoPlacePaste.zip | grep -q "TwoPlacePaste.app/Contents/MacOS/tppdesktop"
+
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
         with:
           name: tppdesktop-${{ matrix.name }}
           if-no-files-found: error
-          path: dist/TwoPlacePaste.app
+          # The zip, not the directory: an artifact upload of the .app itself
+          # arrives unwrapped.
+          path: dist/TwoPlacePaste.zip
 
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'

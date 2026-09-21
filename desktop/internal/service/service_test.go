@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -945,5 +946,37 @@ func TestEntryPreviewRefusesAStaleEntry(t *testing.T) {
 
 	if _, err := f.svc.EntryPreview(context.Background(), "e1"); err == nil {
 		t.Fatal("EntryPreview() of a stale entry = nil error, want a refusal")
+	}
+}
+
+// TestPairingCodesCarryALink is what the desktop was missing: it built the
+// codes but showed them bare, so a phone scanning a desktop's QR got a string
+// its camera app could only offer to copy (SPEC §6a).
+func TestPairingCodesCarryALink(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := context.Background()
+
+	inv, err := f.svc.StartPairing(ctx)
+	if err != nil {
+		t.Fatalf("StartPairing() error = %v", err)
+	}
+	if inv.Payload == "" {
+		t.Fatal("StartPairing() returned no payload")
+	}
+	// The bare code stays in the response: anything that can already read one
+	// has to keep working.
+	want := tppclient.PairingLink(f.relay.State().ServerURL, inv.Payload)
+	if inv.Link != want {
+		t.Errorf("StartPairing() link = %q, want %q", inv.Link, want)
+	}
+	if !strings.Contains(inv.Link, "#") {
+		t.Error("the link does not carry the code in a fragment, so the relay would receive it")
+	}
+	// And it unwraps back to exactly the code it wrapped, which is what makes
+	// the link safe to hand to a decoder on the other side.
+	if got := tppclient.StripCodeEnvelope(inv.Link); got != inv.Payload {
+		t.Errorf("StripCodeEnvelope(link) = %q, want the payload %q", got, inv.Payload)
 	}
 }

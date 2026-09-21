@@ -49,6 +49,27 @@ export function SetupScreen(): React.JSX.Element {
   // open is the relay's only route to a device with no identity.
   useEffect(() => () => offer?.cancel(), [offer]);
 
+  // A code that arrived through a scanned link. An unpaired phone is exactly
+  // the device someone scans one on, so it is claimed here as well as on the
+  // pairing screen — whichever of the two is showing.
+  //
+  // It lives up here with the other hooks, and that placement is the point:
+  // this screen returns early to show the camera, and a hook written below
+  // that return vanishes on the render where the scanner opens — which is
+  // exactly the "rendered fewer hooks than expected" crash it caused.
+  const pendingCode = session.pendingCode;
+  useEffect(() => {
+    if (pendingCode === '') {
+      return;
+    }
+    const claimed = session.claimPendingCode();
+    if (claimed !== '') {
+      setTyped(claimed);
+      submit(claimed);
+    }
+    // Keyed on the arriving code alone: claiming it clears the trigger.
+  }, [pendingCode]);
+
   const show = () => {
     const client = session.client;
     if (client === null || busy || relayUrl.trim() === '') {
@@ -139,22 +160,6 @@ export function SetupScreen(): React.JSX.Element {
       </View>
     );
   }
-
-  // A code that arrived through a scanned link. An unpaired phone is exactly
-  // the device someone scans one on, so it is claimed here as well as on the
-  // pairing screen — whichever of the two is showing.
-  const pendingCode = session.pendingCode;
-  useEffect(() => {
-    if (pendingCode === '') {
-      return;
-    }
-    const claimed = session.claimPendingCode();
-    if (claimed !== '') {
-      setTyped(claimed);
-      submit(claimed);
-    }
-    // Keyed on the arriving code alone: claiming it clears the trigger.
-  }, [pendingCode]);
 
   return (
     <Screen>

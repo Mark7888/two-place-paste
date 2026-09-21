@@ -1,7 +1,9 @@
 // Flat config. The rules that matter here are the ones that catch what a
 // typecheck does not: a floating promise in a screen, an `any` that slipped in,
-// a console call that would put an error — and one day a key — into logcat.
+// a console call that would put an error — and one day a key — into logcat,
+// and a hook placed where React will not always reach it.
 import js from '@eslint/js';
+import reactHooks from 'eslint-plugin-react-hooks';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
@@ -26,7 +28,14 @@ export default tseslint.config(
         module: 'writable',
       },
     },
+    plugins: { 'react-hooks': reactHooks },
     rules: {
+      // The screens return early to show the camera, so a hook written below
+      // that return disappears on the render where the scanner opens. React
+      // calls that "rendered fewer hooks than expected" and unmounts the
+      // screen; nothing else in this toolchain catches it, because it is
+      // perfectly valid TypeScript.
+      'react-hooks/rules-of-hooks': 'error',
       // The log is part of the threat model (docs/conventions.md §2): this app
       // has no logger of its own, and console output on Android is logcat,
       // which every app on the device with the right tooling can read.

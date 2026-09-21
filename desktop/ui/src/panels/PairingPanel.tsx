@@ -122,6 +122,11 @@ function CopyButton({ value }: { value: string }) {
 
 // A QR code rendered on this machine, with the same string underneath it.
 // Whichever form the other device can read, it is reading one code.
+//
+// What it carries is the code wrapped in a link to this group's own relay
+// (SPEC §6a), not the bare code: a general-purpose scanner shows a base64url
+// string as text and offers nothing to open. The code is in the link's
+// fragment, so the relay never receives it.
 function Code({ value, expiresAt }: { value: string; expiresAt: string }) {
   const canvas = useRef<HTMLCanvasElement | null>(null);
 
@@ -169,7 +174,7 @@ function InvitePanel({ guard, setNotice }: { guard: Guard; setNotice: SetNotice 
           <Icon name="link" size={16} />
           {invite ? "New invitation" : "Show pairing code"}
         </button>
-        {invite ? <Code value={invite.payload} expiresAt={invite.expires_at} /> : null}
+        {invite ? <Code value={invite.link} expiresAt={invite.expires_at} /> : null}
       </div>
     </section>
   );
@@ -341,7 +346,7 @@ function ShowOfferPanel({
             </button>
           ) : null}
         </div>
-        {offer ? <Code value={offer.code} expiresAt={offer.expires_at} /> : null}
+        {offer ? <Code value={offer.link} expiresAt={offer.expires_at} /> : null}
         {offer ? (
           <p className="muted small">
             The other device will show this device&apos;s name and a fingerprint before it adds

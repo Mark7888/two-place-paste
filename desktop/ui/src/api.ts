@@ -108,7 +108,9 @@ export interface HistoryPage {
 }
 
 export interface Invite {
+  /** payload is the bare code; link is what a QR should carry (SPEC §6a). */
   payload: string;
+  link: string;
   expires_at: string;
 }
 
@@ -116,7 +118,9 @@ export interface Invite {
 // of some group to accept it. The code is both the QR contents and the
 // copyable string.
 export interface Offer {
+  /** code is the bare code; link is what a QR should carry (SPEC §6a). */
   code: string;
+  link: string;
   expires_at: string;
 }
 
