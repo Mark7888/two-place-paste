@@ -354,8 +354,6 @@ func encodeCode(code *tppv1.PairingCode) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
-// trimPayload tolerates what a user's clipboard adds: surrounding whitespace,
-// and the padding a strict base64 encoder elsewhere might have written.
 // PairPath is the path both link forms use, so one parser reads either.
 const PairPath = "/pair"
 
@@ -413,6 +411,8 @@ func StripCodeEnvelope(s string) string {
 	return trimmed
 }
 
+// trimPayload tolerates what a user's clipboard adds: surrounding whitespace,
+// and the padding a strict base64 encoder elsewhere might have written.
 func trimPayload(s string) string {
 	out := make([]byte, 0, len(s))
 	for i := range len(s) {
