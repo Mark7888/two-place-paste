@@ -1,9 +1,19 @@
 /** The controls every screen is built from. */
 
 import React from 'react';
-import { Modal, Pressable, Text, View } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Modal,
+  Pressable,
+  ScrollView,
+  Text,
+  View,
+} from 'react-native';
+
+import { clipboard } from '../platform';
 
 import { Icon, type IconName } from './icons';
+import { failureMessage } from './session';
 import { colors, styles, touchTarget } from './theme';
 
 export function Button({
@@ -231,5 +241,89 @@ export function Choice({
         <Text style={styles.choiceWhy}>{why}</Text>
       </View>
     </Pressable>
+  );
+}
+
+/**
+ * Screen is the scrolling body every screen with an input is built on.
+ *
+ * Android's `adjustResize` used to be all this needed: the window shrank and a
+ * ScrollView did the rest. Under the edge-to-edge this app is required to use
+ * (SDK 35+) the window no longer resizes, so the keyboard simply covers the
+ * bottom of the screen — which is where the Join and Create fields are. The
+ * KeyboardAvoidingView is what puts that back, and it is here rather than in
+ * each screen so no screen can forget it.
+ *
+ * `keyboardShouldPersistTaps="handled"` is the other half: without it the first
+ * tap on a button while the keyboard is up is swallowed by the dismiss, and the
+ * user has to press twice.
+ */
+export function Screen({
+  children,
+  extraBottom = 0,
+}: {
+  children: React.ReactNode;
+  /** extraBottom is room for anything drawn over the scroll, e.g. the tab bar. */
+  extraBottom?: number;
+}): React.JSX.Element {
+  // behavior="padding" on both platforms: with no window resize left to rely
+  // on, growing the content's own bottom inset is what actually moves it clear
+  // of the keyboard.
+  return (
+    <KeyboardAvoidingView style={styles.screen} behavior="padding">
+      <ScrollView
+        style={styles.screen}
+        contentContainerStyle={[styles.content, { paddingBottom: 32 + extraBottom }]}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+      >
+        {children}
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+/**
+ * CopyButton puts a string on the clipboard and says it did.
+ *
+ * What it copies is this app's own UI text — a pairing code being handed to
+ * another device — so it goes through the port's `writeText` rather than the
+ * entry path: nothing here is a clipboard entry and nothing travels to the
+ * group.
+ */
+export function CopyButton({
+  value,
+  label = 'Copy',
+  onResult,
+}: {
+  value: string;
+  label?: string;
+  onResult?: (message: string, ok: boolean) => void;
+}): React.JSX.Element {
+  const [done, setDone] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!done) {
+      return;
+    }
+    const id = setTimeout(() => setDone(false), 1800);
+    return () => clearTimeout(id);
+  }, [done]);
+
+  return (
+    <Button
+      label={done ? 'Copied' : label}
+      icon={done ? 'check' : undefined}
+      variant="secondary"
+      onPress={() => {
+        void clipboard
+          .writeText(value)
+          .then(() => {
+            setDone(true);
+            onResult?.('Copied. Paste it on the other device.', true);
+          })
+          .catch((err: unknown) => onResult?.(failureMessage(err), false));
+      }}
+    />
   );
 }

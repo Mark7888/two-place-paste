@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Pair a device — TwoPlacePaste</title>
+<link rel="stylesheet" href="/pair/style.css">
+<script src="/pair/app.js" defer></script>
+</head>
+<body>
+<main>
+  <h1>Pair a device</h1>
+
+  <div id="have-code" hidden>
+    <p>Open this code in TwoPlacePaste to finish pairing.</p>
+    <p><a class="cta" id="open" href="#">Open in TwoPlacePaste</a></p>
+    <p class="muted small">
+      If nothing happens, the app is not installed on this device — or copy the
+      code below and paste it into the app's pairing screen.
+    </p>
+    <div class="copy-row">
+      <code class="value" id="code"></code>
+      <button type="button" id="copy">Copy</button>
+    </div>
+    <p class="status" id="status" role="status" aria-live="polite"></p>
+  </div>
+
+  <div id="no-code" hidden>
+    <p>This link carries no pairing code.</p>
+    <p class="muted small">
+      A pairing link looks like <code>…/pair#&lt;code&gt;</code>. Scan the code
+      again from the device that is showing it, or paste the code straight into
+      the app.
+    </p>
+  </div>
+</main>
+<footer class="muted small">
+  The code is in this link's fragment, so it was never sent to this server. The
+  page you are reading was served without it, and this relay does not know it.
+</footer>
+</body>
+</html>

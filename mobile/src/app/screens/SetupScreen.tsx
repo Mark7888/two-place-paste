@@ -24,15 +24,15 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { PermissionsAndroid, Platform, ScrollView, Text, TextInput, View } from 'react-native';
+import { PermissionsAndroid, Platform, Text, TextInput, View } from 'react-native';
 import { Camera, CameraType } from 'react-native-camera-kit';
 import QRCode from 'react-native-qrcode-svg';
 
 import type { Offer } from '../../core';
-import { fingerprint } from '../../core';
+import { fingerprint, pairingLink } from '../../core';
 import { useSession } from '../SessionContext';
 import { enterGroup, failureMessage } from '../session';
-import { Button, Card, Status } from '../ui';
+import { Button, Card, CopyButton, Notice, Screen } from '../ui';
 import { colors, styles } from '../theme';
 
 export function SetupScreen(): React.JSX.Element {
@@ -140,8 +140,24 @@ export function SetupScreen(): React.JSX.Element {
     );
   }
 
+  // A code that arrived through a scanned link. An unpaired phone is exactly
+  // the device someone scans one on, so it is claimed here as well as on the
+  // pairing screen — whichever of the two is showing.
+  const pendingCode = session.pendingCode;
+  useEffect(() => {
+    if (pendingCode === '') {
+      return;
+    }
+    const claimed = session.claimPendingCode();
+    if (claimed !== '') {
+      setTyped(claimed);
+      submit(claimed);
+    }
+    // Keyed on the arriving code alone: claiming it clears the trigger.
+  }, [pendingCode]);
+
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <Screen>
       <Text style={styles.title}>TwoPlacePaste</Text>
       <Text style={styles.muted}>
         This device is not in a group yet. Its keypair has been generated and stays on this phone.
@@ -183,12 +199,25 @@ export function SetupScreen(): React.JSX.Element {
               {/*
                 Rendered on device by a bundled library: a code carrying an
                 offer must not travel to a remote QR service to be drawn.
+
+                It carries a link into the relay the user just named, not the
+                bare code: a general-purpose scanner shows a base64url string
+                as text and offers nothing to open. The code is in the
+                fragment, so that relay never receives it.
               */}
-              <QRCode value={offer.code} size={220} />
+              <QRCode value={pairingLink(relayUrl, offer.code)} size={220} />
             </View>
             <Text style={styles.mono} selectable>
-              {offer.code}
+              {pairingLink(relayUrl, offer.code)}
             </Text>
+            <CopyButton
+              value={pairingLink(relayUrl, offer.code)}
+              label="Copy the code"
+              onResult={(text, good) => {
+                setOk(good);
+                setMessage(text);
+              }}
+            />
             <Text style={styles.muted}>
               Valid until {offer.expiresAt.toLocaleTimeString()} · single use
             </Text>
@@ -243,7 +272,7 @@ export function SetupScreen(): React.JSX.Element {
         />
       </Card>
 
-      <Status message={message} ok={ok} />
-    </ScrollView>
+      {message !== '' && <Notice message={message} tone={ok ? 'ok' : 'error'} />}
+    </Screen>
   );
 }

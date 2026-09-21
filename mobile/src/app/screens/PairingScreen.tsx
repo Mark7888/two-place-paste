@@ -29,16 +29,16 @@
  * would have to mean "leave the group" in disguise.
  */
 
-import React, { useState } from 'react';
-import { Linking, PermissionsAndroid, Platform, ScrollView, Text, TextInput, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Linking, PermissionsAndroid, Platform, Text, TextInput, View } from 'react-native';
 import { Camera, CameraType } from 'react-native-camera-kit';
 import QRCode from 'react-native-qrcode-svg';
 
 import type { Invitation, OfferAcceptance } from '../../core';
-import { classifyCode } from '../../core';
+import { classifyCode, pairingLink } from '../../core';
 import { useSession } from '../SessionContext';
 import { failureMessage } from '../session';
-import { Button, Card, Status } from '../ui';
+import { Button, Card, CopyButton, Notice, Screen } from '../ui';
 import { colors, styles } from '../theme';
 
 export function PairingScreen(): React.JSX.Element {
@@ -78,6 +78,32 @@ export function PairingScreen(): React.JSX.Element {
       }
     })();
   };
+
+  /**
+   * link wraps a code in the link the QR carries: this group's own relay,
+   * with the code in the fragment. Built here rather than in the core's
+   * `startPairing` because only the screen knows which relay this device is
+   * talking to, and a self-hosted deployment has no other name for it.
+   */
+  const link = (code: string) => pairingLink(session.client?.serverUrl ?? '', code);
+
+  // A code that arrived through a scanned link lands in the session store; the
+  // pairing screen is where it belongs, so it is claimed here. It is only ever
+  // *read*, never acted on: admitting a device hands over the group key, so
+  // the confirmation below is the only way in (SPEC §3.2).
+  const pendingCode = session.pendingCode;
+  useEffect(() => {
+    if (pendingCode === '') {
+      return;
+    }
+    const claimed = session.claimPendingCode();
+    if (claimed !== '') {
+      setTyped(claimed);
+      read(claimed);
+    }
+    // Keyed on the arriving code alone: claiming it clears the trigger, so
+    // this runs once per link rather than once per render.
+  }, [pendingCode]);
 
   // read decodes a code and stops. Nothing is wrapped and no device is
   // admitted here: that is `admit`, below, and it only exists once this has
@@ -170,7 +196,7 @@ export function PairingScreen(): React.JSX.Element {
   }
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <Screen>
       <Text style={styles.title}>Pairing</Text>
 
       <Card title="Add a device to this group">
@@ -187,15 +213,30 @@ export function PairingScreen(): React.JSX.Element {
           <View style={{ alignItems: 'center', gap: 10 }}>
             <View style={{ backgroundColor: '#ffffff', padding: 12, borderRadius: 8 }}>
               {/*
-                Rendered on device by a bundled library: a payload carrying a
+                Rendered on device by a bundled library: a code carrying a
                 pairing token must not travel to a remote QR service to be
                 drawn.
+
+                What it carries is a link into this group's own relay, not the
+                bare code. A general-purpose scanner — Google Lens, a camera
+                app — shows a bare base64url string as text and offers nothing
+                to open; as a link it is something to tap, and the relay's page
+                hands it back to this app. The code is in the fragment, so the
+                relay never receives it.
               */}
-              <QRCode value={invitation.payload} size={220} />
+              <QRCode value={link(invitation.payload)} size={220} />
             </View>
             <Text style={styles.mono} selectable>
-              {invitation.payload}
+              {link(invitation.payload)}
             </Text>
+            <CopyButton
+              value={link(invitation.payload)}
+              label="Copy the code"
+              onResult={(text, good) => {
+                setOk(good);
+                setMessage(text);
+              }}
+            />
             <Text style={styles.muted}>
               Valid until {invitation.expiresAt.toLocaleTimeString()} · single use
             </Text>
@@ -257,7 +298,7 @@ export function PairingScreen(): React.JSX.Element {
         </Card>
       )}
 
-      <Status message={message} ok={ok} />
+      {message !== '' && <Notice message={message} tone={ok ? 'ok' : 'error'} />}
 
       <Card title="Moving this device to another group">
         <Text style={styles.muted}>
@@ -282,6 +323,6 @@ export function PairingScreen(): React.JSX.Element {
           }}
         />
       </Card>
-    </ScrollView>
+    </Screen>
   );
 }

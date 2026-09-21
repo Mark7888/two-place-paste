@@ -10,13 +10,13 @@
  */
 
 import React, { useState } from 'react';
-import { Alert, ScrollView, Text, View } from 'react-native';
+import { Alert, Text, View } from 'react-native';
 
 import { publicKey, toHex } from '../../core';
 import { tile } from '../../platform';
 import { useSession } from '../SessionContext';
 import { failureMessage } from '../session';
-import { Button, Notice, Section } from '../ui';
+import { Button, Notice, Screen, Section } from '../ui';
 import { styles } from '../theme';
 
 export function SettingsScreen(): React.JSX.Element {
@@ -51,7 +51,7 @@ export function SettingsScreen(): React.JSX.Element {
   };
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <Screen>
       <Text style={styles.title}>Settings</Text>
 
       <Section title="This device">
@@ -95,7 +95,7 @@ export function SettingsScreen(): React.JSX.Element {
       </Section>
 
       {message !== '' && <Notice message={message} tone="error" />}
-    </ScrollView>
+    </Screen>
   );
 }
 

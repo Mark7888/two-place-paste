@@ -380,6 +380,42 @@ remains an open design question — see §9.
 
 ---
 
+## 6a. Pairing links
+
+A pairing code is a base64url string. Shown as a QR code it is readable only by
+this system's own clients: a general-purpose scanner — Google Lens, a phone
+camera — renders it as text to copy and offers nothing to open.
+
+Clients therefore show the code **wrapped in a link to the relay the code
+already names**:
+
+```
+https://<that group's relay>/pair#<code>
+tpp://pair#<code>            (the same code, straight into the Android app)
+```
+
+Three properties, each load-bearing:
+
+- **The code is in the fragment.** A browser never sends a fragment, so the
+  relay hosting the link does not receive the code its own page hands over, and
+  it reaches no access log, proxy log or `Referer`.
+- **No domain is pinned anywhere.** The host comes from the payload at run
+  time, because every deployment is somebody's own relay. The Android
+  intent-filter matches `tpp://pair` — a scheme, not a host. An `https`
+  intent-filter is not usable here at all: Android honours `pathPrefix` only
+  alongside a concrete `host`, so a host-less one would register the app as a
+  handler for every web link on the device.
+- **Every form still decodes.** Both clients strip the envelope before
+  decoding, so a bare code, an `https` link, a `tpp://` link and any of those
+  with whitespace around them are one input. A code from a build that predates
+  this is still read, and a code this build shows is still pasteable into one.
+
+The relay serves `GET /pair`: a static page that reads the fragment client-side
+and offers "Open in TwoPlacePaste", plus the bare code to copy for anyone
+without the app.
+
+---
+
 ## 7. Clients
 
 ### 7.1 Android
@@ -407,7 +443,7 @@ tap is answered whether or not the app is mounted, and never by a second client.
 - History tab, listed when the tab is opened; tap an entry to preview it — text
   and images, at the current epoch only — and copy it locally from there
 - Device management: list group devices, revoke (with the confirmation from §3.3)
-- Pairing: show QR, scan QR, paste token
+- Pairing: show QR, scan QR, paste code, copy the code to the clipboard
 
 Auto-sync is deferred and may prove infeasible on Android; if so, it is dropped rather
 than worked around.

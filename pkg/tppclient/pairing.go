@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -313,7 +314,7 @@ func EncodePairingOffer(o *tppv1.PairingOffer) (string, error) {
 //     reading produced nothing usable, so there is nothing to be ambiguous
 //     with.
 func DecodeCode(s string) (*tppv1.PairingCode, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(trimPayload(s))
+	raw, err := base64.RawURLEncoding.DecodeString(trimPayload(StripCodeEnvelope(s)))
 	if err != nil {
 		return nil, fmt.Errorf("tppclient: the pairing code is not valid base64url")
 	}
@@ -355,6 +356,63 @@ func encodeCode(code *tppv1.PairingCode) (string, error) {
 
 // trimPayload tolerates what a user's clipboard adds: surrounding whitespace,
 // and the padding a strict base64 encoder elsewhere might have written.
+// PairPath is the path both link forms use, so one parser reads either.
+const PairPath = "/pair"
+
+// AppScheme is the scheme the mobile app registers for itself.
+const AppScheme = "tpp"
+
+// AppLinkPrefix is the app's own link, up to the fragment.
+//
+// "tpp://pair#…" and not "tpp:/pair#…": Android matches an intent filter's
+// path only when a host is also given, so the part identifying this link has
+// to be the authority.
+const AppLinkPrefix = AppScheme + "://pair"
+
+// PairingLink wraps a code in the link a QR code should carry.
+//
+// A bare base64url string is unreadable to a general-purpose scanner: Google
+// Lens shows it as text to copy and nothing more. Wrapped in the relay's own
+// https origin it becomes a link the scanner offers to open, and the relay
+// serves a page that hands it to the app.
+//
+// The code goes in the fragment, which is the whole reason to use one: a
+// fragment is never sent to the server. The relay hosting the link therefore
+// never sees the pairing code its own page is handing over, and it reaches no
+// access log, proxy log or Referer.
+//
+// The host is the user's own relay, taken from the payload at run time.
+// Nothing here is pinned to a domain, because everyone runs their own.
+func PairingLink(serverURL, code string) string {
+	base := strings.TrimRight(strings.TrimSpace(serverURL), "/")
+	if base == "" {
+		// With no relay to point at, the app's own scheme is the only link
+		// left.
+		return AppLink(code)
+	}
+	return base + PairPath + "#" + code
+}
+
+// AppLink is the same code as a link straight into the mobile app.
+func AppLink(code string) string { return AppLinkPrefix + "#" + code }
+
+// StripCodeEnvelope returns the code inside a link, or the text unchanged when
+// it is already bare.
+//
+// DecodeCode funnels through this, so every form a user can arrive with is
+// read the same way: the bare code, an https link from a QR, the app's own
+// tpp: link, and any of those with whitespace around them from a chat app.
+//
+// The rule is "everything after the last #", which is what a fragment is. A
+// creation URL carries no fragment and passes through untouched.
+func StripCodeEnvelope(s string) string {
+	trimmed := strings.TrimSpace(s)
+	if i := strings.LastIndex(trimmed, "#"); i >= 0 {
+		return strings.TrimSpace(trimmed[i+1:])
+	}
+	return trimmed
+}
+
 func trimPayload(s string) string {
 	out := make([]byte, 0, len(s))
 	for i := range len(s) {

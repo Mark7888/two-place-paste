@@ -87,6 +87,9 @@ class SyncOverlayActivity : ReactActivity() {
         @Volatile
         private var current: SyncOverlayActivity? = null
 
+        /** isShowing reports whether a panel is on screen right now. */
+        fun isShowing(): Boolean = current != null
+
         /** close dismisses the panel, if one is showing. It is safe to call when none is. */
         fun close() {
             val activity = current ?: return

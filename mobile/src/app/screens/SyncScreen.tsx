@@ -9,11 +9,11 @@
  */
 
 import React, { useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 
 import { useSession } from '../SessionContext';
 import { download, failureMessage, sync, upload } from '../session';
-import { Button, Choice, Notice, Section, Sheet, Status } from '../ui';
+import { Button, Choice, Notice, Screen, Section, Sheet, Status } from '../ui';
 import { colors, styles } from '../theme';
 
 export function SyncScreen(): React.JSX.Element {
@@ -59,7 +59,7 @@ export function SyncScreen(): React.JSX.Element {
 
   return (
     <>
-      <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+      <Screen>
         <Text style={styles.title}>Sync</Text>
         <Text style={styles.lede}>
           {session.connected
@@ -92,7 +92,19 @@ export function SyncScreen(): React.JSX.Element {
           />
         </Section>
 
+        {/*
+          Three sources, one place. `message` is this screen's own last action;
+          `session.error` is a failure from elsewhere — a tile tap whose panel
+          has since closed — which would otherwise have existed only as a toast
+          nobody was looking at; `session.notice` is what merely happened.
+        */}
         {message !== '' && <Notice message={message} tone={ok ? 'ok' : 'error'} />}
+        {session.error !== '' && (
+          <View style={{ gap: 8 }}>
+            <Notice message={session.error} tone="error" />
+            <Button label="Dismiss" variant="secondary" onPress={() => session.clearError()} />
+          </View>
+        )}
         <Status message={session.notice} />
 
         {session.probablyRevoked && (
@@ -103,7 +115,7 @@ export function SyncScreen(): React.JSX.Element {
             </Text>
           </Section>
         )}
-      </ScrollView>
+      </Screen>
 
       <Sheet
         visible={asking}

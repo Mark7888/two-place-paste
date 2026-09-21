@@ -1,0 +1,91 @@
+/* The pairing hand-off page. One stylesheet, no build step, no framework —
+   the same rule the admin screen follows. It is deliberately not /admin's
+   stylesheet: this page is public and must not depend on an operator surface. */
+:root {
+  color-scheme: light dark;
+  --bg: #f4f5f7;
+  --fg: #16181d;
+  --muted: #61656f;
+  --line: #d8dae1;
+  --card: #fff;
+  --card-sunken: #f7f8fa;
+  --accent: #2f5fd0;
+  --accent-fg: #fff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131417;
+    --fg: #ececeb;
+    --muted: #9a9aa0;
+    --line: #34353c;
+    --card: #1b1d21;
+    --card-sunken: #202329;
+    --accent: #7fa4f5;
+    --accent-fg: #101216;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+  padding: 2rem 1rem;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+main { width: min(26rem, 100%); }
+
+h1 { font-size: 1.4rem; margin: 0 0 1rem; text-align: center; }
+p { margin: 0 0 1rem; }
+.muted { color: var(--muted); }
+.small { font-size: 0.85rem; }
+footer { width: min(26rem, 100%); text-align: center; margin: 0; }
+
+.cta {
+  display: block;
+  padding: 0.85rem 1rem;
+  text-align: center;
+  font-weight: 650;
+  text-decoration: none;
+  color: var(--accent-fg);
+  background: var(--accent);
+  border-radius: 10px;
+}
+
+.copy-row { display: flex; gap: 0.4rem; align-items: stretch; }
+
+.copy-row .value {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.5rem 0.6rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  background: var(--card-sunken);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.copy-row button {
+  flex: none;
+  padding: 0 0.9rem;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--fg);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.status { min-height: 1.3em; margin: 0.5rem 0 0; font-size: 0.85rem; color: var(--muted); }

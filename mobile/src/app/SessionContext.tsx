@@ -13,10 +13,13 @@ import React, { createContext, useContext, useMemo, useSyncExternalStore } from 
 import type { Client } from '../core';
 import {
   answerDirection,
+  claimPendingCode,
+  clearError,
   forget,
   getSnapshot,
   init,
   refresh,
+  setError,
   setNotice,
   subscribe,
   type DirectionChoice,
@@ -39,6 +42,14 @@ export interface SessionState {
   syncing: boolean;
   /** question is a sync waiting on the user to pick a direction. */
   question: Question | null;
+  /** error is the last failure, for a screen to render and then clear. */
+  error: string;
+  /** pendingCode is a pairing code that arrived through a scanned link. */
+  pendingCode: string;
+  setError(message: string): void;
+  clearError(): void;
+  /** claimPendingCode hands the deep-linked code to exactly one screen. */
+  claimPendingCode(): string;
   /** answer resolves that question. Dismissing is an answer: nothing is synced. */
   answer(id: number, choice: DirectionChoice | null): void;
   /** refresh re-reads the client's own state after a flow changed it. */
@@ -80,7 +91,12 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
       probablyRevoked: snapshot.probablyRevoked,
       syncing: snapshot.syncing,
       question: snapshot.question,
+      error: snapshot.error,
+      pendingCode: snapshot.pendingCode,
       answer: answerDirection,
+      setError,
+      clearError,
+      claimPendingCode,
       refresh,
       setNotice,
       forget,

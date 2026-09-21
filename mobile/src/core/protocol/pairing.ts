@@ -49,6 +49,70 @@ export function encodePairingOffer(offer: PairingOffer): string {
   return toBase64URL(PairingCode.encode({ offer }).finish());
 }
 
+/** PAIR_PATH is the path the https link uses. */
+export const PAIR_PATH = '/pair';
+
+/**
+ * APP_LINK_PREFIX is the app's own link, up to the fragment.
+ *
+ * `tpp://pair#…` and not `tpp:/pair#…`: Android matches an intent filter's
+ * path only when a host is also given, so the part that identifies this link
+ * has to be the authority.
+ */
+export const APP_LINK_PREFIX = 'tpp://pair';
+
+/** APP_SCHEME is the scheme Android registers for this app. */
+export const APP_SCHEME = 'tpp';
+
+/**
+ * pairingLink wraps a code in the link a QR code should carry.
+ *
+ * A bare base64url string is unreadable to a general-purpose scanner: Google
+ * Lens shows it as text you can copy and nothing more. Wrapped in the relay's
+ * own https origin it becomes a link the scanner offers to open, and the relay
+ * serves a page that hands it to this app.
+ *
+ * The code goes in the **fragment**, which is the whole point of choosing one:
+ * a fragment is never sent to the server. The relay hosting the link therefore
+ * never sees the pairing code its own page is handing over, and it does not
+ * appear in an access log, a proxy log or a `Referer` — the same reason the
+ * admin screen keeps creation URLs out of a redirect (SPEC §3.2).
+ *
+ * The host is the user's own relay, taken from the payload at runtime. Nothing
+ * here is pinned to a domain, because everyone runs their own.
+ */
+export function pairingLink(serverURL: string, code: string): string {
+  const base = serverURL.trim().replace(/\/+$/, '');
+  if (base === '') {
+    // With no relay to point at, the app's own scheme is the only link left.
+    return appLink(code);
+  }
+  return `${base}${PAIR_PATH}#${code}`;
+}
+
+/** appLink is the same code as a link straight into this app. */
+export function appLink(code: string): string {
+  return `${APP_LINK_PREFIX}#${code}`;
+}
+
+/**
+ * stripCodeEnvelope returns the code inside a link, or the text unchanged when
+ * it is already bare.
+ *
+ * Every decoder funnels through this, so all four forms a user can arrive with
+ * are read the same way: the bare code, an https link from a QR, the app's own
+ * tpp: link, and any of those with whitespace around it from a chat app.
+ *
+ * The rule is "everything after the last #", which is what a fragment is. A
+ * creation URL has no fragment and passes through untouched, which is what
+ * keeps classifyCode's ordering honest.
+ */
+export function stripCodeEnvelope(text: string): string {
+  const trimmed = text.trim();
+  const hash = trimmed.lastIndexOf('#');
+  return hash < 0 ? trimmed : trimmed.slice(hash + 1).trim();
+}
+
 /**
  * decodePairingOffer parses a scanned or pasted offer, and rejects an
  * invitation rather than half-understanding it.
@@ -82,7 +146,7 @@ export function decodePairingOffer(text: string): PairingOffer {
 export function decodePairingCode(text: string): PairingCode {
   let raw: Uint8Array;
   try {
-    raw = fromBase64URL(text);
+    raw = fromBase64URL(stripCodeEnvelope(text));
   } catch (cause) {
     throw new TppError('invalid', 'the pairing code is not valid base64url', { cause });
   }

@@ -30,6 +30,17 @@ export interface ClipboardPort {
 
   /** write puts an item on the clipboard, or reports why it could not. */
   write(item: ClipboardItem): Promise<void>;
+
+  /**
+   * writeText puts a plain string on the clipboard.
+   *
+   * It is separate from `write` because what it carries is not an entry: a
+   * pairing code the user is handing to another device is this app's own UI
+   * text, not something that came from or is going to the group. Keeping the
+   * two apart is what stops a "copy this code" button from looking like a
+   * clipboard entry to anything that inspects the write path.
+   */
+  writeText(text: string): Promise<void>;
 }
 
 /** SecureStorePort is where the device private key and the group key live at rest (spec/crypto.md §10). */

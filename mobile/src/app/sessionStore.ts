@@ -23,10 +23,11 @@
  * `question`, and waits. Whichever surface is on screen renders it.
  */
 
-import { AppState, type AppStateStatus } from 'react-native';
+import { AppState, Linking, type AppStateStatus } from 'react-native';
 
 import type { Client } from '../core';
 import { tile } from '../platform';
+import { stripCodeEnvelope } from '../core';
 import { download, failureMessage, openSession, sync, upload } from './session';
 
 /** DirectionChoice is what the user answers a pending question with. */
@@ -59,6 +60,19 @@ export interface Snapshot {
   syncing: boolean;
   /** question is a direction the user has to choose before a sync can go on. */
   question: Question | null;
+  /**
+   * error is the last thing that went wrong, and is cleared when it has been
+   * shown. It is kept apart from `notice` because the two are not the same
+   * kind of message: a notice is what happened, an error is what did not.
+   */
+  error: string;
+  /**
+   * pendingCode is a pairing code that arrived from outside the app — a
+   * scanned link opened through the tpp:// scheme. The pairing screen claims
+   * it; until one does, it waits rather than being dropped, because the app
+   * may still have been starting when the link arrived.
+   */
+  pendingCode: string;
 }
 
 type Listener = () => void;
@@ -69,6 +83,8 @@ let notice = '';
 let probablyRevoked = false;
 let syncing = false;
 let question: Question | null = null;
+let lastError = '';
+let pendingCode = '';
 let answer: ((choice: DirectionChoice | null) => void) | null = null;
 let nextQuestionId = 1;
 
@@ -88,6 +104,8 @@ let snapshot: Snapshot = {
   probablyRevoked: false,
   syncing: false,
   question: null,
+  error: '',
+  pendingCode: '',
 };
 
 function emit(): void {
@@ -101,6 +119,8 @@ function emit(): void {
     probablyRevoked,
     syncing,
     question,
+    error: lastError,
+    pendingCode,
   };
   for (const listener of listeners) {
     listener();
@@ -126,6 +146,33 @@ export function refresh(): void {
 export function setNotice(message: string): void {
   notice = message;
   emit();
+}
+
+/** setError records a failure for a screen to render. */
+export function setError(message: string): void {
+  lastError = message;
+  emit();
+}
+
+/** clearError drops an error the user has seen. */
+export function clearError(): void {
+  if (lastError !== '') {
+    lastError = '';
+    emit();
+  }
+}
+
+/**
+ * claimPendingCode hands a deep-linked pairing code to exactly one screen and
+ * clears it, so returning to that screen later does not re-run the pairing.
+ */
+export function claimPendingCode(): string {
+  const code = pendingCode;
+  pendingCode = '';
+  if (code !== '') {
+    emit();
+  }
+  return code;
 }
 
 /**
@@ -225,6 +272,42 @@ export function init(): void {
   // a listener attached after the client is ready would be attached after the
   // event it exists for.
   watchTile();
+  watchLinks();
+}
+
+/**
+ * watchLinks takes in pairing codes that arrive from outside the app.
+ *
+ * A QR code carries a link to the user's own relay; the page that link lands
+ * on hands the code back through this app's `tpp://` scheme. Both paths reach
+ * here — the cold start that the link caused (`getInitialURL`) and the link
+ * that arrives while the app is already up (the `url` event).
+ *
+ * The code is only ever *stored*. Nothing is paired from a link on its own:
+ * admitting a device hands over the group key, so the decision stays with the
+ * user on a screen that shows what they are agreeing to (SPEC §3.2).
+ */
+function watchLinks(): void {
+  const take = (url: string | null | undefined) => {
+    if (url === null || url === undefined || url === '') {
+      return;
+    }
+    const code = stripCodeEnvelope(url);
+    // A link with no fragment is not a code, and `stripCodeEnvelope` would
+    // hand back the whole URL. Nothing is stored in that case.
+    if (code === '' || code === url.trim()) {
+      return;
+    }
+    pendingCode = code;
+    emit();
+  };
+
+  Linking.addEventListener('url', (event) => take(event.url));
+  void Linking.getInitialURL()
+    .then(take)
+    .catch(() => {
+      // A platform that cannot answer simply has no link waiting.
+    });
 }
 
 /**
@@ -295,12 +378,21 @@ function runTileSync(): void {
 
   const finish = (ok: boolean, message: string) => {
     tile.report(ok, message);
-    notice = message;
+    if (ok) {
+      notice = message;
+      lastError = '';
+      emit();
+      // Nothing left to say: the panel is a window over whatever the user was
+      // doing, so it goes, and the tile's subtitle carries the outcome.
+      tile.closeOverlay();
+      return;
+    }
+    // A failure is not dismissed on the user's behalf. The panel stays up
+    // holding the reason, with a button to close it — a toast that vanishes in
+    // two seconds is how a sync silently not happening looks like a sync.
+    lastError = message;
+    notice = '';
     emit();
-    // The panel is a window over whatever the user was doing. It goes as soon
-    // as there is nothing left to say; the tile's own subtitle and the toast
-    // carry the outcome from here.
-    tile.closeOverlay();
   };
 
   void (async () => {

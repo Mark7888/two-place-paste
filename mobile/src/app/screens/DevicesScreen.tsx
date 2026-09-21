@@ -8,12 +8,12 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 
 import type { Device, Revocation } from '../../core';
 import { useSession } from '../SessionContext';
 import { failureMessage } from '../session';
-import { Button, Card, Notice, Sheet } from '../ui';
+import { Button, Card, Notice, Screen, Sheet } from '../ui';
 import { colors, styles } from '../theme';
 
 export function DevicesScreen(): React.JSX.Element {
@@ -97,7 +97,7 @@ export function DevicesScreen(): React.JSX.Element {
   };
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <Screen>
       <Text style={styles.title}>Devices</Text>
       <Text style={styles.lede}>
         Everything that holds this group’s key. Removing one re-keys the group, so the removed
@@ -172,6 +172,6 @@ export function DevicesScreen(): React.JSX.Element {
           </Text>
         </Card>
       )}
-    </ScrollView>
+    </Screen>
   );
 }

@@ -19,12 +19,13 @@ import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
 import { tile } from '../platform';
 import { SessionProvider, useSession } from './SessionContext';
-import { Choice, Notice } from './ui';
+import { Button, Choice, Notice } from './ui';
 import { colors, styles } from './theme';
 
 function Panel(): React.JSX.Element {
   const session = useSession();
   const question = session.question;
+  const error = session.error;
 
   const dismiss = () => {
     if (question !== null) {
@@ -32,6 +33,7 @@ function Panel(): React.JSX.Element {
       session.answer(question.id, null);
       return;
     }
+    session.clearError();
     tile.closeOverlay();
   };
 
@@ -63,14 +65,24 @@ function Panel(): React.JSX.Element {
               onPress={() => session.answer(question.id, 'down')}
             />
           </>
+        ) : error !== '' ? (
+          // A failure stays on screen. The store does not close the panel for
+          // an error, because a toast that disappears in two seconds is how a
+          // sync silently not happening comes to look like one that did — the
+          // user is told what went wrong and dismisses it themselves.
+          <>
+            <Text style={styles.sheetTitle}>That did not work</Text>
+            <Notice message={error} tone="error" />
+            <Button label="Close" variant="secondary" onPress={dismiss} />
+          </>
         ) : session.syncing || !session.ready ? (
           <View style={[styles.rowInline, { paddingVertical: 4 }]}>
             <ActivityIndicator color={colors.accent} />
             <Text style={[styles.text, { flex: 1 }]}>Syncing…</Text>
           </View>
         ) : (
-          // The store closes this window as soon as it has an outcome, so this
-          // is what the last frame before that looks like — and what the user
+          // The store closes this window as soon as it has a *successful*
+          // outcome, so this is the last frame before that — and what the user
           // sees if the close is ever slower than the render.
           <Notice message={session.notice === '' ? 'Done.' : session.notice} tone="ok" />
         )}

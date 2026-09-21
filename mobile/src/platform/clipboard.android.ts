@@ -43,6 +43,12 @@ const toStandardBase64 = (b: Uint8Array): string => {
 };
 
 export const clipboard: ClipboardPort = {
+  async writeText(text: string): Promise<void> {
+    // Plain text, straight through: no entry, no content type, nothing that
+    // travels to the group.
+    Clipboard.setString(text);
+  },
+
   async read(): Promise<ClipboardItem | null> {
     // Images first: a screenshot copied from another app puts a content URI on
     // the clipboard and an empty string on the text side, and reading the text

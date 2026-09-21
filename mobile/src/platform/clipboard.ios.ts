@@ -16,6 +16,12 @@ import type { ClipboardItem, ClipboardPort } from './types';
 const TEXT_CONTENT_TYPE = 'text/plain; charset=utf-8';
 
 export const clipboard: ClipboardPort = {
+  async writeText(text: string): Promise<void> {
+    // Plain text, straight through: no entry, no content type, nothing that
+    // travels to the group.
+    Clipboard.setString(text);
+  },
+
   async read(): Promise<ClipboardItem | null> {
     const text = await Clipboard.getString();
     if (text === '') {
