@@ -69,6 +69,11 @@ type Server struct {
 	maxHistoryLimit     int
 	originPatterns      []string
 	now                 func() time.Time
+
+	// afterPairingNotice runs once the join notice has been queued for the
+	// inviter. Only tests set it, to drive the inviter's reply at the exact
+	// point where the joiner used to be unroutable.
+	afterPairingNotice func()
 }
 
 // New returns a Server over the given store and entry service.
