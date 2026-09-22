@@ -17,6 +17,13 @@ type session struct {
 	id        string
 	csrf      string
 	expiresAt time.Time
+
+	// flash is the value of a token this session has just minted, waiting to
+	// be shown once by the next render. It lives here rather than in the
+	// redirect's query string because a creation URL is a credential, and a
+	// credential in a URL is a credential in the browser's history and in
+	// every access log on the way (SPEC §3.1).
+	flash string
 }
 
 // sessionStore keeps sessions in memory. A restart logs every admin out, which
@@ -72,6 +79,34 @@ func (s *sessionStore) get(id string) (session, bool) {
 		return session{}, false
 	}
 	return sess, true
+}
+
+// flash records a value for the next render of this session to show once.
+// Setting it replaces whatever was there: only the most recent mint matters.
+func (s *sessionStore) flash(id, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.byID[id]
+	if !ok {
+		return
+	}
+	sess.flash = value
+	s.byID[id] = sess
+}
+
+// takeFlash returns the session's pending flash and clears it, so a reload
+// shows nothing. It returns "" when there is none.
+func (s *sessionStore) takeFlash(id string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.byID[id]
+	if !ok || sess.flash == "" {
+		return ""
+	}
+	value := sess.flash
+	sess.flash = ""
+	s.byID[id] = sess
+	return value
 }
 
 // destroy removes a session; logging out must not depend on the cookie

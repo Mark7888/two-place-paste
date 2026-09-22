@@ -1,8 +1,19 @@
 {{define "content"}}
-<h1>Sign in</h1>
-<form method="post" action="/admin/login" class="card">
-  <label for="password">Admin password</label>
-  <input type="password" id="password" name="password" autocomplete="current-password" autofocus required>
-  <button type="submit">Sign in</button>
-</form>
+<div class="auth">
+  <h1>Sign in</h1>
+  <p class="lede muted">The admin password is set in the relay&rsquo;s configuration.</p>
+
+  <form method="post" action="/admin/login">
+    <div class="field">
+      <label for="password">Admin password</label>
+      <div class="with-affix">
+        <input type="password" id="password" name="password" autocomplete="current-password" autofocus required>
+        <!-- Hidden until app.js claims it: a toggle that cannot toggle is worse
+             than no toggle at all. -->
+        <button type="button" class="affix" data-reveal="password" aria-pressed="false" aria-label="Show the password" hidden>Show</button>
+      </div>
+    </div>
+    <button type="submit">Sign in</button>
+  </form>
+</div>
 {{end}}

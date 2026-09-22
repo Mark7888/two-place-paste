@@ -495,3 +495,70 @@ func (f *fixture) postJSON(c *http.Client, path, body string) *http.Response {
 	req.Header.Set("Content-Type", "application/json")
 	return f.do(c, req)
 }
+
+// TestTokenScreenShowsANewCodeOnce covers the one-shot reveal: minting a token
+// redirects to a listing that opens that token's code, and only that render
+// does — a reload shows the row with its button and nothing opened.
+func TestTokenScreenShowsANewCodeOnce(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, "https://tpp.example.com")
+	c := f.client()
+	csrf := f.login(c)
+
+	f.postForm(c, "/admin/tokens", url.Values{"name": {"Anna — laptop"}, "csrf": {csrf}})
+
+	first := readBody(t, f.get(c, "/admin/"))
+	if !strings.Contains(first, "data-autoshow") {
+		t.Error("the render after minting a token does not mark it to be shown")
+	}
+
+	second := readBody(t, f.get(c, "/admin/"))
+	if strings.Contains(second, "data-autoshow") {
+		t.Error("a reload shows the code again; the flash is not one-shot")
+	}
+	// The row is still there, with the button that shows the code on demand.
+	if !strings.Contains(second, "data-token-dialog") {
+		t.Error("the unused token has no button to show its code again")
+	}
+}
+
+// TestAdminAssets covers the two static files the pages load, and the policy
+// that allows them and nothing else.
+func TestAdminAssets(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, "https://tpp.example.com")
+	c := f.client()
+
+	for _, tc := range []struct{ path, contentType string }{
+		{"/admin/style.css", "text/css; charset=utf-8"},
+		{"/admin/app.js", "text/javascript; charset=utf-8"},
+	} {
+		// Both are reachable without a session: the login page needs them
+		// before one exists.
+		resp := f.get(c, tc.path)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("GET %s = %d, want %d", tc.path, resp.StatusCode, http.StatusOK)
+			continue
+		}
+		if got := resp.Header.Get("Content-Type"); got != tc.contentType {
+			t.Errorf("GET %s Content-Type = %q, want %q", tc.path, got, tc.contentType)
+		}
+		if readBody(t, resp) == "" {
+			t.Errorf("GET %s served an empty body", tc.path)
+		}
+	}
+
+	csp := f.get(c, "/admin/login").Header.Get("Content-Security-Policy")
+	for _, want := range []string{"default-src 'none'", "script-src 'self'", "style-src 'self'"} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("Content-Security-Policy %q does not contain %q", csp, want)
+		}
+	}
+	// Whatever else changes, inline script must never become allowed: every
+	// line of script is in app.js precisely so it does not have to be.
+	if strings.Contains(csp, "unsafe-inline") || strings.Contains(csp, "unsafe-eval") {
+		t.Errorf("Content-Security-Policy %q relaxes script execution", csp)
+	}
+}

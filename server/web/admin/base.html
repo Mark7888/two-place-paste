@@ -6,6 +6,7 @@
 <meta name="robots" content="noindex, nofollow">
 <title>{{.Title}} — TwoPlacePaste</title>
 <link rel="stylesheet" href="/admin/style.css">
+<script src="/admin/app.js" defer></script>
 </head>
 <body>
 <header class="bar">
@@ -17,13 +18,15 @@
   </form>
   {{end}}
 </header>
-<main>
-{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+<main{{if .Centered}} class="centered"{{end}}>
+{{if .Error}}<p class="notice error" role="alert">{{.Error}}</p>{{end}}
 {{template "content" .}}
 </main>
-<footer class="muted">
+{{if .Authenticated}}
+<footer>
   The server relays ciphertext only. This screen can list creation tokens and
   nothing else — there is no content access here by construction (SPEC §4.4).
 </footer>
+{{end}}
 </body>
 </html>{{end}}

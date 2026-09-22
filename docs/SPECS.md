@@ -369,8 +369,50 @@ remains an open design question — see §9.
 - **Direction:** if the local clipboard is newer than the server's latest entry,
   upload; otherwise download. Where timestamp comparison isn't reliable on a platform,
   clients expose two explicit directional buttons instead.
-- Android **does not** pull anything on reconnect. History is fetched only when the
-  user opens the History tab and presses fetch.
+- No client pulls anything on reconnect or in the background. History is fetched when
+  the user opens the History tab — opening it *is* the request — and at no other time.
+  A listing is entry metadata only; an entry's body is fetched when the user asks for
+  that entry, by copying it or by opening its preview.
+- Where a client cannot make the timestamp comparison, it **asks** rather than reporting
+  that it cannot decide: the two directions are put to the user as a choice, with what
+  each one overwrites, and the sync then proceeds in the direction chosen. Refusing to
+  act and refusing to ask are not the same thing.
+
+---
+
+## 6a. Pairing links
+
+A pairing code is a base64url string. Shown as a QR code it is readable only by
+this system's own clients: a general-purpose scanner — Google Lens, a phone
+camera — renders it as text to copy and offers nothing to open.
+
+Clients therefore show the code **wrapped in a link to the relay the code
+already names**:
+
+```
+https://<that group's relay>/pair#<code>
+tpp://pair#<code>            (the same code, straight into the Android app)
+```
+
+Three properties, each load-bearing:
+
+- **The code is in the fragment.** A browser never sends a fragment, so the
+  relay hosting the link does not receive the code its own page hands over, and
+  it reaches no access log, proxy log or `Referer`.
+- **No domain is pinned anywhere.** The host comes from the payload at run
+  time, because every deployment is somebody's own relay. The Android
+  intent-filter matches `tpp://pair` — a scheme, not a host. An `https`
+  intent-filter is not usable here at all: Android honours `pathPrefix` only
+  alongside a concrete `host`, so a host-less one would register the app as a
+  handler for every web link on the device.
+- **Every form still decodes.** Both clients strip the envelope before
+  decoding, so a bare code, an `https` link, a `tpp://` link and any of those
+  with whitespace around them are one input. A code from a build that predates
+  this is still read, and a code this build shows is still pasteable into one.
+
+The relay serves `GET /pair`: a static page that reads the fragment client-side
+and offers "Open in TwoPlacePaste", plus the bare code to copy for anyone
+without the app.
 
 ---
 
@@ -382,15 +424,26 @@ remains an open design question — see §9.
 not focused and are not the default IME. Background clipboard watching is therefore
 not possible without an accessibility service, which is not acceptable.
 
-The **quick-settings tile** is the primary mechanism: tapping it briefly foregrounds
-the app, which is a legal moment to read the clipboard.
+The **quick-settings tile** is the primary mechanism: tapping it brings a window of the
+app forward, which is a legal moment to read the clipboard.
+
+That window is a **transparent panel**, not the app. Focus is all the platform rule
+asks for, so the tile opens a dedicated activity that dims the screen behind it and
+draws a small panel in the middle — the user keeps their place in whatever they were
+doing. The panel shows the sync running, asks which direction to take when §6's
+comparison cannot be made, reports the outcome, and closes itself.
+
+The panel and the app are two activities over **one** session: the client, the socket
+and the tile handler are opened by the JavaScript bundle rather than by a screen, so a
+tap is answered whether or not the app is mounted, and never by a second client.
 
 **Features:**
-- Quick-settings tile for one-tap sync
+- Quick-settings tile for one-tap sync, answered in a panel over the current screen
 - Manual sync button in-app
-- History tab with explicit fetch button; tap an entry to copy it locally
+- History tab, listed when the tab is opened; tap an entry to preview it — text
+  and images, at the current epoch only — and copy it locally from there
 - Device management: list group devices, revoke (with the confirmation from §3.3)
-- Pairing: show QR, scan QR, paste token
+- Pairing: show QR, scan QR, paste code, copy the code to the clipboard
 
 Auto-sync is deferred and may prove infeasible on Android; if so, it is dropped rather
 than worked around.
@@ -403,8 +456,9 @@ binary, served from localhost and opened in the user's default browser.
 **Features:**
 - Tray menu: sync now, open UI, quit
 - Optional clipboard auto-watch (toggle, off by default)
-- Manual sync
-- History browser
+- Manual sync, with the direction asked for when it cannot be worked out
+- History browser, listed when the tab is opened, with a preview of text and image
+  entries at the current epoch
 - Device management and pairing (show QR, scan not applicable — paste token)
 
 **Autostart on login:** user setting, **default off**. Implemented via launchd plist on

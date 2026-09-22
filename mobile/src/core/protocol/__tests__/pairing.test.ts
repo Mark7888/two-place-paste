@@ -11,7 +11,10 @@
 import { PairingPayload } from '../../../protocol/gen/tpp/v1/pairing';
 import { toBase64URL } from '../../bytes';
 import {
+  appLink,
   classifyCode,
+  pairingLink,
+  stripCodeEnvelope,
   decodePairingCode,
   decodePairingOffer,
   decodePairingPayload,
@@ -111,3 +114,62 @@ function atobLike(s: string): number[] {
   }
   return out;
 }
+
+describe('code links', () => {
+  const code = 'AbCdEf-_123';
+
+  it('puts the code in the fragment, so the relay never receives it', () => {
+    expect(pairingLink('https://tpp.example.com', code)).toBe(
+      `https://tpp.example.com/pair#${code}`,
+    );
+    // A fragment is not sent in a request: that is why it is a fragment and
+    // not a path segment or a query parameter.
+    expect(pairingLink('https://tpp.example.com', code)).toContain('#');
+  });
+
+  it('tolerates a relay URL with a trailing slash or a path', () => {
+    expect(pairingLink('https://tpp.example.com/', code)).toBe(
+      `https://tpp.example.com/pair#${code}`,
+    );
+    expect(pairingLink('https://tpp.example.com/relay//', code)).toBe(
+      `https://tpp.example.com/relay/pair#${code}`,
+    );
+  });
+
+  it('falls back to the app scheme when there is no relay to point at', () => {
+    expect(pairingLink('', code)).toBe(`tpp://pair#${code}`);
+    expect(appLink(code)).toBe(`tpp://pair#${code}`);
+  });
+
+  it('reads a code back out of every form it can arrive in', () => {
+    expect(stripCodeEnvelope(code)).toBe(code);
+    expect(stripCodeEnvelope(`  ${code}\n`)).toBe(code);
+    expect(stripCodeEnvelope(`https://tpp.example.com/pair#${code}`)).toBe(code);
+    expect(stripCodeEnvelope(`tpp://pair#${code}`)).toBe(code);
+    expect(stripCodeEnvelope(` https://r.example/pair#${code} `)).toBe(code);
+  });
+
+  it('leaves a creation URL alone, since it carries no fragment', () => {
+    // classifyCode tries the creation URL first, and it must still see the
+    // whole URL rather than a truncated one.
+    expect(stripCodeEnvelope('https://relay.example.com/abc123')).toBe(
+      'https://relay.example.com/abc123',
+    );
+  });
+});
+
+describe('a scanned pairing link is not a creation URL', () => {
+  // The bug the camera scanner hit: a creation URL is https://relay/<token>,
+  // and a pairing link is https://relay/pair#<code>. The URL parser stops the
+  // path at the fragment, so the link looked like a creation URL whose token
+  // was the literal "pair" — and the relay answered "no such creation token".
+  const code = 'AbCdEf-_123';
+
+  it('classifies an https pairing link as a pairing code', () => {
+    expect(classifyCode(pairingLink('https://tpp.example.com', code))).not.toBe('creation-url');
+  });
+
+  it('still classifies a real creation URL as one', () => {
+    expect(classifyCode('https://tpp.example.com/AbCdEf123')).toBe('creation-url');
+  });
+});

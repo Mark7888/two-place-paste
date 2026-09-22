@@ -31,6 +31,7 @@ import (
 	"github.com/Mark7888/two-place-paste/server/internal/config"
 	"github.com/Mark7888/two-place-paste/server/internal/entries"
 	"github.com/Mark7888/two-place-paste/server/internal/httpapi"
+	"github.com/Mark7888/two-place-paste/server/internal/pairlink"
 	"github.com/Mark7888/two-place-paste/server/internal/store"
 	"github.com/Mark7888/two-place-paste/server/internal/ws"
 )
@@ -140,7 +141,12 @@ func serve(args []string) error {
 		return fmt.Errorf("build admin server: %w", err)
 	}
 
-	handler := httpapi.NewWithOptions(httpapi.Options{Logger: logger}, wsSrv, adminSrv)
+	// The pairing hand-off page: three static files behind "GET /pair", which
+	// is what a scanned pairing link lands on (SPEC §3.2). It holds no state
+	// and never sees a code — the code is in the fragment.
+	pairSrv := pairlink.New(logger)
+
+	handler := httpapi.NewWithOptions(httpapi.Options{Logger: logger}, wsSrv, adminSrv, pairSrv)
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           handler,

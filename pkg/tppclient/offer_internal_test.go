@@ -236,3 +236,73 @@ func TestPrepareAcceptOfferIsTheOnlyWayIn(t *testing.T) {
 		t.Error("PrepareAcceptOffer accepted an offer held by another relay")
 	}
 }
+
+// TestCodeLinksMatchTheMobileClient pins the link format both clients build
+// and read. A QR a desktop shows has to be one a phone can read, and the
+// mobile core has the identical table in pairing.test.ts.
+func TestCodeLinksMatchTheMobileClient(t *testing.T) {
+	t.Parallel()
+
+	const code = "AbCdEf-_123"
+
+	if got, want := PairingLink("https://tpp.example.com", code), "https://tpp.example.com/pair#"+code; got != want {
+		t.Errorf("PairingLink() = %q, want %q", got, want)
+	}
+	// A trailing slash or a path on the relay URL must not double up.
+	if got, want := PairingLink("https://tpp.example.com/", code), "https://tpp.example.com/pair#"+code; got != want {
+		t.Errorf("PairingLink() with a trailing slash = %q, want %q", got, want)
+	}
+	if got, want := PairingLink("https://tpp.example.com/relay//", code), "https://tpp.example.com/relay/pair#"+code; got != want {
+		t.Errorf("PairingLink() with a path = %q, want %q", got, want)
+	}
+	if got, want := PairingLink("", code), "tpp://pair#"+code; got != want {
+		t.Errorf("PairingLink() with no relay = %q, want %q", got, want)
+	}
+
+	for _, in := range []string{
+		code,
+		"  " + code + "\n",
+		"https://tpp.example.com/pair#" + code,
+		"tpp://pair#" + code,
+		" https://r.example/pair#" + code + " ",
+	} {
+		if got := StripCodeEnvelope(in); got != code {
+			t.Errorf("StripCodeEnvelope(%q) = %q, want %q", in, got, code)
+		}
+	}
+
+	// A creation URL has no fragment and must survive untouched.
+	const creation = "https://relay.example.com/abc123"
+	if got := StripCodeEnvelope(creation); got != creation {
+		t.Errorf("StripCodeEnvelope(%q) = %q, want it unchanged", creation, got)
+	}
+}
+
+// TestDecodeCodeAcceptsALink is the property that makes the QR change safe: a
+// code wrapped in a link decodes to exactly what the bare code does.
+func TestDecodeCodeAcceptsALink(t *testing.T) {
+	t.Parallel()
+
+	bare, err := EncodePairingPayload(&tppv1.PairingPayload{
+		ServerUrl:                 "https://tpp.example.com",
+		PairingToken:              "tok",
+		InviterEphemeralPublicKey: bytes.Repeat([]byte{7}, 32),
+	})
+	if err != nil {
+		t.Fatalf("EncodePairingPayload() error = %v", err)
+	}
+
+	for _, in := range []string{
+		bare,
+		PairingLink("https://tpp.example.com", bare),
+		AppLink(bare),
+	} {
+		got, err := DecodePairingPayload(in)
+		if err != nil {
+			t.Fatalf("DecodePairingPayload(%.40q) error = %v", in, err)
+		}
+		if got.GetPairingToken() != "tok" {
+			t.Errorf("DecodePairingPayload(%.40q) token = %q, want %q", in, got.GetPairingToken(), "tok")
+		}
+	}
+}

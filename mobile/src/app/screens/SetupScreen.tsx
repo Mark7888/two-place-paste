@@ -24,15 +24,16 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { PermissionsAndroid, Platform, ScrollView, Text, TextInput, View } from 'react-native';
+import { PermissionsAndroid, Platform, Text, TextInput, View } from 'react-native';
 import { Camera, CameraType } from 'react-native-camera-kit';
 import QRCode from 'react-native-qrcode-svg';
 
 import type { Offer } from '../../core';
-import { fingerprint } from '../../core';
+import { fingerprint, pairingLink } from '../../core';
 import { useSession } from '../SessionContext';
 import { enterGroup, failureMessage } from '../session';
-import { Button, Card, Status } from '../ui';
+import { Button, Card, CopyButton, Notice, Screen } from '../ui';
+import { useExpiry } from '../expiry';
 import { colors, styles } from '../theme';
 
 export function SetupScreen(): React.JSX.Element {
@@ -44,10 +45,33 @@ export function SetupScreen(): React.JSX.Element {
   const [ok, setOk] = useState(true);
   const [relayUrl, setRelayUrl] = useState('');
   const [offer, setOffer] = useState<Offer | null>(null);
+  // Hooks stay above the camera's early return (rules-of-hooks).
+  const offerExpired = useExpiry(offer?.expiresAt ?? null);
 
   // A code this device stops showing must stop being live: the socket it holds
   // open is the relay's only route to a device with no identity.
   useEffect(() => () => offer?.cancel(), [offer]);
+
+  // A code that arrived through a scanned link. An unpaired phone is exactly
+  // the device someone scans one on, so it is claimed here as well as on the
+  // pairing screen — whichever of the two is showing.
+  //
+  // It lives up here with the other hooks, and that placement is the point:
+  // this screen returns early to show the camera, and a hook written below
+  // that return vanishes on the render where the scanner opens — which is
+  // exactly the "rendered fewer hooks than expected" crash it caused.
+  const pendingCode = session.pendingCode;
+  useEffect(() => {
+    if (pendingCode === '') {
+      return;
+    }
+    const claimed = session.claimPendingCode();
+    if (claimed !== '') {
+      setTyped(claimed);
+      submit(claimed);
+    }
+    // Keyed on the arriving code alone: claiming it clears the trigger.
+  }, [pendingCode]);
 
   const show = () => {
     const client = session.client;
@@ -141,7 +165,7 @@ export function SetupScreen(): React.JSX.Element {
   }
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <Screen>
       <Text style={styles.title}>TwoPlacePaste</Text>
       <Text style={styles.muted}>
         This device is not in a group yet. Its keypair has been generated and stays on this phone.
@@ -179,19 +203,41 @@ export function SetupScreen(): React.JSX.Element {
         />
         {offer !== null && (
           <View style={{ alignItems: 'center', gap: 10 }}>
-            <View style={{ backgroundColor: '#ffffff', padding: 12, borderRadius: 8 }}>
+            <View
+              style={[
+                { backgroundColor: '#ffffff', padding: 12, borderRadius: 8 },
+                offerExpired && styles.expiredCode,
+              ]}
+            >
               {/*
                 Rendered on device by a bundled library: a code carrying an
                 offer must not travel to a remote QR service to be drawn.
+
+                It carries a link into the relay the user just named, not the
+                bare code: a general-purpose scanner shows a base64url string
+                as text and offers nothing to open. The code is in the
+                fragment, so that relay never receives it.
               */}
-              <QRCode value={offer.code} size={220} />
+              <QRCode value={pairingLink(relayUrl, offer.code)} size={220} />
             </View>
             <Text style={styles.mono} selectable>
-              {offer.code}
+              {pairingLink(relayUrl, offer.code)}
             </Text>
-            <Text style={styles.muted}>
-              Valid until {offer.expiresAt.toLocaleTimeString()} · single use
-            </Text>
+            <CopyButton
+              value={pairingLink(relayUrl, offer.code)}
+              label="Copy the code"
+              onResult={(text, good) => {
+                setOk(good);
+                setMessage(text);
+              }}
+            />
+            {offerExpired ? (
+              <Text style={styles.expiredTag}>Expired — show a new code</Text>
+            ) : (
+              <Text style={styles.muted}>
+                Valid until {offer.expiresAt.toLocaleTimeString()} · single use
+              </Text>
+            )}
             <Text style={styles.muted}>
               The other device will ask its user to confirm this device’s name and fingerprint
               before it adds anything. This device’s fingerprint is:
@@ -243,7 +289,7 @@ export function SetupScreen(): React.JSX.Element {
         />
       </Card>
 
-      <Status message={message} ok={ok} />
-    </ScrollView>
+      {message !== '' && <Notice message={message} tone={ok ? 'ok' : 'error'} />}
+    </Screen>
   );
 }

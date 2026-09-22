@@ -64,21 +64,44 @@ SPEC §7.1 says the feature is dropped rather than worked around.
 
 The tile is what replaces it. Tapping it:
 
-1. records the request and starts the activity (`SyncTileService.onClick`),
-2. which foregrounds the app — the legal moment to read the clipboard,
+1. records the request and starts `SyncOverlayActivity` (`SyncTileService.onClick`),
+2. which brings a window of this app forward — the legal moment to read the
+   clipboard — as a **transparent panel** over whatever the user was doing,
+   rather than as the app,
 3. and JavaScript then performs exactly one sync and calls `TppTile.report`,
-4. which renders the outcome on the tile and shows a toast.
+4. which renders the outcome on the tile and shows a toast,
+5. then `TppTile.closeOverlay` dismisses the panel.
 
-A tap reaches the app on one of two paths, because it can find it in either
-state: a running app receives an event, and a cold-started one claims the
-pending request during startup. The flag is claimed once, so a tap can never
-produce two syncs and a launcher tap never produces one.
+The window is a panel and not the app because focus is all the platform rule
+asks for. Taking the whole screen to get it made a one-second sync cost the user
+their place in another app; `AppTheme.Overlay` is translucent with a transparent
+background, so what is behind stays on show and the app's own scrim dims it.
+
+The panel is a second React surface — `TwoPlacePasteSync`, registered in
+`index.js` beside the app itself — on the **same** JavaScript context. There is
+one session, not two: `src/app/sessionStore.ts` opens the client, holds the
+socket and answers the tile, and it is initialised by the bundle rather than by
+a screen. That is what lets a tap be answered without the app being mounted, and
+it is why the tile handler is not an effect inside a component.
+
+A tap reaches the app in one of three states, and all three end in one sync: the
+client is open and it runs now; the client is still opening and the tap is held
+until it is; or the tap started this process, in which case the native side has
+it recorded and hands it over exactly once. So a tap can never produce two syncs
+and a launcher tap never produces one.
+
+**A direction the sync cannot work out is asked, not reported.** Where
+`ClipDescription.getTimestamp()` gives nothing, SPEC §6's comparison cannot be
+made — and the panel is already on screen, so the two directions go on it as a
+choice. The old behaviour spent the one moment the clipboard was readable on a
+toast saying the choice was the user's to make, on a surface with no way to make
+it.
 
 ### Behaviour by Android version
 
 | Version | What the tile does | Why |
 |---|---|---|
-| 12 (API 31) | `startActivityAndCollapse(Intent)` collapses the shade and starts the app; the sync runs with the app in the foreground. | The Intent overload is the only one that exists. |
+| 12 (API 31) | `startActivityAndCollapse(Intent)` collapses the shade and starts the panel; the sync runs with the app focused. | The Intent overload is the only one that exists. |
 | 13 (API 33) | Same. The system may show a "TwoPlacePaste pasted from…" notice on a clipboard read; that is the OS, not the app. | Android 13 added the paste notification. |
 | 14+ (API 34) | `startActivityAndCollapse(PendingIntent)`; the Intent overload throws `UnsupportedOperationException` on 14 and is used only below it. | Behaviour change in Android 14 for tiles. |
 
@@ -160,10 +183,13 @@ the device until another device revokes it, which is what re-keys the group
 
 ## What this client refuses to do
 
-- **It never pulls history.** The History tab lists nothing until the fetch
-  button is pressed, and nothing lists it on connect or on a rekey. A client
-  that listed it automatically would be making the user's clipboard history
-  travel without being asked (SPEC §6).
+- **It never pulls history in the background.** The History tab lists the
+  group's entries when it is opened — opening it *is* the request — and nothing
+  lists them on connect, on a rekey, or while the tab is closed. What a listing
+  carries is metadata the relay already holds — not even the content type,
+  which is inside the ciphertext; an entry's body is fetched and decrypted only
+  when the user opens that entry, and an entry from an older epoch cannot be
+  opened at all (SPEC §6).
 - **A new device starts empty.** It cannot read what predates it and does not
   ask for it (SPEC §3.2).
 - **It keeps exactly one (epoch, group key) pair.** An entry from an older
@@ -232,18 +258,28 @@ device or emulator:
 2. On a fresh install, confirm the setup screen has no tab bar, and that
    scanning the creation link on the relay's admin page creates the group.
 3. Add the **Paste sync** tile to the quick-settings panel. Copy text in another
-   app, pull down the shade, tap the tile: the app should flash, a toast should
-   report what happened, and the tile's subtitle should keep saying it.
+   app, pull down the shade, tap the tile: the other app should stay on screen,
+   dimmed, with a small panel over the middle of it; a toast should report what
+   happened, the panel should close itself, and the tile's subtitle should keep
+   saying it. Check that the app you were in is still what you return to.
+   Then repeat with a clipboard the app cannot date — one set before it was
+   installed — and confirm the panel asks which way to sync and carries out the
+   answer.
 4. Repeat with the screen locked: the tap should ask for the lock screen, and
    the sync should complete after unlocking.
 5. Copy a screenshot and repeat, in both directions. An image arriving from a
    desktop is staged in the app's cache and put on the clipboard as a
    FileProvider URI.
 6. Kill the app from recents and tap the tile: the cold-start path claims the
-   pending request exactly once, so exactly one sync should happen.
+   pending request exactly once, so exactly one sync should happen — and the
+   app itself should never appear, only the panel. Check that the panel is not
+   in the recents list afterwards.
 7. Revoke the phone from the desktop while the phone is in the background. Bring
    it forward: it should report that the relay is refusing it.
 8. Check the window's edges, in portrait and in landscape, with gesture
    navigation and with three-button navigation: the app is edge-to-edge, so its
    background should reach both bars while no title, button or tab label sits
    under the status bar, under the navigation bar, or under a display cutout.
+9. Walk the tab bar: exactly one tab should be lit at any moment, the screen on
+   show should be that tab's, and a tap anywhere in a tab's column — including
+   its edges — should register.

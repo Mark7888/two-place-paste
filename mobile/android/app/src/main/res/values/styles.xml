@@ -2,4 +2,34 @@
     <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
         <item name="android:editTextBackground">@android:color/transparent</item>
     </style>
+
+    <!--
+      The theme for the quick-settings panel (SyncOverlayActivity).
+
+      Translucent with a transparent background, so the screen the user was
+      looking at stays on show. Deliberately NOT `windowIsFloating`: a floating
+      window is sized to its content, and this one has to fill the screen so
+      that the dimming covers all of it and a tap outside the panel is a tap
+      this app receives.
+
+      The system's own `backgroundDimEnabled` is off on purpose (note the
+      name: it is `backgroundDimEnabled`, not `windowBackgroundDimEnabled` —
+      the latter does not exist, and aapt2 fails the build on it). The window
+      already fills the screen, so the dim is drawn by the view inside it — one
+      scrim, the same one the in-app sheets use, rather than the system's and
+      ours stacked into something nearly black.
+
+      There is no statusBarColor or navigationBarColor here. A translucent
+      window already leaves both bars showing whatever is behind it, and under
+      the edge-to-edge this app targets those two attributes no longer do
+      anything anyway.
+    -->
+    <style name="AppTheme.Overlay" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowShowWallpaper">false</item>
+    </style>
 </resources>

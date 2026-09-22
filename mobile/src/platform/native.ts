@@ -19,6 +19,9 @@ export interface TppTileModule {
   report(ok: boolean, message: string): void;
   /** consumePendingRequest returns true once if the app was launched by a tile tap. */
   consumePendingRequest(): Promise<boolean>;
+
+  /** closeOverlay finishes the overlay activity a tile tap opened, if one is on screen. */
+  closeOverlay(): void;
 }
 
 /** TppClipboardModule is implemented by `android/app/src/main/java/.../ClipboardModule.kt`. */

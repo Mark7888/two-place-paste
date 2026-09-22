@@ -30,15 +30,16 @@
  */
 
 import React, { useState } from 'react';
-import { Linking, PermissionsAndroid, Platform, ScrollView, Text, TextInput, View } from 'react-native';
+import { Linking, PermissionsAndroid, Platform, Text, TextInput, View } from 'react-native';
 import { Camera, CameraType } from 'react-native-camera-kit';
 import QRCode from 'react-native-qrcode-svg';
 
 import type { Invitation, OfferAcceptance } from '../../core';
-import { classifyCode } from '../../core';
+import { classifyCode, pairingLink } from '../../core';
 import { useSession } from '../SessionContext';
 import { failureMessage } from '../session';
-import { Button, Card, Status } from '../ui';
+import { Button, Card, CopyButton, Notice, Screen, Sheet } from '../ui';
+import { useExpiry } from '../expiry';
 import { colors, styles } from '../theme';
 
 export function PairingScreen(): React.JSX.Element {
@@ -50,6 +51,8 @@ export function PairingScreen(): React.JSX.Element {
   const [typed, setTyped] = useState('');
   const [scanning, setScanning] = useState(false);
   const [pending, setPending] = useState<OfferAcceptance | null>(null);
+  // Hooks stay above the camera's early return (rules-of-hooks).
+  const invitationExpired = useExpiry(invitation?.expiresAt ?? null);
 
   const show = () => {
     const client = session.client;
@@ -78,6 +81,18 @@ export function PairingScreen(): React.JSX.Element {
       }
     })();
   };
+
+  /**
+   * link wraps a code in the link the QR carries: this group's own relay,
+   * with the code in the fragment. Built here rather than in the core's
+   * `startPairing` because only the screen knows which relay this device is
+   * talking to, and a self-hosted deployment has no other name for it.
+   */
+  const link = (code: string) => pairingLink(session.client?.serverUrl ?? '', code);
+
+  // A code that arrives through a scanned link is claimed by PairingRequest at
+  // the shell, not here: it can land while any tab is showing, and this screen
+  // may well not be the one in front of the user.
 
   // read decodes a code and stops. Nothing is wrapped and no device is
   // admitted here: that is `admit`, below, and it only exists once this has
@@ -170,7 +185,7 @@ export function PairingScreen(): React.JSX.Element {
   }
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <Screen>
       <Text style={styles.title}>Pairing</Text>
 
       <Card title="Add a device to this group">
@@ -185,20 +200,47 @@ export function PairingScreen(): React.JSX.Element {
         />
         {invitation !== null && (
           <View style={{ alignItems: 'center', gap: 10 }}>
-            <View style={{ backgroundColor: '#ffffff', padding: 12, borderRadius: 8 }}>
+            <View
+              style={[
+                { backgroundColor: '#ffffff', padding: 12, borderRadius: 8 },
+                invitationExpired && styles.expiredCode,
+              ]}
+            >
               {/*
-                Rendered on device by a bundled library: a payload carrying a
+                Rendered on device by a bundled library: a code carrying a
                 pairing token must not travel to a remote QR service to be
                 drawn.
+
+                What it carries is a link into this group's own relay, not the
+                bare code. A general-purpose scanner — Google Lens, a camera
+                app — shows a bare base64url string as text and offers nothing
+                to open; as a link it is something to tap, and the relay's page
+                hands it back to this app. The code is in the fragment, so the
+                relay never receives it.
               */}
-              <QRCode value={invitation.payload} size={220} />
+              <QRCode value={link(invitation.payload)} size={220} />
             </View>
             <Text style={styles.mono} selectable>
-              {invitation.payload}
+              {link(invitation.payload)}
             </Text>
-            <Text style={styles.muted}>
-              Valid until {invitation.expiresAt.toLocaleTimeString()} · single use
-            </Text>
+            <CopyButton
+              value={link(invitation.payload)}
+              label="Copy the code"
+              onResult={(text, good) => {
+                setOk(good);
+                setMessage(text);
+              }}
+            />
+            {/* Dimmed and said out loud rather than removed: a code taken off
+                screen leaves the user unsure they ever showed one, and a code
+                left looking live fails on the device that reads it. */}
+            {invitationExpired ? (
+              <Text style={styles.expiredTag}>Expired — show a new code</Text>
+            ) : (
+              <Text style={styles.muted}>
+                Valid until {invitation.expiresAt.toLocaleTimeString()} · single use
+              </Text>
+            )}
           </View>
         )}
       </Card>
@@ -222,9 +264,11 @@ export function PairingScreen(): React.JSX.Element {
           autoCorrect={false}
           multiline
         />
+        {/* Primary once there is something to act on: the button is the
+            screen's next step, not a secondary alternative to it. */}
         <Button
-          label="Read the code"
-          variant="secondary"
+          label="Connect"
+          variant={typed.trim() === '' ? 'secondary' : 'primary'}
           onPress={() => read(typed)}
           disabled={busy || typed.trim() === ''}
         />
@@ -236,8 +280,13 @@ export function PairingScreen(): React.JSX.Element {
         shows the fingerprint, which is the only part of this that a hostile
         code cannot choose freely.
       */}
-      {pending !== null && (
-        <Card title={`Add ${pending.deviceName} to this group?`}>
+      <Sheet
+        visible={pending !== null}
+        title={pending === null ? 'Add a device' : `Add ${pending.deviceName} to this group?`}
+        onClose={() => setPending(null)}
+      >
+        {pending !== null && (
+          <>
           <Text style={styles.muted}>
             This gives that device the group key, and everything this group copies from now on. The
             name above is whatever it calls itself; the fingerprint below is what actually
@@ -247,17 +296,18 @@ export function PairingScreen(): React.JSX.Element {
           <Text style={styles.mono} selectable>
             {pending.fingerprint}
           </Text>
-          <Button label={`Add ${pending.deviceName}`} onPress={admit} disabled={busy} />
-          <Button
-            label="Cancel"
-            variant="secondary"
-            onPress={() => setPending(null)}
-            disabled={busy}
-          />
-        </Card>
-      )}
+            <Button label={`Add ${pending.deviceName}`} onPress={admit} disabled={busy} />
+            <Button
+              label="Cancel"
+              variant="secondary"
+              onPress={() => setPending(null)}
+              disabled={busy}
+            />
+          </>
+        )}
+      </Sheet>
 
-      <Status message={message} ok={ok} />
+      {message !== '' && <Notice message={message} tone={ok ? 'ok' : 'error'} />}
 
       <Card title="Moving this device to another group">
         <Text style={styles.muted}>
@@ -282,6 +332,6 @@ export function PairingScreen(): React.JSX.Element {
           }}
         />
       </Card>
-    </ScrollView>
+    </Screen>
   );
 }

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"rsc.io/qr"
@@ -15,16 +16,26 @@ import (
 	"github.com/Mark7888/two-place-paste/server/internal/store"
 )
 
-// handleStyle serves the one stylesheet. It is public because the login page
-// needs it before a session exists, and it contains nothing.
+// handleStyle serves the one stylesheet, and handleScript the one script.
+// Both are public because the login page needs them before a session exists,
+// and neither contains anything: the script reads the page it is on and makes
+// no request of its own.
 func (s *Server) handleStyle(w http.ResponseWriter, r *http.Request) {
-	b, err := webadminFile("style.css")
+	s.serveAsset(w, r, "style.css", "text/css; charset=utf-8")
+}
+
+func (s *Server) handleScript(w http.ResponseWriter, r *http.Request) {
+	s.serveAsset(w, r, "app.js", "text/javascript; charset=utf-8")
+}
+
+func (s *Server) serveAsset(w http.ResponseWriter, r *http.Request, name, contentType string) {
+	b, err := webadminFile(name)
 	if err != nil {
-		s.logger.ErrorContext(r.Context(), "read admin stylesheet", "error", err)
+		s.logger.ErrorContext(r.Context(), "read admin asset", "asset", name, "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = w.Write(b)
 }
@@ -50,7 +61,7 @@ func (s *Server) handleLoginForm(w http.ResponseWriter, r *http.Request) {
 		s.redirect(w, r, "/admin/")
 		return
 	}
-	s.render(w, r, http.StatusOK, "login.html", pageData{Title: "Sign in"})
+	s.render(w, r, http.StatusOK, "login.html", pageData{Title: "Sign in", Centered: true})
 }
 
 // handleLogin verifies the admin password and starts a session.
@@ -67,8 +78,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			slog.String("client_ip", ip), slog.String("scope", scope))
 		w.Header().Set("Retry-After", "60")
 		s.render(w, r, http.StatusTooManyRequests, "login.html", pageData{
-			Title: "Sign in",
-			Error: "Too many sign-in attempts. Wait a minute and try again.",
+			Title:    "Sign in",
+			Centered: true,
+			Error:    "Too many sign-in attempts. Wait a minute and try again.",
 		})
 		return
 	}
@@ -76,8 +88,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBodyBytes)
 	if err := r.ParseForm(); err != nil {
 		s.render(w, r, http.StatusBadRequest, "login.html", pageData{
-			Title: "Sign in",
-			Error: "That request could not be read.",
+			Title:    "Sign in",
+			Centered: true,
+			Error:    "That request could not be read.",
 		})
 		return
 	}
@@ -85,8 +98,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if subtle.ConstantTimeCompare([]byte(r.PostFormValue("password")), s.password) != 1 {
 		s.logger.WarnContext(r.Context(), "admin login failed", slog.String("client_ip", ip))
 		s.render(w, r, http.StatusUnauthorized, "login.html", pageData{
-			Title: "Sign in",
-			Error: "Incorrect password.",
+			Title:    "Sign in",
+			Centered: true,
+			Error:    "Incorrect password.",
 		})
 		return
 	}
@@ -163,6 +177,12 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	// The token value itself is a credential and is never logged
 	// (docs/conventions.md §2).
 	s.logger.InfoContext(r.Context(), "creation token issued", slog.String("token_name", tok.Name))
+	// Remember which token this redirect is carrying the user back to see, so
+	// the listing opens its code straight away. It is held on the session for
+	// one render rather than put in the query string: a creation URL in a
+	// redirect target ends up in the browser's history and in every access log
+	// between here and the operator.
+	s.sessions.flash(sess.id, tok.Value)
 	s.redirect(w, r, "/admin/")
 }
 
@@ -289,6 +309,11 @@ func (s *Server) renderTokens(w http.ResponseWriter, r *http.Request, sess sessi
 		s.render(w, r, http.StatusInternalServerError, "tokens.html", data)
 		return
 	}
+	// The flash is taken once, whether or not a matching token is still in
+	// the listing: a code shown a second time on a reload is a code the user
+	// did not ask to see again.
+	fresh := s.sessions.takeFlash(sess.id)
+
 	data.Tokens = make([]tokenView, 0, len(tokens))
 	for _, t := range tokens {
 		v := tokenView{
@@ -300,6 +325,8 @@ func (s *Server) renderTokens(w http.ResponseWriter, r *http.Request, sess sessi
 		}
 		if !t.Used {
 			v.URL = s.creationURL(t.Value)
+			v.QRPath = "/admin/tokens/" + url.PathEscape(t.Value) + "/qr.png"
+			v.Fresh = fresh != "" && subtle.ConstantTimeCompare([]byte(fresh), []byte(t.Value)) == 1
 		}
 		data.Tokens = append(data.Tokens, v)
 	}

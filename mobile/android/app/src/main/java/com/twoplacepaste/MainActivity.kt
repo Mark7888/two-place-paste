@@ -7,12 +7,13 @@ import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnable
 import com.facebook.react.defaults.DefaultReactActivityDelegate
 
 /**
- * The app's one activity.
+ * The app itself.
  *
- * `singleTask` in the manifest means a tile tap on a running app arrives here
- * as [onNewIntent] rather than as a second instance; either way the sync is
- * driven from JavaScript, which claims the pending request [TileModule] has
- * recorded.
+ * It is no longer what the quick-settings tile starts — that is
+ * [SyncOverlayActivity], a panel rather than a screen — but the tile's action
+ * can still reach here when the app is launched with it, so the same claim is
+ * made: the sync is driven from JavaScript, which picks up the pending request
+ * [TileModule] has recorded.
  */
 class MainActivity : ReactActivity() {
 

@@ -16,6 +16,11 @@ type pageData struct {
 	CSRF          string
 	Error         string
 	Tokens        []tokenView
+
+	// Centered puts the page in the middle of the viewport rather than at the
+	// top of a document column. It is for the sign-in screen, which is one
+	// short form and nothing else; every other screen is a document.
+	Centered bool
 }
 
 // tokenView is one row of the token listing (SPEC §4.4). It carries no
@@ -27,6 +32,15 @@ type tokenView struct {
 	Used    bool
 	GroupID string
 	URL     string
+
+	// QRPath is where this token's QR image is served from. It is built here
+	// rather than in the template so the token is escaped as a path segment
+	// exactly once, by net/url.
+	QRPath string
+
+	// Fresh marks the token this render was redirected to show: the listing
+	// opens its code in a dialog, once, without the user hunting for the row.
+	Fresh bool
 }
 
 // templateSet holds one parsed template per page. Each page is parsed together
@@ -67,8 +81,11 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, page
 
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
-	// The admin UI loads one stylesheet from its own origin and nothing else.
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+	// The admin UI loads one stylesheet and one script from its own origin and
+	// nothing else. 'self' rather than a nonce or 'unsafe-inline': every line
+	// of script is in /admin/app.js, and there is no inline handler on any
+	// page for a policy to have to allow.
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Cache-Control", "no-store")

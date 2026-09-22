@@ -175,6 +175,7 @@ func (s *Server) routes() http.Handler {
 	api("POST /api/sync", s.handleSync)
 	api("GET /api/history", s.handleHistory)
 	api("POST /api/entries/copy", s.handleCopyEntry)
+	api("POST /api/entries/preview", s.handleEntryPreview)
 	api("GET /api/devices", s.handleDevices)
 	api("POST /api/devices/revoke/prepare", s.handlePrepareRevoke)
 	api("POST /api/devices/revoke/confirm", s.handleConfirmRevoke)

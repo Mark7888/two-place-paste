@@ -111,6 +111,39 @@ type HistoryPage struct {
 	NextBefore *time.Time  `json:"next_before,omitempty"`
 }
 
+// EntryPreview is one history entry rendered for a look rather than a paste.
+//
+// It exists because picking an entry out of a list of sizes and timestamps is
+// guesswork: the relay holds only metadata, so nothing in a listing says which
+// row is the address you copied and which is the log line. Fetching a preview
+// decrypts that one entry on this machine — the same operation copying it
+// would do — and renders it here and nowhere else. Nothing about it is cached,
+// logged, or sent anywhere, and an entry from before a rekey has no preview at
+// all because this device no longer holds the key it was written under.
+type EntryPreview struct {
+	ID          string `json:"id"`
+	Epoch       uint64 `json:"epoch"`
+	ContentType string `json:"content_type"`
+	Filename    string `json:"filename,omitempty"`
+	Bytes       int    `json:"bytes"`
+
+	// Kind is "text", "image" or "file", matching the clipboard's own
+	// vocabulary. A file has no preview body: rendering its bytes helps
+	// nobody, and its name and size are already in the listing.
+	Kind string `json:"kind"`
+
+	// Text is a bounded rendering of a text entry, and Truncated says whether
+	// there was more of it.
+	Text      string `json:"text,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+
+	// ImageDataURL is a small image inlined as a data URL, so the browser
+	// renders it without a second request for a decrypted body. It is empty
+	// for an image too large to be worth inlining, and ImageTooLarge says so.
+	ImageDataURL  string `json:"image_data_url,omitempty"`
+	ImageTooLarge bool   `json:"image_too_large,omitempty"`
+}
+
 // DeviceView is one group member, by name, as SPEC §3.3 step 2 requires.
 type DeviceView struct {
 	ID        string     `json:"id"`
@@ -140,11 +173,19 @@ type RevokePlan struct {
 	ExpiresAt time.Time    `json:"expires_at"`
 }
 
-// Invite is a pairing invitation to show (SPEC §3.2 step 1). The payload is
-// both the QR contents and the copyable token: pairing is symmetric, and a
-// phone must be able to read what a desktop shows.
+// Invite is a pairing invitation to show (SPEC §3.2 step 1). Pairing is
+// symmetric, and a phone must be able to read what a desktop shows.
 type Invite struct {
-	Payload   string    `json:"payload"`
+	// Payload is the bare code. It stays in the response because anything that
+	// can already read one must keep working.
+	Payload string `json:"payload"`
+
+	// Link is what the QR carries and what the copy button copies: the same
+	// code wrapped in a link to this group's relay (SPEC §6a). A bare
+	// base64url string is unreadable to a general-purpose scanner — Google
+	// Lens shows it as text and offers nothing to open.
+	Link string `json:"link"`
+
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
@@ -153,7 +194,9 @@ type Invite struct {
 // the QR contents and the copyable string: one string, whichever form the
 // accepting device can read.
 type OfferView struct {
+	// Code is the bare code; Link wraps it for a scanner, as with Invite.
 	Code      string    `json:"code"`
+	Link      string    `json:"link"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
 

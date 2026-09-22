@@ -6,6 +6,23 @@
  * be a dependency to keep current for a stack that is one level deep
  * (docs/conventions.md §9).
  *
+ * # The tab bar
+ *
+ * The previous bar could show two tabs lit or none, and a tab could refuse a
+ * tap. Three things caused it and all three are fixed here:
+ *
+ *  - the highlight was applied to the label's style array while the id it
+ *    compared against could be one no tab renders — an unpaired device reset
+ *    the tab from an effect, so for one frame the content and the bar
+ *    disagreed. The active id is now *derived* during render and validated
+ *    against the tab list, so exactly one tab is ever current and it is the
+ *    one whose screen is mounted;
+ *  - the tap target was a label with padding around it, well under Android's
+ *    48dp, so a press near the edge of a tab landed between two of them and
+ *    did nothing. Each tab is now a 60dp-high target that fills its column;
+ *  - the bar sits above the navigation-bar inset rather than padding into it,
+ *    so no part of a target is underneath the system's own gesture area.
+ *
  * # Insets
  *
  * This app is edge-to-edge, which is not a choice: Android 15 enforces it for
@@ -23,10 +40,12 @@
  * behind the navigation bar instead of leaving a stripe of a different colour.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { ActivityIndicator, Pressable, StatusBar, Text, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { Icon, type IconName } from './icons';
+import { PairingRequest } from './PairingRequest';
 import { SessionProvider, useSession } from './SessionContext';
 import { DevicesScreen } from './screens/DevicesScreen';
 import { HistoryScreen } from './screens/HistoryScreen';
@@ -38,26 +57,29 @@ import { colors, styles } from './theme';
 
 type Tab = 'sync' | 'history' | 'devices' | 'pairing' | 'settings';
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'sync', label: 'Sync' },
-  { id: 'history', label: 'History' },
-  { id: 'devices', label: 'Devices' },
-  { id: 'pairing', label: 'Pairing' },
-  { id: 'settings', label: 'Settings' },
+const TABS: { id: Tab; label: string; icon: IconName }[] = [
+  { id: 'sync', label: 'Sync', icon: 'sync' },
+  { id: 'history', label: 'History', icon: 'history' },
+  { id: 'devices', label: 'Devices', icon: 'devices' },
+  { id: 'pairing', label: 'Pairing', icon: 'link' },
+  { id: 'settings', label: 'Settings', icon: 'settings' },
 ];
+
+const SCREENS: Record<Tab, () => React.JSX.Element> = {
+  sync: SyncScreen,
+  history: HistoryScreen,
+  devices: DevicesScreen,
+  pairing: PairingScreen,
+  settings: SettingsScreen,
+};
 
 function Shell(): React.JSX.Element {
   const session = useSession();
-  const [tab, setTab] = useState<Tab>('sync');
-  const paired = session.inGroup;
-  useEffect(() => {
-    if (!paired) {
-      setTab('sync');
-    }
-  }, [paired]);
+  const [requested, setRequested] = useState<Tab>('sync');
+  const insets = useSafeAreaInsets();
+
   // Left and right matter too: in landscape the navigation bar moves to one
   // side, and a display cutout can take a strip of either edge.
-  const insets = useSafeAreaInsets();
   const frame = {
     paddingTop: insets.top,
     paddingLeft: insets.left,
@@ -84,29 +106,59 @@ function Shell(): React.JSX.Element {
     );
   }
 
+  // The one place the current tab is decided. Deriving it here — rather than
+  // correcting the state from an effect after the fact — is what guarantees
+  // that the screen on show and the tab lit in the bar are the same tab, on
+  // every frame including the first one after a group is joined or left.
+  const active: Tab = TABS.some((t) => t.id === requested) ? requested : 'sync';
+  const Screen = SCREENS[active];
+
   return (
     <View style={[styles.screen, frame]}>
       <View style={{ flex: 1 }}>
-        {tab === 'sync' && <SyncScreen />}
-        {tab === 'history' && <HistoryScreen />}
-        {tab === 'devices' && <DevicesScreen />}
-        {tab === 'pairing' && <PairingScreen />}
-        {tab === 'settings' && <SettingsScreen />}
+        <Screen />
       </View>
-      <View style={[styles.tabBar, { paddingBottom: insets.bottom }]}>
-        {TABS.map((entry) => (
-          <Pressable
-            key={entry.id}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: tab === entry.id }}
-            style={styles.tab}
-            onPress={() => setTab(entry.id)}
-          >
-            <Text style={[styles.tabLabel, tab === entry.id && styles.tabLabelActive]}>
-              {entry.label}
-            </Text>
-          </Pressable>
-        ))}
+      {/*
+        Above every tab, not inside one: a scanned code can arrive while any
+        screen is showing, and a request the user cannot see is a request they
+        will not answer.
+      */}
+      <PairingRequest />
+      <View
+        accessibilityRole="tablist"
+        style={[styles.tabBar, { paddingBottom: insets.bottom }]}
+      >
+        {TABS.map((entry) => {
+          const selected = entry.id === active;
+          return (
+            <Pressable
+              key={entry.id}
+              accessibilityRole="tab"
+              accessibilityLabel={entry.label}
+              accessibilityState={{ selected }}
+              style={styles.tab}
+              // A press that drifts a little is still a press: without this a
+              // thumb that moves 3px on the way up cancels the tap.
+              pressRetentionOffset={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              android_ripple={{ color: colors.accentSoft, borderless: false }}
+              onPress={() => setRequested(entry.id)}
+            >
+              <View style={[styles.tabIconWrap, selected && styles.tabIconWrapActive]}>
+                <Icon
+                  name={entry.icon}
+                  size={20}
+                  color={selected ? colors.accent : colors.muted}
+                />
+              </View>
+              <Text
+                numberOfLines={1}
+                style={[styles.tabLabel, selected && styles.tabLabelActive]}
+              >
+                {entry.label}
+              </Text>
+            </Pressable>
+          );
+        })}
       </View>
     </View>
   );

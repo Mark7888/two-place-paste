@@ -11,10 +11,15 @@ import android.service.quicksettings.TileService
  *
  * This is the app's primary sync mechanism, and it exists because of one
  * platform rule: since Android 10, an app that is not focused and is not the
- * default IME cannot read the clipboard. Tapping the tile starts the activity,
- * which is a legal moment to read it; the JavaScript side then performs
- * exactly one sync and calls back into [TileModule], which renders the outcome
- * here and shows a toast.
+ * default IME cannot read the clipboard. Tapping the tile brings a window of
+ * this app forward, which is a legal moment to read it; the JavaScript side
+ * then performs exactly one sync and calls back into [TileModule], which
+ * renders the outcome here and shows a toast.
+ *
+ * The window is [SyncOverlayActivity] — a transparent panel over whatever the
+ * user is doing — and not [MainActivity]. Focus is all the platform rule asks
+ * for, and taking the whole screen to get it made a one-second sync cost the
+ * user their place in another app.
  *
  * What this service deliberately does not do: hold a socket, read the
  * clipboard itself, or run any work of its own. It starts the app and waits to
@@ -36,8 +41,14 @@ class SyncTileService : TileService() {
         // needing the tap to survive process creation as an Intent extra.
         TileModule.requestSync(applicationContext)
 
-        val intent = Intent(this, MainActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val intent = Intent(this, SyncOverlayActivity::class.java).apply {
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    // A second tap while the panel is up reuses it rather than
+                    // stacking another one behind it.
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP,
+            )
             action = ACTION_TILE_SYNC
         }
         // startActivityAndCollapse is the only way to bring an app forward from

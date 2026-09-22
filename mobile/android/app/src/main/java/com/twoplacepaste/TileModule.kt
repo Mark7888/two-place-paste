@@ -40,19 +40,39 @@ class TileModule(reactContext: ReactApplicationContext) :
      * report tells the tile how the sync went. The message is a status —
      * "Copied 12 bytes to this device" — and never clipboard content: a toast
      * is visible over other apps and on the lock screen's shade.
+     *
+     * The toast is skipped while the panel is on screen. The panel is already
+     * showing the outcome, in a place the user can read at their own pace and
+     * dismiss themselves; a toast on top of it says the same thing twice and
+     * takes the failure away again after two seconds.
      */
     @ReactMethod
     fun report(ok: Boolean, message: String) {
         lastOutcome = Outcome(ok, message)
         val context = reactApplicationContext
-        Handler(Looper.getMainLooper()).post {
-            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        if (!SyncOverlayActivity.isShowing()) {
+            Handler(Looper.getMainLooper()).post {
+                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            }
         }
         // Ask the system to re-bind the tile so it redraws with the outcome.
         TileService.requestListeningState(
             context,
             android.content.ComponentName(context, SyncTileService::class.java),
         )
+    }
+
+    /**
+     * closeOverlay dismisses the panel a tile tap opened.
+     *
+     * JavaScript calls it when the sync it was opened for has finished or the
+     * user has declined it. It is a no-op when no panel is showing — a sync
+     * started from inside the app reaches the same code and must not close
+     * anything.
+     */
+    @ReactMethod
+    fun closeOverlay() {
+        SyncOverlayActivity.close()
     }
 
     /** addListener and removeListeners exist because NativeEventEmitter requires them. */

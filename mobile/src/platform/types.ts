@@ -30,6 +30,17 @@ export interface ClipboardPort {
 
   /** write puts an item on the clipboard, or reports why it could not. */
   write(item: ClipboardItem): Promise<void>;
+
+  /**
+   * writeText puts a plain string on the clipboard.
+   *
+   * It is separate from `write` because what it carries is not an entry: a
+   * pairing code the user is handing to another device is this app's own UI
+   * text, not something that came from or is going to the group. Keeping the
+   * two apart is what stops a "copy this code" button from looking like a
+   * clipboard entry to anything that inspects the write path.
+   */
+  writeText(text: string): Promise<void>;
 }
 
 /** SecureStorePort is where the device private key and the group key live at rest (spec/crypto.md §10). */
@@ -61,4 +72,15 @@ export interface TilePort {
 
   /** pending returns a tile request that arrived while the app was starting, if there was one. */
   pending(): Promise<boolean>;
+
+  /**
+   * closeOverlay dismisses the panel a tile tap opened, once the sync it asked
+   * for has finished or the user has declined it.
+   *
+   * The panel is a window over whatever the user was doing, so closing it is
+   * the app's job the moment it has nothing left to say. It is a no-op where
+   * there is no overlay — on another platform, or when the sync was started
+   * from inside the app rather than from the tile.
+   */
+  closeOverlay(): void;
 }
