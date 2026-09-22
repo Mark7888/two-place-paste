@@ -1049,3 +1049,49 @@ func TestOfferRejectsAKeylessRequest(t *testing.T) {
 		t.Errorf("offer with no public key = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT)
 	}
 }
+
+// TestInviterMayReplyBeforeTheJoinerFinishesJoining pins the ordering inside
+// handlePairingJoin: the joiner must be routable before the inviter is told it
+// exists. The hook runs on the joiner's own goroutine at the moment the notice
+// has been queued, so the inviter's upload is handled while the join handler is
+// still mid-flight — the window that, when the registration came last, dropped
+// PairingComplete on the floor.
+func TestInviterMayReplyBeforeTheJoinerFinishesJoining(t *testing.T) {
+	h := newHarness(t)
+	inviter, _ := h.createGroup(t, "inviter")
+
+	inviter.send("pair-start", tppv1.MessageType_MESSAGE_TYPE_PAIRING_START_REQUEST, &tppv1.PairingStartRequest{})
+	var start tppv1.PairingStartResponse
+	inviter.await(tppv1.MessageType_MESSAGE_TYPE_PAIRING_START_RESPONSE, &start)
+
+	replied := make(chan struct{})
+	h.server.SetAfterPairingNotice(func() {
+		// Waiting for the inviter's own acknowledgement is what makes this
+		// deterministic: it is only produced after the server has tried to
+		// push the joiner's copy, so the attempt has provably happened by the
+		// time the join handler resumes.
+		var notice tppv1.PairingJoinNotice
+		inviter.await(tppv1.MessageType_MESSAGE_TYPE_PAIRING_JOIN_NOTICE, &notice)
+		inviter.send("pair-key", tppv1.MessageType_MESSAGE_TYPE_PAIRING_WRAPPED_KEY_UPLOAD, &tppv1.PairingWrappedKeyUpload{
+			PairingToken:    start.GetPairingToken(),
+			DeviceId:        notice.GetDeviceId(),
+			WrappedGroupKey: []byte("wrapped-for-joiner"),
+		})
+		inviter.await(tppv1.MessageType_MESSAGE_TYPE_PAIRING_COMPLETE, nil)
+		close(replied)
+	})
+
+	joiner := h.dial(t, "")
+	joiner.send("pair-join", tppv1.MessageType_MESSAGE_TYPE_PAIRING_JOIN_REQUEST, &tppv1.PairingJoinRequest{
+		PairingToken:    start.GetPairingToken(),
+		DeviceName:      "joiner",
+		DevicePublicKey: []byte("pk-joiner"),
+	})
+	<-replied
+
+	var complete tppv1.PairingComplete
+	joiner.await(tppv1.MessageType_MESSAGE_TYPE_PAIRING_COMPLETE, &complete)
+	if string(complete.GetWrappedGroupKey()) != "wrapped-for-joiner" {
+		t.Fatalf("PairingComplete = %+v, want the key the inviter wrapped", &complete)
+	}
+}

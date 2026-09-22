@@ -13,3 +13,10 @@ func (s *Server) WaitingOffers() int {
 	defer s.hub.mu.RUnlock()
 	return len(s.hub.offers)
 }
+
+// SetAfterPairingNotice installs a hook that runs on the joiner's goroutine
+// immediately after the join notice has been queued for the inviter. It lets a
+// test occupy the window in which the inviter can answer, without sleeping.
+func (s *Server) SetAfterPairingNotice(fn func()) {
+	s.afterPairingNotice = fn
+}

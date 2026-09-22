@@ -180,16 +180,29 @@ func (s *Server) handlePairingJoin(ctx context.Context, c *conn, env *tppv1.Enve
 		s.removeDevice(ctx, pairing.GroupID, device.ID)
 		return nil, err
 	}
+	// The joiner is routable before the inviter is told about it. The inviter
+	// answers the notice on its own goroutine and may upload the wrapped key
+	// before this one runs another statement; if the hub did not know the
+	// device yet, step 5 would be dropped as undeliverable and the joiner
+	// would wait forever for a key that was already sent.
+	c.setIdentity(device.ID, pairing.GroupID)
+	s.hub.register(c)
+
 	if !s.hub.sendTo(pairing.InviterDeviceID, notice) {
 		// Step 4 needs the inviter online: only it holds the group key. The
-		// join is undone so the user can simply try again.
+		// join is undone so the user can simply try again, and the socket goes
+		// back to being unauthenticated rather than staying bound to a device
+		// that no longer exists.
+		s.hub.unregister(c)
+		c.setIdentity("", "")
 		s.removeDevice(ctx, pairing.GroupID, device.ID)
 		_ = s.store.DeletePairing(ctx, pairing.Token)
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_NOT_FOUND, "the inviting device is not connected")
 	}
+	if s.afterPairingNotice != nil {
+		s.afterPairingNotice()
+	}
 
-	c.setIdentity(device.ID, pairing.GroupID)
-	s.hub.register(c)
 	s.logger.InfoContext(ctx, "device joined pairing",
 		slog.String("group_id", pairing.GroupID),
 		slog.String("device_id", device.ID))
@@ -245,9 +258,17 @@ func (s *Server) handlePairingWrappedKey(ctx context.Context, env *tppv1.Envelop
 	if err != nil {
 		return nil, err
 	}
-	// A joiner that has already gone away picks its key up on next connect,
-	// exactly like a device that missed a rekey (SPEC §3.3).
-	s.hub.sendTo(pairing.JoinerDeviceID, joinerFrame)
+	// Delivery stays best effort: the key is durable in the store, so a joiner
+	// that genuinely disconnected picks it up on next connect, exactly like a
+	// device that missed a rekey (SPEC §3.3). Telling the inviter would only
+	// invite it to undo a pairing that is already complete and recoverable.
+	// A joiner that is merely not registered yet is a bug rather than a
+	// reconnect, which is why the drop is no longer silent.
+	if !s.hub.sendTo(pairing.JoinerDeviceID, joinerFrame) {
+		s.logger.WarnContext(ctx, "pairing completion could not be pushed to the joining device",
+			slog.String("group_id", groupID),
+			slog.String("device_id", pairing.JoinerDeviceID))
+	}
 
 	s.logger.InfoContext(ctx, "device paired",
 		slog.String("group_id", groupID),
