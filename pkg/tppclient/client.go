@@ -58,6 +58,12 @@ type Handlers struct {
 	// exists: it was revoked while away (SPEC §3.3 step 5). The client stops
 	// reconnecting; nothing recovers the install but pairing again.
 	OnRevoked func()
+
+	// OnEntryAdded fires when another device of the group has written a new
+	// latest entry. It carries metadata only and runs on the read loop: a
+	// handler that wants the content fetches it on a goroutine of its own.
+	// Nothing about it touches the clipboard unless the handler does.
+	OnEntryAdded func(EntryMeta)
 }
 
 // Options configures a Client.
@@ -527,6 +533,15 @@ func (c *Client) onEvent(env *tppv1.Envelope) {
 		}
 		if c.handlers.OnDeviceRevoked != nil {
 			c.handlers.OnDeviceRevoked(ev.GetDeviceId(), ev.GetEpoch())
+		}
+
+	case tppv1.MessageType_MESSAGE_TYPE_ENTRY_ADDED:
+		var ev tppv1.EntryAdded
+		if err := proto.Unmarshal(env.GetPayload(), &ev); err != nil || ev.GetMeta() == nil {
+			return
+		}
+		if c.handlers.OnEntryAdded != nil {
+			c.handlers.OnEntryAdded(entryMeta(ev.GetMeta()))
 		}
 
 	case tppv1.MessageType_MESSAGE_TYPE_PAIRING_JOIN_NOTICE:

@@ -52,7 +52,7 @@ func (s *Server) dispatch(ctx context.Context, c *conn, env *tppv1.Envelope) ([]
 	case tppv1.MessageType_MESSAGE_TYPE_REKEY_REQUEST:
 		return s.handleRekey(ctx, env, deviceID, groupID)
 	case tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST:
-		return s.handleEntryPut(ctx, env, groupID)
+		return s.handleEntryPut(ctx, env, deviceID, groupID)
 	case tppv1.MessageType_MESSAGE_TYPE_ENTRY_LATEST_REQUEST:
 		return s.handleEntryLatest(ctx, env, groupID)
 	case tppv1.MessageType_MESSAGE_TYPE_ENTRY_HISTORY_REQUEST:
@@ -518,7 +518,7 @@ func (s *Server) fanOutRekey(ctx context.Context, groupID, revokedID string, epo
 }
 
 // handleEntryPut stores one encrypted clipboard item (SPEC §4.3, §6).
-func (s *Server) handleEntryPut(ctx context.Context, env *tppv1.Envelope, groupID string) ([]byte, error) {
+func (s *Server) handleEntryPut(ctx context.Context, env *tppv1.Envelope, deviceID, groupID string) ([]byte, error) {
 	var req tppv1.EntryPutRequest
 	if err := decode(env, &req); err != nil {
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "payload could not be decoded")
@@ -573,9 +573,24 @@ func (s *Server) handleEntryPut(ctx context.Context, env *tppv1.Envelope, groupI
 		return nil, fmt.Errorf("put entry: %w", err)
 	}
 
+	s.announceEntry(ctx, groupID, deviceID, meta)
 	return encode(env.GetId(), tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_RESPONSE, &tppv1.EntryPutResponse{
 		Meta: entryMeta(meta),
 	})
+}
+
+// announceEntry tells the author's peers that the group has a new latest
+// entry. Metadata only: whether to fetch it is each client's decision (SPEC
+// §6), and a device that is offline is not owed the announcement — it asks for
+// the latest entry when its user does.
+func (s *Server) announceEntry(ctx context.Context, groupID, authorID string, meta entries.Meta) {
+	frame, err := encode(newCorrelationID(), tppv1.MessageType_MESSAGE_TYPE_ENTRY_ADDED,
+		&tppv1.EntryAdded{Meta: entryMeta(meta)})
+	if err != nil {
+		s.logger.ErrorContext(ctx, "encoding entry added event failed", slog.Any("error", err))
+		return
+	}
+	s.hub.broadcast(groupID, frame, authorID)
 }
 
 // handleEntryLatest returns the group's newest entry. The ciphertext travels

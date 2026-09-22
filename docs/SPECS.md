@@ -369,8 +369,14 @@ remains an open design question — see §9.
 - **Direction:** if the local clipboard is newer than the server's latest entry,
   upload; otherwise download. Where timestamp comparison isn't reliable on a platform,
   clients expose two explicit directional buttons instead.
-- No client pulls anything on reconnect or in the background. History is fetched when
-  the user opens the History tab — opening it *is* the request — and at no other time.
+- No client pulls anything on reconnect or in the background, with one opt-in exception
+  below. History is fetched when the user opens the History tab — opening it *is* the
+  request — and at no other time.
+- When a device writes an entry, the relay tells the group's other connected devices
+  (`EntryAdded`, metadata only). A client ignores it unless its user has turned on
+  applying remote entries (desktop: off by default); then it fetches that entry and
+  writes it to the local clipboard, unless the local clipboard is already newer. A
+  device that was offline is not told afterwards.
   A listing is entry metadata only; an entry's body is fetched when the user asks for
   that entry, by copying it or by opening its preview.
 - Where a client cannot make the timestamp comparison, it **asks** rather than reporting
@@ -456,6 +462,8 @@ binary, served from localhost and opened in the user's default browser.
 **Features:**
 - Tray menu: sync now, open UI, quit
 - Optional clipboard auto-watch (toggle, off by default)
+- Optional applying of entries other devices upload to the local clipboard (toggle, off
+  by default; §6)
 - Manual sync, with the direction asked for when it cannot be worked out
 - History browser, listed when the tab is opened, with a preview of text and image
   entries at the current epoch

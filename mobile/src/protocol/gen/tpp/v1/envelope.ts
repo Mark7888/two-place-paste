@@ -66,6 +66,7 @@ export enum MessageType {
   MESSAGE_TYPE_EPOCH_CHANGED = 50,
   MESSAGE_TYPE_WRAPPED_KEY_AVAILABLE = 51,
   MESSAGE_TYPE_DEVICE_REVOKED = 52,
+  MESSAGE_TYPE_ENTRY_ADDED = 53,
   UNRECOGNIZED = -1,
 }
 
@@ -155,6 +156,9 @@ export function messageTypeFromJSON(object: any): MessageType {
     case 52:
     case "MESSAGE_TYPE_DEVICE_REVOKED":
       return MessageType.MESSAGE_TYPE_DEVICE_REVOKED;
+    case 53:
+    case "MESSAGE_TYPE_ENTRY_ADDED":
+      return MessageType.MESSAGE_TYPE_ENTRY_ADDED;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -220,6 +224,8 @@ export function messageTypeToJSON(object: MessageType): string {
       return "MESSAGE_TYPE_WRAPPED_KEY_AVAILABLE";
     case MessageType.MESSAGE_TYPE_DEVICE_REVOKED:
       return "MESSAGE_TYPE_DEVICE_REVOKED";
+    case MessageType.MESSAGE_TYPE_ENTRY_ADDED:
+      return "MESSAGE_TYPE_ENTRY_ADDED";
     case MessageType.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";

@@ -227,6 +227,7 @@ type SettingsView struct {
 	Port               int    `json:"port"`
 	ListenPort         int    `json:"listen_port"`
 	AutoWatch          bool   `json:"auto_watch"`
+	AutoApply          bool   `json:"auto_apply"`
 	Autostart          bool   `json:"autostart"`
 	AutostartSupported bool   `json:"autostart_supported"`
 	ClipboardSupported bool   `json:"clipboard_supported"`
@@ -242,6 +243,7 @@ type SettingsView struct {
 type SettingsPatch struct {
 	Port       *int    `json:"port"`
 	AutoWatch  *bool   `json:"auto_watch"`
+	AutoApply  *bool   `json:"auto_apply"`
 	Autostart  *bool   `json:"autostart"`
 	DeviceName *string `json:"device_name"`
 }
