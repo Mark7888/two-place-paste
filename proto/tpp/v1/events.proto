@@ -6,6 +6,8 @@ syntax = "proto3";
 
 package tpp.v1;
 
+import "tpp/v1/entry.proto";
+
 option go_package = "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1";
 
 // EpochChanged tells every remaining device that the group has been re-keyed
@@ -38,4 +40,14 @@ message DeviceRevoked {
 
   // The epoch the group runs at after the revocation.
   uint64 epoch = 2;
+}
+
+// EntryAdded tells the rest of the group that a new entry is the latest. It is
+// sent to every other connected device of the group, never to the author.
+//
+// It carries metadata only: a client that wants the content fetches it, and
+// only when its user has opted into applying remote entries to the local
+// clipboard (SPEC §6). A client that has not opted in ignores it.
+message EntryAdded {
+  EntryMeta meta = 1;
 }

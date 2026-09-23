@@ -54,7 +54,10 @@ func TestPairSyncRekeyRevoke(t *testing.T) {
 	}
 
 	// --- Pair a second device (SPEC §3.2) ------------------------------------
-	phone, _ := newClient(t, "Anna — phone", tppclient.Options{})
+	announced := make(chan tppclient.EntryMeta, 8)
+	phone, _ := newClient(t, "Anna — phone", tppclient.Options{
+		Handlers: tppclient.Handlers{OnEntryAdded: func(m tppclient.EntryMeta) { announced <- m }},
+	})
 	joined := pair(ctx, t, desktop, phone)
 	if joined.Name != "Anna — phone" {
 		t.Errorf("the inviter was told the joiner is %q, want %q", joined.Name, "Anna — phone")
@@ -80,6 +83,16 @@ func TestPairSyncRekeyRevoke(t *testing.T) {
 	}
 	if meta.ID == "" {
 		t.Error("the relay returned no entry id")
+	}
+	// The other device is told a new entry exists; metadata only, and the
+	// content is still its to fetch.
+	select {
+	case m := <-announced:
+		if m.ID != meta.ID {
+			t.Errorf("phone was announced entry %q, want %q", m.ID, meta.ID)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("phone was not told about the desktop's entry")
 	}
 	got, err := phone.GetLatest(ctx)
 	if err != nil {

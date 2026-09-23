@@ -78,6 +78,7 @@ type Service struct {
 	watcher   *clipboard.Watcher
 	auto      autostart.Manager
 	hub       *hub
+	incoming  chan tppclient.EntryMeta
 	logger    *slog.Logger
 	now       func() time.Time
 	configDir string
@@ -90,6 +91,7 @@ type Service struct {
 	connected   bool
 	revoked     bool
 	lastSync    time.Time
+	lastApplied time.Time
 	lastError   string
 	plans       map[string]*plan
 	offerPlans  map[string]*offerPlan
@@ -126,6 +128,7 @@ func New(opts Options) (*Service, error) {
 		backend:    opts.KeystoreBackend,
 		listen:     opts.ListenPort,
 		settings:   opts.Settings,
+		incoming:   make(chan tppclient.EntryMeta, 1),
 		plans:      map[string]*plan{},
 		offerPlans: map[string]*offerPlan{},
 	}
@@ -164,11 +167,18 @@ func (s *Service) SetListenPort(port int) {
 	s.listen = port
 }
 
-// Run watches the clipboard until ctx is done, then ends every UI event
-// stream.
+// Run watches the clipboard and applies entries other devices announce until
+// ctx is done, then ends every UI event stream.
 func (s *Service) Run(ctx context.Context) {
 	defer s.hub.close()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.applyIncoming(ctx)
+	}()
 	s.watcher.Run(ctx)
+	wg.Wait()
 }
 
 // ClientHandlers are the callbacks to hand to tppclient.New.
@@ -199,6 +209,7 @@ func (s *Service) ClientHandlers() tppclient.Handlers {
 		OnDeviceRevoked: func(deviceID string, epoch uint64) {
 			s.hub.publish(localui.Event{Kind: localui.EventDeviceRevoked, DeviceID: deviceID, Epoch: epoch})
 		},
+		OnEntryAdded: s.announce,
 		OnRevoked: func() {
 			s.mu.Lock()
 			s.revoked, s.connected = true, false
@@ -937,6 +948,7 @@ func (s *Service) settingsView(set config.Settings) localui.SettingsView {
 		Port:               set.Port,
 		ListenPort:         s.listenPort(),
 		AutoWatch:          s.watcher.Enabled(),
+		AutoApply:          set.AutoApply && s.clip.Available(),
 		Autostart:          on,
 		AutostartSupported: s.auto.Available(),
 		ClipboardSupported: s.clip.Available(),
@@ -971,6 +983,13 @@ func (s *Service) UpdateSettings(_ context.Context, p localui.SettingsPatch) (lo
 		}
 		next.AutoWatch = *p.AutoWatch
 	}
+	if p.AutoApply != nil {
+		if *p.AutoApply && !s.clip.Available() {
+			return localui.SettingsView{}, localui.Errorf(http.StatusNotImplemented, nil,
+				"this build cannot reach a clipboard, so it cannot write one")
+		}
+		next.AutoApply = *p.AutoApply
+	}
 	if p.Autostart != nil {
 		on, err := autostart.Apply(s.auto, *p.Autostart)
 		if err != nil {
@@ -995,7 +1014,7 @@ func (s *Service) UpdateSettings(_ context.Context, p localui.SettingsPatch) (lo
 	s.watcher.SetEnabled(next.AutoWatch && s.clip.Available())
 
 	s.logger.Info("settings updated",
-		"auto_watch", next.AutoWatch, "autostart", next.Autostart, "port", next.Port)
+		"auto_watch", next.AutoWatch, "auto_apply", next.AutoApply, "autostart", next.Autostart, "port", next.Port)
 	s.hub.publish(localui.Event{Kind: localui.EventSettings})
 	return s.settingsView(next), nil
 }
@@ -1024,6 +1043,80 @@ func (s *Service) onClipboardChange(ctx context.Context, c clipboard.Content, at
 	s.noteSync(at)
 	s.logger.InfoContext(ctx, "clipboard change uploaded", "entry_id", meta.ID, "epoch", meta.Epoch, "bytes", meta.Size)
 	s.hub.publish(localui.Event{Kind: localui.EventSync, Message: "uploaded"})
+}
+
+// announce queues an entry another device wrote. It runs on the client's read
+// loop, so it never blocks: only the newest announcement matters (SPEC §6
+// syncs the latest entry only), and one still waiting is replaced.
+func (s *Service) announce(meta tppclient.EntryMeta) {
+	for {
+		select {
+		case s.incoming <- meta:
+			return
+		default:
+		}
+		select {
+		case <-s.incoming:
+		default:
+		}
+	}
+}
+
+// applyIncoming writes announced entries to the clipboard, when the user has
+// asked for that, until ctx is done.
+func (s *Service) applyIncoming(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case meta := <-s.incoming:
+			s.applyAnnounced(ctx, meta)
+		}
+	}
+}
+
+// applyAnnounced fetches one announced entry and puts it on the clipboard.
+//
+// It stands down rather than overwrite something newer: an entry older than
+// one already applied, or than a copy the user made here since, loses the
+// same comparison a manual sync would make (SPEC §6).
+func (s *Service) applyAnnounced(ctx context.Context, meta tppclient.EntryMeta) {
+	s.mu.Lock()
+	on, applied := s.settings.AutoApply, s.lastApplied
+	s.mu.Unlock()
+	if !on || !s.clip.Available() {
+		return
+	}
+	if meta.CreatedAt.Before(applied) || meta.CreatedAt.Before(s.watcher.LastChange()) {
+		return
+	}
+	relay, err := s.ready()
+	if err != nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	item, err := relay.GetEntry(ctx, meta.ID)
+	switch {
+	case errors.Is(err, tppclient.ErrStaleEntry), errors.Is(err, tppclient.ErrEpochAhead):
+		// Written under a key this device does not hold: skipped silently,
+		// as a manual download would skip it (SPEC §3.3).
+		s.logger.DebugContext(ctx, "announced entry skipped", "entry_id", meta.ID, "epoch", meta.Epoch)
+		return
+	case err != nil:
+		s.logger.WarnContext(ctx, "fetching an announced entry failed", "entry_id", meta.ID, "error", err)
+		return
+	}
+	if _, err := s.applyToClipboard(ctx, localui.DirectionDownload, item); err != nil {
+		s.logger.WarnContext(ctx, "applying an announced entry failed", "entry_id", meta.ID, "error", err)
+		return
+	}
+	s.mu.Lock()
+	if item.Meta.CreatedAt.After(s.lastApplied) {
+		s.lastApplied = item.Meta.CreatedAt
+	}
+	s.mu.Unlock()
 }
 
 func (s *Service) noteSync(at time.Time) {

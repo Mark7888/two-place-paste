@@ -196,11 +196,61 @@ func (x *DeviceRevoked) GetEpoch() uint64 {
 	return 0
 }
 
+// EntryAdded tells the rest of the group that a new entry is the latest. It is
+// sent to every other connected device of the group, never to the author.
+//
+// It carries metadata only: a client that wants the content fetches it, and
+// only when its user has opted into applying remote entries to the local
+// clipboard (SPEC §6). A client that has not opted in ignores it.
+type EntryAdded struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Meta          *EntryMeta             `protobuf:"bytes,1,opt,name=meta,proto3" json:"meta,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EntryAdded) Reset() {
+	*x = EntryAdded{}
+	mi := &file_tpp_v1_events_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EntryAdded) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EntryAdded) ProtoMessage() {}
+
+func (x *EntryAdded) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_events_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EntryAdded.ProtoReflect.Descriptor instead.
+func (*EntryAdded) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_events_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *EntryAdded) GetMeta() *EntryMeta {
+	if x != nil {
+		return x.Meta
+	}
+	return nil
+}
+
 var File_tpp_v1_events_proto protoreflect.FileDescriptor
 
 const file_tpp_v1_events_proto_rawDesc = "" +
 	"\n" +
-	"\x13tpp/v1/events.proto\x12\x06tpp.v1\"P\n" +
+	"\x13tpp/v1/events.proto\x12\x06tpp.v1\x1a\x12tpp/v1/entry.proto\"P\n" +
 	"\fEpochChanged\x12\x14\n" +
 	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12*\n" +
 	"\x11revoked_device_id\x18\x02 \x01(\tR\x0frevokedDeviceId\"W\n" +
@@ -209,7 +259,10 @@ const file_tpp_v1_events_proto_rawDesc = "" +
 	"\x11wrapped_group_key\x18\x02 \x01(\fR\x0fwrappedGroupKey\"B\n" +
 	"\rDeviceRevoked\x12\x1b\n" +
 	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12\x14\n" +
-	"\x05epoch\x18\x02 \x01(\x04R\x05epochBHZFgithub.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1b\x06proto3"
+	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\"3\n" +
+	"\n" +
+	"EntryAdded\x12%\n" +
+	"\x04meta\x18\x01 \x01(\v2\x11.tpp.v1.EntryMetaR\x04metaBHZFgithub.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1b\x06proto3"
 
 var (
 	file_tpp_v1_events_proto_rawDescOnce sync.Once
@@ -223,18 +276,21 @@ func file_tpp_v1_events_proto_rawDescGZIP() []byte {
 	return file_tpp_v1_events_proto_rawDescData
 }
 
-var file_tpp_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_tpp_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_tpp_v1_events_proto_goTypes = []any{
 	(*EpochChanged)(nil),        // 0: tpp.v1.EpochChanged
 	(*WrappedKeyAvailable)(nil), // 1: tpp.v1.WrappedKeyAvailable
 	(*DeviceRevoked)(nil),       // 2: tpp.v1.DeviceRevoked
+	(*EntryAdded)(nil),          // 3: tpp.v1.EntryAdded
+	(*EntryMeta)(nil),           // 4: tpp.v1.EntryMeta
 }
 var file_tpp_v1_events_proto_depIdxs = []int32{
-	0, // [0:0] is the sub-list for method output_type
-	0, // [0:0] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	4, // 0: tpp.v1.EntryAdded.meta:type_name -> tpp.v1.EntryMeta
+	1, // [1:1] is the sub-list for method output_type
+	1, // [1:1] is the sub-list for method input_type
+	1, // [1:1] is the sub-list for extension type_name
+	1, // [1:1] is the sub-list for extension extendee
+	0, // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_tpp_v1_events_proto_init() }
@@ -242,13 +298,14 @@ func file_tpp_v1_events_proto_init() {
 	if File_tpp_v1_events_proto != nil {
 		return
 	}
+	file_tpp_v1_entry_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_tpp_v1_events_proto_rawDesc), len(file_tpp_v1_events_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -33,8 +33,9 @@ The token and Origin checks apply in dev mode too.
 | `TPP_DESKTOP_UI_DEV` | Base URL of a running Vite server; the UI is proxied from there. |
 | `TPP_DESKTOP_LOG` | `debug`, `info`, `warn`, `error`. Defaults to `info`. |
 
-Everything a user changes — the port, clipboard auto-watch, autostart — is in the
-settings file and in the UI, not in the environment.
+Everything a user changes — the port, clipboard auto-watch, applying other
+devices' entries, autostart — is in the settings file and in the UI, not in the
+environment.
 
 ## Layout
 

@@ -138,6 +138,7 @@ export interface SettingsView {
   port: number;
   listen_port: number;
   auto_watch: boolean;
+  auto_apply: boolean;
   autostart: boolean;
   autostart_supported: boolean;
   clipboard_supported: boolean;
@@ -148,6 +149,7 @@ export interface SettingsView {
 export interface SettingsPatch {
   port?: number;
   auto_watch?: boolean;
+  auto_apply?: boolean;
   autostart?: boolean;
   device_name?: string;
 }

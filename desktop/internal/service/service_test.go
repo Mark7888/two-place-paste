@@ -980,3 +980,78 @@ func TestPairingCodesCarryALink(t *testing.T) {
 		t.Errorf("StripCodeEnvelope(link) = %q, want the payload %q", got, inv.Payload)
 	}
 }
+
+// TestAnnouncedEntriesReachTheClipboardOnlyWhenAsked covers auto-apply: an
+// entry another device wrote is written here only with the setting on, and
+// never over something newer.
+func TestAnnouncedEntriesReachTheClipboardOnlyWhenAsked(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		autoApply bool
+		localAt   time.Duration // a local copy this long after the entry; zero for none
+		wantBody  string
+	}{
+		{name: "off by default", autoApply: false},
+		{name: "on", autoApply: true, wantBody: "from the phone"},
+		{name: "a newer local copy wins", autoApply: true, localAt: time.Minute, wantBody: "copied here"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			ctx := context.Background()
+			if tt.autoApply {
+				view, err := f.svc.UpdateSettings(ctx, localui.SettingsPatch{AutoApply: boolPtr(true)})
+				if err != nil {
+					t.Fatalf("UpdateSettings() error = %v", err)
+				}
+				if !view.AutoApply {
+					t.Fatalf("UpdateSettings() = %+v, want auto-apply on", view)
+				}
+			}
+			if tt.localAt != 0 {
+				local := textContent("copied here")
+				f.clip.set(local)
+				f.svc.watcher.MarkLocal(local, f.now().Add(tt.localAt))
+			}
+
+			meta, err := f.relay.PutEntry(ctx, tppclient.Item{
+				ContentType: clipboard.TypeText,
+				Body:        []byte("from the phone"),
+				CreatedAt:   f.now(),
+			})
+			if err != nil {
+				t.Fatalf("PutEntry() error = %v", err)
+			}
+			f.svc.applyAnnounced(ctx, meta)
+
+			got, err := f.clip.Read(ctx)
+			switch {
+			case tt.wantBody == "" && !errors.Is(err, clipboard.ErrEmpty):
+				t.Errorf("clipboard = %q, %v; want it untouched", got.Body, err)
+			case tt.wantBody != "" && string(got.Body) != tt.wantBody:
+				t.Errorf("clipboard = %q, %v; want %q", got.Body, err, tt.wantBody)
+			}
+			if tt.wantBody != "" && f.relay.count() != 1 {
+				t.Errorf("relay holds %d entries, want 1: applying an entry must not upload it back", f.relay.count())
+			}
+		})
+	}
+}
+
+// TestAnnounceKeepsOnlyTheNewest checks the read loop is never blocked and a
+// backlog collapses to the latest entry (SPEC §6).
+func TestAnnounceKeepsOnlyTheNewest(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	for i := range 5 {
+		f.svc.announce(tppclient.EntryMeta{ID: fmt.Sprintf("e%d", i)})
+	}
+	if got := (<-f.svc.incoming).ID; got != "e4" {
+		t.Errorf("queued announcement = %q, want e4", got)
+	}
+}

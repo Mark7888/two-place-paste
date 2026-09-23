@@ -6,6 +6,7 @@
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
+import { EntryMeta } from "./entry";
 
 export const protobufPackage = "tpp.v1";
 
@@ -49,6 +50,18 @@ export interface DeviceRevoked {
   deviceId: string;
   /** The epoch the group runs at after the revocation. */
   epoch: string;
+}
+
+/**
+ * EntryAdded tells the rest of the group that a new entry is the latest. It is
+ * sent to every other connected device of the group, never to the author.
+ *
+ * It carries metadata only: a client that wants the content fetches it, and
+ * only when its user has opted into applying remote entries to the local
+ * clipboard (SPEC §6). A client that has not opted in ignores it.
+ */
+export interface EntryAdded {
+  meta?: EntryMeta | undefined;
 }
 
 function createBaseEpochChanged(): EpochChanged {
@@ -314,6 +327,73 @@ export const DeviceRevoked: MessageFns<DeviceRevoked> = {
     const message = createBaseDeviceRevoked();
     message.deviceId = object.deviceId ?? "";
     message.epoch = object.epoch ?? "0";
+    return message;
+  },
+};
+
+function createBaseEntryAdded(): EntryAdded {
+  return { meta: undefined };
+}
+
+export const EntryAdded: MessageFns<EntryAdded> = {
+  encode(message: EntryAdded, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.meta !== undefined) {
+      EntryMeta.encode(message.meta, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EntryAdded {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseEntryAdded();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.meta = EntryMeta.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): EntryAdded {
+    return { meta: isSet(object.meta) ? EntryMeta.fromJSON(object.meta) : undefined };
+  },
+
+  toJSON(message: EntryAdded): unknown {
+    const obj: any = {};
+    if (message.meta !== undefined) {
+      obj.meta = EntryMeta.toJSON(message.meta);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EntryAdded>, I>>(base?: I): EntryAdded {
+    return EntryAdded.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EntryAdded>, I>>(object: I): EntryAdded {
+    const message = createBaseEntryAdded();
+    message.meta = (object.meta !== undefined && object.meta !== null) ? EntryMeta.fromPartial(object.meta) : undefined;
     return message;
   },
 };

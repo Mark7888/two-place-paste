@@ -96,7 +96,7 @@ export function SettingsPanel({
   return (
     <>
       <h1>Settings</h1>
-      <p className="lede">This installation, and the four things you can change about it.</p>
+      <p className="lede">This installation, and the five things you can change about it.</p>
 
       {error ? (
         <div className="notice error">
@@ -126,6 +126,22 @@ export function SettingsPanel({
               <span className="why">
                 {settings.clipboard_supported
                   ? "Anything you copy is encrypted and uploaded as the group’s latest entry. Off by default."
+                  : "This build cannot reach a clipboard."}
+              </span>
+            </span>
+          </label>
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={settings.auto_apply}
+              disabled={!settings.clipboard_supported}
+              onChange={(e) => void patch({ auto_apply: e.target.checked })}
+            />
+            <span className="text">
+              <strong>Take what other devices upload</strong>
+              <span className="why">
+                {settings.clipboard_supported
+                  ? "A new entry from another device replaces this clipboard as soon as it arrives. Off by default."
                   : "This build cannot reach a clipboard."}
               </span>
             </span>

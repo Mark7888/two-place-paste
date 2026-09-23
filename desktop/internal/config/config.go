@@ -1,5 +1,6 @@
 // Package config holds the desktop service's non-secret settings: the port it
-// binds, whether it watches the clipboard, and whether it starts at login.
+// binds, whether it watches the clipboard, whether it applies other devices'
+// entries to it, and whether it starts at login.
 //
 // Nothing secret is stored here. The device private key, the group key and the
 // group identifiers live in the keystore (/spec/crypto.md §10); this file is
@@ -31,15 +32,20 @@ const FileName = "desktop.json"
 
 // Settings is the whole of the service's configuration.
 //
-// Both toggles default to false and stay false until the user says otherwise
-// (SPEC §7.2): a clipboard watcher and a login item are things a user opts
-// into, never things an installer decides for them.
+// Every toggle defaults to false and stay false until the user says otherwise
+// (SPEC §7.2): a clipboard watcher, a clipboard that changes by itself and a
+// login item are things a user opts into, never things an installer decides
+// for them.
 type Settings struct {
 	// Port overrides DefaultPort. Zero means the default.
 	Port int `json:"port"`
 
 	// AutoWatch enables clipboard polling. Off by default.
 	AutoWatch bool `json:"auto_watch"`
+
+	// AutoApply writes an entry another device uploads to the local
+	// clipboard as soon as the relay announces it. Off by default.
+	AutoApply bool `json:"auto_apply"`
 
 	// Autostart records the user's intent for the login item. The truth lives
 	// in launchd or the registry; this is what the UI shows and what a
