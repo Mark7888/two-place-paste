@@ -20,5 +20,10 @@ To change the icon, edit `icon.svg`, then:
     python3 assets/icon/generate.py
     cd desktop/cmd/tppdesktop && go run github.com/tc-hib/go-winres@latest make --arch amd64,arm64
 
+Everything that can end up on a dark background is made to survive it: the
+Android icons sit on white, every `.ico` (the Windows exe and the favicon
+fallbacks) sits on a white rounded plate, and `favicon.svg` switches to a light
+ink under `prefers-color-scheme: dark`.
+
 The tray icons (`desktop/internal/tray`) are drawn separately and are not
 generated from this file.

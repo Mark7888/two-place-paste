@@ -83,9 +83,24 @@ def save_png(img: Image.Image, path: Path) -> None:
     print("wrote", path.relative_to(ROOT))
 
 
+def favicon_svg() -> str:
+    """The SVG favicon. The artwork's navy all but disappears on a dark tab
+    strip, so under a dark colour scheme it switches to a light ink; the
+    coloured lines keep their own fills."""
+    text = clean_svg()
+    text = text.replace('<g fill="#2f3b59"', '<g class="ink" fill="#2f3b59"', 1)
+    style = ("\n  <style>@media (prefers-color-scheme: dark) { .ink { fill: #e6ebf5; } }</style>")
+    return re.sub(r"(<svg[^>]*>)", lambda m: m.group(1) + style, text, count=1)
+
+
+# ICO has no dark variant, and Windows shows the exe's icon on dark and light
+# backgrounds alike, so every ICO sits on a light rounded plate.
+ICO_PLATE = "#FFFFFF"
+
+
 def save_ico(path: Path, sizes: list[int], scale: float) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    frames = [render(s, scale) for s in sizes]
+    frames = [render(s, scale, ICO_PLATE, "square", corner=0.2) for s in sizes]
     frames[-1].save(path, format="ICO", sizes=[(s, s) for s in sizes], append_images=frames[:-1])
     print("wrote", path.relative_to(ROOT))
 
@@ -134,7 +149,7 @@ def android_vector(path: Path, size_dp: int, art_radius_dp: float, header: str, 
 
 
 def main() -> None:
-    svg = clean_svg()
+    svg = favicon_svg()
 
     # --- Master rasters, for stores and anything else that wants one.
     save_png(render(1024, 0.92), ROOT / "assets/icon/icon-1024.png")
@@ -165,14 +180,14 @@ def main() -> None:
     icns = ROOT / "desktop/packaging/macos/AppIcon.icns"
     render(1024, 0.92).save(icns, format="ICNS")
     print("wrote", icns.relative_to(ROOT))
-    save_ico(ROOT / "desktop/packaging/windows/app.ico", [16, 20, 24, 32, 40, 48, 64, 256], 0.96)
+    save_ico(ROOT / "desktop/packaging/windows/app.ico", [16, 20, 24, 32, 40, 48, 64, 256], 0.84)
 
     # --- Web favicons: the desktop settings UI and the relay's two pages.
     for web in (ROOT / "desktop/ui/public", ROOT / "server/web/admin", ROOT / "server/web/pair"):
         web.mkdir(parents=True, exist_ok=True)
         (web / "favicon.svg").write_text(svg)
         print("wrote", (web / "favicon.svg").relative_to(ROOT))
-        save_ico(web / "favicon.ico", [16, 32, 48], 0.98)
+        save_ico(web / "favicon.ico", [16, 32, 48], 0.86)
         save_png(render(180, 0.80, "#FFFFFF", "square"), web / "apple-touch-icon.png")
 
 

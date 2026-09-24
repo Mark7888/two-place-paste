@@ -1,12 +1,17 @@
 package tray
 
-import "fyne.io/systray"
+import (
+	"context"
 
-// setIcon uses a template image on macOS, so the glyph inverts with the menu
+	"fyne.io/systray"
+)
+
+// showIcon uses a template image on macOS, so the glyph inverts with the menu
 // bar rather than staying black on a dark bar.
-func setIcon(pngIcon, _ []byte) {
-	if len(pngIcon) == 0 {
+func showIcon(context.Context) {
+	set := icons(inkDark)
+	if len(set.png) == 0 {
 		return
 	}
-	systray.SetTemplateIcon(pngIcon, pngIcon)
+	systray.SetTemplateIcon(set.png, set.png)
 }
