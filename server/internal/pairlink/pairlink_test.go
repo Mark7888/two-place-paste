@@ -32,7 +32,7 @@ func get(t *testing.T, srv *httptest.Server, path string) (*http.Response, strin
 	return resp, string(body)
 }
 
-// TestPageAndAssets: the three files are public, because whoever is scanning a
+// TestPageAndAssets: the page and its files are public, because whoever is scanning a
 // code has no account here and may not have the app.
 func TestPageAndAssets(t *testing.T) {
 	t.Parallel()
@@ -42,6 +42,9 @@ func TestPageAndAssets(t *testing.T) {
 		{"/pair", "text/html; charset=utf-8"},
 		{"/pair/style.css", "text/css; charset=utf-8"},
 		{"/pair/app.js", "text/javascript; charset=utf-8"},
+		{"/pair/favicon.svg", "image/svg+xml"},
+		{"/pair/favicon.ico", "image/x-icon"},
+		{"/pair/apple-touch-icon.png", "image/png"},
 	} {
 		resp, body := get(t, srv, tc.path)
 		if resp.StatusCode != http.StatusOK {

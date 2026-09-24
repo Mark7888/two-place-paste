@@ -20,7 +20,7 @@
 //
 // The page is public and unauthenticated by necessity: whoever is scanning has
 // no account here and may not even have the app. It exposes nothing, because
-// it is three static files.
+// it is a handful of static files.
 package pairlink
 
 import (
@@ -54,6 +54,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /pair", s.handlePage)
 	mux.HandleFunc("GET /pair/style.css", s.asset("style.css", "text/css; charset=utf-8"))
 	mux.HandleFunc("GET /pair/app.js", s.asset("app.js", "text/javascript; charset=utf-8"))
+	mux.HandleFunc("GET /pair/favicon.svg", s.asset("favicon.svg", "image/svg+xml"))
+	mux.HandleFunc("GET /pair/favicon.ico", s.asset("favicon.ico", "image/x-icon"))
+	mux.HandleFunc("GET /pair/apple-touch-icon.png", s.asset("apple-touch-icon.png", "image/png"))
 }
 
 func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
@@ -66,11 +69,11 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
-	// One stylesheet and one script, both from this origin, and nothing else.
-	// No inline script anywhere on the page, so the policy needs no nonce and
-	// no 'unsafe-inline'.
+	// One stylesheet, one script and the favicons, all from this origin, and
+	// nothing else. No inline script anywhere on the page, so the policy needs
+	// no nonce and no 'unsafe-inline'.
 	h.Set("Content-Security-Policy",
-		"default-src 'none'; style-src 'self'; script-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'")
+		"default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'")
 	// The fragment never reaches this server, and this makes sure it never
 	// leaves the browser by another route either.
 	h.Set("Referrer-Policy", "no-referrer")

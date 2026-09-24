@@ -1,10 +1,24 @@
-# App icon source
+# App icon
 
-Drop the master icon here as **`icon.png`**:
+`icon.svg` is the master. Every platform icon is generated from it by
+`generate.py` and checked in:
 
-- Square, **1024×1024** px (or larger), PNG with transparency
-- Optionally also `icon.svg` if you have a vector version
+| Output | Used by |
+| --- | --- |
+| `mobile/android/app/src/main/res/drawable/ic_launcher_foreground.xml`, `ic_launcher_monochrome.xml` | Android adaptive launcher icon (API 26+) and themed icon (Android 13+) |
+| `mobile/android/app/src/main/res/mipmap-*/ic_launcher*.png` | Android launcher icon on API 24–25 |
+| `mobile/android/app/src/main/res/drawable/ic_tile.xml` | Android quick-settings tile |
+| `desktop/packaging/macos/AppIcon.icns` | macOS app bundle |
+| `desktop/packaging/windows/app.ico` | Windows exe (via `desktop/cmd/tppdesktop/winres`) and installer |
+| `desktop/ui/public/favicon.*`, `apple-touch-icon.png` | Desktop settings UI |
+| `server/web/{admin,pair}/favicon.*`, `apple-touch-icon.png` | Relay admin UI and pairing hand-off page |
+| `icon-1024.png`, `play-store-512.png` | Store listings and anything else that wants a bitmap |
 
-All platform-specific sizes (Android launcher icons, macOS `.icns`,
-Windows `.ico`, client settings UI, relay server favicons) are generated
-from this file. Tray icons are separate and are not derived from it.
+To change the icon, edit `icon.svg`, then:
+
+    pip install cairosvg pillow
+    python3 assets/icon/generate.py
+    cd desktop/cmd/tppdesktop && go run github.com/tc-hib/go-winres@latest make --arch amd64,arm64
+
+The tray icons (`desktop/internal/tray`) are drawn separately and are not
+generated from this file.
