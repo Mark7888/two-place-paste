@@ -12,6 +12,7 @@
 | `desktop/packaging/windows/app.ico` | Windows exe (via `desktop/cmd/tppdesktop/winres`) and installer |
 | `desktop/ui/public/favicon.*`, `apple-touch-icon.png` | Desktop settings UI |
 | `server/web/{admin,pair}/favicon.*`, `apple-touch-icon.png` | Relay admin UI and pairing hand-off page |
+| `icon-outlined.svg` | The outlined variant the desktop icons and favicons are made from |
 | `icon-1024.png`, `play-store-512.png` | Store listings and anything else that wants a bitmap |
 
 To change the icon, edit `icon.svg`, then:
@@ -20,10 +21,11 @@ To change the icon, edit `icon.svg`, then:
     python3 assets/icon/generate.py
     cd desktop/cmd/tppdesktop && go run github.com/tc-hib/go-winres@latest make --arch amd64,arm64
 
-Everything that can end up on a dark background is made to survive it: the
-Android icons sit on white, every `.ico` (the Windows exe and the favicon
-fallbacks) sits on a white rounded plate, and `favicon.svg` switches to a light
-ink under `prefers-color-scheme: dark`.
+Everything that can end up on a dark background is made to survive it. The
+Android icons sit on white. The desktop icons (`.ico`, `.icns`) and the
+favicons use `icon-outlined.svg`: the same artwork on a white sticker that
+follows its silhouette. `generate.py` writes that file too; edit `icon.svg`,
+not it.
 
 The tray icons (`desktop/internal/tray`) are drawn separately and are not
 generated from this file.

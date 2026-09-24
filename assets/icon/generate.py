@@ -47,8 +47,34 @@ def clean_svg() -> str:
     return text
 
 
+# The outlined variant, for everything that is shown on a background of the
+# user's choosing (Windows, macOS, browser tabs): a white sticker that follows
+# the artwork's silhouette, so the navy has something to stand on even on a
+# dark desktop. HALO is how far it reaches past the artwork, in SVG units.
+HALO = 18
+HALO_FILL = "#FFFFFF"
+# The silhouette, in the source's own coordinates (before its translate): the
+# board, the clip and the sync badge, each as a solid shape.
+SILHOUETTE = (
+    "M132 100 H364 A40 40 0 0 1 404 140 V410 A40 40 0 0 1 364 450 H132 A40 40 0 0 1 92 410 V140 "
+    "A40 40 0 0 1 132 100 Z "
+    "M150 104 A16 16 0 0 1 166 88 H182 A14 14 0 0 0 196 74 V70 A52 52 0 0 1 300 70 V74 "
+    "A14 14 0 0 0 314 88 H330 A16 16 0 0 1 346 104 V132 A18 18 0 0 1 328 150 H168 A18 18 0 0 1 150 132 Z "
+    "M357 307 A85 85 0 1 1 357 477 A85 85 0 1 1 357 307 Z"
+)
+
+
+def outlined_svg() -> str:
+    """The artwork on its white sticker."""
+    text = clean_svg()
+    _, tx, ty = svg_paths()
+    halo = (f'\n  <path fill="{HALO_FILL}" stroke="{HALO_FILL}" stroke-width="{2 * HALO}" '
+            f'stroke-linejoin="round" transform="translate({tx:g} {ty:g})" d="{SILHOUETTE}"/>')
+    return re.sub(r"(<svg[^>]*>)", lambda m: m.group(1) + halo, text, count=1)
+
+
 def render(size: int, scale: float = 1.0, background: str | None = None, shape: str = "none",
-           corner: float = 0.0) -> Image.Image:
+           corner: float = 0.0, outlined: bool = False) -> Image.Image:
     """Render the artwork centred in a size×size canvas.
 
     scale is the artwork's radius as a fraction of the canvas's half-width;
@@ -56,8 +82,10 @@ def render(size: int, scale: float = 1.0, background: str | None = None, shape: 
     fraction of the size) or circle.
     """
     # Render the SVG large, then place it: cairosvg has no notion of padding.
-    art_px = round(size * scale * 512 / (2 * ART_RADIUS))
-    png = cairosvg.svg2png(bytestring=clean_svg().encode(), output_width=art_px * 2,
+    radius = ART_RADIUS + HALO if outlined else ART_RADIUS
+    art_px = round(size * scale * 512 / (2 * radius))
+    source = outlined_svg() if outlined else clean_svg()
+    png = cairosvg.svg2png(bytestring=source.encode(), output_width=art_px * 2,
                            output_height=art_px * 2)
     art = Image.open(io.BytesIO(png)).convert("RGBA").resize((art_px, art_px), Image.LANCZOS)
 
@@ -83,24 +111,9 @@ def save_png(img: Image.Image, path: Path) -> None:
     print("wrote", path.relative_to(ROOT))
 
 
-def favicon_svg() -> str:
-    """The SVG favicon. The artwork's navy all but disappears on a dark tab
-    strip, so under a dark colour scheme it switches to a light ink; the
-    coloured lines keep their own fills."""
-    text = clean_svg()
-    text = text.replace('<g fill="#2f3b59"', '<g class="ink" fill="#2f3b59"', 1)
-    style = ("\n  <style>@media (prefers-color-scheme: dark) { .ink { fill: #e6ebf5; } }</style>")
-    return re.sub(r"(<svg[^>]*>)", lambda m: m.group(1) + style, text, count=1)
-
-
-# ICO has no dark variant, and Windows shows the exe's icon on dark and light
-# backgrounds alike, so every ICO sits on a light rounded plate.
-ICO_PLATE = "#FFFFFF"
-
-
 def save_ico(path: Path, sizes: list[int], scale: float) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    frames = [render(s, scale, ICO_PLATE, "square", corner=0.2) for s in sizes]
+    frames = [render(s, scale, outlined=True) for s in sizes]
     frames[-1].save(path, format="ICO", sizes=[(s, s) for s in sizes], append_images=frames[:-1])
     print("wrote", path.relative_to(ROOT))
 
@@ -149,7 +162,9 @@ def android_vector(path: Path, size_dp: int, art_radius_dp: float, header: str, 
 
 
 def main() -> None:
-    svg = favicon_svg()
+    svg = outlined_svg()
+    (ROOT / "assets/icon/icon-outlined.svg").write_text(svg)
+    print("wrote assets/icon/icon-outlined.svg")
 
     # --- Master rasters, for stores and anything else that wants one.
     save_png(render(1024, 0.92), ROOT / "assets/icon/icon-1024.png")
@@ -178,16 +193,16 @@ def main() -> None:
 
     # --- Desktop (SPEC §7.2).
     icns = ROOT / "desktop/packaging/macos/AppIcon.icns"
-    render(1024, 0.92).save(icns, format="ICNS")
+    render(1024, 0.92, outlined=True).save(icns, format="ICNS")
     print("wrote", icns.relative_to(ROOT))
-    save_ico(ROOT / "desktop/packaging/windows/app.ico", [16, 20, 24, 32, 40, 48, 64, 256], 0.84)
+    save_ico(ROOT / "desktop/packaging/windows/app.ico", [16, 20, 24, 32, 40, 48, 64, 256], 1.0)
 
     # --- Web favicons: the desktop settings UI and the relay's two pages.
     for web in (ROOT / "desktop/ui/public", ROOT / "server/web/admin", ROOT / "server/web/pair"):
         web.mkdir(parents=True, exist_ok=True)
         (web / "favicon.svg").write_text(svg)
         print("wrote", (web / "favicon.svg").relative_to(ROOT))
-        save_ico(web / "favicon.ico", [16, 32, 48], 0.86)
+        save_ico(web / "favicon.ico", [16, 32, 48], 1.0)
         save_png(render(180, 0.80, "#FFFFFF", "square"), web / "apple-touch-icon.png")
 
 
