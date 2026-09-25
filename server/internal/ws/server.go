@@ -52,6 +52,10 @@ type Options struct {
 	// the desktop and mobile clients are not browsers and send no Origin.
 	OriginPatterns []string
 
+	// PingInterval is how often an idle connection is pinged to keep proxies
+	// and NATs from dropping it. Defaults to 25 seconds; tests shorten it.
+	PingInterval time.Duration
+
 	// Now supplies UTC timestamps; tests replace it.
 	Now func() time.Time
 }
@@ -68,6 +72,7 @@ type Server struct {
 	defaultHistoryLimit int
 	maxHistoryLimit     int
 	originPatterns      []string
+	pingInterval        time.Duration
 	now                 func() time.Time
 
 	// afterPairingNotice runs once the join notice has been queued for the
@@ -88,6 +93,7 @@ func New(st Store, en Entries, opts Options) *Server {
 		defaultHistoryLimit: opts.DefaultHistoryLimit,
 		maxHistoryLimit:     opts.MaxHistoryLimit,
 		originPatterns:      opts.OriginPatterns,
+		pingInterval:        opts.PingInterval,
 		now:                 opts.Now,
 	}
 	if s.logger == nil {
@@ -104,6 +110,9 @@ func New(st Store, en Entries, opts Options) *Server {
 	}
 	if s.maxHistoryLimit <= 0 {
 		s.maxHistoryLimit = maxHistoryLimit
+	}
+	if s.pingInterval <= 0 {
+		s.pingInterval = pingInterval
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
@@ -157,6 +166,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go c.writePump(ctx)
+	go c.keepalive(ctx, s.pingInterval)
 	s.readLoop(ctx, c)
 }
 

@@ -370,7 +370,13 @@ func (c *Client) supervise(runCtx context.Context, stopped chan struct{}) {
 		if runCtx.Err() != nil {
 			return
 		}
-		err := c.serveOnce(runCtx)
+		connected, err := c.serveOnce(runCtx)
+		if connected {
+			// The backoff paces attempts that fail, not connections that
+			// worked and later dropped: without the reset, every proxy idle
+			// timeout would leave the next outage waiting longer than the last.
+			backoff = c.minBackoff
+		}
 		switch {
 		case runCtx.Err() != nil:
 			return
@@ -400,19 +406,20 @@ func (c *Client) supervise(runCtx context.Context, stopped chan struct{}) {
 	}
 }
 
-// serveOnce holds one connection open until it fails.
-func (c *Client) serveOnce(runCtx context.Context) error {
+// serveOnce holds one connection open until it fails. connected reports
+// whether a connection was established at all.
+func (c *Client) serveOnce(runCtx context.Context) (connected bool, err error) {
 	c.mu.Lock()
 	deviceID, base := c.state.DeviceID, c.state.ServerURL
 	c.mu.Unlock()
 
 	endpoint, err := websocketURL(base, deviceID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	conn, err := c.dial(runCtx, endpoint)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	c.mu.Lock()
@@ -424,6 +431,7 @@ func (c *Client) serveOnce(runCtx context.Context) error {
 		c.handlers.OnConnected()
 	}
 
+	go conn.keepalive(runCtx, pingInterval, pingTimeout)
 	readErr := conn.readLoop(runCtx, c.onEvent)
 
 	c.mu.Lock()
@@ -433,7 +441,7 @@ func (c *Client) serveOnce(runCtx context.Context) error {
 	if c.handlers.OnDisconnected != nil {
 		c.handlers.OnDisconnected(readErr)
 	}
-	return readErr
+	return true, readErr
 }
 
 // dial opens a socket, translating the relay's rejection of an unknown device

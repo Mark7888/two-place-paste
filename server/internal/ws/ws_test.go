@@ -3,6 +3,7 @@ package ws_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -1093,5 +1094,44 @@ func TestInviterMayReplyBeforeTheJoinerFinishesJoining(t *testing.T) {
 	joiner.await(tppv1.MessageType_MESSAGE_TYPE_PAIRING_COMPLETE, &complete)
 	if string(complete.GetWrappedGroupKey()) != "wrapped-for-joiner" {
 		t.Fatalf("PairingComplete = %+v, want the key the inviter wrapped", &complete)
+	}
+}
+
+func TestIdleConnectionsArePinged(t *testing.T) {
+	t.Parallel()
+
+	const interval = 20 * time.Millisecond
+	h := newHarnessWithOptions(t, ws.Options{
+		Logger:       slog.New(slog.DiscardHandler),
+		PingInterval: interval,
+	})
+
+	// A peer that answers pings survives any amount of silence: this is the
+	// clipboard socket between two copies.
+	laptop, created := h.createGroup(t, "laptop")
+	time.Sleep(20 * interval)
+	laptop.send("roster", tppv1.MessageType_MESSAGE_TYPE_DEVICE_LIST_REQUEST, &tppv1.DeviceListRequest{})
+	laptop.await(tppv1.MessageType_MESSAGE_TYPE_DEVICE_LIST_RESPONSE, nil)
+
+	// A peer that does not is gone, whatever TCP says. Nothing reads this
+	// socket, so nothing answers the server's pings.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	silent, _, err := websocket.Dial(ctx, h.url+"?device_id="+created.GetDeviceId(), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = silent.CloseNow() })
+	time.Sleep(20 * interval)
+
+	readCtx, readCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer readCancel()
+	// Whatever the server queued before giving up is still in the buffer; the
+	// close is what comes after it.
+	for err == nil {
+		_, _, err = silent.Read(readCtx)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("read on an unresponsive peer: %v, want the server to have closed it", err)
 	}
 }
