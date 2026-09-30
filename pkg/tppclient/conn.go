@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"google.golang.org/protobuf/proto"
@@ -37,6 +38,18 @@ type conn struct {
 // readLimit bounds an inbound frame: the 10 MB ciphertext cap plus room for
 // protobuf framing, mirroring what the server allows outbound (SPEC §4.3).
 const readLimit = (10 << 20) + (64 << 10)
+
+// Keepalive. A socket with no traffic on it is indistinguishable, to a reverse
+// proxy or a NAT, from one whose peer has gone: most of them sever it after
+// somewhere between 30 and 100 seconds of silence, and they do it by dropping
+// the TCP connection, not by sending a close frame. The client learns of that
+// as an EOF, then reconnects. A ping well inside the shortest of those windows
+// keeps the path open; a pong that does not come back in time is also how a
+// connection that died silently is noticed at all.
+const (
+	pingInterval = 25 * time.Second
+	pingTimeout  = 15 * time.Second
+)
 
 // dialConn opens a connection. deviceID, when set, is the connection's device
 // credential; the two unauthenticated flows (group creation, pairing-join)
@@ -73,9 +86,10 @@ func (c *conn) readLoop(ctx context.Context, onEvent func(*tppv1.Envelope)) erro
 	for {
 		typ, data, err := c.ws.Read(ctx)
 		if err != nil {
-			err = fmt.Errorf("tppclient: read from the relay: %w", err)
-			c.fail(err)
-			return err
+			// A keepalive that failed has already recorded why and closed the
+			// socket under this read; its reason is the one worth reporting.
+			c.fail(fmt.Errorf("tppclient: read from the relay: %w", err))
+			return c.failure()
 		}
 		if typ != websocket.MessageBinary {
 			err := fmt.Errorf("tppclient: relay sent a %s frame; this protocol is binary only", typ)
@@ -95,6 +109,35 @@ func (c *conn) readLoop(ctx context.Context, onEvent func(*tppv1.Envelope)) erro
 		}
 		if onEvent != nil {
 			onEvent(&env)
+		}
+	}
+}
+
+// keepalive pings the relay every interval until the connection ends. A ping
+// not answered within timeout fails the connection and closes the socket,
+// which unblocks readLoop. Ping needs a concurrent reader to see the pong, and
+// readLoop is that reader.
+func (c *conn) keepalive(ctx context.Context, interval, timeout time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.done:
+			return
+		case <-ticker.C:
+		}
+		pingCtx, cancel := context.WithTimeout(ctx, timeout)
+		err := c.ws.Ping(pingCtx)
+		cancel()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			c.fail(fmt.Errorf("tppclient: the relay stopped answering pings: %w", err))
+			_ = c.ws.CloseNow()
+			return
 		}
 	}
 }
@@ -213,6 +256,13 @@ func (c *conn) fail(err error) {
 		c.mu.Unlock()
 		close(c.done)
 	})
+}
+
+// failure is the error that ended the connection, as fail recorded it.
+func (c *conn) failure() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
 }
 
 // reason is the error callers see once the connection is gone.

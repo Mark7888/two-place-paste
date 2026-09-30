@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -16,6 +17,14 @@ import (
 // what it missed, which is cheaper than letting one stalled socket consume the
 // server's memory.
 const writeQueueDepth = 32
+
+// Keepalive. Reverse proxies and NATs sever a TCP connection that has been
+// silent for long enough, usually somewhere between 30 and 100 seconds, and
+// they do it without a close frame. A clipboard socket is silent most of the
+// time, so the server pings well inside that window; a peer that does not
+// answer before the next ping is due is gone, and its socket is closed rather
+// than kept registered.
+const pingInterval = 25 * time.Second
 
 // conn is one WebSocket connection and the identity it has established.
 type conn struct {
@@ -119,6 +128,37 @@ func (c *conn) writePump(ctx context.Context) {
 				c.closeWith(websocket.StatusInternalError, "write failed")
 				return
 			}
+		}
+	}
+}
+
+// keepalive pings the peer every interval until ctx is done or the connection
+// closes, and gives each ping until the next one to be answered. Ping writes a control frame, which coder/websocket allows alongside
+// the write pump's data frames; the pong is read by the server's read loop.
+func (c *conn) keepalive(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.closed:
+			return
+		case <-ticker.C:
+		}
+		pingCtx, cancel := context.WithTimeout(ctx, interval)
+		err := c.ws.Ping(pingCtx)
+		cancel()
+		if err != nil {
+			if ctx.Err() == nil {
+				deviceID, _ := c.identity()
+				c.logger.DebugContext(ctx, "websocket peer stopped answering pings",
+					slog.String("device_id", deviceID), slog.Any("error", err))
+			}
+			// The close handshake would wait on the same unresponsive peer.
+			c.closeOnce.Do(func() { close(c.closed) })
+			_ = c.ws.CloseNow()
+			return
 		}
 	}
 }

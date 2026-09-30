@@ -102,7 +102,15 @@ func (c *Client) StartOffer(ctx context.Context, serverURL string) (*Offer, erro
 	//nolint:contextcheck // Deliberate, and stated above: ctx bounds the mint,
 	// while the socket must stay open until a member accepts. The client's own
 	// context is the only one with that lifetime.
-	go func() { _ = conn.readLoop(c.runContext(), nil) }()
+	//
+	// It may sit idle for the whole pairing window while a member finds the
+	// accept button, which is longer than a proxy leaves a silent socket open,
+	// so it is kept alive like the supervised one.
+	go func() {
+		runCtx := c.runContext()
+		go conn.keepalive(runCtx, pingInterval, pingTimeout)
+		_ = conn.readLoop(runCtx, nil)
+	}()
 
 	// Registered before the request goes out: a member watching the screen can
 	// accept fast enough that PairingComplete arrives while Wait is still
