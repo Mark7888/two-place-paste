@@ -534,6 +534,9 @@ func TestAdminAssets(t *testing.T) {
 	for _, tc := range []struct{ path, contentType string }{
 		{"/admin/style.css", "text/css; charset=utf-8"},
 		{"/admin/app.js", "text/javascript; charset=utf-8"},
+		{"/admin/favicon.svg", "image/svg+xml"},
+		{"/admin/favicon.ico", "image/x-icon"},
+		{"/admin/apple-touch-icon.png", "image/png"},
 	} {
 		// Both are reachable without a session: the login page needs them
 		// before one exists.

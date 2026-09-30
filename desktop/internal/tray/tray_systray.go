@@ -25,8 +25,7 @@ func reveal(ctx context.Context, path string) error {
 // run builds the menu and hands control to the platform's event loop.
 func run(ctx context.Context, opts Options) {
 	onReady := func() {
-		pngIcon, icoIcon := icons()
-		setIcon(pngIcon, icoIcon)
+		showIcon(ctx)
 		systray.SetTitle("")
 		systray.SetTooltip(title)
 

@@ -28,6 +28,13 @@ func (s *Server) handleScript(w http.ResponseWriter, r *http.Request) {
 	s.serveAsset(w, r, "app.js", "text/javascript; charset=utf-8")
 }
 
+// handleIcon serves one favicon. Public for the same reason as the stylesheet.
+func (s *Server) handleIcon(name, contentType string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.serveAsset(w, r, name, contentType)
+	}
+}
+
 func (s *Server) serveAsset(w http.ResponseWriter, r *http.Request, name, contentType string) {
 	b, err := webadminFile(name)
 	if err != nil {

@@ -102,6 +102,7 @@ jobs:
           APP="dist/TwoPlacePaste.app"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp desktop/packaging/macos/Info.plist "$APP/Contents/Info.plist"
+          cp desktop/packaging/macos/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
           cp dist/tppdesktop "$APP/Contents/MacOS/tppdesktop"
           chmod +x "$APP/Contents/MacOS/tppdesktop"
           printf 'APPL????' > "$APP/Contents/PkgInfo"

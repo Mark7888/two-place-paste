@@ -29,6 +29,11 @@ VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "LegalCopyright" ""
 
+; The installer, uninstaller and shortcut all wear the app's own icon; the
+; one inside tppdesktop.exe comes from cmd/tppdesktop/winres.
+!define MUI_ICON "app.ico"
+!define MUI_UNICON "app.ico"
+
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -46,11 +51,13 @@ Section "TwoPlacePaste" SecMain
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TwoPlacePaste" \
     "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TwoPlacePaste" \
+    "DisplayIcon" "$INSTDIR\tppdesktop.exe,0"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TwoPlacePaste" \
     "UninstallString" "$\"$INSTDIR\Uninstall.exe$\""
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TwoPlacePaste" \
     "NoModify" 1
 
-  CreateShortCut "$SMPROGRAMS\TwoPlacePaste.lnk" "$INSTDIR\tppdesktop.exe"
+  CreateShortCut "$SMPROGRAMS\TwoPlacePaste.lnk" "$INSTDIR\tppdesktop.exe" "" "$INSTDIR\tppdesktop.exe" 0
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 SectionEnd
 

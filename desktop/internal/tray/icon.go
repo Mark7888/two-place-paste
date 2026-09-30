@@ -13,32 +13,45 @@ import (
 
 // The icon is drawn rather than shipped.
 //
-// A committed .png and .ico would be two binary files in a repository that
-// otherwise contains none, and a menu-bar glyph at this size is a rectangle
-// and a fold — twenty lines of image/draw against two blobs nobody can review
-// in a diff. It renders once, on first use.
+// A tray glyph at this size is a rectangle and a fold — twenty lines of
+// image/draw against committed blobs nobody can review in a diff, and it is
+// deliberately not the app icon (assets/icon), which does not survive being
+// drawn this small in one colour. Each ink renders once, on first use.
 const iconSize = 32
 
+// The two inks. macOS takes the black one as a template and recolours it
+// itself; Windows does not, so it gets whichever one contrasts with the
+// taskbar (icon_windows.go).
 var (
-	iconOnce sync.Once
-	iconPNG  []byte
-	iconICO  []byte
+	inkDark  = color.NRGBA{A: 255}
+	inkLight = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
 )
 
-func icons() ([]byte, []byte) {
-	iconOnce.Do(func() {
-		iconPNG = drawIcon()
-		iconICO = wrapICO(iconPNG)
-	})
-	return iconPNG, iconICO
+type iconSet struct {
+	png, ico []byte
 }
 
-// drawIcon renders a clipboard outline in black with a transparent ground,
-// which is what macOS wants from a template image and what Windows renders
-// acceptably against either theme.
-func drawIcon() []byte {
+var (
+	iconMu    sync.Mutex
+	iconCache = map[color.NRGBA]iconSet{}
+)
+
+// icons returns the glyph in one ink, as a PNG and as an .ico.
+func icons(ink color.NRGBA) iconSet {
+	iconMu.Lock()
+	defer iconMu.Unlock()
+	if set, ok := iconCache[ink]; ok {
+		return set
+	}
+	pngBytes := drawIcon(ink)
+	set := iconSet{png: pngBytes, ico: wrapICO(pngBytes)}
+	iconCache[ink] = set
+	return set
+}
+
+// drawIcon renders a clipboard outline in ink with a transparent ground.
+func drawIcon(ink color.NRGBA) []byte {
 	img := image.NewNRGBA(image.Rect(0, 0, iconSize, iconSize))
-	ink := color.NRGBA{A: 255}
 
 	const (
 		left, right = 6, 26
