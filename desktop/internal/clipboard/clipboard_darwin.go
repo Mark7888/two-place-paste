@@ -17,24 +17,32 @@ import (
 // not take the poll loop with it.
 const commandTimeout = 10 * time.Second
 
-// macOS clipboard access without cgo.
+// macOS clipboard access.
 //
-// AppKit would be the direct route, and it is not taken: an NSPasteboard
-// binding drags cgo into a module that otherwise cross-compiles from any
-// machine, and the two tools used here — pbpaste/pbcopy for text and osascript
-// for everything else — are present on every supported macOS and cover the
-// three payload kinds SPEC §7.2 asks for. The cost is a process per operation,
-// which at a 750ms poll is not a cost anyone can measure.
+// Content goes through two tools present on every supported macOS:
+// pbpaste/pbcopy for text and osascript for everything else. An NSPasteboard
+// binding for the content would mean marshalling three payload kinds through
+// cgo; the tools cover the three SPEC §7.2 asks for already.
+//
+// The cost is a process per flavour per read, which is why the watcher must
+// not read on every poll. Sequence is how it avoids that: the pasteboard's
+// change counter, read through AppKit (changecount_darwin.go), tells it when
+// there is anything new to read at all.
 type darwinClipboard struct{}
 
 func newClipboard() Clipboard { return darwinClipboard{} }
 
 func (darwinClipboard) Available() bool { return true }
 
-// Sequence has no cheap equivalent here: NSPasteboard's changeCount is not
-// exposed by any stock command-line tool, and spawning osascript to read it
-// would cost more than the content read it saves.
-func (darwinClipboard) Sequence(context.Context) (uint64, error) { return 0, ErrNoSequence }
+// Sequence is NSPasteboard's changeCount, or ErrNoSequence in a build without
+// cgo.
+func (darwinClipboard) Sequence(context.Context) (uint64, error) {
+	n, ok := pasteboardChangeCount()
+	if !ok {
+		return 0, ErrNoSequence
+	}
+	return n, nil
+}
 
 func (c darwinClipboard) Read(ctx context.Context) (Content, error) {
 	// File first: a copied file also offers a text flavour holding its name,

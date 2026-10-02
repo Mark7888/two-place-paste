@@ -32,6 +32,8 @@ type fakeRelay struct {
 	offer   *fakeOffer
 	accept  *fakeAcceptance
 	forgot  bool
+
+	reconnects int
 }
 
 func newFakeRelay(now func() time.Time) *fakeRelay {
@@ -44,6 +46,7 @@ func (f *fakeRelay) State() tppclient.State {
 func (f *fakeRelay) InGroup() bool                             { return f.inGroup }
 func (f *fakeRelay) Epoch() uint64                             { return 3 }
 func (f *fakeRelay) Connect(context.Context) error             { return nil }
+func (f *fakeRelay) Reconnect()                                { f.mu.Lock(); f.reconnects++; f.mu.Unlock() }
 func (f *fakeRelay) CreateGroup(context.Context, string) error { return nil }
 func (f *fakeRelay) JoinPairing(context.Context, string) error { return nil }
 
@@ -308,6 +311,7 @@ func newFixture(t *testing.T) *fixture {
 	relay := newFakeRelay(now)
 	svc.Attach(relay)
 	svc.ClientHandlers().OnConnected()
+	svc.catchUps.Wait()
 	return &fixture{svc: svc, relay: relay, clip: clip, now: now}
 }
 
@@ -1053,5 +1057,87 @@ func TestAnnounceKeepsOnlyTheNewest(t *testing.T) {
 	}
 	if got := (<-f.svc.incoming).ID; got != "e4" {
 		t.Errorf("queued announcement = %q, want e4", got)
+	}
+}
+
+// TestCatchUpAppliesWhatWasMissed covers the laptop that slept through a copy
+// on the phone: nothing was announced to it, so reconnecting must ask.
+func TestCatchUpAppliesWhatWasMissed(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := context.Background()
+	if _, err := f.svc.UpdateSettings(ctx, localui.SettingsPatch{AutoApply: boolPtr(true)}); err != nil {
+		t.Fatalf("UpdateSettings() error = %v", err)
+	}
+	f.clip.set(textContent("copied here before the sleep"))
+
+	// Written while this device was asleep: no announcement reached it.
+	f.relay.push(tppclient.Item{
+		ContentType: clipboard.TypeText,
+		Body:        []byte("from the phone, during the sleep"),
+		CreatedAt:   f.now(),
+	})
+
+	f.svc.Resumed(time.Hour)
+	f.relay.mu.Lock()
+	reconnects := f.relay.reconnects
+	f.relay.mu.Unlock()
+	if reconnects != 1 {
+		t.Fatalf("Resumed() reconnected %d times, want 1", reconnects)
+	}
+
+	// The client reports the new connection.
+	f.svc.ClientHandlers().OnConnected()
+	f.svc.catchUps.Wait()
+	select {
+	case meta := <-f.svc.incoming:
+		f.svc.applyAnnounced(ctx, meta)
+	default:
+		t.Fatal("reconnecting did not pick up the entry written while offline")
+	}
+	if got, _ := f.clip.Read(ctx); got.Text() != "from the phone, during the sleep" {
+		t.Errorf("clipboard = %q, want the missed entry", got.Text())
+	}
+
+	// A further reconnect with nothing new changes nothing.
+	f.svc.ClientHandlers().OnConnected()
+	f.svc.catchUps.Wait()
+	select {
+	case meta := <-f.svc.incoming:
+		t.Errorf("a reconnect with nothing new announced %s", meta.ID)
+	default:
+	}
+}
+
+// TestFirstConnectionDoesNotApply: the entry already on the relay when the
+// service starts is not something it missed, and must not overwrite the local
+// clipboard on its own say-so (SPEC §6).
+func TestFirstConnectionDoesNotApply(t *testing.T) {
+	t.Parallel()
+
+	clock := time.Date(2026, 9, 9, 10, 0, 0, 0, time.UTC)
+	now := func() time.Time { return clock }
+	svc, err := New(Options{
+		Clipboard:  newMemClipboard(),
+		Autostart:  noAutostart{},
+		Settings:   config.Settings{AutoApply: true},
+		ConfigDir:  t.TempDir(),
+		ListenPort: config.DefaultPort,
+		Now:        now,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	relay := newFakeRelay(now)
+	relay.push(tppclient.Item{ContentType: clipboard.TypeText, Body: []byte("yesterday's"), CreatedAt: clock})
+	svc.Attach(relay)
+
+	svc.ClientHandlers().OnConnected()
+	svc.catchUps.Wait()
+	select {
+	case meta := <-svc.incoming:
+		t.Errorf("the first connection announced %s", meta.ID)
+	default:
 	}
 }

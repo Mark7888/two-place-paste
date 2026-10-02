@@ -22,6 +22,7 @@ import (
 	"github.com/Mark7888/two-place-paste/desktop/internal/clipboard"
 	"github.com/Mark7888/two-place-paste/desktop/internal/config"
 	"github.com/Mark7888/two-place-paste/desktop/internal/localui"
+	"github.com/Mark7888/two-place-paste/desktop/internal/power"
 	"github.com/Mark7888/two-place-paste/desktop/internal/service"
 	"github.com/Mark7888/two-place-paste/desktop/internal/tray"
 	"github.com/Mark7888/two-place-paste/pkg/tppclient"
@@ -94,6 +95,7 @@ func run(logger *slog.Logger) error {
 		ConfigDir:       configDir,
 		ListenPort:      settings.ListenPort(),
 		KeystoreBackend: string(store.Backend()),
+		WatchPaused:     power.ScreenLocked,
 		Logger:          logger,
 	})
 	if err != nil {
@@ -143,6 +145,7 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 	go svc.Run(runCtx)
+	go power.WatchWake(runCtx, power.DefaultWakeCheck, svc.Resumed)
 
 	if client.InGroup() {
 		if err := client.Connect(runCtx); err != nil {

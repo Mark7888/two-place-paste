@@ -11,8 +11,14 @@ import (
 
 // DefaultInterval is how often the watcher looks at the clipboard when it is
 // enabled. Fast enough that a copy followed by a switch to the other machine
-// feels instant; slow enough to be invisible in a process list.
+// feels instant. On a platform with a change counter a look is one cheap call;
+// the content is read only when the counter has moved.
 const DefaultInterval = 750 * time.Millisecond
+
+// DefaultPausedInterval is how often a paused watcher asks whether it is still
+// paused. Nobody is copying anything at a locked screen, so this is about
+// noticing the unlock, not a copy, and it can be slow.
+const DefaultPausedInterval = 3 * time.Second
 
 // maxSuppressed bounds the self-write set. Only one write is ever in flight,
 // but a platform that coalesces changes can make an older one surface late, so
@@ -26,6 +32,15 @@ type WatchOptions struct {
 
 	// Interval is the poll period. Defaults to DefaultInterval.
 	Interval time.Duration
+
+	// Paused, when set, is asked before every poll; while it answers true the
+	// watcher does not touch the clipboard and asks again every PausedInterval
+	// instead. It is how a locked screen stops costing anything.
+	Paused func() bool
+
+	// PausedInterval is how often a paused watcher asks again. Defaults to
+	// DefaultPausedInterval.
+	PausedInterval time.Duration
 
 	// OnChange fires for every change the watcher attributes to the user. It
 	// never fires for a change this service made itself.
@@ -53,6 +68,8 @@ type WatchOptions struct {
 type Watcher struct {
 	cb       Clipboard
 	interval time.Duration
+	paused   func() bool
+	idle     time.Duration
 	onChange func(context.Context, Content, time.Time)
 	logger   *slog.Logger
 	now      func() time.Time
@@ -74,6 +91,8 @@ func NewWatcher(opts WatchOptions) *Watcher {
 	w := &Watcher{
 		cb:       opts.Clipboard,
 		interval: opts.Interval,
+		paused:   opts.Paused,
+		idle:     opts.PausedInterval,
 		onChange: opts.OnChange,
 		logger:   opts.Logger,
 		now:      opts.Now,
@@ -81,6 +100,9 @@ func NewWatcher(opts WatchOptions) *Watcher {
 	}
 	if w.interval <= 0 {
 		w.interval = DefaultInterval
+	}
+	if w.idle <= 0 {
+		w.idle = DefaultPausedInterval
 	}
 	if w.logger == nil {
 		w.logger = slog.Default()
@@ -159,17 +181,25 @@ func (w *Watcher) MarkLocal(c Content, at time.Time) {
 //
 // It is exported because it is the whole of the watcher's logic and deserves
 // to be tested without a goroutine and a clock.
+//
+// The change counter, where the platform has one, is recorded only once the
+// read it guards has succeeded. Recorded before, a read that failed — a helper
+// process that timed out, a file that vanished mid-read — would leave the
+// counter saying "seen" for content nobody saw, and that copy would never be
+// uploaded.
 func (w *Watcher) Poll(ctx context.Context) (Content, bool, error) {
-	if seq, err := w.cb.Sequence(ctx); err == nil {
+	seq, err := w.cb.Sequence(ctx)
+	haveSeq := err == nil
+	if err != nil && !errors.Is(err, ErrNoSequence) {
+		return Content{}, false, fmt.Errorf("clipboard: read the change counter: %w", err)
+	}
+	if haveSeq {
 		w.mu.Lock()
 		unchanged := w.haveSeq && w.seq == seq && w.primed
-		w.seq, w.haveSeq = seq, true
 		w.mu.Unlock()
 		if unchanged {
 			return Content{}, false, nil
 		}
-	} else if !errors.Is(err, ErrNoSequence) {
-		return Content{}, false, fmt.Errorf("clipboard: read the change counter: %w", err)
 	}
 
 	c, err := w.cb.Read(ctx)
@@ -179,6 +209,9 @@ func (w *Watcher) Poll(ctx context.Context) (Content, bool, error) {
 		w.mu.Lock()
 		w.primed = true
 		w.digest = Content{}.Digest()
+		if haveSeq {
+			w.seq, w.haveSeq = seq, true
+		}
 		w.mu.Unlock()
 		return Content{}, false, nil
 	}
@@ -191,6 +224,9 @@ func (w *Watcher) Poll(ctx context.Context) (Content, bool, error) {
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if haveSeq {
+		w.seq, w.haveSeq = seq, true
+	}
 	switch {
 	case !w.primed:
 		// First look after start or after being enabled: adopt, do not report.
@@ -213,14 +249,18 @@ func (w *Watcher) Poll(ctx context.Context) (Content, bool, error) {
 	return c, true, nil
 }
 
-// Run polls until ctx is done. It is a no-op while the watcher is disabled,
-// which is its state until the user turns auto-watch on (SPEC §7.2).
+// Run polls until ctx is done.
+//
+// A disabled watcher, which is its state until the user turns auto-watch on
+// (SPEC §7.2), keeps no timer at all: SetEnabled is what wakes it. A paused
+// one keeps a slow timer to notice the pause ending. Neither reads the
+// clipboard.
 func (w *Watcher) Run(ctx context.Context) {
 	if !w.cb.Available() {
 		w.logger.Warn("clipboard auto-watch is unavailable on this platform")
 		return
 	}
-	t := time.NewTicker(w.interval)
+	t := time.NewTimer(w.interval)
 	defer t.Stop()
 	for {
 		select {
@@ -229,21 +269,38 @@ func (w *Watcher) Run(ctx context.Context) {
 		case <-w.wake:
 		case <-t.C:
 		}
-		if !w.Enabled() {
-			continue
+		next, again := w.tick(ctx)
+		if ctx.Err() != nil {
+			return
 		}
-		c, changed, err := w.Poll(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			w.logger.Warn("reading the clipboard failed", "error", err)
-			continue
-		}
-		if changed && w.onChange != nil {
-			w.onChange(ctx, c, w.now())
+		if again {
+			t.Reset(next)
+		} else {
+			t.Stop()
 		}
 	}
+}
+
+// tick is one turn of Run. It reports how long to wait before the next one,
+// and false when there should be no next one until SetEnabled asks.
+func (w *Watcher) tick(ctx context.Context) (time.Duration, bool) {
+	if !w.Enabled() {
+		return 0, false
+	}
+	if w.paused != nil && w.paused() {
+		return w.idle, true
+	}
+	c, changed, err := w.Poll(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			w.logger.Warn("reading the clipboard failed", "error", err)
+		}
+		return w.interval, true
+	}
+	if changed && w.onChange != nil {
+		w.onChange(ctx, c, w.now())
+	}
+	return w.interval, true
 }
 
 // Rebase reads the clipboard and adopts whatever is there as the baseline,

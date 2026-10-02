@@ -36,6 +36,10 @@ type Relay interface {
 	// Connect starts the supervised connection.
 	Connect(ctx context.Context) error
 
+	// Reconnect drops the connection and dials again at once, for a socket
+	// known to be stale before the keepalive can tell: after a sleep.
+	Reconnect()
+
 	// CreateGroup turns an admin creation URL into a group (SPEC §3.1).
 	CreateGroup(ctx context.Context, creationURL string) error
 
