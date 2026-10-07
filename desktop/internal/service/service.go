@@ -64,6 +64,10 @@ type Options struct {
 	// WatchInterval overrides the clipboard poll period.
 	WatchInterval time.Duration
 
+	// WatchPaused, when set, holds clipboard polling off while it answers
+	// true: a locked screen, where nobody is copying anything.
+	WatchPaused func() bool
+
 	// Logger receives service-level logs. It never sees clipboard content.
 	Logger *slog.Logger
 
@@ -85,6 +89,9 @@ type Service struct {
 	backend   string
 	listen    int
 
+	// catchUps tracks catchUp goroutines, so a test can wait for one.
+	catchUps sync.WaitGroup
+
 	mu          sync.Mutex
 	relay       Relay
 	settings    config.Settings
@@ -93,6 +100,13 @@ type Service struct {
 	lastSync    time.Time
 	lastApplied time.Time
 	lastError   string
+
+	// latestID is the newest entry this service knows the group holds: the
+	// last one announced, uploaded, or found on connecting. latestKnown is
+	// false until the first connection has said what that is.
+	latestID    string
+	latestKnown bool
+
 	plans       map[string]*plan
 	offerPlans  map[string]*offerPlan
 	offer       Offer
@@ -142,6 +156,7 @@ func New(opts Options) (*Service, error) {
 	s.watcher = clipboard.NewWatcher(clipboard.WatchOptions{
 		Clipboard: opts.Clipboard,
 		Interval:  opts.WatchInterval,
+		Paused:    opts.WatchPaused,
 		Logger:    s.logger,
 		Now:       s.now,
 		OnChange:  s.onClipboardChange,
@@ -191,6 +206,9 @@ func (s *Service) ClientHandlers() tppclient.Handlers {
 		OnConnected: func() {
 			s.setConnected(true, "")
 			s.hub.publish(localui.Event{Kind: localui.EventConnected})
+			// On its own goroutine: this runs before the client's read loop
+			// starts, and the request needs that loop to see its answer.
+			s.catchUps.Go(func() { s.catchUp(context.Background()) })
 		},
 		OnDisconnected: func(err error) {
 			msg := ""
@@ -399,6 +417,7 @@ func (s *Service) upload(ctx context.Context, relay Relay) (localui.SyncResult, 
 	}
 	s.watcher.MarkLocal(c, now)
 	s.noteSync(now)
+	s.noteLatest(meta.ID)
 
 	s.logger.InfoContext(ctx, "clipboard uploaded", "entry_id", meta.ID, "epoch", meta.Epoch, "bytes", meta.Size)
 	s.hub.publish(localui.Event{Kind: localui.EventSync, Message: "uploaded"})
@@ -912,6 +931,7 @@ func (s *Service) Forget(context.Context) error {
 	s.revoked = false
 	s.lastError = ""
 	s.lastSync = time.Time{}
+	s.latestID, s.latestKnown = "", false
 	s.plans = map[string]*plan{}
 	s.offerPlans = map[string]*offerPlan{}
 	s.mu.Unlock()
@@ -1041,6 +1061,7 @@ func (s *Service) onClipboardChange(ctx context.Context, c clipboard.Content, at
 		return
 	}
 	s.noteSync(at)
+	s.noteLatest(meta.ID)
 	s.logger.InfoContext(ctx, "clipboard change uploaded", "entry_id", meta.ID, "epoch", meta.Epoch, "bytes", meta.Size)
 	s.hub.publish(localui.Event{Kind: localui.EventSync, Message: "uploaded"})
 }
@@ -1049,6 +1070,7 @@ func (s *Service) onClipboardChange(ctx context.Context, c clipboard.Content, at
 // loop, so it never blocks: only the newest announcement matters (SPEC §6
 // syncs the latest entry only), and one still waiting is replaced.
 func (s *Service) announce(meta tppclient.EntryMeta) {
+	s.noteLatest(meta.ID)
 	for {
 		select {
 		case s.incoming <- meta:
@@ -1060,6 +1082,77 @@ func (s *Service) announce(meta tppclient.EntryMeta) {
 		default:
 		}
 	}
+}
+
+// noteLatest records the newest entry this service knows the group holds.
+func (s *Service) noteLatest(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.latestID, s.latestKnown = id, true
+}
+
+// catchUp handles what was written while this device was not listening.
+//
+// Announcements reach only a connected device, so an entry another device
+// wrote while this one slept, or while the network was down, was never
+// announced here. On every connection after the first, catchUp asks the relay
+// for its newest entry and, when that is not the one this service last knew
+// of, treats it as announced — and from there auto-apply decides, by the same
+// rules as for any announcement, whether to put it on the clipboard.
+//
+// The first connection only records what is there. Nothing was missed before
+// it, and an entry from before this service started is no more the user's
+// latest intent than what is on the local clipboard; which of those wins is
+// the question SPEC §6 says to ask the user rather than guess.
+func (s *Service) catchUp(ctx context.Context) {
+	relay, err := s.ready()
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	page, err := relay.GetHistory(ctx, tppclient.HistoryQuery{Limit: 1})
+	if err != nil {
+		s.logger.DebugContext(ctx, "could not check for entries missed while offline", "error", err)
+		return
+	}
+	if len(page.Entries) == 0 {
+		// An empty group is a baseline too: whatever appears next was
+		// written after this connection, and a later one must not miss it.
+		s.mu.Lock()
+		s.latestID, s.latestKnown = "", true
+		s.mu.Unlock()
+		return
+	}
+	meta := page.Entries[0]
+
+	s.mu.Lock()
+	missed := s.latestKnown && s.latestID != meta.ID
+	s.latestID, s.latestKnown = meta.ID, true
+	s.mu.Unlock()
+	if missed {
+		s.logger.InfoContext(ctx, "an entry was written while this device was offline", "entry_id", meta.ID)
+		s.announce(meta)
+	}
+}
+
+// Resumed tells the service the machine has just woken from sleep, after
+// sleeping for about `slept`.
+//
+// The relay connection is all but certainly dead by then — the relay, or a
+// NAT on the way to it, has forgotten it — and the client will not notice for
+// up to a ping interval and a ping timeout. Reconnecting straight away also
+// runs catchUp, so an entry written during the sleep arrives now rather than
+// never.
+func (s *Service) Resumed(slept time.Duration) {
+	s.mu.Lock()
+	relay := s.relay
+	s.mu.Unlock()
+	if relay == nil || !relay.InGroup() {
+		return
+	}
+	s.logger.Info("woke from sleep; reconnecting to the relay", "slept", slept.Round(time.Second).String())
+	relay.Reconnect()
 }
 
 // applyIncoming writes announced entries to the clipboard, when the user has

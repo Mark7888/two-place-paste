@@ -122,6 +122,11 @@ type Client struct {
 	ready       chan struct{} // closed while a connection is live
 	invitations []*Invitation
 
+	// kick cuts the supervisor's backoff short. It is buffered so Reconnect
+	// never blocks, and it outlives Forget: a stale kick costs one early
+	// dial and nothing else.
+	kick chan struct{}
+
 	// The supervisor's lifetime, and everything scoped to it. Forget replaces
 	// all four so the next Connect starts a fresh supervisor, which is why
 	// nothing reads them outside the mutex: a reader that cached runCtx across
@@ -153,6 +158,7 @@ func New(opts Options) (*Client, error) {
 		now:        opts.Now,
 		ready:      make(chan struct{}),
 		stopped:    make(chan struct{}),
+		kick:       make(chan struct{}, 1),
 	}
 	if c.logger == nil {
 		c.logger = slog.Default()
@@ -356,6 +362,39 @@ func (c *Client) Connect(ctx context.Context) error {
 	return err
 }
 
+// errReconnect is why a connection ended when Reconnect ended it.
+var errReconnect = errors.New("tppclient: reconnecting at the caller's request")
+
+// Reconnect drops the current connection, if there is one, and dials again at
+// once instead of waiting out the supervisor's backoff.
+//
+// It is for a caller that knows the socket is suspect before the keepalive
+// does — a machine that has just woken from sleep, where the relay or a NAT on
+// the way has long since forgotten the connection but the client has not been
+// awake to notice. Left to the keepalive, that discovery takes up to a ping
+// interval plus a ping timeout; meanwhile requests wait and announcements are
+// lost.
+//
+// It is safe to call at any time, including before Connect and after Close,
+// when it does nothing that matters.
+func (c *Client) Reconnect() {
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	// The kick goes first so the supervisor finds it the moment the read loop
+	// below gives up.
+	select {
+	case c.kick <- struct{}{}:
+	default:
+	}
+	if conn != nil {
+		conn.fail(errReconnect)
+		// CloseNow, not a close handshake: the peer this is for is usually
+		// not there to answer one.
+		_ = conn.ws.CloseNow()
+	}
+}
+
 // supervise dials, serves the connection, and re-dials with backoff until the
 // client is closed, the device is revoked, or the group is forgotten.
 func (c *Client) supervise(runCtx context.Context, stopped chan struct{}) {
@@ -398,6 +437,11 @@ func (c *Client) supervise(runCtx context.Context, stopped chan struct{}) {
 		select {
 		case <-runCtx.Done():
 			return
+		case <-c.kick:
+			// Reconnect asked for a dial now; whatever the network was doing
+			// before is no guide to what it is doing after.
+			backoff = c.minBackoff
+			continue
 		case <-time.After(jitter(backoff)):
 		}
 		if backoff < c.maxBackoff {

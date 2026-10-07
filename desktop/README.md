@@ -89,3 +89,24 @@ that is the one state where nothing works until the user does something and the
 UI is the only place to do it. A paired device starts quietly into the tray: it
 is a background service, and one that throws a browser tab at you on every
 login is one you turn off. The tray's "Open UI" is how you reach it after that.
+
+## What it costs to leave running
+
+The service is meant to sit in the tray all day, including on a laptop's
+battery, so it does nothing on a timer that it can avoid:
+
+- **Auto-watch off** (the default): no clipboard timer at all. The relay
+  socket idles, with a ping every 25 seconds to keep proxies from cutting it.
+- **Auto-watch on**: every 750ms the watcher reads the clipboard's change
+  counter — `GetClipboardSequenceNumber` on Windows, `NSPasteboard`'s
+  `changeCount` on macOS — and reads the content only when the counter has
+  moved. On macOS the content read is a few helper processes (`osascript`,
+  `pbpaste`), so this is the difference between one cheap call per poll and
+  several processes per poll.
+- **Screen locked**, or another user switched in (macOS): the watcher stops
+  reading and checks every 3 seconds whether anyone is back.
+- **Sleep**: nothing runs, and the service never holds the machine awake.
+  On wake it notices within 5 seconds (the wall clock has jumped past the
+  monotonic one), drops the relay socket the sleep killed, reconnects at once,
+  and fetches anything another device wrote meanwhile — which auto-apply then
+  handles like any other new entry.

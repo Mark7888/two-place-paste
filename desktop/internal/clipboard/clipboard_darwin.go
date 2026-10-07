@@ -17,24 +17,32 @@ import (
 // not take the poll loop with it.
 const commandTimeout = 10 * time.Second
 
-// macOS clipboard access without cgo.
+// macOS clipboard access.
 //
-// AppKit would be the direct route, and it is not taken: an NSPasteboard
-// binding drags cgo into a module that otherwise cross-compiles from any
-// machine, and the two tools used here — pbpaste/pbcopy for text and osascript
-// for everything else — are present on every supported macOS and cover the
-// three payload kinds SPEC §7.2 asks for. The cost is a process per operation,
-// which at a 750ms poll is not a cost anyone can measure.
+// Content goes through two tools present on every supported macOS:
+// pbpaste/pbcopy for text and osascript for everything else. An NSPasteboard
+// binding for the content would mean marshalling three payload kinds through
+// cgo; the tools cover the three SPEC §7.2 asks for already.
+//
+// The cost is a process per flavour per read, which is why the watcher must
+// not read on every poll. Sequence is how it avoids that: the pasteboard's
+// change counter, read through AppKit (changecount_darwin.go), tells it when
+// there is anything new to read at all.
 type darwinClipboard struct{}
 
 func newClipboard() Clipboard { return darwinClipboard{} }
 
 func (darwinClipboard) Available() bool { return true }
 
-// Sequence has no cheap equivalent here: NSPasteboard's changeCount is not
-// exposed by any stock command-line tool, and spawning osascript to read it
-// would cost more than the content read it saves.
-func (darwinClipboard) Sequence(context.Context) (uint64, error) { return 0, ErrNoSequence }
+// Sequence is NSPasteboard's changeCount, or ErrNoSequence in a build without
+// cgo.
+func (darwinClipboard) Sequence(context.Context) (uint64, error) {
+	n, ok := pasteboardChangeCount()
+	if !ok {
+		return 0, ErrNoSequence
+	}
+	return n, nil
+}
 
 func (c darwinClipboard) Read(ctx context.Context) (Content, error) {
 	// File first: a copied file also offers a text flavour holding its name,
@@ -75,6 +83,7 @@ func (c darwinClipboard) Write(ctx context.Context, item Content) error {
 	switch item.Kind() {
 	case KindText:
 		cmd := exec.CommandContext(ctx, "/usr/bin/pbcopy")
+		cmd.Env = helperEnv()
 		cmd.Stdin = bytes.NewReader(item.Body)
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("clipboard: pbcopy: %w", err)
@@ -194,11 +203,27 @@ func appleScriptString(s string) string {
 	return `"` + r.Replace(s) + `"`
 }
 
+// helperEnv is the environment every helper process runs with: this one's,
+// with the character encoding pinned to UTF-8.
+//
+// pbcopy and pbpaste encode text by the locale, and a service started by
+// launchd or from Finder has none — no LANG, no LC_*. They then fall back to
+// Mac Roman, so "á" sent as UTF-8 was pasted as "√°", and a copy with accents
+// was uploaded as bytes no other device could read as text. The entry on the
+// relay was right all along, which is why the history preview showed it
+// correctly. LC_ALL wins over anything the user's environment does set, and
+// overriding only the encoding category would not be enough for a value set
+// in LC_ALL already.
+func helperEnv() []string {
+	return append(os.Environ(), "LC_ALL=en_US.UTF-8", "LANG=en_US.UTF-8")
+}
+
 func run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = helperEnv()
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("%s: %w: %s", filepath.Base(name), err, strings.TrimSpace(stderr.String()))

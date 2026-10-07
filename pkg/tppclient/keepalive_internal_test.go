@@ -107,3 +107,60 @@ func TestBackoffResetsAfterAConnection(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// TestReconnectRedialsAtOnce covers a machine waking from sleep: the socket it
+// holds is one the relay forgot long ago, and the caller knows it before any
+// ping could. Reconnect drops it and dials again without waiting out the
+// backoff, which here is far longer than the test allows.
+func TestReconnectRedialsAtOnce(t *testing.T) {
+	t.Parallel()
+
+	accepted := make(chan struct{}, 8)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = ws.CloseNow() }()
+		accepted <- struct{}{}
+		// Reads until the client drops the socket; reading is what answers
+		// the client's pings.
+		for {
+			if _, _, err := ws.Read(r.Context()); err != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(Options{
+		ServerURL:  srv.URL,
+		Logger:     slog.New(slog.DiscardHandler),
+		MinBackoff: 10 * time.Second,
+		MaxBackoff: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	c.state.GroupID = "group"
+	c.state.DeviceID = "device"
+	c.state.GroupKey = make([]byte, 32)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := c.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	<-accepted
+
+	c.Reconnect()
+	select {
+	case <-accepted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no new connection within 2s of Reconnect: it waited out the backoff")
+	}
+	if _, err := c.connection(ctx); err != nil {
+		t.Fatalf("connection after Reconnect: %v", err)
+	}
+}

@@ -310,3 +310,105 @@ func TestSafeNameIsBounded(t *testing.T) {
 		t.Errorf("SafeName() = %q, want the extension kept", got)
 	}
 }
+
+// TestWatcherSequenceGuardsTheRead is what makes an idle macOS watcher cheap:
+// with a change counter, an unchanged counter means the content is not read at
+// all. And a read that fails must not use the counter up, or the copy it
+// failed to read would never be reported.
+func TestWatcherSequenceGuardsTheRead(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeClipboard{hasSeq: true}
+	fake.set(text("before"))
+	w := NewWatcher(WatchOptions{Clipboard: fake})
+	mustPrime(t, w)
+
+	// A read now would fail; an unchanged counter must mean there is none.
+	fake.mu.Lock()
+	fake.readErr = errors.New("a read happened")
+	fake.mu.Unlock()
+	if _, changed, err := w.Poll(context.Background()); err != nil || changed {
+		t.Fatalf("Poll() with an unchanged counter = changed %v, err %v; want no read at all", changed, err)
+	}
+
+	// The user copies, and the first read of it fails.
+	fake.set(text("after"))
+	if _, _, err := w.Poll(context.Background()); err == nil {
+		t.Fatal("Poll() = nil error, want the read failure")
+	}
+
+	// The next poll must try again, though the counter has not moved since.
+	fake.mu.Lock()
+	fake.readErr = nil
+	fake.mu.Unlock()
+	c, changed, err := w.Poll(context.Background())
+	if err != nil || !changed || c.Text() != "after" {
+		t.Fatalf("Poll() after a failed read = %q, changed %v, err %v; want the copy reported", c.Text(), changed, err)
+	}
+}
+
+// TestWatcherPausedDoesNotRead covers the locked screen: nothing is read while
+// paused, and a copy made before the pause ends is reported once it does.
+func TestWatcherPausedDoesNotRead(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeClipboard{hasSeq: true}
+	fake.set(text("before the lock"))
+
+	var (
+		mu     sync.Mutex
+		paused bool
+		asked  int
+	)
+	fired := make(chan Content, 1)
+	w := NewWatcher(WatchOptions{
+		Clipboard:      fake,
+		Interval:       time.Millisecond,
+		PausedInterval: time.Millisecond,
+		Paused: func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			asked++
+			return paused
+		},
+		OnChange: func(_ context.Context, c Content, _ time.Time) { fired <- c },
+	})
+	// Enabling discards the baseline; priming by hand before Run starts is
+	// what makes the next copy a change rather than the new baseline.
+	w.SetEnabled(true)
+	mustPrime(t, w)
+	mu.Lock()
+	paused = true
+	mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); w.Run(ctx) }()
+
+	// A read while paused would see this change and fire.
+	fake.set(text("changed while locked"))
+	select {
+	case c := <-fired:
+		t.Fatalf("a paused watcher reported %q", c.Text())
+	case <-time.After(50 * time.Millisecond):
+	}
+	mu.Lock()
+	if asked == 0 {
+		t.Error("a paused watcher stopped asking whether it is still paused")
+	}
+	paused = false
+	mu.Unlock()
+
+	select {
+	case c := <-fired:
+		if got := c.Text(); got != "changed while locked" {
+			t.Errorf("OnChange after the pause = %q, want the change made during it", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the watcher did not resume after the pause ended")
+	}
+
+	cancel()
+	<-done
+}
