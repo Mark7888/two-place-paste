@@ -83,6 +83,7 @@ func (c darwinClipboard) Write(ctx context.Context, item Content) error {
 	switch item.Kind() {
 	case KindText:
 		cmd := exec.CommandContext(ctx, "/usr/bin/pbcopy")
+		cmd.Env = helperEnv()
 		cmd.Stdin = bytes.NewReader(item.Body)
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("clipboard: pbcopy: %w", err)
@@ -202,11 +203,27 @@ func appleScriptString(s string) string {
 	return `"` + r.Replace(s) + `"`
 }
 
+// helperEnv is the environment every helper process runs with: this one's,
+// with the character encoding pinned to UTF-8.
+//
+// pbcopy and pbpaste encode text by the locale, and a service started by
+// launchd or from Finder has none — no LANG, no LC_*. They then fall back to
+// Mac Roman, so "á" sent as UTF-8 was pasted as "√°", and a copy with accents
+// was uploaded as bytes no other device could read as text. The entry on the
+// relay was right all along, which is why the history preview showed it
+// correctly. LC_ALL wins over anything the user's environment does set, and
+// overriding only the encoding category would not be enough for a value set
+// in LC_ALL already.
+func helperEnv() []string {
+	return append(os.Environ(), "LC_ALL=en_US.UTF-8", "LANG=en_US.UTF-8")
+}
+
 func run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = helperEnv()
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("%s: %w: %s", filepath.Base(name), err, strings.TrimSpace(stderr.String()))
