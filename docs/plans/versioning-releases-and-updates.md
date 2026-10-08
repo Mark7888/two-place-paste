@@ -20,9 +20,9 @@ Checked against this repository and the GitHub API before writing anything below
 | # | Fact | Consequence |
 |---|---|---|
 | F1 | Listing workflow runs and artifacts works **without a token** on a public repo (`/actions/workflows/desktop.yml/runs`, `/actions/runs/{id}/artifacts`). | Discovery for every channel needs no credentials. |
-| F2 | **Downloading** an artifact (`/actions/artifacts/{id}/zip`) **requires an authenticated request, even on a public repo**. Release assets do not. | Stable needs nothing. Beta/Nightly need a token, *or* CI has to mirror those builds somewhere public (§3.7). |
+| F2 | **Downloading** an artifact (`/actions/artifacts/{id}/zip`) **requires an authenticated request, even on a public repo**. Release assets do not. | Stable needs nothing. Beta and Nightly need a token. For Beta only, CI can mirror the build somewhere public instead (§3.7). |
 | F3 | Artifacts expire (90 days here: `expires_at` on the listing). | The updater skips `expired: true` and falls back to the next run. |
-| F4 | `desktop.yml` builds on `push` to **`main`/`master` only**. Every other branch builds **only through `pull_request`**, and that includes PRs from **forks**. | "Nightly = any branch" has to change the trigger, and it **must never install a fork's build** (§3.6). |
+| F4 | `desktop.yml` builds on `push` to **`main`/`master` only**. Every other branch builds **only through `pull_request`**, and that includes PRs from **forks**. | A commit on a branch with no PR has no build yet (§3.8). Beta **must never install a fork's build** (§3.6), and Nightly shows where a commit came from before installing it. |
 | F5 | `android.yml` builds a **debug** APK on a fresh runner, so AGP generates a **new debug keystore on every run**. | Two CI APKs never have the same signature, so Android refuses to install one over the other. A stable signing key is a prerequisite for APK updates, whatever the version numbers say. |
 | F6 | macOS asks for approval (Settings → Privacy & Security → *Open Anyway*) because the **browser** stamps the download with `com.apple.quarantine` and the app is not notarised. A file that **our own process** downloads with `net/http` and unpacks with `ditto` gets **no quarantine attribute**. Windows behaves the same way: no `Zone.Identifier` stream, so no SmartScreen prompt. | Only the **first** install needs the manual approval. Every update the app applies itself does not. |
 | F7 | The macOS key store goes through `/usr/bin/security` (`pkg/tppclient/keystore/keystore_darwin.go`), so the keychain ACL belongs to `security`, not to our ad-hoc signature. | Replacing the binary with a build that has a different ad-hoc signature does **not** lose access to the keys. |
@@ -62,7 +62,7 @@ One script, `scripts/version.sh`, called by every workflow. It writes `$GITHUB_O
 | Output | Release (`v1.0.1` tag) | Any other run (latest tag `v1.0.0`) |
 |---|---|---|
 | `version` (SemVer, for people) | `1.0.1` | `1.0.2-dev.20261008161500+56bd693`, see note |
-| `channel` | `stable` | `beta` (default branch) / `nightly` (any other branch) / `pr<N>` (a `pull_request` run, from `github.event.number`) |
+| `channel` | `stable` | `beta` (default branch) / `nightly` (any other branch, or a `pull_request` run) |
 | `stamp` (ordering key) | seconds since 2025-01-01T00:00Z | same |
 | `version_code` (Android) | `= stamp` | `= stamp` |
 | `numeric` (`X.Y.Z`, for plists/Windows) | `1.0.1` | `1.0.2` |
@@ -78,13 +78,13 @@ workflow run in a `version` job, and every other job reads that job's outputs, s
 Windows and Android from the same run share one number. Then:
 
 - **"Newer" means a larger stamp**, on desktop and Android alike. That is exactly what
-  "latest run" means for Beta and Nightly. It also means Android's `versionCode` and the
+  "latest run" means for Beta. It also means Android's `versionCode` and the
   updater can never disagree.
 - `versionCode` limit: 2 100 000 000. Seconds since 2025 reach that in **2091**, and the
   value is about 55 M today.
 - A re-run of an old commit gets a new, larger stamp. That is the honest answer to "which
   build is newer", and it is what Android needs anyway.
-- **Downgrades are explicit.** Moving from Nightly to Stable usually means a *smaller*
+- **Downgrades are explicit.** Moving from a Nightly commit back to Beta or Stable often means a *smaller*
   stamp. Desktop offers "Install anyway (older build)". Android cannot downgrade without
   an uninstall, which is the same for every app.
 
@@ -180,9 +180,8 @@ jobs:
 auto-update **defaults to off**:
 
 ```go
-UpdateChannel string `json:"update_channel"` // "stable" (default) | "beta" | "nightly" | "pr"
-UpdatePR      int    `json:"update_pr"`      // the PR number, only for "pr"
-UpdatePRSHA   string `json:"update_pr_sha"`  // the head commit the user confirmed (§3.8)
+UpdateChannel string `json:"update_channel"` // "stable" (default) | "beta" | "nightly"
+NightlyCommit string `json:"nightly_commit"` // full SHA the user entered, only for "nightly" (§3.8)
 AutoUpdate    bool   `json:"auto_update"`
 ```
 
@@ -192,7 +191,7 @@ next to the device key. A fine-grained PAT with *Public repositories (read-only)
 other permissions is enough.
 
 UI (`SettingsPanel.tsx`): a channel dropdown, an auto-update toggle, a token field shown
-only for Beta/Nightly, **Check now**, current vs. available version, and **Install & restart**.
+only for Beta/Nightly, a **commit hash** field shown only for Nightly, **Check now**, current vs. available version, and **Install & restart**.
 The tray gets a *Check for updates…* item.
 API (registered like the existing routes, behind `s.guard(originScripted, tokenRequired, …)`):
 `GET /api/update`, `POST /api/update/check`, `POST /api/update/install`.
@@ -216,13 +215,14 @@ desktop/internal/update/
 |---|---|---|
 | **Stable** | `GET /repos/{o}/{r}/releases/latest` (excludes drafts and prereleases) → read `manifest.json` | release asset URL, no auth |
 | **Beta** | `GET /repos/{o}/{r}` → `default_branch` (cached; handles **`master` and `main`** without hard-coding either) → `GET /actions/workflows/desktop.yml/runs?branch=<default>&event=push&status=success&per_page=5` → `GET /actions/runs/{id}/artifacts` | `archive_download_url`, **with token** |
-| **Nightly** | as Beta without `branch=`, then **keep only runs whose `head_repository.full_name == "Mark7888/two-place-paste"`** | same |
-| **Pull request #N** | `GET /pulls/{N}` → `head.sha`, `head.repo.full_name`, author, title → `GET /actions/workflows/desktop.yml/runs?head_sha=<sha>&status=success` (a `push` run for a same-repo branch, a `pull_request` run for a fork) → its artifacts | same, **pinned and confirmed** (§3.8) |
+| **Nightly** (commit) | `GET /commits/{hash}` (resolves a short hash to the full SHA; works for fork-PR commits too) → `GET /actions/workflows/desktop.yml/runs?head_sha=<full sha>` → its artifacts | same, **after confirmation** for an unsigned build (§3.8) |
 
 Rules that apply to every channel:
 
-- Parse `stamp` from the artifact name. A candidate is offered only if `stamp > buildinfo.Stamp`.
-  For an explicit channel switch the user may install a smaller one ("older build").
+- Stable and Beta: parse `stamp` from the artifact name. A candidate is offered only if
+  `stamp > buildinfo.Stamp`. On an explicit channel switch the user may install a smaller one
+  ("older build"). Nightly ignores the stamp: you named the build, so it's installed
+  whether it's older or newer.
 - Skip `expired` artifacts and fall through to the next run (F3).
 - Send `If-None-Match` with the stored ETag. A `304` does not count against the
   **60 requests/hour unauthenticated** limit. With a token the limit is 5 000.
@@ -295,14 +295,13 @@ the new one binds**, or the new one shows the tray's "port in use" failure:
 
 ### 3.6 Trust: never install a stranger's build
 
-This is a public repo, and `desktop.yml` runs on **fork pull requests** (F4). A Nightly that
-installs "the latest artifact on any branch" would run a stranger's code on your machine
-the moment they opened a PR. Two defences, and you should use both:
+This is a public repo, and `desktop.yml` runs on **fork pull requests** (F4). Any channel
+that installs "whatever built last" without you choosing it must never pick up such a
+build: it would run a stranger's code on your machine the moment they opened a PR. Beta
+and Stable install on their own, so they rely on two defences. Use both:
 
-1. **Filter.** Only `event == push` runs from this repository, as in §3.3. To make Nightly
-   see every branch, change the trigger to `push: branches: ["**"]` and keep `pull_request`
-   for forks only, which also avoids double builds:
-   `if: github.event_name == 'push' || github.event.pull_request.head.repo.fork`.
+1. **Filter.** Beta only takes `event == push` runs on the default branch of this repository,
+   as in §3.3. Fork code can't land there without you merging it.
 2. **Sign.** Generate an ed25519 key pair once. The private key goes into the secret
    `UPDATE_SIGNING_KEY` and the public key is compiled into `buildinfo`. Every build writes
    `manifest.json` (version, stamp, channel, commit, run id, sha256 of the payload) and
@@ -311,71 +310,92 @@ the moment they opened a PR. Two defences, and you should use both:
    signature even if the filter is bypassed. The same signature protects Stable against
    a tampered release asset.
 
-### 3.7 If a token for Beta/Nightly is too much friction
+### 3.7 If a token for Beta is too much friction
 
-Mirror those builds to public **rolling prereleases**: after a successful push run, CI
-uploads the assets with `gh release upload --clobber` to a fixed prerelease tagged
-`channel-beta` (default branch) or `channel-nightly` (any branch). The updater then uses
-release-asset URLs for all three channels, with no token and no 90-day expiry. Give that job
+Mirror Beta builds to a public **rolling prerelease**: after a successful push run on the
+default branch, CI uploads the assets with `gh release upload --clobber` to a fixed
+prerelease tagged `channel-beta`. The updater then uses release-asset URLs for Stable and
+Beta, with no token and no 90-day expiry. Nightly can't be mirrored this way, because it
+needs one build per commit, so it always needs the token. Give that job
 `concurrency: { group: publish-${{ channel }}, cancel-in-progress: false }`, and have it
 skip the upload if the release already holds a larger stamp. Here the "newest pending run
 cancels older pending" behaviour from §1.1 is exactly what you want.
 
 I'd start with the token (it's what was asked for, and it needs no extra CI). Switch to
-the mirror if Beta/Nightly ever has testers other than you.
+the mirror if Beta ever has testers other than you.
 
-### 3.8 The pull request channel: run any PR's build, on purpose
+### 3.8 Nightly: install one specific commit
 
-The goal is to be able to run **any** PR's build, forks included. A Nightly that follows
-"whatever built last" is the unsafe way to get there. **Asking for a PR number is the safe
-way**, because nothing is installed that you didn't name. What it has to cover:
+Nightly isn't a feed. **You enter a commit hash, and the app installs that commit's build.**
+That covers every case the earlier "any branch" and "PR number" options did:
+- a branch in this repo;
+- a PR's head commit, a fork's included;
+- an old commit on `master`, to bisect a regression.
 
-**A fork's build can't be signed, and must not be.** A fork PR run gets no secrets, so §3.6's
-signature can't exist for it. Signing it afterwards in a `pull_request_target` or
-`workflow_run` job is the classic "pwn request". It would give a stranger's binary a valid
-signature, and that binary could then pass on the Nightly channel too. So PR builds are
-**unsigned by design**, and the PR channel is the only place an unsigned build is accepted.
-It is installed only after you say yes. Integrity comes from the artifact listing's
-`digest` (`sha256:…`), checked against the downloaded zip.
+Nothing is installed that you didn't name, which makes it the safe way to run anything.
 
-**What you are trusting, and what the UI shows before installing:**
-- PR number, title, author, and whether it's from a fork (`head.repo.full_name`).
-- The **head commit**, with a link to the PR's *Files changed*.
-- A warning if the PR changes `.github/workflows/**`. A `pull_request` run uses the
-  workflow files **from the PR**, so a fork can change how its own artifact is built, not
-  only the app code.
-- One button: **Install this commit**.
+**Lookup:**
+1. Accept a short or full hash. `GET /repos/{o}/{r}/commits/{hash}` resolves it to the full
+   SHA. A fork PR's commits resolve too, because GitHub keeps them under `refs/pull/N/head`
+   in this repo. An ambiguous short hash is an error, so ask for more characters.
+2. `GET /actions/workflows/desktop.yml/runs?head_sha=<full sha>`. Possible outcomes:
+   - **No run:** the commit didn't touch `desktop/**` (the `paths` filter), or its branch
+     has no PR yet (F4). The UI says which. It offers to start one with **Run workflow**
+     (`desktop.yml` already has `workflow_dispatch`; that needs the token to have *Actions:
+     write*, or you click it on GitHub).
+   - **Running or queued:** show "build in progress". Install automatically when it
+     finishes, but only if you've already confirmed it (below).
+   - **Failed:** show the run link. Nothing to install.
+   - **Several successful runs** (a `push` and a `pull_request` run of the same commit):
+     prefer the **signed** one, then the newest.
 
-**Pinned to the commit you confirmed.** The confirmed SHA is stored in `update_pr_sha`.
-What happens when the PR gets new commits depends on whose PR it is:
+**Signed or not decides whether you're asked:**
 
-| PR from | New commits pushed | Auto-update |
+| Build | Comes from | What happens |
 |---|---|---|
-| This repo (you or a collaborator) | Follows the PR's head like Nightly, if the build is **signed** | allowed |
-| A fork | Shows *"PR #N has new commits: review and install?"* | **never**: an author can push a malicious commit after you've looked |
+| **Signed** (§3.6) | a run in this repo, which had the secrets | Installs straight away, like Beta. |
+| **Unsigned** | a fork PR run (no secrets), or any run without a valid signature | A confirmation screen first. |
 
-The PR channel also ends on its own terms. When the PR is merged or closed, the UI offers
-to switch back to Beta (or Stable). That is usually a smaller stamp, so it's the explicit
-downgrade from §1.2.
+A fork's build can't be signed, and must not be. Signing it afterwards in a
+`pull_request_target` or `workflow_run` job is the classic "pwn request": it would give a
+stranger's binary a valid signature, and that binary would then pass the checks for
+signed builds everywhere. So unsigned builds are accepted **only through Nightly, only for
+the exact commit you typed, and only after you confirm**. Integrity comes from the
+artifact listing's `digest` (`sha256:…`), checked against the downloaded zip.
+
+The confirmation screen shows:
+- the commit's message and author;
+- where it came from: the branch, or the PR number, title and fork name (from the run's
+  `head_repository`, `head_branch` and, when GitHub can link it, `GET /commits/{sha}/pulls`);
+- a link to the commit's diff;
+- a warning if the commit's PR changes `.github/workflows/**`. A `pull_request` run uses
+  the workflow files **from the PR**, so a fork can change how its own artifact is built,
+  not only the app code;
+- one button: **Install this commit**.
+
+**A commit never changes, so Nightly never auto-updates.** The auto-update toggle and the
+schedule don't apply while Nightly is selected. The one exception is waiting for a build
+that is still running, and only for a commit you've confirmed. A re-run of the same commit
+makes a build with a newer stamp. Ignore it: it's the same code. To move on, you enter a
+new hash, or switch back to Beta or Stable (often a smaller stamp, so the explicit
+downgrade from §1.2).
 
 **Workflow changes this needs:**
-- Keep `pull_request` builds for **forks** (the dedupe condition from §3.6 already does).
-  Same-repo branches are covered by their `push` runs. The lookup goes by `head_sha`, so
-  either kind of run is found.
-- `scripts/version.sh` gives `pull_request` runs the channel `pr<N>`, so the artifact name
-  says which PR it is: `tppdesktop-Windows-x64-1.0.2-pr42.20261008161500+abc1234`.
+- Keep `pull_request` builds, so fork commits have a build at all. To give same-repo
+  branches a build without opening a PR, also build `push` on every branch, and skip the
+  same-repo PR run so nothing builds twice:
+  `push: branches: ["**"]` plus
+  `if: github.event_name == 'push' || github.event.pull_request.head.repo.fork`.
 - Recommended repo setting: *Settings → Actions → General → "Require approval for all
-  external contributors"*. A fork's workflow then doesn't run at all until you approve it,
-  so the build can't exist without you having looked at the PR first.
-- Fork PR artifacts download with the same token as Beta/Nightly (F2). The rolling-release
-  mirror in §3.7 deliberately **does not** cover PRs, because it would need write access in a
-  fork-triggered run.
+  external contributors"*. A fork's workflow then doesn't run until you approve it, so an
+  unsigned build can't exist without you having looked at the PR first.
+- Downloading needs the token (F2) for every Nightly build.
 
-The same flow fits the Android app later: enter a PR number, see the same confirmation,
-install the APK. One caveat: a fork's APK can't use the release key (F5). Build it as the
-`.debug` application id, so it installs **next to** the real app rather than over it. It
-also can't update itself, because each run has a new debug key. A same-repo branch's APK is
-signed with the real key and updates normally.
+The same flow fits the Android app later: enter a hash, see the same confirmation, install
+the APK. One caveat: a fork's APK can't use the release key (F5). Build it as the `.debug`
+application id, so it installs **next to** the real app rather than over it. A same-repo
+commit's APK is signed with the real key and installs over the existing app as usual,
+as long as its `versionCode` is higher.
 
 ---
 
@@ -387,10 +407,10 @@ signed with the real key and updates normally.
 3. Update-signing key, `manifest.json` + `.sig` produced in CI. **(§3.6)**
 4. `workflow_call` on desktop/android, `release.yml`, universal macOS build, NSIS in CI,
    `install-macos.sh`. Tag `v0.1.0` to prove it. **(Part 2)**
-5. `desktop.yml` trigger change for Nightly (push on all branches, PRs only from forks),
-   `pr<N>` channel in `version.sh`, and the repo setting requiring approval for fork runs.
+5. `desktop.yml` trigger change (push on all branches, PRs only from forks), and the repo
+   setting requiring approval for fork runs.
 6. `internal/update`: sources → verify → apply (Windows first, then macOS) → API + UI → scheduler,
-   then the PR channel with its confirmation screen (§3.8).
+   then Nightly's commit lookup with its confirmation screen (§3.8).
    **(Part 3)**
 
 ## 5. Test plan
