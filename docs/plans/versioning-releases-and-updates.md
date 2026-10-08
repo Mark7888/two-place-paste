@@ -62,7 +62,7 @@ One script, `scripts/version.sh`, called by every workflow. It writes `$GITHUB_O
 | Output | Release (`v1.0.1` tag) | Any other run (latest tag `v1.0.0`) |
 |---|---|---|
 | `version` (SemVer, for people) | `1.0.1` | `1.0.2-dev.20261008161500+56bd693`, see note |
-| `channel` | `stable` | `beta` (default branch) / `nightly` (any other branch) |
+| `channel` | `stable` | `beta` (default branch) / `nightly` (any other branch) / `pr<N>` (a `pull_request` run, from `github.event.number`) |
 | `stamp` (ordering key) | seconds since 2025-01-01T00:00Z | same |
 | `version_code` (Android) | `= stamp` | `= stamp` |
 | `numeric` (`X.Y.Z`, for plists/Windows) | `1.0.1` | `1.0.2` |
@@ -180,7 +180,9 @@ jobs:
 auto-update **defaults to off**:
 
 ```go
-UpdateChannel string `json:"update_channel"` // "stable" (default) | "beta" | "nightly"
+UpdateChannel string `json:"update_channel"` // "stable" (default) | "beta" | "nightly" | "pr"
+UpdatePR      int    `json:"update_pr"`      // the PR number, only for "pr"
+UpdatePRSHA   string `json:"update_pr_sha"`  // the head commit the user confirmed (§3.8)
 AutoUpdate    bool   `json:"auto_update"`
 ```
 
@@ -215,6 +217,7 @@ desktop/internal/update/
 | **Stable** | `GET /repos/{o}/{r}/releases/latest` (excludes drafts and prereleases) → read `manifest.json` | release asset URL, no auth |
 | **Beta** | `GET /repos/{o}/{r}` → `default_branch` (cached; handles **`master` and `main`** without hard-coding either) → `GET /actions/workflows/desktop.yml/runs?branch=<default>&event=push&status=success&per_page=5` → `GET /actions/runs/{id}/artifacts` | `archive_download_url`, **with token** |
 | **Nightly** | as Beta without `branch=`, then **keep only runs whose `head_repository.full_name == "Mark7888/two-place-paste"`** | same |
+| **Pull request #N** | `GET /pulls/{N}` → `head.sha`, `head.repo.full_name`, author, title → `GET /actions/workflows/desktop.yml/runs?head_sha=<sha>&status=success` (a `push` run for a same-repo branch, a `pull_request` run for a fork) → its artifacts | same, **pinned and confirmed** (§3.8) |
 
 Rules that apply to every channel:
 
@@ -321,6 +324,58 @@ cancels older pending" behaviour from §1.1 is exactly what you want.
 I'd start with the token (it's what was asked for, and it needs no extra CI). Switch to
 the mirror if Beta/Nightly ever has testers other than you.
 
+### 3.8 The pull request channel: run any PR's build, on purpose
+
+The goal is to be able to run **any** PR's build, forks included. A Nightly that follows
+"whatever built last" is the unsafe way to get there. **Asking for a PR number is the safe
+way**, because nothing is installed that you didn't name. What it has to cover:
+
+**A fork's build can't be signed, and must not be.** A fork PR run gets no secrets, so §3.6's
+signature can't exist for it. Signing it afterwards in a `pull_request_target` or
+`workflow_run` job is the classic "pwn request". It would give a stranger's binary a valid
+signature, and that binary could then pass on the Nightly channel too. So PR builds are
+**unsigned by design**, and the PR channel is the only place an unsigned build is accepted.
+It is installed only after you say yes. Integrity comes from the artifact listing's
+`digest` (`sha256:…`), checked against the downloaded zip.
+
+**What you are trusting, and what the UI shows before installing:**
+- PR number, title, author, and whether it's from a fork (`head.repo.full_name`).
+- The **head commit**, with a link to the PR's *Files changed*.
+- A warning if the PR changes `.github/workflows/**`. A `pull_request` run uses the
+  workflow files **from the PR**, so a fork can change how its own artifact is built, not
+  only the app code.
+- One button: **Install this commit**.
+
+**Pinned to the commit you confirmed.** The confirmed SHA is stored in `update_pr_sha`.
+What happens when the PR gets new commits depends on whose PR it is:
+
+| PR from | New commits pushed | Auto-update |
+|---|---|---|
+| This repo (you or a collaborator) | Follows the PR's head like Nightly, if the build is **signed** | allowed |
+| A fork | Shows *"PR #N has new commits: review and install?"* | **never**: an author can push a malicious commit after you've looked |
+
+The PR channel also ends on its own terms. When the PR is merged or closed, the UI offers
+to switch back to Beta (or Stable). That is usually a smaller stamp, so it's the explicit
+downgrade from §1.2.
+
+**Workflow changes this needs:**
+- Keep `pull_request` builds for **forks** (the dedupe condition from §3.6 already does).
+  Same-repo branches are covered by their `push` runs. The lookup goes by `head_sha`, so
+  either kind of run is found.
+- `scripts/version.sh` gives `pull_request` runs the channel `pr<N>`, so the artifact name
+  says which PR it is: `tppdesktop-Windows-x64-1.0.2-pr42.20261008161500+abc1234`.
+- Recommended repo setting: *Settings → Actions → General → "Require approval for all
+  external contributors"*. A fork's workflow then doesn't run at all until you approve it,
+  so the build can't exist without you having looked at the PR first.
+- Fork PR artifacts download with the same token as Beta/Nightly (F2). The rolling-release
+  mirror in §3.7 deliberately **does not** cover PRs, because it would need write access in a
+  fork-triggered run.
+
+The same flow fits the Android app later: enter a PR number, see the same confirmation,
+install the APK. One caveat: a fork's APK is **debug-signed** (F5), so Android will only
+install it after uninstalling the release-signed app. For phones, PR builds are practical
+only from same-repo branches, which are signed with the real key.
+
 ---
 
 ## 4. Order of work
@@ -331,8 +386,10 @@ the mirror if Beta/Nightly ever has testers other than you.
 3. Update-signing key, `manifest.json` + `.sig` produced in CI. **(§3.6)**
 4. `workflow_call` on desktop/android, `release.yml`, universal macOS build, NSIS in CI,
    `install-macos.sh`. Tag `v0.1.0` to prove it. **(Part 2)**
-5. `desktop.yml` trigger change for Nightly (push on all branches, PRs only from forks).
-6. `internal/update`: sources → verify → apply (Windows first, then macOS) → API + UI → scheduler.
+5. `desktop.yml` trigger change for Nightly (push on all branches, PRs only from forks),
+   `pr<N>` channel in `version.sh`, and the repo setting requiring approval for fork runs.
+6. `internal/update`: sources → verify → apply (Windows first, then macOS) → API + UI → scheduler,
+   then the PR channel with its confirmation screen (§3.8).
    **(Part 3)**
 
 ## 5. Test plan
