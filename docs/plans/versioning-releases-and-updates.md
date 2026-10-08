@@ -372,9 +372,10 @@ downgrade from §1.2.
   fork-triggered run.
 
 The same flow fits the Android app later: enter a PR number, see the same confirmation,
-install the APK. One caveat: a fork's APK is **debug-signed** (F5), so Android will only
-install it after uninstalling the release-signed app. For phones, PR builds are practical
-only from same-repo branches, which are signed with the real key.
+install the APK. One caveat: a fork's APK can't use the release key (F5). Build it as the
+`.debug` application id, so it installs **next to** the real app rather than over it. It
+also can't update itself, because each run has a new debug key. A same-repo branch's APK is
+signed with the real key and updates normally.
 
 ---
 
