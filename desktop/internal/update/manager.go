@@ -76,6 +76,18 @@ type Options struct {
 	// them (TPP_DESKTOP_UPDATE_ALLOW_LOCAL=1).
 	AllowLocal bool
 
+	// Idle reports whether restarting the service now would interrupt
+	// nobody: the screen is locked, or nothing has synced for a while. An
+	// automatic update waits for it; one a person asked for does not.
+	Idle func() bool
+
+	// The schedule: how long a check stays fresh, how long after start the
+	// first one waits, and how often a waiting auto-update re-asks Idle.
+	// Zero means the Default* constants.
+	CheckInterval time.Duration
+	StartDelay    time.Duration
+	IdleRetry     time.Duration
+
 	// Tests replace the endpoints, the key, the HTTP client, the clock, and
 	// the file this platform installs.
 	Asset       string
@@ -102,6 +114,9 @@ type Manager struct {
 	lastChecked time.Time
 	previous    *localui.BuildView
 	busy        bool
+
+	// trigger wakes Run's loop; nil until Run starts.
+	trigger func()
 }
 
 // candidate is an offered build and how to fetch it.
@@ -128,6 +143,15 @@ func New(opts Options) (*Manager, error) {
 	}
 	if opts.Client == nil {
 		opts.Client = &http.Client{Timeout: httpTimeout}
+	}
+	if opts.CheckInterval <= 0 {
+		opts.CheckInterval = DefaultCheckInterval
+	}
+	if opts.StartDelay <= 0 {
+		opts.StartDelay = DefaultStartDelay
+	}
+	if opts.IdleRetry <= 0 {
+		opts.IdleRetry = DefaultIdleRetry
 	}
 	if opts.ReleaseBase == "" {
 		opts.ReleaseBase = DefaultReleaseBase

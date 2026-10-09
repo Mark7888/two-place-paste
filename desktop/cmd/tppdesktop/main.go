@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Mark7888/two-place-paste/desktop/internal/autostart"
 	"github.com/Mark7888/two-place-paste/desktop/internal/buildinfo"
@@ -38,7 +39,15 @@ const (
 	envConfigDir = "TPP_DESKTOP_CONFIG_DIR"
 	envUIDev     = "TPP_DESKTOP_UI_DEV"
 	envLogLevel  = "TPP_DESKTOP_LOG"
+
+	// envUpdateAllowLocal lets a build from a checkout install updates, to
+	// test the updater itself. Off, a local build never replaces itself.
+	envUpdateAllowLocal = "TPP_DESKTOP_UPDATE_ALLOW_LOCAL"
 )
+
+// idleAfter is how long after the last sync an automatic update may restart
+// the service, when the screen is not locked.
+const idleAfter = 10 * time.Minute
 
 // main exists only to turn start's exit code into a process exit.
 //
@@ -158,7 +167,26 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 	go svc.Run(runCtx)
-	go power.WatchWake(runCtx, power.DefaultWakeCheck, svc.Resumed)
+
+	updater, err := update.New(update.Options{
+		ConfigDir:  configDir,
+		Quit:       cancel,
+		AllowLocal: os.Getenv(envUpdateAllowLocal) == "1",
+		Logger:     logger,
+		Idle: func() bool {
+			return power.ScreenLocked() || time.Since(svc.LastSync()) > idleAfter
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("build the updater: %w", err)
+	}
+	updater.SetPreferences(settings)
+	go updater.Run(runCtx)
+
+	go power.WatchWake(runCtx, power.DefaultWakeCheck, func(slept time.Duration) {
+		svc.Resumed(slept)
+		updater.Woke()
+	})
 
 	if client.InGroup() {
 		if err := client.Connect(runCtx); err != nil {

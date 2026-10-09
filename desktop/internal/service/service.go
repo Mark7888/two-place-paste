@@ -1212,6 +1212,15 @@ func (s *Service) applyAnnounced(ctx context.Context, meta tppclient.EntryMeta) 
 	s.mu.Unlock()
 }
 
+// LastSync is when the clipboard last moved in either direction, or zero if
+// it has not since this process started. The updater waits for it to be a
+// while ago before restarting the service on its own.
+func (s *Service) LastSync() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastSync
+}
+
 func (s *Service) noteSync(at time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
