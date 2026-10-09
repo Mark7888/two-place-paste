@@ -44,3 +44,6 @@ jobs:
 
       - name: Test manifest.sh
         run: scripts/manifest_test.sh
+
+      - name: Test publish-beta.sh
+        run: scripts/publish-beta_test.sh

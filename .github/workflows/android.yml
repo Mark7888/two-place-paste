@@ -242,3 +242,37 @@ jobs:
             dist/${{ steps.apk.outputs.name }}
             dist/manifest-android.json*
           if-no-files-found: error
+
+  # A push to the default branch replaces the android files of the rolling
+  # `channel-beta` prerelease, which the Beta update channel reads with no
+  # token (docs/plans/versioning-releases-and-updates.md §3.7). The only job
+  # here that can write to the repository.
+  publish-beta:
+    name: Publish to Beta
+    needs: [version, build]
+    if: github.event_name == 'push' && needs.version.outputs.channel == 'beta'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Queued, never cancelled mid-upload. A newer push's run replaces a
+    # pending older one, which is the one it would have overwritten anyway.
+    concurrency:
+      group: publish-beta-android
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      # Only the release-signed APK: on a run without the keystore there is no
+      # artifact by this name, and the job fails rather than publish a debug build.
+      - uses: actions/download-artifact@v4
+        with:
+          name: twoplacepaste-android-${{ needs.version.outputs.version }}
+          path: dist
+
+      - name: Publish
+        run: scripts/publish-beta.sh android dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ needs.version.outputs.commit }}
+          STAMP: ${{ needs.version.outputs.stamp }}

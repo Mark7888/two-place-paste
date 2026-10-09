@@ -369,10 +369,10 @@ Details that matter:
 - **The concurrency group is correct here.** If several pushes land close together, the
   pending-run cancellation from §1.1 drops the older pending one, which is what you want.
   Step 2 covers a slow older run that finishes after a newer one.
-- **Create the release once** by hand: `gh release create channel-beta --prerelease
-  --title "Beta" --notes "Latest build of the default branch. Overwritten on every push."`.
-  The tag matches neither `v*` pattern, so it never triggers `release.yml`, and
-  `releases/latest` ignores prereleases, so Stable is unaffected.
+- **The release is created on first use** by the publish job (as a prerelease titled
+  "Beta"), so there is nothing to set up by hand. The tag matches neither `v*` pattern, so it
+  never triggers `release.yml`, and `releases/latest` ignores prereleases, so Stable is
+  unaffected. The upload logic lives in `scripts/publish-beta.sh`, shared by both workflows.
 - Android's Beta APK goes into the same release (`manifest-android.json`), so the phone's
   updater can later read Beta the same way.
 

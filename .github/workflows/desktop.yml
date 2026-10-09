@@ -310,3 +310,36 @@ jobs:
           name: tppdesktop-manifest-${{ needs.version.outputs.version }}
           path: dist/manifest/
           if-no-files-found: error
+
+  # A push to the default branch replaces the desktop files of the rolling
+  # `channel-beta` prerelease, which the Beta update channel reads with no
+  # token (docs/plans/versioning-releases-and-updates.md §3.7). The only job
+  # here that can write to the repository.
+  publish-beta:
+    name: Publish to Beta
+    needs: [version, manifest]
+    if: github.event_name == 'push' && needs.version.outputs.channel == 'beta'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Queued, never cancelled mid-upload. A newer push's run replaces a
+    # pending older one, which is the one it would have overwritten anyway.
+    concurrency:
+      group: publish-beta-desktop
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tppdesktop-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        run: scripts/publish-beta.sh desktop dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ needs.version.outputs.commit }}
+          STAMP: ${{ needs.version.outputs.stamp }}

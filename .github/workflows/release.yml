@@ -63,9 +63,16 @@ jobs:
         env:
           TPP_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
 
+  # A called workflow's jobs can be granted no more than its caller job holds,
+  # and the check covers jobs that will be skipped too: desktop.yml and
+  # android.yml each have a publish-beta job that writes (skipped here, since a
+  # tag build is stable, not beta). Without contents: write here the run is
+  # rejected before it starts.
   desktop:
     name: Desktop
     needs: version
+    permissions:
+      contents: write
     uses: ./.github/workflows/desktop.yml
     with:
       stamp: ${{ needs.version.outputs.stamp }}
@@ -74,6 +81,8 @@ jobs:
   android:
     name: Android
     needs: version
+    permissions:
+      contents: write
     uses: ./.github/workflows/android.yml
     with:
       stamp: ${{ needs.version.outputs.stamp }}
