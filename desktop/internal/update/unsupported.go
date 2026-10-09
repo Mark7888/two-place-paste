@@ -1,3 +1,5 @@
+//go:build !windows && !darwin
+
 package update
 
 import (
@@ -8,8 +10,7 @@ import (
 // errNoApplier is what every operation of unsupportedApplier reports.
 var errNoApplier = errors.New("updates cannot be installed on this platform")
 
-// unsupportedApplier is the Applier for a platform with no published builds,
-// and for every platform until its own lands.
+// unsupportedApplier is the Applier for a platform with no published builds.
 type unsupportedApplier struct{}
 
 func (unsupportedApplier) Ready() error                          { return errNoApplier }

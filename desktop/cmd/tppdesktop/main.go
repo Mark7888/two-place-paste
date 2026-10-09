@@ -26,6 +26,7 @@ import (
 	"github.com/Mark7888/two-place-paste/desktop/internal/power"
 	"github.com/Mark7888/two-place-paste/desktop/internal/service"
 	"github.com/Mark7888/two-place-paste/desktop/internal/tray"
+	"github.com/Mark7888/two-place-paste/desktop/internal/update"
 	"github.com/Mark7888/two-place-paste/pkg/tppclient"
 	"github.com/Mark7888/two-place-paste/pkg/tppclient/keystore"
 )
@@ -66,6 +67,16 @@ func start() int {
 func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// An update relaunches the new build while the old one still holds the
+	// localhost port (internal/update). Binding before it has gone would land
+	// this process in the "port in use" failure, so it waits first.
+	if pid := update.ParseWaitPID(os.Args[1:]); pid > 0 {
+		logger.Info("waiting for the build this one replaces to exit", "pid", pid)
+		if !update.WaitForExit(pid, update.WaitPIDTimeout) {
+			logger.Warn("the previous build is still running; starting anyway", "pid", pid)
+		}
+	}
 
 	configDir := os.Getenv(envConfigDir)
 	settings, err := config.Load(configDir)

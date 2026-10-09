@@ -230,7 +230,10 @@ func (m *Manager) readyLocked() error {
 	if m.asset == "" {
 		return errors.New("no builds are published for this platform")
 	}
-	return m.opts.Applier.Ready()
+	if err := m.opts.Applier.Ready(); err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	return nil
 }
 
 // Check asks the channel for its newest build.
@@ -417,7 +420,7 @@ func (m *Manager) install(ctx context.Context, cand *candidate) error {
 
 	m.setState(localui.UpdateStateInstalling)
 	if err := m.opts.Applier.Install(ctx, path); err != nil {
-		return err
+		return fmt.Errorf("install %s: %w", cand.view.Version, err)
 	}
 	m.opts.Logger.Info("update installed", "from", m.opts.Current.Version, "to", cand.view.Version)
 
@@ -535,7 +538,8 @@ func (m *Manager) saveLocked() {
 	if err != nil {
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
+	err = os.MkdirAll(filepath.Dir(path), 0o700)
+	if err == nil {
 		err = os.WriteFile(path, append(b, '\n'), 0o600)
 	}
 	if err != nil {
