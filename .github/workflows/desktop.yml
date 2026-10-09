@@ -241,3 +241,38 @@ jobs:
           name: tppdesktop-${{ matrix.name }}-${{ needs.version.outputs.version }}
           if-no-files-found: error
           path: dist/TwoPlacePaste-${{ matrix.name }}.exe
+
+  # One manifest for every desktop file of this run, signed with the
+  # update-signing key (docs/plans/versioning-releases-and-updates.md §3.6).
+  # The updater installs nothing whose checksum is not in a manifest that
+  # verifies against the public key compiled into it. A fork's pull request
+  # has no key, so its manifest is unsigned and the updater treats the build
+  # as unsigned.
+  manifest:
+    name: Manifest
+    needs: [version, package]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tppdesktop-*
+          path: dist
+          merge-multiple: true
+
+      - name: Write and sign the manifest
+        run: scripts/manifest.sh desktop dist/manifest dist/TwoPlacePaste-*
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          NUMERIC: ${{ needs.version.outputs.numeric }}
+          STAMP: ${{ needs.version.outputs.stamp }}
+          CHANNEL: ${{ needs.version.outputs.channel }}
+          COMMIT: ${{ needs.version.outputs.commit }}
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tppdesktop-manifest-${{ needs.version.outputs.version }}
+          path: dist/manifest/
+          if-no-files-found: error

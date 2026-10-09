@@ -39,7 +39,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      numeric: ${{ steps.version.outputs.numeric }}
       stamp: ${{ steps.version.outputs.stamp }}
+      channel: ${{ steps.version.outputs.channel }}
+      commit: ${{ steps.version.outputs.commit }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -208,8 +211,23 @@ jobs:
           set -euo pipefail
           "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --print-certs "dist/${{ steps.apk.outputs.name }}"
 
+      # The same signed manifest the desktop build gets
+      # (docs/plans/versioning-releases-and-updates.md §3.6), in the same
+      # artifact as the APK it vouches for.
+      - name: Write and sign the manifest
+        run: scripts/manifest.sh android dist "dist/${{ steps.apk.outputs.name }}"
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          NUMERIC: ${{ needs.version.outputs.numeric }}
+          STAMP: ${{ needs.version.outputs.stamp }}
+          CHANNEL: ${{ needs.version.outputs.channel }}
+          COMMIT: ${{ needs.version.outputs.commit }}
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+
       - uses: actions/upload-artifact@v4
         with:
           name: twoplacepaste-${{ steps.keystore.outputs.signed == 'true' && 'android' || 'android-debug' }}-${{ needs.version.outputs.version }}
-          path: dist/${{ steps.apk.outputs.name }}
+          path: |
+            dist/${{ steps.apk.outputs.name }}
+            dist/manifest-android.json*
           if-no-files-found: error

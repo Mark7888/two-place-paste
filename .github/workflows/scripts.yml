@@ -41,3 +41,6 @@ jobs:
 
       - name: Test version.sh
         run: scripts/version_test.sh
+
+      - name: Test manifest.sh
+        run: scripts/manifest_test.sh
