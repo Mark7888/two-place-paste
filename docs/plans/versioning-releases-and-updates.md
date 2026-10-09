@@ -20,9 +20,9 @@ Checked against this repository and the GitHub API before writing anything below
 | # | Fact | Consequence |
 |---|---|---|
 | F1 | Listing workflow runs and artifacts works **without a token** on a public repo (`/actions/workflows/desktop.yml/runs`, `/actions/runs/{id}/artifacts`). | Discovery for every channel needs no credentials. |
-| F2 | **Downloading** an artifact (`/actions/artifacts/{id}/zip`) **requires an authenticated request, even on a public repo**. Release assets do not. | Stable needs nothing. Beta and Nightly need a token. For Beta only, CI can mirror the build somewhere public instead (§3.7). |
+| F2 | **Downloading** an artifact (`/actions/artifacts/{id}/zip`) **requires an authenticated request, even on a public repo**. Release assets do not. | Stable and Beta are served from Releases (§2, §3.7) and need no token. Only Nightly downloads artifacts, so only Nightly needs a token, kept in the OS's secure storage (§3.9). |
 | F3 | Artifacts expire (90 days here: `expires_at` on the listing). | The updater skips `expired: true` and falls back to the next run. |
-| F4 | `desktop.yml` builds on `push` to **`main`/`master` only**. Every other branch builds **only through `pull_request`**, and that includes PRs from **forks**. | A commit on a branch with no PR has no build yet (§3.8). Beta **must never install a fork's build** (§3.6), and Nightly shows where a commit came from before installing it. |
+| F4 | `desktop.yml` builds on `push` to **`main`/`master` only**. Every other branch builds **only through `pull_request`**, and that includes PRs from **forks**. | The triggers stay as they are: no builds for side-branch pushes. A commit with no build is an error in Nightly (§3.8). Beta **must never install a fork's build** (§3.6), and Nightly shows where a commit came from before installing it. |
 | F5 | `android.yml` builds a **debug** APK on a fresh runner, so AGP generates a **new debug keystore on every run**. | Two CI APKs never have the same signature, so Android refuses to install one over the other. A stable signing key is a prerequisite for APK updates, whatever the version numbers say. |
 | F6 | macOS asks for approval (Settings → Privacy & Security → *Open Anyway*) because the **browser** stamps the download with `com.apple.quarantine` and the app is not notarised. A file that **our own process** downloads with `net/http` and unpacks with `ditto` gets **no quarantine attribute**. Windows behaves the same way: no `Zone.Identifier` stream, so no SmartScreen prompt. | Only the **first** install needs the manual approval. Every update the app applies itself does not. |
 | F7 | The macOS key store goes through `/usr/bin/security` (`pkg/tppclient/keystore/keystore_darwin.go`), so the keychain ACL belongs to `security`, not to our ad-hoc signature. | Replacing the binary with a build that has a different ad-hoc signature does **not** lose access to the keys. |
@@ -166,7 +166,7 @@ jobs:
 | `TwoPlacePaste-Windows-x64.exe` | The bare exe, which is what the updater swaps in. |
 | `TwoPlacePaste-Setup.exe` | The NSIS installer, for first installs (puts the exe in `%LOCALAPPDATA%\Programs\TwoPlacePaste`). |
 | `TwoPlacePaste-android.apk` | Release-signed APK. |
-| `manifest.json`, `manifest.json.sig` | Version, stamp, channel, commit, and the SHA-256 of each asset (§3.6). |
+| `manifest-desktop.json` (+ `.sig`), `manifest-android.json` (+ `.sig`) | Version, stamp, channel, commit, and the SHA-256 of each of that platform's assets (§3.6). One manifest per platform, because the Beta release (§3.7) is filled by two separate workflows. |
 | `SHA256SUMS` | For people. |
 | `install-macos.sh` | First-install helper (§3.5). |
 
@@ -185,16 +185,15 @@ NightlyCommit string `json:"nightly_commit"` // full SHA the user entered, only 
 AutoUpdate    bool   `json:"auto_update"`
 ```
 
-The optional **GitHub token** for Beta/Nightly downloads (F2) is a secret, and
-`desktop.json` must stay secret-free, so it goes into the **keystore** under its own name,
-next to the device key. A fine-grained PAT with *Public repositories (read-only)* and no
-other permissions is enough.
+The **GitHub token** is needed only for Nightly (F2). It is a secret, so it never goes
+into `desktop.json`; §3.9 covers how it's stored and used.
 
-UI (`SettingsPanel.tsx`): a channel dropdown, an auto-update toggle, a token field shown
-only for Beta/Nightly, a **commit hash** field shown only for Nightly, **Check now**, current vs. available version, and **Install & restart**.
+UI (`SettingsPanel.tsx`): a channel dropdown, an auto-update toggle, and, shown only for Nightly,
+a **commit hash** field and the token controls (§3.9), **Check now**, current vs. available version, and **Install & restart**.
 The tray gets a *Check for updates…* item.
 API (registered like the existing routes, behind `s.guard(originScripted, tokenRequired, …)`):
-`GET /api/update`, `POST /api/update/check`, `POST /api/update/install`.
+`GET /api/update`, `POST /api/update/check`, `POST /api/update/install`, and
+`PUT`/`DELETE /api/update/token` (§3.9).
 
 ### 3.2 Package layout
 
@@ -202,7 +201,9 @@ API (registered like the existing routes, behind `s.guard(originScripted, tokenR
 desktop/internal/buildinfo/     version vars set by -ldflags
 desktop/internal/update/
   source.go        Source interface: Latest(ctx, channel) (Candidate, error)
-  github.go        releases + Actions implementations (ETag-cached)
+  release.go       Stable/Beta: manifest + asset from a release URL, no API calls
+  actions.go       Nightly: commit lookup + artifact download via the API (§3.8)
+  token.go         token load/save/delete through the keystore (§3.9)
   verify.go        ed25519 manifest check + sha256
   schedule.go      wall-clock scheduler (F8); darwin variant in schedule_darwin.go (cgo)
   apply_darwin.go  bundle swap
@@ -211,11 +212,15 @@ desktop/internal/update/
 
 ### 3.3 Finding the candidate per channel
 
-| Channel | Calls (no token needed) | Download |
-|---|---|---|
-| **Stable** | `GET /repos/{o}/{r}/releases/latest` (excludes drafts and prereleases) → read `manifest.json` | release asset URL, no auth |
-| **Beta** | `GET /repos/{o}/{r}` → `default_branch` (cached; handles **`master` and `main`** without hard-coding either) → `GET /actions/workflows/desktop.yml/runs?branch=<default>&event=push&status=success&per_page=5` → `GET /actions/runs/{id}/artifacts` | `archive_download_url`, **with token** |
-| **Nightly** (commit) | `GET /commits/{hash}` (resolves a short hash to the full SHA; works for fork-PR commits too) → `GET /actions/workflows/desktop.yml/runs?head_sha=<full sha>` → its artifacts | same, **after confirmation** for an unsigned build (§3.8) |
+| Channel | Check | Download | Token |
+|---|---|---|---|
+| **Stable** | `GET github.com/{o}/{r}/releases/latest/download/manifest-desktop.json` (`latest` excludes drafts and prereleases) | the asset named in the manifest, same URL form | no |
+| **Beta** | `GET github.com/{o}/{r}/releases/download/channel-beta/manifest-desktop.json` (§3.7) | same | no |
+| **Nightly** (commit) | `GET /commits/{hash}` (resolves a short hash to the full SHA; works for fork-PR commits too) → `GET /actions/workflows/desktop.yml/runs?head_sha=<full sha>` → its artifacts | `archive_download_url`, **after confirmation** for an unsigned build (§3.8) | **yes** (§3.9) |
+
+Stable and Beta use **plain release-download URLs, not the REST API**. That means no API rate
+limit and no token, and the app never has to know whether the default branch is `master`
+or `main`: CI decides that when it publishes (§3.7).
 
 Rules that apply to every channel:
 
@@ -223,9 +228,11 @@ Rules that apply to every channel:
   `stamp > buildinfo.Stamp`. On an explicit channel switch the user may install a smaller one
   ("older build"). Nightly ignores the stamp: you named the build, so it's installed
   whether it's older or newer.
-- Skip `expired` artifacts and fall through to the next run (F3).
-- Send `If-None-Match` with the stored ETag. A `304` does not count against the
-  **60 requests/hour unauthenticated** limit. With a token the limit is 5 000.
+- Nightly: an `expired` artifact (F3) means the commit needs a new build. Say so, and link
+  the run so it can be re-run.
+- Nightly sends the token on its API calls, which gives 5 000 requests/hour rather than
+  the 60/hour an unauthenticated client gets. It only calls the API when you enter a hash
+  or while it waits for a running build.
 - Respect `Retry-After` / `X-RateLimit-Reset`. Never retry in a tight loop.
 
 ### 3.4 Scheduling without costing battery
@@ -300,8 +307,9 @@ that installs "whatever built last" without you choosing it must never pick up s
 build: it would run a stranger's code on your machine the moment they opened a PR. Beta
 and Stable install on their own, so they rely on two defences. Use both:
 
-1. **Filter.** Beta only takes `event == push` runs on the default branch of this repository,
-   as in §3.3. Fork code can't land there without you merging it.
+1. **Filter.** Only the publish job in §3.7 writes to the Beta release. It runs only on
+   `push` to the default branch of this repository, where fork code can't land without you
+   merging it. The job holds `contents: write` and runs nothing from the checkout.
 2. **Sign.** Generate an ed25519 key pair once. The private key goes into the secret
    `UPDATE_SIGNING_KEY` and the public key is compiled into `buildinfo`. Every build writes
    `manifest.json` (version, stamp, channel, commit, run id, sha256 of the payload) and
@@ -310,19 +318,49 @@ and Stable install on their own, so they rely on two defences. Use both:
    signature even if the filter is bypassed. The same signature protects Stable against
    a tampered release asset.
 
-### 3.7 If a token for Beta is too much friction
+### 3.7 Beta: a rolling prerelease
 
-Mirror Beta builds to a public **rolling prerelease**: after a successful push run on the
-default branch, CI uploads the assets with `gh release upload --clobber` to a fixed
-prerelease tagged `channel-beta`. The updater then uses release-asset URLs for Stable and
-Beta, with no token and no 90-day expiry. Nightly can't be mirrored this way, because it
-needs one build per commit, so it always needs the token. Give that job
-`concurrency: { group: publish-${{ channel }}, cancel-in-progress: false }`, and have it
-skip the upload if the release already holds a larger stamp. Here the "newest pending run
-cancels older pending" behaviour from §1.1 is exactly what you want.
+Beta builds are published to one fixed prerelease, tagged `channel-beta`, so that the
+updater can download them from a public, permanent URL with no token. The release
+**holds one build at a time**, overwritten by each push to the default branch, so it
+never collects old files.
 
-I'd start with the token (it's what was asked for, and it needs no extra CI). Switch to
-the mirror if Beta ever has testers other than you.
+A `publish-beta` job, added to both `desktop.yml` and `android.yml`:
+
+```yaml
+publish-beta:
+  needs: [package]          # the existing build jobs
+  if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+  runs-on: ubuntu-latest
+  permissions:
+    contents: write         # the only job outside release.yml that can write
+  concurrency:
+    group: publish-beta-${{ github.workflow }}
+    cancel-in-progress: false
+  steps:
+    # 1. download-artifact (this run's builds, plus its signed manifest-<platform>.json)
+    # 2. if the release's current manifest has a larger stamp, stop: a newer run already published
+    # 3. gh release upload channel-beta <payloads> --clobber   # payloads first
+    # 4. gh release upload channel-beta manifest-<platform>.json manifest-<platform>.json.sig --clobber
+    # 5. move the channel-beta tag to this commit, and put the version in the release title
+```
+
+Details that matter:
+- **`github.event.repository.default_branch`** makes this work on `master` today and on
+  `main` after a rename, with nothing hard-coded.
+- **Payloads go up first and the manifest last.** `--clobber` replaces files one at a time,
+  so for a few seconds the release can hold a new payload under the old manifest. The
+  updater checks the payload's sha256 against the manifest, finds a mismatch, and tries
+  again at the next check. It never installs the half-updated pair.
+- **The concurrency group is correct here.** If several pushes land close together, the
+  pending-run cancellation from §1.1 drops the older pending one, which is what you want.
+  Step 2 covers a slow older run that finishes after a newer one.
+- **Create the release once** by hand: `gh release create channel-beta --prerelease
+  --title "Beta" --notes "Latest build of the default branch. Overwritten on every push."`.
+  The tag matches neither `v*` pattern, so it never triggers `release.yml`, and
+  `releases/latest` ignores prereleases, so Stable is unaffected.
+- Android's Beta APK goes into the same release (`manifest-android.json`), so the phone's
+  updater can later read Beta the same way.
 
 ### 3.8 Nightly: install one specific commit
 
@@ -339,15 +377,15 @@ Nothing is installed that you didn't name, which makes it the safe way to run an
    SHA. A fork PR's commits resolve too, because GitHub keeps them under `refs/pull/N/head`
    in this repo. An ambiguous short hash is an error, so ask for more characters.
 2. `GET /actions/workflows/desktop.yml/runs?head_sha=<full sha>`. Possible outcomes:
-   - **No run:** the commit didn't touch `desktop/**` (the `paths` filter), or its branch
-     has no PR yet (F4). The UI says which. It offers to start one with **Run workflow**
-     (`desktop.yml` already has `workflow_dispatch`; that needs the token to have *Actions:
-     write*, or you click it on GitHub).
+   - **No run:** an error, and nothing else. *"No desktop build exists for commit
+     abc1234. Only commits on the default branch and the latest commit of an open pull
+     request are built, and only when they change `desktop/`."* No workflow is started
+     from the app, so the token stays read-only (§3.9).
    - **Running or queued:** show "build in progress". Install automatically when it
      finishes, but only if you've already confirmed it (below).
    - **Failed:** show the run link. Nothing to install.
-   - **Several successful runs** (a `push` and a `pull_request` run of the same commit):
-     prefer the **signed** one, then the newest.
+   - **Several successful runs** (a re-run, or a commit that was both a PR head and then
+     pushed to the default branch): prefer the **signed** one, then the newest.
 
 **Signed or not decides whether you're asked:**
 
@@ -381,21 +419,72 @@ new hash, or switch back to Beta or Stable (often a smaller stamp, so the explic
 downgrade from §1.2).
 
 **Workflow changes this needs:**
-- Keep `pull_request` builds, so fork commits have a build at all. To give same-repo
-  branches a build without opening a PR, also build `push` on every branch, and skip the
-  same-repo PR run so nothing builds twice:
-  `push: branches: ["**"]` plus
-  `if: github.event_name == 'push' || github.event.pull_request.head.repo.fork`.
+- **None to the triggers.** `desktop.yml` keeps building on `push` to the default branch
+  and on `pull_request`. A side branch gets a build only once it has a PR, and only for
+  commits that change `desktop/**`. Each push to a PR builds its new head commit, so the
+  commit you'd want to try is the one that has a build. Same-repo PR runs get the secrets,
+  so they're signed and install without the confirmation screen. Fork PR runs aren't.
 - Recommended repo setting: *Settings → Actions → General → "Require approval for all
   external contributors"*. A fork's workflow then doesn't run until you approve it, so an
   unsigned build can't exist without you having looked at the PR first.
-- Downloading needs the token (F2) for every Nightly build.
+- Every Nightly download needs the token (F2, §3.9).
 
 The same flow fits the Android app later: enter a hash, see the same confirmation, install
 the APK. One caveat: a fork's APK can't use the release key (F5). Build it as the `.debug`
 application id, so it installs **next to** the real app rather than over it. A same-repo
 commit's APK is signed with the real key and installs over the existing app as usual,
 as long as its `versionCode` is higher.
+
+### 3.9 The Nightly token: how it's created, stored and used
+
+Only Nightly uses it, and only to read Actions data. A missing or invalid token affects
+Nightly alone; Stable and Beta work without one.
+
+**The token to create.** A **fine-grained** personal access token, never a classic one:
+- *Repository access:* **Only select repositories →** `Mark7888/two-place-paste`.
+- *Permissions:* **Actions: Read-only**. GitHub adds *Metadata: Read-only* on its own.
+  Nothing else.
+- *Expiration:* 90 days or less. GitHub sends the expiry date back in the
+  `github-authentication-token-expiration` response header, so the app can show "expires
+  in 12 days" and warn you before it does.
+
+That token can read workflow runs and download artifacts from this one repository. It
+can't push, open PRs, start workflows, or see any other repository.
+
+**Where it's stored: the existing keystore,** as a secret named `github-token` next to the
+device key (`pkg/tppclient/keystore`):
+
+| OS | Backend | Protection |
+|---|---|---|
+| macOS | login keychain, through `/usr/bin/security` | encrypted with your login password, like the device key |
+| Windows | file sealed with **DPAPI** under your account | only your Windows account on this machine can decrypt it |
+
+So it gets exactly the protection the clipboard's own keys already have, without new storage
+code. Never in `desktop.json`, never in the log: the conventions already forbid logging
+secrets (docs/conventions.md §2), and the updater logs only "token set / not set / rejected".
+
+**How the UI handles it:**
+- `PUT /api/update/token` accepts it, checks it (one call to the run listing), and then
+  saves it. Behind the same guard as the other routes (origin check + session token), on
+  127.0.0.1 only.
+- **It can't be read back.** `GET /api/update` returns only `{token: {set, expires_at,
+  valid}}`. The field in the UI shows "Token saved, expires 2027-01-05" with **Replace** and
+  **Remove** buttons.
+- `DELETE /api/update/token` removes it from the keystore. A `401` from GitHub marks it
+  invalid and asks for a new one; it doesn't keep retrying with a dead token.
+
+**How it's sent:**
+- Only as `Authorization: Bearer …`, only over HTTPS, and only to `api.github.com`. Never in
+  a URL, so it can't end up in a log or a proxy's history.
+- The artifact download is two explicit steps. The first request goes to `api.github.com`
+  with the token and **doesn't follow the redirect** (`CheckRedirect` returns
+  `http.ErrUseLastResponse`). The second fetches the short-lived signed storage URL from
+  `Location` with a **fresh request and no token**. Go already drops `Authorization` on a
+  redirect to another host, but doing it explicitly keeps the token from depending on that.
+
+**For development from a checkout:** an environment variable, `TPP_DESKTOP_GITHUB_TOKEN`,
+overrides the stored token. It follows the existing `TPP_DESKTOP_*` overrides in
+`cmd/tppdesktop`, and is never written anywhere.
 
 ---
 
@@ -407,10 +496,12 @@ as long as its `versionCode` is higher.
 3. Update-signing key, `manifest.json` + `.sig` produced in CI. **(§3.6)**
 4. `workflow_call` on desktop/android, `release.yml`, universal macOS build, NSIS in CI,
    `install-macos.sh`. Tag `v0.1.0` to prove it. **(Part 2)**
-5. `desktop.yml` trigger change (push on all branches, PRs only from forks), and the repo
-   setting requiring approval for fork runs.
-6. `internal/update`: sources → verify → apply (Windows first, then macOS) → API + UI → scheduler,
-   then Nightly's commit lookup with its confirmation screen (§3.8).
+5. `publish-beta` job in `desktop.yml` and `android.yml`, and creating the `channel-beta`
+   release once (§3.7).
+6. The repo setting requiring approval for fork runs (§3.8). The triggers don't change.
+7. `internal/update`: release source (Stable/Beta) → verify → apply (Windows first, then
+   macOS) → API + UI → scheduler. Then Nightly: token storage (§3.9), commit lookup, and
+   the confirmation screen (§3.8).
    **(Part 3)**
 
 ## 5. Test plan
@@ -419,7 +510,8 @@ as long as its `versionCode` is higher.
   branch, a `-rc` tag, and a run on the tag itself.
 - `update` package: an `httptest` server that serves canned release and run listings,
   covering expired artifacts, a fork run, a bad signature, a sha mismatch, `304`, and a
-  rate-limit response. The swap logic is tested on a temp dir (rename sequence, `.old`
+  rate-limit response, a half-updated Beta release (new payload, old manifest), and a `401`
+  on the token. A test asserts the token never reaches the storage host or the log. The swap logic is tested on a temp dir (rename sequence, `.old`
   cleanup, rollback).
 - Manual, on real machines: install v0.1.0 → tag v0.1.1 → confirm auto-update **with no
   Gatekeeper prompt** on macOS and no SmartScreen prompt on Windows, the login item still
