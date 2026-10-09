@@ -12,9 +12,13 @@
 !ifndef SOURCE_EXE
   !define SOURCE_EXE "tppdesktop.exe"
 !endif
+; CI passes an absolute path; makensis otherwise writes next to this script.
+!ifndef OUTFILE
+  !define OUTFILE "TwoPlacePaste-Setup.exe"
+!endif
 
 Name "TwoPlacePaste"
-OutFile "TwoPlacePaste-Setup.exe"
+OutFile "${OUTFILE}"
 Unicode true
 RequestExecutionLevel user
 InstallDir "$LOCALAPPDATA\Programs\TwoPlacePaste"

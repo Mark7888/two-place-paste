@@ -12,3 +12,8 @@ generated, and checked in so the build needs no extra tool. After changing
     go run github.com/tc-hib/go-winres@latest make --arch amd64,arm64
 
 The tray icon is not this one; it lives in `internal/tray`.
+
+The version block in `winres.json` is a placeholder. CI regenerates the
+`.syso` files with the build's real version before it links the release
+binary (`.github/workflows/desktop.yml`, *Stamp the version into the Windows
+resources*); the files committed here are never rewritten by it.

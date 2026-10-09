@@ -25,6 +25,14 @@ react {
     }
 }
 
+// The release keystore (docs/plans/versioning-releases-and-updates.md §1.4).
+// CI decodes it from the ANDROID_KEYSTORE_B64 secret into a file and points
+// TPP_ANDROID_KEYSTORE at it. Every build an update can install over has to
+// carry this one signature — Android refuses an APK signed by a different key
+// — so it must never be regenerated. Absent (a fork, a local build), the
+// release variant is unsigned and CI builds the debug variant instead.
+def releaseKeystore = System.getenv("TPP_ANDROID_KEYSTORE")
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -36,8 +44,26 @@ android {
         applicationId "com.twoplacepaste"
         minSdk rootProject.ext.minSdkVersion
         targetSdk rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "0.1.0"
+        // CI passes both (-PversionCode=… -PversionName=…) from
+        // scripts/version.sh: the code is the build's stamp, so a later build
+        // always installs over an earlier one. A local build keeps these.
+        versionCode((project.findProperty("versionCode") ?: "1").toString().toInteger())
+        versionName((project.findProperty("versionName") ?: "0.0.0-local").toString())
+    }
+
+    signingConfigs {
+        if (releaseKeystore) {
+            release {
+                storeFile file(releaseKeystore)
+                storeType "pkcs12"
+                storePassword System.getenv("TPP_ANDROID_KEYSTORE_PASSWORD")
+                // Not a secret, and kept out of secrets on purpose: Actions masks a
+                // secret's value everywhere in the logs, and this one is the app's name.
+                keyAlias "twoplacepaste"
+                // A PKCS#12 store has one password, for the store and its key.
+                keyPassword System.getenv("TPP_ANDROID_KEYSTORE_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
@@ -48,6 +74,9 @@ android {
             applicationIdSuffix ".debug"
         }
         release {
+            if (releaseKeystore) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled true
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }

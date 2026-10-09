@@ -2,10 +2,11 @@
 #
 # The desktop job ROADMAP P6 owns. The Go and Node workflows already compile
 # and test this module; what happens here is the part that only makes sense on
-# the target operating systems — a .app for macOS and a plain .exe for
-# Windows, each built around a binary with the React UI embedded in it. No
-# installers are produced here; the .app and .exe are uploaded as artifacts
-# as-is.
+# the target operating systems — a .app for each Mac architecture and a plain
+# .exe for Windows, each built around a binary with the React UI embedded in it,
+# plus the NSIS installer for a first install on Windows. Each run is versioned
+# (scripts/version.sh) and gets a signed update manifest; release.yml calls
+# this workflow to build a release from a tag.
 #
 # Signing is deliberately conditional. A fork and a pull request have no
 # certificate, and a workflow that fails without one is a workflow nobody can
@@ -26,6 +27,16 @@ on:
       - "pkg/tppclient/**"
       - ".github/workflows/desktop.yml"
   workflow_dispatch:
+  # release.yml builds a release by calling this workflow from a tag push.
+  # It passes the stamp it computed, so the desktop and Android builds of one
+  # release carry one version.
+  workflow_call:
+    inputs:
+      stamp:
+        description: The build stamp to use instead of the current time.
+        type: string
+        required: false
+        default: ""
 
 concurrency:
   group: desktop-${{ github.workflow }}-${{ github.ref }}
@@ -38,17 +49,65 @@ env:
   GOTOOLCHAIN: auto
 
 jobs:
+  # One version for the whole run, computed once so every platform's build of
+  # it carries the same one (docs/plans/versioning-releases-and-updates.md §1).
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      numeric: ${{ steps.version.outputs.numeric }}
+      stamp: ${{ steps.version.outputs.stamp }}
+      channel: ${{ steps.version.outputs.channel }}
+      commit: ${{ steps.version.outputs.commit }}
+    steps:
+      # The whole history and every tag: the version is derived from the
+      # newest vX.Y.Z tag reachable from this commit.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Compute the version
+        id: version
+        run: scripts/version.sh
+        env:
+          TPP_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # A pull_request run builds a merge commit; the build is named after
+          # the PR's head commit, which is what the updater looks it up by.
+          TPP_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TPP_STAMP: ${{ inputs.stamp }}
+
   package:
     name: ${{ matrix.name }}
+    needs: version
     runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      NUMERIC: ${{ needs.version.outputs.numeric }}
+      STAMP: ${{ needs.version.outputs.stamp }}
+      CHANNEL: ${{ needs.version.outputs.channel }}
+      COMMIT: ${{ needs.version.outputs.commit }}
     strategy:
       fail-fast: false
       matrix:
+        # `name` is also the platform part of every file name this job
+        # produces (TwoPlacePaste-<name>.zip / .exe), and the updater picks
+        # the file for its own OS and architecture by it.
         include:
+          # Two separate .app bundles rather than one universal one. Both are
+          # built on the Apple Silicon runner: arm64 natively, x86_64 by
+          # pointing cgo's clang at the other architecture.
           - os: macos-latest
-            name: macOS
+            name: macOS-arm64
+            goarch: arm64
+            arch: arm64
+          - os: macos-latest
+            name: macOS-x64
+            goarch: amd64
+            arch: x86_64
           - os: windows-latest
-            name: Windows
+            name: Windows-x64
+            goarch: amd64
     steps:
       - uses: actions/checkout@v5
 
@@ -77,23 +136,55 @@ jobs:
         shell: bash
         run: test -f desktop/internal/localui/dist/index.html
 
+      # The committed .syso files carry a placeholder version (winres/README.md).
+      # Regenerated here so Explorer's Details tab shows this build's version.
+      # The fixed file version is four 16-bit numbers, so it gets X.Y.Z.0; the
+      # full version, pre-release and commit included, goes in the string.
+      - name: Stamp the version into the Windows resources
+        if: runner.os == 'Windows'
+        working-directory: desktop/cmd/tppdesktop
+        shell: bash
+        run: |
+          go run github.com/tc-hib/go-winres@v0.3.3 make --arch amd64,arm64 \
+            --product-version "$VERSION" --file-version "$NUMERIC.0"
+
       # -H=windowsgui on Windows, and only there: without it the linker marks
       # the binary as a console application and Windows opens a black console
       # window behind the tray icon for as long as the service runs. A GUI
       # subsystem process has no usable stderr, which is why the service also
       # logs to a file beside its settings (cmd/tppdesktop: newLogger).
+      # On macOS cgo is on (the pasteboard change counter is Objective-C), so a
+      # cross-build needs a C compiler for the target too: clang -arch does it.
+      # The deployment target matches LSMinimumSystemVersion in Info.plist.
       - name: Build the binary
         working-directory: desktop
         shell: bash
+        env:
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: ${{ runner.os == 'macOS' && '1' || '' }}
+          CC: ${{ runner.os == 'macOS' && format('clang -arch {0}', matrix.arch) || '' }}
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
         run: |
           mkdir -p ../dist
-          LDFLAGS="-s -w"
+          BI=github.com/Mark7888/two-place-paste/desktop/internal/buildinfo
+          LDFLAGS="-s -w -X $BI.Version=$VERSION -X $BI.Channel=$CHANNEL -X $BI.Commit=$COMMIT -X $BI.Stamp=$STAMP"
           if [ "${{ runner.os }}" = "Windows" ]; then
             LDFLAGS="$LDFLAGS -H=windowsgui"
           fi
           go build -trimpath -ldflags "$LDFLAGS" -o "../dist/tppdesktop${{ runner.os == 'Windows' && '.exe' || '' }}" ./cmd/tppdesktop
 
       # ----------------------------------------------------------------- macOS
+      # A cross-build that silently produced the runner's own architecture
+      # would install and run on the wrong Macs only, so it is checked here.
+      - name: Check the architecture
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          archs=$(lipo -archs dist/tppdesktop)
+          echo "dist/tppdesktop: $archs"
+          [ "$archs" = "${{ matrix.arch }}" ] || { echo "::error::built $archs, want ${{ matrix.arch }}"; exit 1; }
+
       - name: Build the .app
         if: runner.os == 'macOS'
         shell: bash
@@ -102,6 +193,12 @@ jobs:
           APP="dist/TwoPlacePaste.app"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp desktop/packaging/macos/Info.plist "$APP/Contents/Info.plist"
+          # Apple wants one to three integers in both: X.Y.Z for people, the
+          # stamp for the build number.
+          /usr/libexec/PlistBuddy \
+            -c "Set :CFBundleShortVersionString $NUMERIC" \
+            -c "Set :CFBundleVersion $STAMP" \
+            "$APP/Contents/Info.plist"
           cp desktop/packaging/macos/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
           cp dist/tppdesktop "$APP/Contents/MacOS/tppdesktop"
           chmod +x "$APP/Contents/MacOS/tppdesktop"
@@ -130,22 +227,119 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ditto -c -k --keepParent dist/TwoPlacePaste.app dist/TwoPlacePaste.zip
+          ditto -c -k --keepParent dist/TwoPlacePaste.app "dist/TwoPlacePaste-${{ matrix.name }}.zip"
           # Prove the wrapper survived, because this is exactly what broke.
-          unzip -l dist/TwoPlacePaste.zip | grep -q "TwoPlacePaste.app/Contents/MacOS/tppdesktop"
+          unzip -l "dist/TwoPlacePaste-${{ matrix.name }}.zip" | grep -q "TwoPlacePaste.app/Contents/MacOS/tppdesktop"
 
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
         with:
-          name: tppdesktop-${{ matrix.name }}
+          name: tppdesktop-${{ matrix.name }}-${{ needs.version.outputs.version }}
           if-no-files-found: error
           # The zip, not the directory: an artifact upload of the .app itself
           # arrives unwrapped.
-          path: dist/TwoPlacePaste.zip
+          path: dist/TwoPlacePaste-${{ matrix.name }}.zip
+
+      # Named for what it is rather than what it is called once installed: the
+      # updater and the installer both put it in place as tppdesktop.exe.
+      - name: Name the .exe
+        if: runner.os == 'Windows'
+        shell: bash
+        run: cp dist/tppdesktop.exe "dist/TwoPlacePaste-${{ matrix.name }}.exe"
+
+      # The per-user installer for a first install (packaging/windows/installer.nsi);
+      # updates replace the .exe and never run it. NSIS is installed if the
+      # runner image does not carry it. -D, not /D: Git Bash would rewrite /D…
+      # as a path.
+      - name: Build the installer
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          makensis="/c/Program Files (x86)/NSIS/makensis.exe"
+          if [ ! -x "$makensis" ]; then
+            choco install nsis --yes --no-progress
+          fi
+          "$makensis" -V2 \
+            "-DVERSION=$NUMERIC" \
+            "-DSOURCE_EXE=$(cygpath -w "$PWD/dist/tppdesktop.exe")" \
+            "-DOUTFILE=$(cygpath -w "$PWD/dist/TwoPlacePaste-Setup.exe")" \
+            desktop/packaging/windows/installer.nsi
+          test -f dist/TwoPlacePaste-Setup.exe
 
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
-          name: tppdesktop-${{ matrix.name }}
+          name: tppdesktop-${{ matrix.name }}-${{ needs.version.outputs.version }}
           if-no-files-found: error
-          path: dist/tppdesktop.exe
+          path: |
+            dist/TwoPlacePaste-${{ matrix.name }}.exe
+            dist/TwoPlacePaste-Setup.exe
+
+  # One manifest for every desktop file of this run, signed with the
+  # update-signing key (docs/plans/versioning-releases-and-updates.md §3.6).
+  # The updater installs nothing whose checksum is not in a manifest that
+  # verifies against the public key compiled into it. A fork's pull request
+  # has no key, so its manifest is unsigned and the updater treats the build
+  # as unsigned.
+  manifest:
+    name: Manifest
+    needs: [version, package]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tppdesktop-*
+          path: dist
+          merge-multiple: true
+
+      - name: Write and sign the manifest
+        run: scripts/manifest.sh desktop dist/manifest dist/TwoPlacePaste-*
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          NUMERIC: ${{ needs.version.outputs.numeric }}
+          STAMP: ${{ needs.version.outputs.stamp }}
+          CHANNEL: ${{ needs.version.outputs.channel }}
+          COMMIT: ${{ needs.version.outputs.commit }}
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tppdesktop-manifest-${{ needs.version.outputs.version }}
+          path: dist/manifest/
+          if-no-files-found: error
+
+  # A push to the default branch replaces the desktop files of the rolling
+  # `channel-beta` prerelease, which the Beta update channel reads with no
+  # token (docs/plans/versioning-releases-and-updates.md §3.7). The only job
+  # here that can write to the repository.
+  publish-beta:
+    name: Publish to Beta
+    needs: [version, manifest]
+    if: github.event_name == 'push' && needs.version.outputs.channel == 'beta'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Queued, never cancelled mid-upload. A newer push's run replaces a
+    # pending older one, which is the one it would have overwritten anyway.
+    concurrency:
+      group: publish-beta-desktop
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tppdesktop-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        run: scripts/publish-beta.sh desktop dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ needs.version.outputs.commit }}
+          STAMP: ${{ needs.version.outputs.stamp }}

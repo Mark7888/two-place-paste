@@ -17,6 +17,10 @@ type Options struct {
 	// API is the service the UI drives. Required.
 	API API
 
+	// Updates is the updater. Nil means this build has none, and the update
+	// routes answer 501.
+	Updates UpdateAPI
+
 	// Port is the TCP port on 127.0.0.1 to bind. Zero lets the operating
 	// system choose, which is what tests want and no product should ship.
 	Port int
@@ -37,6 +41,7 @@ type Options struct {
 // Server is the localhost HTTP server of SPEC §7.2.
 type Server struct {
 	api      API
+	updates  UpdateAPI
 	token    string
 	port     int
 	origins  []string
@@ -88,6 +93,7 @@ func Listen(ctx context.Context, opts Options) (*Server, error) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	s := &Server{
 		api:      opts.API,
+		updates:  opts.Updates,
 		token:    token,
 		port:     port,
 		origins:  allowedOrigins(port),
@@ -189,6 +195,12 @@ func (s *Server) routes() http.Handler {
 	api("POST /api/group/forget", s.handleForget)
 	api("GET /api/settings", s.handleGetSettings)
 	api("POST /api/settings", s.handleUpdateSettings)
+	api("GET /api/update", s.handleUpdateStatus)
+	api("POST /api/update/check", s.handleCheckUpdate)
+	api("POST /api/update/install", s.handleInstallUpdate)
+	api("POST /api/update/rollback", s.handleRollbackUpdate)
+	api("PUT /api/update/token", s.handleSetUpdateToken)
+	api("DELETE /api/update/token", s.handleDeleteUpdateToken)
 
 	// The event stream is a WebSocket, and its upgrade goes through exactly
 	// the same guard as everything else: an upgrade request from a foreign

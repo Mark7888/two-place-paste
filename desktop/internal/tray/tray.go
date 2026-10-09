@@ -24,6 +24,10 @@ type Options struct {
 	// tray's own goroutine.
 	SyncNow func()
 
+	// CheckUpdates checks for an update. It is run on its own goroutine.
+	// Nil hides the item.
+	CheckUpdates func()
+
 	// Quit stops the service. The tray calls it before returning.
 	Quit func()
 
