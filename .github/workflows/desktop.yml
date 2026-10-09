@@ -3,9 +3,10 @@
 # The desktop job ROADMAP P6 owns. The Go and Node workflows already compile
 # and test this module; what happens here is the part that only makes sense on
 # the target operating systems — a .app for each Mac architecture and a plain
-# .exe for Windows, each built around a binary with the React UI embedded in it. No
-# installers are produced here; the .app and .exe are uploaded as artifacts
-# as-is.
+# .exe for Windows, each built around a binary with the React UI embedded in it,
+# plus the NSIS installer for a first install on Windows. Each run is versioned
+# (scripts/version.sh) and gets a signed update manifest; release.yml calls
+# this workflow to build a release from a tag.
 #
 # Signing is deliberately conditional. A fork and a pull request have no
 # certificate, and a workflow that fails without one is a workflow nobody can
@@ -26,6 +27,16 @@ on:
       - "pkg/tppclient/**"
       - ".github/workflows/desktop.yml"
   workflow_dispatch:
+  # release.yml builds a release by calling this workflow from a tag push.
+  # It passes the stamp it computed, so the desktop and Android builds of one
+  # release carry one version.
+  workflow_call:
+    inputs:
+      stamp:
+        description: The build stamp to use instead of the current time.
+        type: string
+        required: false
+        default: ""
 
 concurrency:
   group: desktop-${{ github.workflow }}-${{ github.ref }}
@@ -64,6 +75,7 @@ jobs:
           # A pull_request run builds a merge commit; the build is named after
           # the PR's head commit, which is what the updater looks it up by.
           TPP_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TPP_STAMP: ${{ inputs.stamp }}
 
   package:
     name: ${{ matrix.name }}
@@ -235,12 +247,34 @@ jobs:
         shell: bash
         run: cp dist/tppdesktop.exe "dist/TwoPlacePaste-${{ matrix.name }}.exe"
 
+      # The per-user installer for a first install (packaging/windows/installer.nsi);
+      # updates replace the .exe and never run it. NSIS is installed if the
+      # runner image does not carry it. -D, not /D: Git Bash would rewrite /D…
+      # as a path.
+      - name: Build the installer
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          makensis="/c/Program Files (x86)/NSIS/makensis.exe"
+          if [ ! -x "$makensis" ]; then
+            choco install nsis --yes --no-progress
+          fi
+          "$makensis" -V2 \
+            "-DVERSION=$NUMERIC" \
+            "-DSOURCE_EXE=$(cygpath -w "$PWD/dist/tppdesktop.exe")" \
+            "-DOUTFILE=$(cygpath -w "$PWD/dist/TwoPlacePaste-Setup.exe")" \
+            desktop/packaging/windows/installer.nsi
+          test -f dist/TwoPlacePaste-Setup.exe
+
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
           name: tppdesktop-${{ matrix.name }}-${{ needs.version.outputs.version }}
           if-no-files-found: error
-          path: dist/TwoPlacePaste-${{ matrix.name }}.exe
+          path: |
+            dist/TwoPlacePaste-${{ matrix.name }}.exe
+            dist/TwoPlacePaste-Setup.exe
 
   # One manifest for every desktop file of this run, signed with the
   # update-signing key (docs/plans/versioning-releases-and-updates.md §3.6).

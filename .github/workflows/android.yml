@@ -22,6 +22,16 @@ on:
       - "mobile/**"
       - ".github/workflows/android.yml"
   workflow_dispatch:
+  # release.yml builds a release by calling this workflow from a tag push.
+  # It passes the stamp it computed, so the desktop and Android builds of one
+  # release carry one version.
+  workflow_call:
+    inputs:
+      stamp:
+        description: The build stamp to use instead of the current time.
+        type: string
+        required: false
+        default: ""
 
 concurrency:
   group: android-${{ github.workflow }}-${{ github.ref }}
@@ -54,6 +64,7 @@ jobs:
         env:
           TPP_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           TPP_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TPP_STAMP: ${{ inputs.stamp }}
 
   build:
     name: APK

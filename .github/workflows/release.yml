@@ -1,0 +1,147 @@
+# Release: a vX.Y.Z tag becomes a GitHub Release
+# (docs/plans/versioning-releases-and-updates.md §2).
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# The builds are the ordinary desktop and Android workflows, called rather than
+# copied, with one stamp so every file of the release carries one version. A
+# tag with a pre-release suffix (v0.2.0-rc.1) makes a pre-release, which
+# "latest" — and so the Stable channel — never points at.
+#
+# Asset names are the same in every release, so the newest is always at
+#   https://github.com/Mark7888/two-place-paste/releases/latest/download/<name>
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+
+# Per tag: two releases may build side by side, and a re-pushed tag waits for
+# the run already building it instead of cancelling it half-published.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      stamp: ${{ steps.version.outputs.stamp }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # A release is built from the default branch's history, never from a
+      # side branch that happens to carry a tag.
+      - name: Check the tag is on the default branch
+        run: |
+          set -euo pipefail
+          commit=$(git rev-parse "$GITHUB_REF_NAME^{commit}")
+          if [ "$commit" != "$GITHUB_SHA" ]; then
+            echo "::error::$GITHUB_REF_NAME points at $commit, but the run is for $GITHUB_SHA"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$commit" "origin/$DEFAULT_BRANCH"; then
+            echo "::error::$GITHUB_REF_NAME ($commit) is not on $DEFAULT_BRANCH; release only from $DEFAULT_BRANCH"
+            exit 1
+          fi
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+
+      - name: Compute the version
+        id: version
+        run: scripts/version.sh
+        env:
+          TPP_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+
+  desktop:
+    name: Desktop
+    needs: version
+    uses: ./.github/workflows/desktop.yml
+    with:
+      stamp: ${{ needs.version.outputs.stamp }}
+    secrets: inherit
+
+  android:
+    name: Android
+    needs: version
+    uses: ./.github/workflows/android.yml
+    with:
+      stamp: ${{ needs.version.outputs.stamp }}
+    secrets: inherit
+
+  publish:
+    name: Publish
+    needs: [version, desktop, android]
+    runs-on: ubuntu-latest
+    # The only job in a release that can write to the repository.
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # The desktop files and their manifest. Exact names, so that nothing
+      # unsigned from a fallback path could slip into a release.
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tppdesktop-*-${{ needs.version.outputs.version }}
+          path: dist
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: twoplacepaste-android-${{ needs.version.outputs.version }}
+          path: dist
+
+      - name: Stage the release files
+        run: |
+          set -euo pipefail
+          for f in TwoPlacePaste-macOS-arm64.zip TwoPlacePaste-macOS-x64.zip \
+            TwoPlacePaste-Windows-x64.exe TwoPlacePaste-Setup.exe TwoPlacePaste-android.apk \
+            manifest-desktop.json manifest-desktop.json.sig \
+            manifest-android.json manifest-android.json.sig; do
+            if [ ! -f "dist/$f" ]; then
+              echo "::error::dist/$f is missing; a release is only published complete and signed"
+              exit 1
+            fi
+          done
+          for p in desktop android; do
+            got_channel=$(jq -r .channel "dist/manifest-$p.json")
+            got_version=$(jq -r .version "dist/manifest-$p.json")
+            if [ "$got_channel" != stable ] || [ "$got_version" != "$VERSION" ]; then
+              echo "::error::manifest-$p.json is $got_channel $got_version, want stable $VERSION"
+              exit 1
+            fi
+          done
+          cp desktop/packaging/macos/install-macos.sh dist/
+          (cd dist && sha256sum -- * >SHA256SUMS)
+          ls -l dist
+
+      # Re-running a release fills in a release that already exists rather than
+      # failing on it.
+      - name: Publish the release
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            flags=()
+            [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --verify-tag --generate-notes --title "TwoPlacePaste $VERSION" "${flags[@]}"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
