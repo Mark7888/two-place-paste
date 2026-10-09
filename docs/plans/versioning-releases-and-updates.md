@@ -397,8 +397,10 @@ Nothing is installed that you didn't name, which makes it the safe way to run an
      abc1234. Only commits on the default branch and the latest commit of an open pull
      request are built, and only when they change `desktop/`."* No workflow is started
      from the app, so the token stays read-only (§3.9).
-   - **Running or queued:** show "build in progress". Install automatically when it
-     finishes, but only if you've already confirmed it (below).
+   - **Running or queued:** show "build in progress", with where the commit came from.
+     *As built:* the app does not wait and install on its own; you press Check again
+     once the run has finished. Waiting would mean polling the API for a build that may
+     take ten minutes, for a step that is one click.
    - **Failed:** show the run link. Nothing to install.
    - **Several successful runs** (a re-run, or a commit that was both a PR head and then
      pushed to the default branch): prefer the **signed** one, then the newest.

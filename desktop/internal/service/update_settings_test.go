@@ -102,3 +102,44 @@ func isStatus(err error, code int) bool {
 	var se *localui.StatusError
 	return errors.As(err, &se) && se.Code == code
 }
+
+// resolvingPreferences is an updater that can expand a short hash.
+type resolvingPreferences struct {
+	recordingPreferences
+	full string
+}
+
+func (r *resolvingPreferences) ResolveCommit(_ context.Context, hash string) (string, error) {
+	if !strings.HasPrefix(r.full, hash) {
+		return "", localui.Errorf(400, nil, "no commit %s", hash)
+	}
+	return r.full, nil
+}
+
+func TestAShortNightlyCommitIsResolved(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	full := strings.Repeat("c0", 20)
+	f.svc.updates = &resolvingPreferences{full: full}
+	ctx := context.Background()
+
+	view, err := f.svc.UpdateSettings(ctx, localui.SettingsPatch{NightlyCommit: strPtr("C0C0C0C")})
+	if err != nil {
+		t.Fatalf("UpdateSettings() error = %v", err)
+	}
+	if view.NightlyCommit != full {
+		t.Fatalf("NightlyCommit = %q, want the resolved %q", view.NightlyCommit, full)
+	}
+	if _, err := f.svc.UpdateSettings(ctx, localui.SettingsPatch{NightlyCommit: strPtr("abcdef1")}); !isStatus(err, 400) {
+		t.Fatalf("an unknown short hash: %v, want a 400", err)
+	}
+}
+
+func TestAShortCommitNeedsAResolver(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.svc.updates = &recordingPreferences{}
+	if _, err := f.svc.UpdateSettings(context.Background(), localui.SettingsPatch{NightlyCommit: strPtr("abcdef1")}); !isStatus(err, 400) {
+		t.Fatalf("UpdateSettings() = %v, want a 400", err)
+	}
+}

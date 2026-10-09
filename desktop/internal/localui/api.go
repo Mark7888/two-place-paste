@@ -92,4 +92,11 @@ type UpdateAPI interface {
 
 	// RollbackUpdate restores the build the last update replaced.
 	RollbackUpdate(ctx context.Context) (UpdateView, error)
+
+	// SetUpdateToken checks a GitHub token and stores it for the Nightly
+	// channel. The token is never sent back.
+	SetUpdateToken(ctx context.Context, token string) (UpdateView, error)
+
+	// DeleteUpdateToken removes the stored token.
+	DeleteUpdateToken(ctx context.Context) (UpdateView, error)
 }

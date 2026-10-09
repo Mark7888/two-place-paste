@@ -85,6 +85,12 @@ type Preferences interface {
 	SetPreferences(config.Settings)
 }
 
+// CommitResolver turns an abbreviated commit hash into the full one. An
+// updater that can do this lets the user type a short hash for Nightly.
+type CommitResolver interface {
+	ResolveCommit(ctx context.Context, hash string) (string, error)
+}
+
 // Service is the desktop shell: it answers the UI, drives the clipboard, and
 // owns the sync direction decision of SPEC §6.
 type Service struct {
@@ -997,7 +1003,7 @@ func (s *Service) settingsView(set config.Settings) localui.SettingsView {
 // The port takes effect at the next launch and says so: the service binds once
 // at startup, and silently rebinding underneath an open UI would break the
 // page that asked for it.
-func (s *Service) UpdateSettings(_ context.Context, p localui.SettingsPatch) (localui.SettingsView, error) {
+func (s *Service) UpdateSettings(ctx context.Context, p localui.SettingsPatch) (localui.SettingsView, error) {
 	s.mu.Lock()
 	next := s.settings
 	s.mu.Unlock()
@@ -1032,7 +1038,19 @@ func (s *Service) UpdateSettings(_ context.Context, p localui.SettingsPatch) (lo
 		next.AutoUpdate = *p.AutoUpdate
 	}
 	if p.NightlyCommit != nil {
-		next.NightlyCommit = strings.ToLower(strings.TrimSpace(*p.NightlyCommit))
+		commit := strings.ToLower(strings.TrimSpace(*p.NightlyCommit))
+		if commit != "" && !config.IsFullSHA(commit) {
+			r, ok := s.updates.(CommitResolver)
+			if !ok {
+				return localui.SettingsView{}, localui.Errorf(http.StatusBadRequest, nil, "enter the full 40-character commit hash")
+			}
+			full, err := r.ResolveCommit(ctx, commit)
+			if err != nil {
+				return localui.SettingsView{}, fmt.Errorf("resolve commit %s: %w", commit, err)
+			}
+			commit = full
+		}
+		next.NightlyCommit = commit
 	}
 	if p.UpdateChannel != nil || p.NightlyCommit != nil {
 		if err := next.Validate(); err != nil {

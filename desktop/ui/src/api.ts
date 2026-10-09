@@ -316,6 +316,9 @@ export const api = {
   checkUpdate: () => request<UpdateView>("POST", "/api/update/check", {}),
   installUpdate: (req: InstallRequest) => request<UpdateView>("POST", "/api/update/install", req),
   rollbackUpdate: () => request<UpdateView>("POST", "/api/update/rollback", {}),
+  // The token goes in a body, never a URL, and is never sent back.
+  setUpdateToken: (token: string) => request<UpdateView>("PUT", "/api/update/token", { token }),
+  deleteUpdateToken: () => request<UpdateView>("DELETE", "/api/update/token"),
 };
 
 // events opens the push stream. The token goes in the query string because a

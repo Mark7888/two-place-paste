@@ -28,6 +28,12 @@ function shortCommit(sha?: string): string {
   return sha ? sha.slice(0, 7) : "";
 }
 
+// A dev build's version already ends in +<commit>; a release's does not.
+function commitSuffix(version: string, sha?: string): string {
+  const c = shortCommit(sha);
+  return c && !version.includes(c) ? ` · ${c}` : "";
+}
+
 const channels = [
   { id: "stable", label: "Stable", why: "releases" },
   { id: "beta", label: "Beta", why: "the main branch's newest build" },
@@ -50,7 +56,8 @@ export function UpdatesSection({
   lastEvent,
 }: {
   settings: SettingsView;
-  onPatch: (patch: SettingsPatch) => Promise<void>;
+  /** Resolves to whether the change was saved. */
+  onPatch: (patch: SettingsPatch) => Promise<boolean>;
   lastEvent: ServiceEvent | null;
 }) {
   const [view, setView] = useState<UpdateView | null>(null);
@@ -142,9 +149,7 @@ export function UpdatesSection({
           <dt>Version</dt>
           <dd>
             {view.current.version}
-            {view.current.commit ? (
-              <span className="muted mono"> · {shortCommit(view.current.commit)}</span>
-            ) : null}
+            <span className="muted mono">{commitSuffix(view.current.version, view.current.commit)}</span>
           </dd>
           <dt>Built</dt>
           <dd>{builtAt(view.current.stamp) ? when(builtAt(view.current.stamp)) : "locally"}</dd>
@@ -184,7 +189,13 @@ export function UpdatesSection({
               <button
                 className="action"
                 disabled={busy || commit === "" || commit === settings.nightly_commit}
-                onClick={() => void onPatch({ nightly_commit: commit })}
+                onClick={() =>
+                  void (async () => {
+                    // A short hash is expanded by the service; once saved,
+                    // the commit's build is looked up straight away.
+                    if (await onPatch({ nightly_commit: commit })) await run(api.checkUpdate);
+                  })()
+                }
               >
                 Use this commit
               </button>
@@ -193,6 +204,7 @@ export function UpdatesSection({
               Installs that commit&apos;s build and never updates on its own. Builds exist for commits
               on the main branch and the latest commit of each pull request.
             </p>
+            <TokenControls view={view} onView={setView} disabled={busy} />
           </>
         ) : null}
 
@@ -281,6 +293,136 @@ export function UpdatesSection({
   );
 }
 
+// Where a fine-grained token is created, and what it needs.
+const NEW_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new";
+
+/**
+ * The Nightly channel's GitHub token. It goes to the service once, is kept in
+ * the OS keystore, and is never shown again: this only ever knows whether one
+ * is set and when it expires.
+ */
+function TokenControls({
+  view,
+  onView,
+  disabled,
+}: {
+  view: UpdateView;
+  onView: (v: UpdateView) => void;
+  disabled: boolean;
+}) {
+  const [token, setToken] = useState("");
+  const [replacing, setReplacing] = useState(false);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const t = view.token;
+
+  const save = async () => {
+    setError("");
+    setSaving(true);
+    try {
+      onView(await api.setUpdateToken(token));
+      setToken("");
+      setReplacing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async () => {
+    setError("");
+    try {
+      onView(await api.deleteUpdateToken());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const expiresSoon =
+    t.expires_at !== undefined && new Date(t.expires_at).getTime() - Date.now() < 14 * 86_400_000;
+
+  return (
+    <div className="stack" style={{ gap: "0.6rem" }}>
+      {t.set && !replacing ? (
+        <div className="row" style={{ gap: "0.5rem", flexWrap: "wrap" }}>
+          <span>
+            GitHub token {t.source === "environment" ? "from TPP_DESKTOP_GITHUB_TOKEN" : "saved"}
+            {t.expires_at ? <span className="muted">, expires {when(t.expires_at)}</span> : null}.
+          </span>
+          {t.source === "keystore" ? (
+            <>
+              <button className="action" disabled={disabled} onClick={() => setReplacing(true)}>
+                Replace
+              </button>
+              <button className="action" disabled={disabled} onClick={() => void remove()}>
+                Remove
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : (
+        <>
+          <div className="inline-form">
+            <label className="field">
+              <span className="label">GitHub token</span>
+              <input
+                type="password"
+                value={token}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="github_pat_…"
+                onChange={(e) => setToken(e.target.value.trim())}
+              />
+            </label>
+            <button className="action" disabled={disabled || saving || token === ""} onClick={() => void save()}>
+              {saving ? <span className="spinner" /> : null}
+              Save token
+            </button>
+            {replacing ? (
+              <button className="action" onClick={() => setReplacing(false)}>
+                Cancel
+              </button>
+            ) : null}
+          </div>
+          <p className="muted small">
+            Nightly downloads builds from GitHub Actions, which needs a token.{" "}
+            <a href={NEW_TOKEN_URL} target="_blank" rel="noreferrer">
+              Create a fine-grained token
+            </a>{" "}
+            with access to only Mark7888/two-place-paste and the Actions: Read-only permission. It is
+            kept in this computer&apos;s keychain and never shown again.
+          </p>
+        </>
+      )}
+      {t.invalid ? (
+        <div className="notice warn">
+          <Icon name="alert" />
+          <span>GitHub rejected the saved token. Replace it to use Nightly.</span>
+        </div>
+      ) : expiresSoon && !replacing ? (
+        <div className="notice warn">
+          <Icon name="alert" />
+          <span>The token expires {relativeFuture(t.expires_at)}. Replace it before then.</span>
+        </div>
+      ) : null}
+      {error ? (
+        <div className="notice error">
+          <Icon name="alert" />
+          <span>{sentence(error)}</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function relativeFuture(iso?: string): string {
+  if (!iso) return "soon";
+  const days = Math.round((new Date(iso).getTime() - Date.now()) / 86_400_000);
+  if (days <= 0) return "today";
+  return days === 1 ? "tomorrow" : `in ${days} days`;
+}
+
 function StateNotice({ view }: { view: UpdateView }) {
   switch (view.state) {
     case "up_to_date":
@@ -343,7 +485,7 @@ function Candidate({
       <span className="stack" style={{ gap: "0.5rem", flex: 1 }}>
         <span>
           <strong>{candidate.version}</strong>
-          {candidate.commit ? <span className="mono"> · {shortCommit(candidate.commit)}</span> : null}
+          <span className="mono">{commitSuffix(candidate.version, candidate.commit)}</span>
           {builtAt(candidate.stamp) ? <span>, built {when(builtAt(candidate.stamp))}</span> : null}
           {candidate.older ? <span> — older than the running build</span> : null}
           {!candidate.signed ? <span> — unsigned</span> : null}

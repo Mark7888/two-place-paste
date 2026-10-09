@@ -34,6 +34,35 @@ func (s *stubAPI) RollbackUpdate(context.Context) (UpdateView, error) {
 	return UpdateView{State: UpdateStateRestarting}, nil
 }
 
+func (s *stubAPI) SetUpdateToken(_ context.Context, token string) (UpdateView, error) {
+	s.record("update-token-set:" + token)
+	return UpdateView{Token: TokenView{Set: true, Source: "keystore"}}, nil
+}
+
+func (s *stubAPI) DeleteUpdateToken(context.Context) (UpdateView, error) {
+	s.record("update-token-delete")
+	return UpdateView{}, nil
+}
+
+func TestTheTokenRoutesTakeTheTokenInTheBody(t *testing.T) {
+	t.Parallel()
+	srv, api := newTestServer(t)
+	headers := map[string]string{"Origin": fmt.Sprintf("http://127.0.0.1:%d", srv.Port()), tokenHeader: "test-token"}
+
+	rec := do(t, srv, "PUT", "/api/update/token", `{"token":"github_pat_x"}`, headers)
+	if rec.Code != http.StatusOK || !api.called("update-token-set:github_pat_x") {
+		t.Fatalf("PUT /api/update/token = %d", rec.Code)
+	}
+	if rec := do(t, srv, "DELETE", "/api/update/token", "", headers); rec.Code != http.StatusOK {
+		t.Fatalf("DELETE /api/update/token = %d", rec.Code)
+	}
+	// A page on another origin can neither set nor remove it.
+	evil := map[string]string{"Origin": "https://evil.example", tokenHeader: "test-token"}
+	if rec := do(t, srv, "PUT", "/api/update/token", `{"token":"github_pat_y"}`, evil); rec.Code != http.StatusForbidden {
+		t.Fatalf("PUT from a foreign origin = %d, want 403", rec.Code)
+	}
+}
+
 func TestUpdateRoutesReachTheUpdater(t *testing.T) {
 	t.Parallel()
 	srv, api := newTestServer(t)

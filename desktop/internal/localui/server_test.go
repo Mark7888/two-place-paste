@@ -226,6 +226,8 @@ func TestOriginIsValidatedOnEveryRequest(t *testing.T) {
 		{"POST", "/api/update/check", `{}`},
 		{"POST", "/api/update/install", `{"confirm":true}`},
 		{"POST", "/api/update/rollback", `{}`},
+		{"PUT", "/api/update/token", `{"token":"github_pat_x"}`},
+		{"DELETE", "/api/update/token", ""},
 		{"GET", "/api/events", ""},
 		{"GET", "/app", ""},
 		{"GET", "/index.html", ""},

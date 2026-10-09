@@ -76,6 +76,13 @@ type Options struct {
 	// them (TPP_DESKTOP_UPDATE_ALLOW_LOCAL=1).
 	AllowLocal bool
 
+	// Secrets keeps the Nightly channel's GitHub token. Nil means no token
+	// can be stored (one in the environment still works).
+	Secrets Secrets
+
+	// LookupEnv reads the environment; tests replace it. Nil is os.LookupEnv.
+	LookupEnv func(string) (string, bool)
+
 	// Idle reports whether restarting the service now would interrupt
 	// nobody: the screen is locked, or nothing has synced for a while. An
 	// automatic update waits for it; one a person asked for does not.
@@ -117,6 +124,9 @@ type Manager struct {
 
 	// trigger wakes Run's loop; nil until Run starts.
 	trigger func()
+
+	// token is what is known about the Nightly token, never the token.
+	token tokenState
 }
 
 // candidate is an offered build and how to fetch it.
@@ -156,6 +166,12 @@ func New(opts Options) (*Manager, error) {
 	if opts.ReleaseBase == "" {
 		opts.ReleaseBase = DefaultReleaseBase
 	}
+	if opts.APIBase == "" {
+		opts.APIBase = DefaultAPIBase
+	}
+	if opts.LookupEnv == nil {
+		opts.LookupEnv = os.LookupEnv
+	}
 	if opts.Key == nil {
 		key, err := SigningKey()
 		if err != nil {
@@ -192,6 +208,7 @@ func New(opts Options) (*Manager, error) {
 		m.asset, _ = AssetName()
 	}
 	m.load()
+	m.loadTokenState()
 	return m, nil
 }
 
@@ -229,6 +246,7 @@ func (m *Manager) viewLocked() localui.UpdateView {
 		State:         m.state,
 		Message:       m.message,
 		Previous:      m.previous,
+		Token:         m.token.view(),
 	}
 	if m.avail != nil {
 		c := m.avail.view
@@ -362,11 +380,6 @@ func (m *Manager) findRelease(ctx context.Context, channel string) (*candidate, 
 			return download(ctx, m.downloadClient(), url, dir, file)
 		},
 	}, nil
-}
-
-// findNightly is replaced in a later step; until then Nightly offers nothing.
-func (m *Manager) findNightly(context.Context, string) (*candidate, error) {
-	return nil, errors.New("the Nightly channel is not available in this build")
 }
 
 // downloadClient is the HTTP client with a timeout long enough for a build.

@@ -50,7 +50,7 @@ export function SettingsPanel({
     }
   }, [settings]);
 
-  const patch = async (body: Parameters<typeof api.updateSettings>[0]) => {
+  const patch = async (body: Parameters<typeof api.updateSettings>[0]): Promise<boolean> => {
     setError("");
     setNotice("");
     try {
@@ -59,8 +59,10 @@ export function SettingsPanel({
       setPort(s.port ? String(s.port) : "");
       setName(s.device_name);
       setNotice(s.restart_required ? "Saved. The port changes at the next launch." : "Saved.");
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      return false;
     }
   };
 

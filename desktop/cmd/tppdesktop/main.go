@@ -116,6 +116,7 @@ func run(logger *slog.Logger) error {
 	var svc *service.Service
 	updater, err := update.New(update.Options{
 		ConfigDir:  configDir,
+		Secrets:    store,
 		Quit:       stop,
 		AllowLocal: os.Getenv(envUpdateAllowLocal) == "1",
 		Logger:     logger,

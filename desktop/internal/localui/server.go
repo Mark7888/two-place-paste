@@ -199,6 +199,8 @@ func (s *Server) routes() http.Handler {
 	api("POST /api/update/check", s.handleCheckUpdate)
 	api("POST /api/update/install", s.handleInstallUpdate)
 	api("POST /api/update/rollback", s.handleRollbackUpdate)
+	api("PUT /api/update/token", s.handleSetUpdateToken)
+	api("DELETE /api/update/token", s.handleDeleteUpdateToken)
 
 	// The event stream is a WebSocket, and its upgrade goes through exactly
 	// the same guard as everything else: an upgrade request from a foreign

@@ -185,13 +185,14 @@ func (s Settings) Validate() error {
 	default:
 		return fmt.Errorf("config: update channel %q is not stable, beta or nightly", s.UpdateChannel)
 	}
-	if s.NightlyCommit != "" && !isFullSHA(s.NightlyCommit) {
+	if s.NightlyCommit != "" && !IsFullSHA(s.NightlyCommit) {
 		return fmt.Errorf("config: nightly commit %q is not a full 40-character commit hash", s.NightlyCommit)
 	}
 	return nil
 }
 
-func isFullSHA(s string) bool {
+// IsFullSHA reports whether s is a full, lowercase, 40-character commit hash.
+func IsFullSHA(s string) bool {
 	if len(s) != 40 {
 		return false
 	}
