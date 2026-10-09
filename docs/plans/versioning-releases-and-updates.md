@@ -504,19 +504,36 @@ overrides the stored token. It follows the existing `TPP_DESKTOP_*` overrides in
 
 ## 4. Order of work
 
-1. `scripts/version.sh`, the `version` job in each workflow, `buildinfo`, version into
-   plist/winres/NSIS/gradle, version in artifact names. **(Part 1)**
-2. Android release keystore + `signingConfigs.release` for all CI builds. **(Part 1, F5)**
-3. Update-signing key, `manifest.json` + `.sig` produced in CI. **(§3.6)**
-4. `workflow_call` on desktop/android, `release.yml`, arm64 + x64 macOS builds, NSIS in CI,
-   `install-macos.sh`. Tag `v0.1.0` to prove it. **(Part 2)**
-5. `publish-beta` job in `desktop.yml` and `android.yml`, and creating the `channel-beta`
-   release once (§3.7).
-6. The repo setting requiring approval for fork runs (§3.8). The triggers don't change.
-7. `internal/update`: release source (Stable/Beta) → verify → apply (Windows first, then
-   macOS) → API + UI → scheduler. Then Nightly: token storage (§3.9), commit lookup, and
-   the confirmation screen (§3.8).
-   **(Part 3)**
+**One pull request, one commit per step**, in this order. Each commit builds and passes its
+own tests, so the history can be reviewed and bisected step by step.
+
+Already done before the PR: the four repository secrets, the update-signing public key
+(`desktop/internal/update/update-signing.pub.pem`), and the repo setting that requires
+approval for fork runs.
+
+1. **Versioning.** `scripts/version.sh` and its tests, the `version` job in `desktop.yml` and
+   `android.yml`, `desktop/internal/buildinfo`, the version in plist/winres/NSIS/Gradle, and
+   the version in artifact names. **(Part 1)**
+2. **Separate macOS builds.** Apple Silicon natively, plus Intel cross-compiled with an
+   architecture check.
+3. **Android release signing.** `signingConfigs.release` from secrets for every CI build,
+   with fork builds falling back to the `.debug` app. **(F5)**
+4. **Signed manifests.** `manifest-<platform>.json` + `.sig` produced in CI. **(§3.6)**
+5. **Release workflow.** `workflow_call` on desktop/android, `release.yml`, NSIS in CI,
+   `install-macos.sh`. **(Part 2)**
+6. **Beta publishing.** The `publish-beta` job in both workflows; it creates `channel-beta`
+   if missing. **(§3.7)**
+7. **Updater core.** Settings fields, release source (Stable/Beta), signature and checksum
+   check. **(Part 3)**
+8. **Applying updates.** The Windows exe swap, the macOS bundle swap, `--wait-pid`, and rollback.
+9. **Scheduling.** Wall-clock checks, check on wake, `NSBackgroundActivityScheduler` on
+   macOS, and installs at idle.
+10. **API and UI.** Routes, Settings panel, tray item, version display.
+11. **Nightly.** Token storage (§3.9), commit lookup, and the confirmation screen for unsigned
+    builds (§3.8).
+
+After merge: tag `v0.1.0` to prove the release pipeline, then `v0.1.1` for the manual
+update test (§5).
 
 ## 5. Test plan
 
