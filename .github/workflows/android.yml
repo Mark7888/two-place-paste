@@ -31,8 +31,30 @@ permissions:
   contents: read
 
 jobs:
+  # The same computation desktop.yml makes (docs/plans/versioning-releases-and-updates.md §1).
+  # The stamp is the APK's versionCode, so a later build always installs over
+  # an earlier one.
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      stamp: ${{ steps.version.outputs.stamp }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Compute the version
+        id: version
+        run: scripts/version.sh
+        env:
+          TPP_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TPP_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+
   build:
     name: Debug APK
+    needs: version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -107,7 +129,12 @@ jobs:
       # tile on a device.
       - name: Build the debug APK
         working-directory: mobile/android
-        run: ./gradlew --no-daemon assembleDebug -PbundleInDebug=true
+        run: |
+          ./gradlew --no-daemon assembleDebug -PbundleInDebug=true \
+            -PversionCode="$VERSION_CODE" -PversionName="$VERSION_NAME"
+        env:
+          VERSION_CODE: ${{ needs.version.outputs.stamp }}
+          VERSION_NAME: ${{ needs.version.outputs.version }}
 
       # The bundle is the thing that makes this artefact installable, and its
       # absence is invisible until the app is launched on a device. So it is
@@ -124,6 +151,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: twoplacepaste-debug-apk
+          name: twoplacepaste-debug-apk-${{ needs.version.outputs.version }}
           path: mobile/android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error

@@ -38,9 +38,43 @@ env:
   GOTOOLCHAIN: auto
 
 jobs:
+  # One version for the whole run, computed once so every platform's build of
+  # it carries the same one (docs/plans/versioning-releases-and-updates.md §1).
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      numeric: ${{ steps.version.outputs.numeric }}
+      stamp: ${{ steps.version.outputs.stamp }}
+      channel: ${{ steps.version.outputs.channel }}
+      commit: ${{ steps.version.outputs.commit }}
+    steps:
+      # The whole history and every tag: the version is derived from the
+      # newest vX.Y.Z tag reachable from this commit.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Compute the version
+        id: version
+        run: scripts/version.sh
+        env:
+          TPP_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # A pull_request run builds a merge commit; the build is named after
+          # the PR's head commit, which is what the updater looks it up by.
+          TPP_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+
   package:
     name: ${{ matrix.name }}
+    needs: version
     runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      NUMERIC: ${{ needs.version.outputs.numeric }}
+      STAMP: ${{ needs.version.outputs.stamp }}
+      CHANNEL: ${{ needs.version.outputs.channel }}
+      COMMIT: ${{ needs.version.outputs.commit }}
     strategy:
       fail-fast: false
       matrix:
@@ -77,6 +111,18 @@ jobs:
         shell: bash
         run: test -f desktop/internal/localui/dist/index.html
 
+      # The committed .syso files carry a placeholder version (winres/README.md).
+      # Regenerated here so Explorer's Details tab shows this build's version.
+      # The fixed file version is four 16-bit numbers, so it gets X.Y.Z.0; the
+      # full version, pre-release and commit included, goes in the string.
+      - name: Stamp the version into the Windows resources
+        if: runner.os == 'Windows'
+        working-directory: desktop/cmd/tppdesktop
+        shell: bash
+        run: |
+          go run github.com/tc-hib/go-winres@v0.3.3 make --arch amd64,arm64 \
+            --product-version "$VERSION" --file-version "$NUMERIC.0"
+
       # -H=windowsgui on Windows, and only there: without it the linker marks
       # the binary as a console application and Windows opens a black console
       # window behind the tray icon for as long as the service runs. A GUI
@@ -87,7 +133,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p ../dist
-          LDFLAGS="-s -w"
+          BI=github.com/Mark7888/two-place-paste/desktop/internal/buildinfo
+          LDFLAGS="-s -w -X $BI.Version=$VERSION -X $BI.Channel=$CHANNEL -X $BI.Commit=$COMMIT -X $BI.Stamp=$STAMP"
           if [ "${{ runner.os }}" = "Windows" ]; then
             LDFLAGS="$LDFLAGS -H=windowsgui"
           fi
@@ -102,6 +149,12 @@ jobs:
           APP="dist/TwoPlacePaste.app"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp desktop/packaging/macos/Info.plist "$APP/Contents/Info.plist"
+          # Apple wants one to three integers in both: X.Y.Z for people, the
+          # stamp for the build number.
+          /usr/libexec/PlistBuddy \
+            -c "Set :CFBundleShortVersionString $NUMERIC" \
+            -c "Set :CFBundleVersion $STAMP" \
+            "$APP/Contents/Info.plist"
           cp desktop/packaging/macos/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
           cp dist/tppdesktop "$APP/Contents/MacOS/tppdesktop"
           chmod +x "$APP/Contents/MacOS/tppdesktop"
@@ -137,7 +190,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
         with:
-          name: tppdesktop-${{ matrix.name }}
+          name: tppdesktop-${{ matrix.name }}-${{ needs.version.outputs.version }}
           if-no-files-found: error
           # The zip, not the directory: an artifact upload of the .app itself
           # arrives unwrapped.
@@ -146,6 +199,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
-          name: tppdesktop-${{ matrix.name }}
+          name: tppdesktop-${{ matrix.name }}-${{ needs.version.outputs.version }}
           if-no-files-found: error
           path: dist/tppdesktop.exe

@@ -19,6 +19,7 @@ import (
 	"syscall"
 
 	"github.com/Mark7888/two-place-paste/desktop/internal/autostart"
+	"github.com/Mark7888/two-place-paste/desktop/internal/buildinfo"
 	"github.com/Mark7888/two-place-paste/desktop/internal/clipboard"
 	"github.com/Mark7888/two-place-paste/desktop/internal/config"
 	"github.com/Mark7888/two-place-paste/desktop/internal/localui"
@@ -53,6 +54,7 @@ func start() int {
 	logger, closeLog := newLogger(os.Getenv(envConfigDir))
 	defer closeLog()
 	slog.SetDefault(logger)
+	logger.Info("starting", "version", buildinfo.Version, "channel", buildinfo.Channel, "commit", buildinfo.Commit)
 
 	if err := run(logger); err != nil {
 		logger.Error("the service stopped", "error", err)

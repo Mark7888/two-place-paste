@@ -36,8 +36,11 @@ android {
         applicationId "com.twoplacepaste"
         minSdk rootProject.ext.minSdkVersion
         targetSdk rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "0.1.0"
+        // CI passes both (-PversionCode=… -PversionName=…) from
+        // scripts/version.sh: the code is the build's stamp, so a later build
+        // always installs over an earlier one. A local build keeps these.
+        versionCode((project.findProperty("versionCode") ?: "1").toString().toInteger())
+        versionName((project.findProperty("versionName") ?: "0.0.0-local").toString())
     }
 
     buildTypes {
