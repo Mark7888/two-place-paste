@@ -6,9 +6,9 @@
 # service and the two native modules are real classes, and the whole thing
 # packages into an APK that can be installed.
 #
-# It is a debug build. Release signing is a key this repository does not carry
-# and is release work (ROADMAP P8), so what this job proves is that the app
-# builds and that the artefact a reviewer needs to test the tile by hand exists.
+# With the release keystore (a repository secret) it builds the signed release
+# APK that updates install over; without it, as on a fork's pull request, the
+# debug APK it always built (docs/plans/versioning-releases-and-updates.md §1.4).
 name: Android
 
 on:
@@ -53,7 +53,7 @@ jobs:
           TPP_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
 
   build:
-    name: Debug APK
+    name: APK
     needs: version
     runs-on: ubuntu-latest
     steps:
@@ -122,12 +122,46 @@ jobs:
         working-directory: mobile/android
         run: gradle wrapper --gradle-version 9.4.1
 
+      # The release keystore comes from secrets, which only a run in this
+      # repository has. With it the job builds the signed release APK that
+      # updates install over; without it (a fork's pull request) it falls back
+      # to the debug build it always made, which installs as the separate
+      # com.twoplacepaste.debug app and never as an update of the real one.
+      - name: Decode the release keystore
+        id: keystore
+        run: |
+          set -euo pipefail
+          if [ -z "$ANDROID_KEYSTORE_B64" ]; then
+            echo "::notice::no release keystore available; building the debug APK"
+            echo "signed=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s' "$ANDROID_KEYSTORE_B64" | base64 -d >"$RUNNER_TEMP/release.p12"
+          echo "path=$RUNNER_TEMP/release.p12" >>"$GITHUB_OUTPUT"
+          echo "signed=true" >>"$GITHUB_OUTPUT"
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+
+      - name: Build the signed release APK
+        if: steps.keystore.outputs.signed == 'true'
+        working-directory: mobile/android
+        run: |
+          ./gradlew --no-daemon assembleRelease \
+            -PversionCode="$VERSION_CODE" -PversionName="$VERSION_NAME"
+        env:
+          VERSION_CODE: ${{ needs.version.outputs.stamp }}
+          VERSION_NAME: ${{ needs.version.outputs.version }}
+          TPP_ANDROID_KEYSTORE: ${{ steps.keystore.outputs.path }}
+          TPP_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          TPP_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+
       # -PbundleInDebug=true makes the debug variant carry its own JS bundle
       # (see mobile/android/app/build.gradle). Without it React Native leaves
       # the bundle out of a debug build and the APK cannot start without a
       # Metro dev server, which is no use to someone installing it to test the
       # tile on a device.
       - name: Build the debug APK
+        if: steps.keystore.outputs.signed != 'true'
         working-directory: mobile/android
         run: |
           ./gradlew --no-daemon assembleDebug -PbundleInDebug=true \
@@ -136,21 +170,46 @@ jobs:
           VERSION_CODE: ${{ needs.version.outputs.stamp }}
           VERSION_NAME: ${{ needs.version.outputs.version }}
 
+      # One name per kind, so a debug-signed APK can never be mistaken for, or
+      # published as, the release-signed one.
+      - name: Name the APK
+        id: apk
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          if [ "${{ steps.keystore.outputs.signed }}" = "true" ]; then
+            src=mobile/android/app/build/outputs/apk/release/app-release.apk
+            name=TwoPlacePaste-android.apk
+          else
+            src=mobile/android/app/build/outputs/apk/debug/app-debug.apk
+            name=TwoPlacePaste-android-debug.apk
+          fi
+          cp "$src" "dist/$name"
+          echo "name=$name" >>"$GITHUB_OUTPUT"
+
       # The bundle is the thing that makes this artefact installable, and its
       # absence is invisible until the app is launched on a device. So it is
       # asserted here rather than discovered there.
       - name: Check the APK carries its own JS bundle
         run: |
           set -euo pipefail
-          apk=$(ls mobile/android/app/build/outputs/apk/debug/*.apk | head -1)
+          apk="dist/${{ steps.apk.outputs.name }}"
           if ! unzip -l "$apk" | grep -q "assets/index.android.bundle"; then
             echo "::error::$apk has no assets/index.android.bundle; it would ask for a Metro server on launch"
             exit 1
           fi
           echo "$apk carries assets/index.android.bundle"
 
+      # Proves the secret held the key it should: the certificate printed here
+      # is the one every future update must match. It is public information.
+      - name: Check the release signature
+        if: steps.keystore.outputs.signed == 'true'
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --print-certs "dist/${{ steps.apk.outputs.name }}"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: twoplacepaste-debug-apk-${{ needs.version.outputs.version }}
-          path: mobile/android/app/build/outputs/apk/debug/*.apk
+          name: twoplacepaste-${{ steps.keystore.outputs.signed == 'true' && 'android' || 'android-debug' }}-${{ needs.version.outputs.version }}
+          path: dist/${{ steps.apk.outputs.name }}
           if-no-files-found: error
