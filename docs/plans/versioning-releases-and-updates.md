@@ -11,6 +11,14 @@ Three parts, in the order they have to land: **(1)** every build knows its versi
 **(2)** a tag produces a GitHub Release, **(3)** the desktop service updates itself from
 releases or Actions runs.
 
+**Decisions taken** (2026-10-09):
+- Separate macOS builds for Apple Silicon and Intel, not one universal `.app` (§2.2).
+- The first tag is `v0.1.0`.
+- No Apple Developer ID: the app stays ad-hoc signed and first installs use `install-macos.sh` (§3.5).
+- The Android in-app updater is out of scope. This plan gives Android versioning, a
+  permanent signing key and APKs on Stable/Beta. The in-app installer is a follow-up.
+- "Require approval for all external contributors" is already on.
+
 ---
 
 ## 0. Facts the design rests on
@@ -97,13 +105,14 @@ Windows and Android from the same run share one number. Then:
 | Windows exe | The `.syso` files are committed with `0.1.0`. In CI, regenerate them before `go build`: `go-winres make --arch amd64,arm64 --product-version "$version" --file-version "$numeric.0"`. The fixed file version is four `uint16`s, so the stamp cannot go there. The string `ProductVersion` carries the full version. |
 | NSIS | `makensis -DVERSION=$numeric -DSOURCE_EXE=…` (the script already takes both). |
 | Android | `build.gradle`: `versionCode (findProperty("versionCode") ?: "1") as Integer`, `versionName findProperty("versionName") ?: "0.0.0-local"`, and CI passes `-PversionCode=… -PversionName=…`. |
-| Artifact **names** | `tppdesktop-macOS-universal-<version>` etc. The updater can then compare a run against itself **from the listing alone**, without downloading anything. `+` is legal in an artifact name. |
+| Artifact **names** | `tppdesktop-macOS-arm64-<version>`, `tppdesktop-macOS-x64-<version>`, `tppdesktop-Windows-x64-<version>`. The updater can then compare a run against itself **from the listing alone**, without downloading anything. `+` is legal in an artifact name. |
 | UI | `GET /api/status` (or the new `/api/update`) returns `buildinfo`, and the Settings panel shows it. |
 
 ### 1.4 Android prerequisites (from F5)
 
-1. Create one release keystore. Store it as `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`,
-   `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` secrets. **Back it up offline.** Losing it means
+1. Create one PKCS#12 release keystore. Store it as `ANDROID_KEYSTORE_B64`,
+   `ANDROID_KEYSTORE_PASSWORD` and `ANDROID_KEY_ALIAS` secrets. In a PKCS#12 store the key
+   password is the store password, so there's no separate key-password secret. **Back it up offline.** Losing it means
    every user has to uninstall.
 2. Add a `signingConfigs.release` that reads those values from env/properties, and use it
    for **every** CI build (release *and* dev). If the secrets are absent (forks), fall back to
@@ -162,7 +171,8 @@ jobs:
 
 | Asset | Contents |
 |---|---|
-| `TwoPlacePaste-macOS-universal.zip` | `ditto`-zipped `.app`. Build arm64 and amd64 (cross-compile with `CGO_ENABLED=1 GOARCH=amd64 CC="clang -arch x86_64"` on the arm64 runner), then `lipo -create`. That covers ROADMAP P6 note 2, and the updater needs no architecture logic. |
+| `TwoPlacePaste-macOS-arm64.zip` | `ditto`-zipped `.app` for Apple Silicon, built natively on the arm64 runner. |
+| `TwoPlacePaste-macOS-x64.zip` | The same for Intel, cross-compiled on the same runner (`CGO_ENABLED=1 GOARCH=amd64 CC="clang -arch x86_64"`). A step asserts `lipo -archs` prints `x86_64`. This covers ROADMAP P6 note 2. The updater picks the zip for `runtime.GOARCH`. One exception: an Intel build running under Rosetta on Apple Silicon (`sysctl.proc_translated == 1`) switches to the arm64 build at its next update. |
 | `TwoPlacePaste-Windows-x64.exe` | The bare exe, which is what the updater swaps in. |
 | `TwoPlacePaste-Setup.exe` | The NSIS installer, for first installs (puts the exe in `%LOCALAPPDATA%\Programs\TwoPlacePaste`). |
 | `TwoPlacePaste-android.apk` | Release-signed APK. |
@@ -311,7 +321,11 @@ and Stable install on their own, so they rely on two defences. Use both:
    `push` to the default branch of this repository, where fork code can't land without you
    merging it. The job holds `contents: write` and runs nothing from the checkout.
 2. **Sign.** Generate an ed25519 key pair once. The private key goes into the secret
-   `UPDATE_SIGNING_KEY` and the public key is compiled into `buildinfo`. Every build writes
+   `UPDATE_SIGNING_KEY` (a PKCS#8 PEM, made with `openssl genpkey -algorithm ed25519`). The
+   public key is committed as `desktop/internal/update/update-signing.pub.pem` and embedded
+   with `go:embed`. It isn't secret, and committing it makes any change to it visible in review.
+   CI signs on `ubuntu-latest` (OpenSSL 3):
+   `openssl pkeyutl -sign -rawin -inkey key.pem -in manifest.json -out manifest.json.sig`. Every build writes
    `manifest.json` (version, stamp, channel, commit, run id, sha256 of the payload) and
    signs it. The updater refuses any payload whose manifest signature fails or whose
    sha256 doesn't match. **Fork PR runs never see secrets**, so they can't produce a valid
@@ -494,7 +508,7 @@ overrides the stored token. It follows the existing `TPP_DESKTOP_*` overrides in
    plist/winres/NSIS/gradle, version in artifact names. **(Part 1)**
 2. Android release keystore + `signingConfigs.release` for all CI builds. **(Part 1, F5)**
 3. Update-signing key, `manifest.json` + `.sig` produced in CI. **(§3.6)**
-4. `workflow_call` on desktop/android, `release.yml`, universal macOS build, NSIS in CI,
+4. `workflow_call` on desktop/android, `release.yml`, arm64 + x64 macOS builds, NSIS in CI,
    `install-macos.sh`. Tag `v0.1.0` to prove it. **(Part 2)**
 5. `publish-beta` job in `desktop.yml` and `android.yml`, and creating the `channel-beta`
    release once (§3.7).
