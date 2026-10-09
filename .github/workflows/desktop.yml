@@ -2,8 +2,8 @@
 #
 # The desktop job ROADMAP P6 owns. The Go and Node workflows already compile
 # and test this module; what happens here is the part that only makes sense on
-# the target operating systems — a .app for macOS and a plain .exe for
-# Windows, each built around a binary with the React UI embedded in it. No
+# the target operating systems — a .app for each Mac architecture and a plain
+# .exe for Windows, each built around a binary with the React UI embedded in it. No
 # installers are produced here; the .app and .exe are uploaded as artifacts
 # as-is.
 #
@@ -78,11 +78,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # `name` is also the platform part of every file name this job
+        # produces (TwoPlacePaste-<name>.zip / .exe), and the updater picks
+        # the file for its own OS and architecture by it.
         include:
+          # Two separate .app bundles rather than one universal one. Both are
+          # built on the Apple Silicon runner: arm64 natively, x86_64 by
+          # pointing cgo's clang at the other architecture.
           - os: macos-latest
-            name: macOS
+            name: macOS-arm64
+            goarch: arm64
+            arch: arm64
+          - os: macos-latest
+            name: macOS-x64
+            goarch: amd64
+            arch: x86_64
           - os: windows-latest
-            name: Windows
+            name: Windows-x64
+            goarch: amd64
     steps:
       - uses: actions/checkout@v5
 
@@ -128,9 +141,17 @@ jobs:
       # window behind the tray icon for as long as the service runs. A GUI
       # subsystem process has no usable stderr, which is why the service also
       # logs to a file beside its settings (cmd/tppdesktop: newLogger).
+      # On macOS cgo is on (the pasteboard change counter is Objective-C), so a
+      # cross-build needs a C compiler for the target too: clang -arch does it.
+      # The deployment target matches LSMinimumSystemVersion in Info.plist.
       - name: Build the binary
         working-directory: desktop
         shell: bash
+        env:
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: ${{ runner.os == 'macOS' && '1' || '' }}
+          CC: ${{ runner.os == 'macOS' && format('clang -arch {0}', matrix.arch) || '' }}
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
         run: |
           mkdir -p ../dist
           BI=github.com/Mark7888/two-place-paste/desktop/internal/buildinfo
@@ -141,6 +162,17 @@ jobs:
           go build -trimpath -ldflags "$LDFLAGS" -o "../dist/tppdesktop${{ runner.os == 'Windows' && '.exe' || '' }}" ./cmd/tppdesktop
 
       # ----------------------------------------------------------------- macOS
+      # A cross-build that silently produced the runner's own architecture
+      # would install and run on the wrong Macs only, so it is checked here.
+      - name: Check the architecture
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          archs=$(lipo -archs dist/tppdesktop)
+          echo "dist/tppdesktop: $archs"
+          [ "$archs" = "${{ matrix.arch }}" ] || { echo "::error::built $archs, want ${{ matrix.arch }}"; exit 1; }
+
       - name: Build the .app
         if: runner.os == 'macOS'
         shell: bash
@@ -183,9 +215,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ditto -c -k --keepParent dist/TwoPlacePaste.app dist/TwoPlacePaste.zip
+          ditto -c -k --keepParent dist/TwoPlacePaste.app "dist/TwoPlacePaste-${{ matrix.name }}.zip"
           # Prove the wrapper survived, because this is exactly what broke.
-          unzip -l dist/TwoPlacePaste.zip | grep -q "TwoPlacePaste.app/Contents/MacOS/tppdesktop"
+          unzip -l "dist/TwoPlacePaste-${{ matrix.name }}.zip" | grep -q "TwoPlacePaste.app/Contents/MacOS/tppdesktop"
 
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
@@ -194,11 +226,18 @@ jobs:
           if-no-files-found: error
           # The zip, not the directory: an artifact upload of the .app itself
           # arrives unwrapped.
-          path: dist/TwoPlacePaste.zip
+          path: dist/TwoPlacePaste-${{ matrix.name }}.zip
+
+      # Named for what it is rather than what it is called once installed: the
+      # updater and the installer both put it in place as tppdesktop.exe.
+      - name: Name the .exe
+        if: runner.os == 'Windows'
+        shell: bash
+        run: cp dist/tppdesktop.exe "dist/TwoPlacePaste-${{ matrix.name }}.exe"
 
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
           name: tppdesktop-${{ matrix.name }}-${{ needs.version.outputs.version }}
           if-no-files-found: error
-          path: dist/tppdesktop.exe
+          path: dist/TwoPlacePaste-${{ matrix.name }}.exe
