@@ -322,7 +322,7 @@ and Stable install on their own, so they rely on two defences. Use both:
    merging it. The job holds `contents: write` and runs nothing from the checkout.
 2. **Sign.** Generate an ed25519 key pair once. The private key goes into the secret
    `UPDATE_SIGNING_KEY` (a PKCS#8 PEM, made with `openssl genpkey -algorithm ed25519`). The
-   public key is committed as `desktop/internal/update/update-signing.pub.pem` and embedded
+   public key is committed (done) as `desktop/internal/update/update-signing.pub.pem` and embedded
    with `go:embed`. It isn't secret, and committing it makes any change to it visible in review.
    CI signs on `ubuntu-latest` (OpenSSL 3):
    `openssl pkeyutl -sign -rawin -inkey key.pem -in manifest.json -out manifest.json.sig`. Every build writes
