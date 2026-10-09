@@ -1,0 +1,104 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/Mark7888/two-place-paste/desktop/internal/config"
+	"github.com/Mark7888/two-place-paste/desktop/internal/localui"
+)
+
+// recordingPreferences is an updater that only remembers what it was told.
+type recordingPreferences struct {
+	mu   sync.Mutex
+	seen []config.Settings
+}
+
+func (r *recordingPreferences) SetPreferences(s config.Settings) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.seen = append(r.seen, s)
+}
+
+func (r *recordingPreferences) last() (config.Settings, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.seen) == 0 {
+		return config.Settings{}, false
+	}
+	return r.seen[len(r.seen)-1], true
+}
+
+func strPtr(s string) *string { return &s }
+
+func TestUpdateSettingsReachTheUpdater(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	prefs := &recordingPreferences{}
+	f.svc.updates = prefs
+	ctx := context.Background()
+
+	view, err := f.svc.UpdateSettings(ctx, localui.SettingsPatch{
+		UpdateChannel: strPtr("beta"),
+		AutoUpdate:    boolPtr(true),
+	})
+	if err != nil {
+		t.Fatalf("UpdateSettings() error = %v", err)
+	}
+	if view.UpdateChannel != "beta" || !view.AutoUpdate {
+		t.Fatalf("UpdateSettings() = %+v, want beta with auto-update", view)
+	}
+	got, ok := prefs.last()
+	if !ok || got.Channel() != "beta" || !got.AutoUpdate {
+		t.Fatalf("the updater was told %+v (told: %v)", got, ok)
+	}
+	saved, err := config.Load(f.svc.configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.UpdateChannel != "beta" || !saved.AutoUpdate {
+		t.Fatalf("saved %+v", saved)
+	}
+}
+
+func TestANightlyCommitIsNormalisedAndChecked(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := context.Background()
+
+	full := strings.Repeat("ab", 20)
+	view, err := f.svc.UpdateSettings(ctx, localui.SettingsPatch{
+		UpdateChannel: strPtr("nightly"),
+		NightlyCommit: strPtr("  " + strings.ToUpper(full) + " "),
+	})
+	if err != nil {
+		t.Fatalf("UpdateSettings() error = %v", err)
+	}
+	if view.NightlyCommit != full {
+		t.Fatalf("NightlyCommit = %q, want %q", view.NightlyCommit, full)
+	}
+
+	for _, bad := range []localui.SettingsPatch{
+		{UpdateChannel: strPtr("canary")},
+		{NightlyCommit: strPtr("not-a-hash")},
+	} {
+		if _, err := f.svc.UpdateSettings(ctx, bad); !isStatus(err, 400) {
+			t.Errorf("UpdateSettings(%+v) error = %v, want a 400", bad, err)
+		}
+	}
+	saved, err := config.Load(f.svc.configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Channel() != "nightly" || saved.NightlyCommit != full {
+		t.Fatalf("a refused change was saved: %+v", saved)
+	}
+}
+
+func isStatus(err error, code int) bool {
+	var se *localui.StatusError
+	return errors.As(err, &se) && se.Code == code
+}

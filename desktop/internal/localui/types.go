@@ -233,6 +233,11 @@ type SettingsView struct {
 	ClipboardSupported bool   `json:"clipboard_supported"`
 	DeviceName         string `json:"device_name"`
 
+	// The updater's settings (UpdateView carries its state).
+	UpdateChannel string `json:"update_channel"`
+	AutoUpdate    bool   `json:"auto_update"`
+	NightlyCommit string `json:"nightly_commit"`
+
 	// RestartRequired is true when a saved port differs from the one this
 	// process is listening on: the service binds once, at startup.
 	RestartRequired bool `json:"restart_required"`
@@ -246,6 +251,12 @@ type SettingsPatch struct {
 	AutoApply  *bool   `json:"auto_apply"`
 	Autostart  *bool   `json:"autostart"`
 	DeviceName *string `json:"device_name"`
+
+	UpdateChannel *string `json:"update_channel"`
+	AutoUpdate    *bool   `json:"auto_update"`
+	// NightlyCommit is the commit whose build the Nightly channel installs:
+	// a full or abbreviated hash, resolved to a full one before it is saved.
+	NightlyCommit *string `json:"nightly_commit"`
 }
 
 // Event is a push from the service to the UI.

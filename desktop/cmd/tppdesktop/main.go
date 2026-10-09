@@ -110,7 +110,30 @@ func run(logger *slog.Logger) error {
 	}
 	logger.Info("key store opened", "backend", string(store.Backend()))
 
-	svc, err := service.New(service.Options{
+	// The updater exists before the service: the service hands it every
+	// settings change, and it tells the service's UI streams when its own
+	// state changes. svc is filled in below; nothing calls back before then.
+	var svc *service.Service
+	updater, err := update.New(update.Options{
+		ConfigDir:  configDir,
+		Quit:       stop,
+		AllowLocal: os.Getenv(envUpdateAllowLocal) == "1",
+		Logger:     logger,
+		OnChange: func() {
+			if svc != nil {
+				svc.NotifyUpdate()
+			}
+		},
+		Idle: func() bool {
+			return power.ScreenLocked() || time.Since(svc.LastSync()) > idleAfter
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("build the updater: %w", err)
+	}
+	updater.SetPreferences(settings)
+
+	svc, err = service.New(service.Options{
 		Clipboard:       clipboard.New(),
 		Autostart:       autostart.New(),
 		Settings:        settings,
@@ -118,6 +141,7 @@ func run(logger *slog.Logger) error {
 		ListenPort:      settings.ListenPort(),
 		KeystoreBackend: string(store.Backend()),
 		WatchPaused:     power.ScreenLocked,
+		Updates:         updater,
 		Logger:          logger,
 	})
 	if err != nil {
@@ -138,6 +162,7 @@ func run(logger *slog.Logger) error {
 
 	srv, listenErr := localui.Listen(ctx, localui.Options{
 		API:      svc,
+		Updates:  updater,
 		Port:     settings.ListenPort(),
 		DevProxy: os.Getenv(envUIDev),
 		Logger:   logger,
@@ -168,19 +193,6 @@ func run(logger *slog.Logger) error {
 	}()
 	go svc.Run(runCtx)
 
-	updater, err := update.New(update.Options{
-		ConfigDir:  configDir,
-		Quit:       cancel,
-		AllowLocal: os.Getenv(envUpdateAllowLocal) == "1",
-		Logger:     logger,
-		Idle: func() bool {
-			return power.ScreenLocked() || time.Since(svc.LastSync()) > idleAfter
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("build the updater: %w", err)
-	}
-	updater.SetPreferences(settings)
 	go updater.Run(runCtx)
 
 	go power.WatchWake(runCtx, power.DefaultWakeCheck, func(slept time.Duration) {
@@ -219,6 +231,18 @@ func run(logger *slog.Logger) error {
 				return
 			}
 			logger.Info("sync from the tray", "direction", string(res.Direction), "changed", res.Changed)
+		},
+		// A check from the tray has nowhere to show its answer but the UI, so
+		// an update it finds opens the updates section; finding nothing, or
+		// failing, only logs.
+		CheckUpdates: func() {
+			v, err := updater.Check(runCtx)
+			if err != nil || v.Available == nil {
+				return
+			}
+			if err := openUI(runCtx, srv.URL()+"#updates", logger); err != nil {
+				logger.Warn("could not open the browser", "error", err)
+			}
 		},
 		Quit:   cancel,
 		Logger: logger,

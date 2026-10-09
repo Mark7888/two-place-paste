@@ -75,3 +75,21 @@ type API interface {
 	// channel is closed when the subscription ends.
 	Subscribe() (<-chan Event, func())
 }
+
+// UpdateAPI is the updater, as the UI drives it
+// (docs/plans/versioning-releases-and-updates.md §3). Which channel it follows
+// is a setting, changed through API.UpdateSettings like any other.
+type UpdateAPI interface {
+	// UpdateStatus is the updates section's model.
+	UpdateStatus(ctx context.Context) UpdateView
+
+	// CheckUpdate asks the channel for its newest build.
+	CheckUpdate(ctx context.Context) (UpdateView, error)
+
+	// InstallUpdate downloads, verifies and installs the offered build, then
+	// restarts the service into it. The page that asked loses its connection.
+	InstallUpdate(ctx context.Context, req InstallRequest) (UpdateView, error)
+
+	// RollbackUpdate restores the build the last update replaced.
+	RollbackUpdate(ctx context.Context) (UpdateView, error)
+}

@@ -321,6 +321,62 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, view)
 }
 
+// updatesOff answers an update route on a build without an updater.
+func (s *Server) updatesOff(w http.ResponseWriter) bool {
+	if s.updates == nil {
+		writeError(w, http.StatusNotImplemented, "this build has no updater")
+		return true
+	}
+	return false
+}
+
+func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
+	if s.updatesOff(w) {
+		return
+	}
+	writeJSON(w, http.StatusOK, s.updates.UpdateStatus(r.Context()))
+}
+
+func (s *Server) handleCheckUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.updatesOff(w) {
+		return
+	}
+	view, err := s.updates.CheckUpdate(r.Context())
+	if err != nil {
+		s.fail(w, r, "check for updates", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+func (s *Server) handleInstallUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.updatesOff(w) {
+		return
+	}
+	var req InstallRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	view, err := s.updates.InstallUpdate(r.Context(), req)
+	if err != nil {
+		s.fail(w, r, "install the update", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+func (s *Server) handleRollbackUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.updatesOff(w) {
+		return
+	}
+	view, err := s.updates.RollbackUpdate(r.Context())
+	if err != nil {
+		s.fail(w, r, "roll back", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
 // fail turns a service error into a response. A StatusError carries the status
 // and a message meant for a person; anything else is a bug and is reported as
 // one, with the detail going to the log rather than to the page.

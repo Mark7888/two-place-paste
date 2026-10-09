@@ -185,7 +185,7 @@ func (s *stubAPI) Subscribe() (<-chan Event, func()) {
 func newTestServer(t *testing.T) (*Server, *stubAPI) {
 	t.Helper()
 	api := newStubAPI()
-	srv, err := Listen(context.Background(), Options{API: api, Port: 0, Token: "test-token"})
+	srv, err := Listen(context.Background(), Options{API: api, Updates: api, Port: 0, Token: "test-token"})
 	if err != nil {
 		t.Fatalf("Listen() error = %v", err)
 	}
@@ -222,6 +222,10 @@ func TestOriginIsValidatedOnEveryRequest(t *testing.T) {
 		{"POST", "/api/group/forget", `{}`},
 		{"GET", "/api/settings", ""},
 		{"POST", "/api/settings", `{"auto_watch":true}`},
+		{"GET", "/api/update", ""},
+		{"POST", "/api/update/check", `{}`},
+		{"POST", "/api/update/install", `{"confirm":true}`},
+		{"POST", "/api/update/rollback", `{}`},
 		{"GET", "/api/events", ""},
 		{"GET", "/app", ""},
 		{"GET", "/index.html", ""},

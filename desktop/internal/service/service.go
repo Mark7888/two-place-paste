@@ -68,11 +68,21 @@ type Options struct {
 	// true: a locked screen, where nobody is copying anything.
 	WatchPaused func() bool
 
+	// Updates hears every change to the settings, so the updater follows
+	// the channel the user picks. Optional.
+	Updates Preferences
+
 	// Logger receives service-level logs. It never sees clipboard content.
 	Logger *slog.Logger
 
 	// Now supplies UTC timestamps; tests replace it.
 	Now func() time.Time
+}
+
+// Preferences is the part of the updater the service drives: it owns the
+// settings file, and hands the updater its settings after each save.
+type Preferences interface {
+	SetPreferences(config.Settings)
 }
 
 // Service is the desktop shell: it answers the UI, drives the clipboard, and
@@ -81,6 +91,7 @@ type Service struct {
 	clip      clipboard.Clipboard
 	watcher   *clipboard.Watcher
 	auto      autostart.Manager
+	updates   Preferences
 	hub       *hub
 	incoming  chan tppclient.EntryMeta
 	logger    *slog.Logger
@@ -136,6 +147,7 @@ func New(opts Options) (*Service, error) {
 	s := &Service{
 		clip:       opts.Clipboard,
 		auto:       opts.Autostart,
+		updates:    opts.Updates,
 		logger:     opts.Logger,
 		now:        opts.Now,
 		configDir:  opts.ConfigDir,
@@ -973,6 +985,9 @@ func (s *Service) settingsView(set config.Settings) localui.SettingsView {
 		AutostartSupported: s.auto.Available(),
 		ClipboardSupported: s.clip.Available(),
 		DeviceName:         set.DeviceName,
+		UpdateChannel:      set.Channel(),
+		AutoUpdate:         set.AutoUpdate,
+		NightlyCommit:      set.NightlyCommit,
 		RestartRequired:    set.ListenPort() != s.listenPort(),
 	}
 }
@@ -1010,6 +1025,20 @@ func (s *Service) UpdateSettings(_ context.Context, p localui.SettingsPatch) (lo
 		}
 		next.AutoApply = *p.AutoApply
 	}
+	if p.UpdateChannel != nil {
+		next.UpdateChannel = *p.UpdateChannel
+	}
+	if p.AutoUpdate != nil {
+		next.AutoUpdate = *p.AutoUpdate
+	}
+	if p.NightlyCommit != nil {
+		next.NightlyCommit = strings.ToLower(strings.TrimSpace(*p.NightlyCommit))
+	}
+	if p.UpdateChannel != nil || p.NightlyCommit != nil {
+		if err := next.Validate(); err != nil {
+			return localui.SettingsView{}, localui.Errorf(http.StatusBadRequest, err, "%v", err)
+		}
+	}
 	if p.Autostart != nil {
 		on, err := autostart.Apply(s.auto, *p.Autostart)
 		if err != nil {
@@ -1032,9 +1061,13 @@ func (s *Service) UpdateSettings(_ context.Context, p localui.SettingsPatch) (lo
 	s.settings = next
 	s.mu.Unlock()
 	s.watcher.SetEnabled(next.AutoWatch && s.clip.Available())
+	if s.updates != nil {
+		s.updates.SetPreferences(next)
+	}
 
 	s.logger.Info("settings updated",
-		"auto_watch", next.AutoWatch, "auto_apply", next.AutoApply, "autostart", next.Autostart, "port", next.Port)
+		"auto_watch", next.AutoWatch, "auto_apply", next.AutoApply, "autostart", next.Autostart, "port", next.Port,
+		"update_channel", next.Channel(), "auto_update", next.AutoUpdate)
 	s.hub.publish(localui.Event{Kind: localui.EventSettings})
 	return s.settingsView(next), nil
 }
@@ -1210,6 +1243,11 @@ func (s *Service) applyAnnounced(ctx context.Context, meta tppclient.EntryMeta) 
 		s.lastApplied = item.Meta.CreatedAt
 	}
 	s.mu.Unlock()
+}
+
+// NotifyUpdate tells every open UI the update state changed.
+func (s *Service) NotifyUpdate() {
+	s.hub.publish(localui.Event{Kind: localui.EventUpdate})
 }
 
 // LastSync is when the clipboard last moved in either direction, or zero if

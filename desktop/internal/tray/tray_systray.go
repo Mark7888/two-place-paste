@@ -41,6 +41,10 @@ func run(ctx context.Context, opts Options) {
 func runMenu(ctx context.Context, opts Options) {
 	syncItem := systray.AddMenuItem("Sync now", "Sync the clipboard with the group")
 	openItem := systray.AddMenuItem("Open TwoPlacePaste", "Open the app in your browser")
+	updateItem := systray.AddMenuItem("Check for updates…", "Check the update channel for a newer build")
+	if opts.CheckUpdates == nil {
+		updateItem.Hide()
+	}
 	systray.AddSeparator()
 	quitItem := systray.AddMenuItem("Quit", "Stop the service")
 
@@ -53,6 +57,10 @@ func runMenu(ctx context.Context, opts Options) {
 			case <-syncItem.ClickedCh:
 				if opts.SyncNow != nil {
 					go opts.SyncNow()
+				}
+			case <-updateItem.ClickedCh:
+				if opts.CheckUpdates != nil {
+					go opts.CheckUpdates()
 				}
 			case <-openItem.ClickedCh:
 				if err := OpenURL(ctx, opts.URL); err != nil {

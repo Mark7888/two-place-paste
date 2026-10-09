@@ -20,7 +20,10 @@ type Tab = (typeof tabs)[number]["id"];
 export function App() {
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState<string>("");
-  const [tab, setTab] = useState<Tab>("sync");
+  // The tray's "Check for updates…" opens #updates when it finds one.
+  const [tab, setTab] = useState<Tab>(() =>
+    window.location.hash === "#updates" ? "settings" : "sync",
+  );
 
   // lastEvent is how a panel knows the service did something without each of
   // them opening its own socket. It changes identity on every push, which is
@@ -139,7 +142,9 @@ export function App() {
             <DevicesPanel inGroup={status?.in_group ?? false} onChanged={refresh} />
           ) : null}
           {tab === "pairing" ? <PairingPanel status={status} onChanged={refresh} /> : null}
-          {tab === "settings" ? <SettingsPanel status={status} onChanged={refresh} /> : null}
+          {tab === "settings" ? (
+            <SettingsPanel status={status} onChanged={refresh} lastEvent={lastEvent} />
+          ) : null}
         </div>
       </main>
     </div>
