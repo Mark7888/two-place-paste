@@ -167,7 +167,6 @@ jobs:
           VERSION_NAME: ${{ needs.version.outputs.version }}
           TPP_ANDROID_KEYSTORE: ${{ steps.keystore.outputs.path }}
           TPP_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          TPP_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
 
       # -PbundleInDebug=true makes the debug variant carry its own JS bundle
       # (see mobile/android/app/build.gradle). Without it React Native leaves

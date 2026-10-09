@@ -110,9 +110,11 @@ Windows and Android from the same run share one number. Then:
 
 ### 1.4 Android prerequisites (from F5)
 
-1. Create one PKCS#12 release keystore. Store it as `ANDROID_KEYSTORE_B64`,
-   `ANDROID_KEYSTORE_PASSWORD` and `ANDROID_KEY_ALIAS` secrets. In a PKCS#12 store the key
-   password is the store password, so there's no separate key-password secret. **Back it up offline.** Losing it means
+1. Create one PKCS#12 release keystore. Store it as the `ANDROID_KEYSTORE_B64` and
+   `ANDROID_KEYSTORE_PASSWORD` secrets. The alias, `twoplacepaste`, is hard-coded in
+   `build.gradle` rather than kept as a secret: Actions masks a secret's value in every log
+   line, and this one is the app's name. In a PKCS#12 store the key password is the store
+   password, so there's no separate key-password secret. **Back it up offline.** Losing it means
    every user has to uninstall.
 2. Add a `signingConfigs.release` that reads those values from env/properties, and use it
    for **every** CI build (release *and* dev). If the secrets are absent (forks), fall back to

@@ -57,7 +57,9 @@ android {
                 storeFile file(releaseKeystore)
                 storeType "pkcs12"
                 storePassword System.getenv("TPP_ANDROID_KEYSTORE_PASSWORD")
-                keyAlias System.getenv("TPP_ANDROID_KEY_ALIAS")
+                // Not a secret, and kept out of secrets on purpose: Actions masks a
+                // secret's value everywhere in the logs, and this one is the app's name.
+                keyAlias "twoplacepaste"
                 // A PKCS#12 store has one password, for the store and its key.
                 keyPassword System.getenv("TPP_ANDROID_KEYSTORE_PASSWORD")
             }
