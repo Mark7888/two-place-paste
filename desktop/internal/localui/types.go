@@ -272,3 +272,128 @@ const (
 	EventSync          = "sync"
 	EventSettings      = "settings"
 )
+
+// UpdateView is the updates section's model
+// (docs/plans/versioning-releases-and-updates.md §3).
+type UpdateView struct {
+	// Current is the running build.
+	Current BuildView `json:"current"`
+
+	Channel       string `json:"channel"`
+	AutoUpdate    bool   `json:"auto_update"`
+	NightlyCommit string `json:"nightly_commit,omitempty"`
+
+	// State is one of the UpdateState* constants.
+	State string `json:"state"`
+
+	// Message says what the state means for a person: why a check failed,
+	// why nothing can be installed.
+	Message string `json:"message,omitempty"`
+
+	// Available is the build the channel offers, when it differs from the
+	// running one.
+	Available *UpdateCandidate `json:"available,omitempty"`
+
+	LastChecked *time.Time `json:"last_checked,omitempty"`
+
+	// CanInstall is false where this installation cannot replace itself: a
+	// build from a checkout, a binary outside an app bundle, a folder it may
+	// not write to. CannotInstall says which.
+	CanInstall    bool   `json:"can_install"`
+	CannotInstall string `json:"cannot_install,omitempty"`
+
+	// Previous is the build the last update replaced, which Roll back restores.
+	Previous *BuildView `json:"previous,omitempty"`
+
+	// Token is the state of the Nightly channel's GitHub token. The token
+	// itself is never sent to the UI.
+	Token TokenView `json:"token"`
+}
+
+// BuildView names one build.
+type BuildView struct {
+	Version string `json:"version"`
+	Channel string `json:"channel"`
+	Commit  string `json:"commit,omitempty"`
+	Stamp   int64  `json:"stamp"`
+}
+
+// UpdateCandidate is a build the channel offers.
+type UpdateCandidate struct {
+	BuildView
+
+	// Older is set when the build is older than the running one, which only
+	// happens after a channel switch; installing it needs AllowOlder.
+	Older bool `json:"older"`
+
+	// Signed is false for a fork's Nightly build, which CI could not sign.
+	// Such a build needs Confirm, after the person has seen Origin.
+	Signed            bool `json:"signed"`
+	NeedsConfirmation bool `json:"needs_confirmation"`
+
+	// Building is set while the commit's build is still running.
+	Building bool `json:"building,omitempty"`
+
+	// Origin says where a Nightly build came from.
+	Origin *BuildOrigin `json:"origin,omitempty"`
+}
+
+// BuildOrigin is what the Nightly confirmation screen shows about a commit.
+type BuildOrigin struct {
+	Repository       string `json:"repository"`
+	Branch           string `json:"branch,omitempty"`
+	Fork             bool   `json:"fork"`
+	PullRequest      int    `json:"pull_request,omitempty"`
+	PullRequestTitle string `json:"pull_request_title,omitempty"`
+	CommitMessage    string `json:"commit_message,omitempty"`
+	Author           string `json:"author,omitempty"`
+	URL              string `json:"url"`
+	RunURL           string `json:"run_url,omitempty"`
+
+	// ChangesWorkflows is set when the commit's pull request touches
+	// .github/workflows: a pull_request run uses the PR's own workflow files,
+	// so such a PR can change how its artifact was built.
+	ChangesWorkflows bool `json:"changes_workflows"`
+}
+
+// TokenView describes the stored GitHub token without revealing it.
+type TokenView struct {
+	Set bool `json:"set"`
+
+	// Source is "keystore", or "environment" when TPP_DESKTOP_GITHUB_TOKEN
+	// overrides it.
+	Source string `json:"source,omitempty"`
+
+	// Invalid is set after GitHub rejected the token.
+	Invalid   bool       `json:"invalid,omitempty"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+}
+
+// InstallRequest is what the Install button sends.
+type InstallRequest struct {
+	// Confirm accepts an unsigned Nightly build after its origin was shown.
+	Confirm bool `json:"confirm"`
+	// AllowOlder accepts a build older than the running one.
+	AllowOlder bool `json:"allow_older"`
+}
+
+// TokenRequest stores a GitHub token.
+type TokenRequest struct {
+	Token string `json:"token"`
+}
+
+// Update states.
+const (
+	UpdateStateIdle        = "idle"
+	UpdateStateChecking    = "checking"
+	UpdateStateUpToDate    = "up_to_date"
+	UpdateStateAvailable   = "available"
+	UpdateStateBuilding    = "building"
+	UpdateStateDownloading = "downloading"
+	UpdateStateInstalling  = "installing"
+	UpdateStateRestarting  = "restarting"
+	UpdateStateError       = "error"
+)
+
+// EventUpdate tells the UI the update state changed.
+const EventUpdate = "update"
