@@ -68,6 +68,11 @@ SectionEnd
 Section "Uninstall"
   Delete "$SMPROGRAMS\TwoPlacePaste.lnk"
   Delete "$INSTDIR\tppdesktop.exe"
+  ; What the updater leaves beside it (internal/update/applier_windows.go):
+  ; the build it replaced, kept for rollback, and any half-finished swap.
+  Delete "$INSTDIR\tppdesktop.exe.old"
+  Delete "$INSTDIR\tppdesktop.exe.new"
+  Delete "$INSTDIR\tppdesktop.exe.rollback"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
 
