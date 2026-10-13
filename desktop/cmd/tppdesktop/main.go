@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -298,7 +299,16 @@ func newLogger(configDir string) (*slog.Logger, func()) {
 		return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})), func() {}
 	}
 	handler := slog.NewTextHandler(tee{file}, &slog.HandlerOptions{Level: level})
-	return slog.New(handler), func() { _ = file.Close() }
+	logger := slog.New(handler)
+
+	// A panic or a fatal runtime error is printed to stderr, which the Windows
+	// build does not have: a crash would leave nothing behind but a log that
+	// stops. The runtime writes its crash report to this file as well, so the
+	// next one names the goroutine and the line.
+	if err := debug.SetCrashOutput(file, debug.CrashOptions{}); err != nil {
+		logger.Warn("crash reports will not reach the log file", "error", err)
+	}
+	return logger, func() { _ = file.Close() }
 }
 
 func openLogFile(configDir string) (*os.File, error) {
