@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -66,10 +68,11 @@ func (windowsClipboard) Sequence(context.Context) (uint64, error) {
 }
 
 func (windowsClipboard) Read(ctx context.Context) (Content, error) {
-	if err := openClipboard(ctx); err != nil {
+	release, err := acquire(ctx)
+	if err != nil {
 		return Content{}, err
 	}
-	defer closeClipboard()
+	defer release()
 
 	// Files first, then image, then text: an image copied from a file offers
 	// several flavours and the richest one is the one the user meant.
@@ -137,10 +140,11 @@ func (windowsClipboard) Write(ctx context.Context, item Content) error {
 		return fmt.Errorf("clipboard: nothing to write")
 	}
 
-	if err := openClipboard(ctx); err != nil {
+	release, err := acquire(ctx)
+	if err != nil {
 		return err
 	}
-	defer closeClipboard()
+	defer release()
 	if r, _, err := procEmptyClipboard.Call(); r == 0 {
 		return fmt.Errorf("clipboard: empty the clipboard: %w", err)
 	}
@@ -158,6 +162,40 @@ func (windowsClipboard) Write(ctx context.Context, item Content) error {
 	return nil
 }
 
+// clipboardMu serialises this process's use of the clipboard.
+var clipboardMu sync.Mutex
+
+// acquire opens the clipboard for the calling goroutine and returns the
+// function that closes it again. Every read and write goes through it.
+//
+// Windows ties an open clipboard to the OS thread that opened it, and Go moves
+// goroutines between threads at will. Without both locks below, two reads at
+// once (two status requests, or a request and the watcher) could share one
+// thread: OpenClipboard succeeds again for a thread that already holds it, and
+// the first CloseClipboard then closes the clipboard under the other read
+// while it is still copying out of the clipboard's memory. That was an access
+// violation in memmove, and with a large image on the clipboard the copy is
+// slow enough to lose that race every time.
+//
+//   - LockOSThread keeps open, every read of the data, and close on one thread.
+//   - The mutex keeps a second goroutine from opening the clipboard at all
+//     while one has it, on this thread or any other.
+func acquire(ctx context.Context) (release func(), err error) {
+	clipboardMu.Lock()
+	runtime.LockOSThread()
+	if err := openClipboard(ctx); err != nil {
+		runtime.UnlockOSThread()
+		clipboardMu.Unlock()
+		return nil, err
+	}
+	return func() {
+		closeClipboard()
+		runtime.UnlockOSThread()
+		clipboardMu.Unlock()
+	}, nil
+}
+
+// openClipboard must be called through acquire.
 func openClipboard(ctx context.Context) error {
 	var last error
 	for i := range openAttempts {
