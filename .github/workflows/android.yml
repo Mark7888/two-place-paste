@@ -33,9 +33,13 @@ on:
         required: false
         default: ""
 
+# A newer push to a pull request makes the older run pointless, so it is
+# cancelled. A push to the default branch is not cancelled: its run ends in
+# publish-beta, and cancelling the run would cut that job off between uploads.
+# A newer push still replaces an older one that is only waiting.
 concurrency:
   group: android-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -253,8 +257,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    # Queued, never cancelled mid-upload. A newer push's run replaces a
-    # pending older one, which is the one it would have overwritten anyway.
+    # One publish at a time. A newer push's run replaces a pending older one,
+    # which is the one it would have overwritten anyway; the run-level
+    # concurrency above never cancels a default-branch run in progress.
     concurrency:
       group: publish-beta-android
       cancel-in-progress: false

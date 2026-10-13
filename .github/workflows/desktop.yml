@@ -38,9 +38,13 @@ on:
         required: false
         default: ""
 
+# A newer push to a pull request makes the older run pointless, so it is
+# cancelled. A push to the default branch is not cancelled: its run ends in
+# publish-beta, and cancelling the run would cut that job off between uploads.
+# A newer push still replaces an older one that is only waiting.
 concurrency:
   group: desktop-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -207,8 +211,10 @@ jobs:
           if [ -n "${MACOS_SIGN_IDENTITY:-}" ]; then
             codesign --force --deep --options runtime --sign "$MACOS_SIGN_IDENTITY" "$APP"
           else
-            echo "::notice::no signing identity configured; shipping an unsigned .app"
-            codesign --force --deep --sign - "$APP" || true
+            echo "::notice::no signing identity configured; shipping an ad-hoc signed .app"
+            # Not optional: Apple Silicon runs nothing unsigned, and the
+            # updater refuses a bundle whose signature does not verify.
+            codesign --force --deep --sign - "$APP"
           fi
         env:
           MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
@@ -230,6 +236,22 @@ jobs:
           ditto -c -k --keepParent dist/TwoPlacePaste.app "dist/TwoPlacePaste-${{ matrix.name }}.zip"
           # Prove the wrapper survived, because this is exactly what broke.
           unzip -l "dist/TwoPlacePaste-${{ matrix.name }}.zip" | grep -q "TwoPlacePaste.app/Contents/MacOS/tppdesktop"
+
+      # The updater unpacks this zip with ditto and refuses the bundle unless
+      # its identifier is the app's and its signature verifies
+      # (internal/update/applier_darwin.go). The same checks here mean a build
+      # that every Mac would refuse to install never gets published.
+      - name: Check the zip installs as an update
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          check="$RUNNER_TEMP/update-check"
+          rm -rf "$check" && mkdir -p "$check"
+          ditto -x -k "dist/TwoPlacePaste-${{ matrix.name }}.zip" "$check"
+          id=$(plutil -extract CFBundleIdentifier raw -o - "$check/TwoPlacePaste.app/Contents/Info.plist")
+          [ "$id" = com.twoplacepaste.desktop ] || { echo "::error::bundle identifier is $id"; exit 1; }
+          codesign --verify --deep --strict "$check/TwoPlacePaste.app"
 
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
@@ -322,8 +344,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    # Queued, never cancelled mid-upload. A newer push's run replaces a
-    # pending older one, which is the one it would have overwritten anyway.
+    # One publish at a time. A newer push's run replaces a pending older one,
+    # which is the one it would have overwritten anyway; the run-level
+    # concurrency above never cancels a default-branch run in progress.
     concurrency:
       group: publish-beta-desktop
       cancel-in-progress: false
