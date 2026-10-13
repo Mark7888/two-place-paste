@@ -77,7 +77,14 @@ android {
             if (releaseKeystore) {
                 signingConfig signingConfigs.release
             }
-            minifyEnabled true
+            // Off, as in React Native's own template. The first release build,
+            // with R8 on, crashed a second after the QR scanner opened, where
+            // the debug build had not. react-native-camera-kit ships no keep
+            // rules for its CameraX and ML Kit frame analysis, which is the
+            // likely victim. A few megabytes off the APK are not worth crashes
+            // only a device can show: turn this back on only together with
+            // keep rules tested on one.
+            minifyEnabled false
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
     }
