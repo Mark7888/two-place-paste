@@ -271,7 +271,7 @@ jobs:
 
       # The per-user installer for a first install (packaging/windows/installer.nsi);
       # updates replace the .exe and never run it. NSIS is installed if the
-      # runner image does not carry it. -D, not /D: Git Bash would rewrite /D…
+      # runner image does not carry it (the current windows-latest does not). -D, not /D: Git Bash would rewrite /D…
       # as a path.
       - name: Build the installer
         if: runner.os == 'Windows'
@@ -279,9 +279,13 @@ jobs:
         run: |
           set -euo pipefail
           makensis="/c/Program Files (x86)/NSIS/makensis.exe"
-          if [ ! -x "$makensis" ]; then
-            choco install nsis --yes --no-progress
-          fi
+          # The Chocolatey feed sometimes answers 504, so a failed install is
+          # retried before it fails the build (and with it a release).
+          for attempt in 1 2 3 4; do
+            [ -x "$makensis" ] && break
+            choco install nsis --yes --no-progress || sleep $((attempt * 15))
+          done
+          [ -x "$makensis" ] || { echo "::error::could not install NSIS"; exit 1; }
           "$makensis" -V2 \
             "-DVERSION=$NUMERIC" \
             "-DSOURCE_EXE=$(cygpath -w "$PWD/dist/tppdesktop.exe")" \
