@@ -1,0 +1,49 @@
+# The release tooling's own checks: the shell scripts every build depends on
+# for its version and its manifest (docs/plans/versioning-releases-and-updates.md).
+#
+# A broken version.sh breaks every other workflow at once, so it is linted and
+# tested on its own whenever it changes.
+name: Scripts
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "scripts/**"
+      - "desktop/packaging/**/*.sh"
+      - ".github/workflows/scripts.yml"
+  pull_request:
+    paths:
+      - "scripts/**"
+      - "desktop/packaging/**/*.sh"
+      - ".github/workflows/scripts.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: scripts-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # ShellCheck is preinstalled on the Ubuntu runners.
+      - name: ShellCheck
+        run: |
+          shopt -s globstar nullglob
+          shellcheck scripts/*.sh desktop/packaging/**/*.sh
+
+      - name: Test version.sh
+        run: scripts/version_test.sh
+
+      - name: Test manifest.sh
+        run: scripts/manifest_test.sh
+
+      - name: Test publish-beta.sh
+        run: scripts/publish-beta_test.sh

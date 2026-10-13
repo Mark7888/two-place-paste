@@ -32,6 +32,8 @@ The token and Origin checks apply in dev mode too.
 | `TPP_DESKTOP_CONFIG_DIR` | Where `desktop.json` lives. Defaults to a per-user config directory. |
 | `TPP_DESKTOP_UI_DEV` | Base URL of a running Vite server; the UI is proxied from there. |
 | `TPP_DESKTOP_LOG` | `debug`, `info`, `warn`, `error`. Defaults to `info`. |
+| `TPP_DESKTOP_GITHUB_TOKEN` | A GitHub token for the Nightly update channel, used instead of the stored one. Never written anywhere. |
+| `TPP_DESKTOP_UPDATE_ALLOW_LOCAL` | `1` lets a build from a checkout install updates, to test the updater. Otherwise it never replaces itself. |
 
 Everything a user changes — the port, clipboard auto-watch, applying other
 devices' entries, autostart — is in the settings file and in the UI, not in the
@@ -48,6 +50,8 @@ environment.
 | `internal/tray` | Tray icon and menu, and the visible bind failure. |
 | `internal/autostart` | launchd agent (macOS) and the HKCU Run key (Windows). |
 | `internal/config` | The settings file. Non-secret by design: the port must be editable by hand. |
+| `internal/update` | The auto-updater: Stable, Beta and Nightly sources, manifest signatures, the in-place swap. |
+| `internal/buildinfo` | The version CI stamps into the binary. |
 | `ui/` | The React app. Builds into `internal/localui/dist`, which the binary embeds. |
 
 ## Security notes
@@ -110,3 +114,28 @@ battery, so it does nothing on a timer that it can avoid:
   monotonic one), drops the relay socket the sleep killed, reconnects at once,
   and fetches anything another device wrote meanwhile — which auto-apply then
   handles like any other new entry.
+- **Auto-update on**: on macOS, `NSBackgroundActivityScheduler` decides when
+  to check, about every six hours, and holds the check back on battery, under
+  thermal pressure and in Low Power Mode. Elsewhere a ticker wakes every 30
+  minutes to compare two timestamps. Either way a check only goes out when the
+  last one is six hours old, and an update only restarts the service when the
+  screen is locked or nothing has synced for ten minutes. Off, there is no
+  timer at all.
+
+## Updates
+
+The Updates section of Settings, and the tray's *Check for updates…*, follow
+one of three channels (docs/plans/versioning-releases-and-updates.md):
+
+| Channel | Installs | Needs |
+|---|---|---|
+| Stable | The latest GitHub Release. | Nothing. |
+| Beta | The newest build of the default branch, from the `channel-beta` prerelease. | Nothing. |
+| Nightly | The build of one commit you enter, from GitHub Actions. | A fine-grained token with Actions: Read-only on this repository, kept in the keystore. |
+
+Every download is checked against a manifest signed in CI with a key whose
+public half is `internal/update/update-signing.pub.pem`. A fork's pull request
+build cannot be signed; Nightly installs one only after showing where it came
+from and asking. The previous build is kept for one-click rollback. A build
+from a checkout (version `0.0.0-local`) never replaces itself.
+

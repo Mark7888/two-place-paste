@@ -366,6 +366,7 @@ button.action:disabled { opacity: 0.45; cursor: not-allowed; }
 
 input[type="text"],
 input[type="password"],
+select,
 textarea {
   /* Width is a width. A flex-basis here would be a height in a column
      container, which is how a one-line field ends up twenty rows tall. */
@@ -379,7 +380,8 @@ textarea {
   padding: 0.45rem 0.6rem;
 }
 
-input[type="text"] { height: 2.25rem; padding-top: 0; padding-bottom: 0; }
+input[type="text"],
+select { height: 2.25rem; padding-top: 0; padding-bottom: 0; }
 
 textarea { min-height: 5rem; resize: vertical; }
 

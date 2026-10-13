@@ -55,6 +55,34 @@ type Settings struct {
 	// DeviceName is what this device is called in another device's revocation
 	// dialog (SPEC §3.3 step 2). Not a secret.
 	DeviceName string `json:"device_name"`
+
+	// UpdateChannel is where updates come from: ChannelStable (the default,
+	// also when empty), ChannelBeta or ChannelNightly
+	// (docs/plans/versioning-releases-and-updates.md §3).
+	UpdateChannel string `json:"update_channel"`
+
+	// AutoUpdate installs Stable and Beta updates without asking. Off by
+	// default, like every other toggle. Nightly never installs on its own.
+	AutoUpdate bool `json:"auto_update"`
+
+	// NightlyCommit is the full SHA of the commit whose build the Nightly
+	// channel installs. Only meaningful on ChannelNightly.
+	NightlyCommit string `json:"nightly_commit"`
+}
+
+// Update channels.
+const (
+	ChannelStable  = "stable"
+	ChannelBeta    = "beta"
+	ChannelNightly = "nightly"
+)
+
+// Channel resolves the update channel, an empty one being Stable.
+func (s Settings) Channel() string {
+	if s.UpdateChannel == "" {
+		return ChannelStable
+	}
+	return s.UpdateChannel
 }
 
 // ErrNotFound reports that no settings file exists yet, which is the state of
@@ -152,7 +180,28 @@ func (s Settings) Validate() error {
 		// per-user clipboard agent never should.
 		return fmt.Errorf("config: port %d is privileged; use 1024-65535", s.Port)
 	}
+	switch s.UpdateChannel {
+	case "", ChannelStable, ChannelBeta, ChannelNightly:
+	default:
+		return fmt.Errorf("config: update channel %q is not stable, beta or nightly", s.UpdateChannel)
+	}
+	if s.NightlyCommit != "" && !IsFullSHA(s.NightlyCommit) {
+		return fmt.Errorf("config: nightly commit %q is not a full 40-character commit hash", s.NightlyCommit)
+	}
 	return nil
+}
+
+// IsFullSHA reports whether s is a full, lowercase, 40-character commit hash.
+func IsFullSHA(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // ListenPort resolves the port to bind.

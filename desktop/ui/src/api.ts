@@ -13,7 +13,8 @@ function captureToken(): string {
   const params = new URLSearchParams(window.location.search);
   const token = params.get("token") ?? "";
   if (token) {
-    window.history.replaceState({}, "", window.location.pathname);
+    // The fragment stays: the tray opens #updates to land on that section.
+    window.history.replaceState({}, "", window.location.pathname + window.location.hash);
   }
   return token;
 }
@@ -143,6 +144,9 @@ export interface SettingsView {
   autostart_supported: boolean;
   clipboard_supported: boolean;
   device_name: string;
+  update_channel: UpdateChannel;
+  auto_update: boolean;
+  nightly_commit: string;
   restart_required: boolean;
 }
 
@@ -152,6 +156,83 @@ export interface SettingsPatch {
   auto_apply?: boolean;
   autostart?: boolean;
   device_name?: string;
+  update_channel?: UpdateChannel;
+  auto_update?: boolean;
+  nightly_commit?: string;
+}
+
+export type UpdateChannel = "stable" | "beta" | "nightly";
+
+/** BuildView names one build of the desktop app. */
+export interface BuildView {
+  version: string;
+  channel: string;
+  commit?: string;
+  /** Seconds since 2025-01-01 when CI built it; a larger stamp is newer. */
+  stamp: number;
+}
+
+/** BuildOrigin is what the Nightly confirmation shows about a commit. */
+export interface BuildOrigin {
+  repository: string;
+  branch?: string;
+  fork: boolean;
+  pull_request?: number;
+  pull_request_title?: string;
+  commit_message?: string;
+  author?: string;
+  url: string;
+  run_url?: string;
+  changes_workflows: boolean;
+}
+
+export interface UpdateCandidate extends BuildView {
+  older: boolean;
+  signed: boolean;
+  needs_confirmation: boolean;
+  building?: boolean;
+  origin?: BuildOrigin;
+}
+
+/** TokenView says whether a GitHub token is stored, never what it is. */
+export interface TokenView {
+  set: boolean;
+  source?: "keystore" | "environment";
+  invalid?: boolean;
+  expires_at?: string;
+}
+
+export type UpdateState =
+  | "idle"
+  | "checking"
+  | "up_to_date"
+  | "available"
+  | "building"
+  | "downloading"
+  | "installing"
+  | "restarting"
+  | "error";
+
+export interface UpdateView {
+  current: BuildView;
+  channel: UpdateChannel;
+  auto_update: boolean;
+  nightly_commit?: string;
+  state: UpdateState;
+  message?: string;
+  available?: UpdateCandidate;
+  last_checked?: string;
+  can_install: boolean;
+  cannot_install?: string;
+  previous?: BuildView;
+  token: TokenView;
+}
+
+export interface InstallRequest {
+  /** Accepts an unsigned Nightly build after its origin was shown. */
+  confirm?: boolean;
+  /** Accepts a build older than the running one. */
+  allow_older?: boolean;
 }
 
 export interface ServiceEvent {
@@ -231,6 +312,13 @@ export const api = {
   forgetGroup: () => request<{ ok: boolean }>("POST", "/api/group/forget", {}),
   settings: () => request<SettingsView>("GET", "/api/settings"),
   updateSettings: (patch: SettingsPatch) => request<SettingsView>("POST", "/api/settings", patch),
+  updateStatus: () => request<UpdateView>("GET", "/api/update"),
+  checkUpdate: () => request<UpdateView>("POST", "/api/update/check", {}),
+  installUpdate: (req: InstallRequest) => request<UpdateView>("POST", "/api/update/install", req),
+  rollbackUpdate: () => request<UpdateView>("POST", "/api/update/rollback", {}),
+  // The token goes in a body, never a URL, and is never sent back.
+  setUpdateToken: (token: string) => request<UpdateView>("PUT", "/api/update/token", { token }),
+  deleteUpdateToken: () => request<UpdateView>("DELETE", "/api/update/token"),
 };
 
 // events opens the push stream. The token goes in the query string because a

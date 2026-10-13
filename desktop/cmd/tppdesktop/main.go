@@ -15,16 +15,20 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Mark7888/two-place-paste/desktop/internal/autostart"
+	"github.com/Mark7888/two-place-paste/desktop/internal/buildinfo"
 	"github.com/Mark7888/two-place-paste/desktop/internal/clipboard"
 	"github.com/Mark7888/two-place-paste/desktop/internal/config"
 	"github.com/Mark7888/two-place-paste/desktop/internal/localui"
 	"github.com/Mark7888/two-place-paste/desktop/internal/power"
 	"github.com/Mark7888/two-place-paste/desktop/internal/service"
 	"github.com/Mark7888/two-place-paste/desktop/internal/tray"
+	"github.com/Mark7888/two-place-paste/desktop/internal/update"
 	"github.com/Mark7888/two-place-paste/pkg/tppclient"
 	"github.com/Mark7888/two-place-paste/pkg/tppclient/keystore"
 )
@@ -36,7 +40,15 @@ const (
 	envConfigDir = "TPP_DESKTOP_CONFIG_DIR"
 	envUIDev     = "TPP_DESKTOP_UI_DEV"
 	envLogLevel  = "TPP_DESKTOP_LOG"
+
+	// envUpdateAllowLocal lets a build from a checkout install updates, to
+	// test the updater itself. Off, a local build never replaces itself.
+	envUpdateAllowLocal = "TPP_DESKTOP_UPDATE_ALLOW_LOCAL"
 )
+
+// idleAfter is how long after the last sync an automatic update may restart
+// the service, when the screen is not locked.
+const idleAfter = 10 * time.Minute
 
 // main exists only to turn start's exit code into a process exit.
 //
@@ -53,6 +65,7 @@ func start() int {
 	logger, closeLog := newLogger(os.Getenv(envConfigDir))
 	defer closeLog()
 	slog.SetDefault(logger)
+	logger.Info("starting", "version", buildinfo.Version, "channel", buildinfo.Channel, "commit", buildinfo.Commit)
 
 	if err := run(logger); err != nil {
 		logger.Error("the service stopped", "error", err)
@@ -64,6 +77,16 @@ func start() int {
 func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// An update relaunches the new build while the old one still holds the
+	// localhost port (internal/update). Binding before it has gone would land
+	// this process in the "port in use" failure, so it waits first.
+	if pid := update.ParseWaitPID(os.Args[1:]); pid > 0 {
+		logger.Info("waiting for the build this one replaces to exit", "pid", pid)
+		if !update.WaitForExit(pid, update.WaitPIDTimeout) {
+			logger.Warn("the previous build is still running; starting anyway", "pid", pid)
+		}
+	}
 
 	configDir := os.Getenv(envConfigDir)
 	settings, err := config.Load(configDir)
@@ -77,6 +100,13 @@ func run(logger *slog.Logger) error {
 	if settings.DeviceName == "" {
 		settings.DeviceName = defaultDeviceName()
 	}
+	// A Beta build someone installed has not been told a channel yet; left at
+	// the Stable default, its updater would offer the older release instead of
+	// the next Beta build, and auto-update would never move it on. It follows
+	// the channel it came from until the user picks one.
+	if settings.UpdateChannel == "" && buildinfo.Channel == config.ChannelBeta {
+		settings.UpdateChannel = config.ChannelBeta
+	}
 	settingsPath, err := config.Path(configDir)
 	if err != nil {
 		return fmt.Errorf("locate the settings file: %w", err)
@@ -88,7 +118,31 @@ func run(logger *slog.Logger) error {
 	}
 	logger.Info("key store opened", "backend", string(store.Backend()))
 
-	svc, err := service.New(service.Options{
+	// The updater exists before the service: the service hands it every
+	// settings change, and it tells the service's UI streams when its own
+	// state changes. svc is filled in below; nothing calls back before then.
+	var svc *service.Service
+	updater, err := update.New(update.Options{
+		ConfigDir:  configDir,
+		Secrets:    store,
+		Quit:       stop,
+		AllowLocal: os.Getenv(envUpdateAllowLocal) == "1",
+		Logger:     logger,
+		OnChange: func() {
+			if svc != nil {
+				svc.NotifyUpdate()
+			}
+		},
+		Idle: func() bool {
+			return power.ScreenLocked() || time.Since(svc.LastSync()) > idleAfter
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("build the updater: %w", err)
+	}
+	updater.SetPreferences(settings)
+
+	svc, err = service.New(service.Options{
 		Clipboard:       clipboard.New(),
 		Autostart:       autostart.New(),
 		Settings:        settings,
@@ -96,6 +150,7 @@ func run(logger *slog.Logger) error {
 		ListenPort:      settings.ListenPort(),
 		KeystoreBackend: string(store.Backend()),
 		WatchPaused:     power.ScreenLocked,
+		Updates:         updater,
 		Logger:          logger,
 	})
 	if err != nil {
@@ -116,6 +171,7 @@ func run(logger *slog.Logger) error {
 
 	srv, listenErr := localui.Listen(ctx, localui.Options{
 		API:      svc,
+		Updates:  updater,
 		Port:     settings.ListenPort(),
 		DevProxy: os.Getenv(envUIDev),
 		Logger:   logger,
@@ -145,7 +201,13 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 	go svc.Run(runCtx)
-	go power.WatchWake(runCtx, power.DefaultWakeCheck, svc.Resumed)
+
+	go updater.Run(runCtx)
+
+	go power.WatchWake(runCtx, power.DefaultWakeCheck, func(slept time.Duration) {
+		svc.Resumed(slept)
+		updater.Woke()
+	})
 
 	if client.InGroup() {
 		if err := client.Connect(runCtx); err != nil {
@@ -178,6 +240,18 @@ func run(logger *slog.Logger) error {
 				return
 			}
 			logger.Info("sync from the tray", "direction", string(res.Direction), "changed", res.Changed)
+		},
+		// A check from the tray has nowhere to show its answer but the UI, so
+		// an update it finds opens the updates section; finding nothing, or
+		// failing, only logs.
+		CheckUpdates: func() {
+			v, err := updater.Check(runCtx)
+			if err != nil || v.Available == nil {
+				return
+			}
+			if err := openUI(runCtx, srv.URL()+"#updates", logger); err != nil {
+				logger.Warn("could not open the browser", "error", err)
+			}
 		},
 		Quit:   cancel,
 		Logger: logger,
@@ -232,7 +306,16 @@ func newLogger(configDir string) (*slog.Logger, func()) {
 		return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})), func() {}
 	}
 	handler := slog.NewTextHandler(tee{file}, &slog.HandlerOptions{Level: level})
-	return slog.New(handler), func() { _ = file.Close() }
+	logger := slog.New(handler)
+
+	// A panic or a fatal runtime error is printed to stderr, which the Windows
+	// build does not have: a crash would leave nothing behind but a log that
+	// stops. The runtime writes its crash report to this file as well, so the
+	// next one names the goroutine and the line.
+	if err := debug.SetCrashOutput(file, debug.CrashOptions{}); err != nil {
+		logger.Warn("crash reports will not reach the log file", "error", err)
+	}
+	return logger, func() { _ = file.Close() }
 }
 
 func openLogFile(configDir string) (*os.File, error) {

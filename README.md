@@ -122,10 +122,34 @@ are covered in [`docs/deployment.md`](docs/deployment.md).
 
 ## 2. Install the desktop app
 
-**Windows and macOS.** Binaries are built by the `Desktop` GitHub Actions
-workflow: `TwoPlacePaste-Setup.exe` (a per-user NSIS installer, no
-administrator rights) and `TwoPlacePaste.dmg` (a menu-bar agent with no Dock
-icon). Download the artefact for your platform, or build it yourself:
+Every [release](https://github.com/Mark7888/two-place-paste/releases/latest)
+carries the installers. Once installed, the app updates itself (Settings →
+Updates).
+
+**macOS.** Run this in Terminal. It installs the latest release for your Mac
+(Apple Silicon or Intel) into `/Applications`, or `~/Applications` when that is
+not writable:
+
+```sh
+curl -fsSL https://github.com/Mark7888/two-place-paste/releases/latest/download/install-macos.sh | sh
+```
+
+The app is not notarised by Apple, and macOS asks for approval in System
+Settings → Privacy & Security before it opens an app downloaded with a browser.
+The script downloads with `curl`, which does not set that flag, so the app
+opens straight away. It checks the download against the release's checksum.
+Run the same command again to update by hand. To install a specific release or
+the latest Beta build instead, set a variable in front of `sh`:
+
+```sh
+curl -fsSL https://github.com/Mark7888/two-place-paste/releases/latest/download/install-macos.sh | TPP_VERSION=0.1.0 sh
+curl -fsSL https://github.com/Mark7888/two-place-paste/releases/latest/download/install-macos.sh | TPP_CHANNEL=beta sh
+```
+
+**Windows.** Download and run `TwoPlacePaste-Setup.exe`, a per-user installer
+that needs no administrator rights.
+
+**From source:**
 
 ```sh
 cd desktop/ui && npm ci && npm run build   # builds into ../internal/localui/dist
@@ -143,7 +167,8 @@ it is never stored in a cookie or in `localStorage`. The listener is
 `127.0.0.1` only, and the `Origin` header is checked on every request including
 the WebSocket upgrade.
 
-The tray menu has **Sync now**, **Open TwoPlacePaste** and **Quit**. If the port
+The tray menu has **Sync now**, **Open TwoPlacePaste**, **Check for updates…**
+and **Quit**. If the port
 is already taken, the service does not fail silently: the tray shows the bind
 error instead and offers to open the settings file, which is where the port is
 overridden.

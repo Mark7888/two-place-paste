@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { api, type SettingsView, type Status } from "../api";
+import { api, type ServiceEvent, type SettingsView, type Status } from "../api";
 import { Icon } from "../components/Icon";
 import { Modal } from "../components/Modal";
+import { UpdatesSection } from "./UpdatesSection";
 
 /**
  * Settings.
@@ -15,9 +16,11 @@ import { Modal } from "../components/Modal";
 export function SettingsPanel({
   status,
   onChanged,
+  lastEvent,
 }: {
   status: Status | null;
   onChanged: () => void;
+  lastEvent: ServiceEvent | null;
 }) {
   const [settings, setSettings] = useState<SettingsView | null>(null);
   const [port, setPort] = useState("");
@@ -40,7 +43,14 @@ export function SettingsPanel({
     })();
   }, []);
 
-  const patch = async (body: Parameters<typeof api.updateSettings>[0]) => {
+  // Opened from the tray's "Check for updates…": bring that section into view.
+  useEffect(() => {
+    if (settings && window.location.hash === "#updates") {
+      document.getElementById("updates")?.scrollIntoView();
+    }
+  }, [settings]);
+
+  const patch = async (body: Parameters<typeof api.updateSettings>[0]): Promise<boolean> => {
     setError("");
     setNotice("");
     try {
@@ -49,8 +59,10 @@ export function SettingsPanel({
       setPort(s.port ? String(s.port) : "");
       setName(s.device_name);
       setNotice(s.restart_required ? "Saved. The port changes at the next launch." : "Saved.");
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      return false;
     }
   };
 
@@ -96,7 +108,7 @@ export function SettingsPanel({
   return (
     <>
       <h1>Settings</h1>
-      <p className="lede">This installation, and the five things you can change about it.</p>
+      <p className="lede">This installation, and what you can change about it.</p>
 
       {error ? (
         <div className="notice error">
@@ -225,6 +237,8 @@ export function SettingsPanel({
           ) : null}
         </div>
       </section>
+
+      <UpdatesSection settings={settings} onPatch={patch} lastEvent={lastEvent} />
 
       <section className="group">
         <h2>Group</h2>
