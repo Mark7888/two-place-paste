@@ -100,6 +100,13 @@ func run(logger *slog.Logger) error {
 	if settings.DeviceName == "" {
 		settings.DeviceName = defaultDeviceName()
 	}
+	// A Beta build someone installed has not been told a channel yet; left at
+	// the Stable default, its updater would offer the older release instead of
+	// the next Beta build, and auto-update would never move it on. It follows
+	// the channel it came from until the user picks one.
+	if settings.UpdateChannel == "" && buildinfo.Channel == config.ChannelBeta {
+		settings.UpdateChannel = config.ChannelBeta
+	}
 	settingsPath, err := config.Path(configDir)
 	if err != nil {
 		return fmt.Errorf("locate the settings file: %w", err)

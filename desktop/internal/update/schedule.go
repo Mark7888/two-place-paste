@@ -103,7 +103,8 @@ func (m *Manager) scheduled(ctx context.Context) {
 		return
 	}
 	if m.opts.Idle != nil && !m.opts.Idle() {
-		m.opts.Logger.Info("an update is ready; waiting until the machine is idle to restart")
+		// Debug: this repeats every IdleRetry for as long as someone is busy.
+		m.opts.Logger.Debug("an update is ready; waiting until the machine is idle to restart")
 		return
 	}
 	if _, err := m.Install(ctx, localui.InstallRequest{}); err != nil {

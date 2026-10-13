@@ -127,6 +127,11 @@ type Manager struct {
 
 	// token is what is known about the Nightly token, never the token.
 	token tokenState
+
+	// notReady is the applier's last answer to Ready. Asking it means creating
+	// a file in the install folder, so the status the UI polls reads this, and
+	// only an install asks again.
+	notReady error
 }
 
 // candidate is an offered build and how to fetch it.
@@ -209,6 +214,7 @@ func New(opts Options) (*Manager, error) {
 	}
 	m.load()
 	m.loadTokenState()
+	m.notReady = opts.Applier.Ready()
 	return m, nil
 }
 
@@ -272,8 +278,8 @@ func (m *Manager) readyLocked() error {
 	if m.asset == "" {
 		return errors.New("no builds are published for this platform")
 	}
-	if err := m.opts.Applier.Ready(); err != nil {
-		return fmt.Errorf("%w", err)
+	if m.notReady != nil {
+		return fmt.Errorf("%w", m.notReady)
 	}
 	return nil
 }
@@ -292,10 +298,14 @@ func (m *Manager) Check(ctx context.Context) (localui.UpdateView, error) {
 	m.mu.Unlock()
 	m.changed()
 
+	// A check is rare enough to re-ask the applier too, so a folder that was
+	// made writable shows up without a restart.
+	notReady := m.opts.Applier.Ready()
 	cand, err := m.find(ctx, prefs)
 
 	m.mu.Lock()
 	m.busy = false
+	m.notReady = notReady
 	m.lastChecked = m.opts.Now()
 	switch {
 	case errors.Is(err, ErrNoRelease):
@@ -438,6 +448,8 @@ func (m *Manager) beginInstallLocked(req localui.InstallRequest) (*candidate, er
 	case m.opts.Quit == nil:
 		return nil, localui.Errorf(http.StatusNotImplemented, nil, "this process cannot restart itself")
 	}
+	// Asked afresh: the folder may have changed since the last answer.
+	m.notReady = m.opts.Applier.Ready()
 	if err := m.readyLocked(); err != nil {
 		return nil, localui.Errorf(http.StatusConflict, err, "%v", err)
 	}
