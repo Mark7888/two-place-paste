@@ -47,3 +47,6 @@ jobs:
 
       - name: Test publish-beta.sh
         run: scripts/publish-beta_test.sh
+
+      - name: Test ghcr-cleanup.sh
+        run: scripts/ghcr-cleanup_test.sh

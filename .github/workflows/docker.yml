@@ -1,0 +1,187 @@
+# Server image: deploy/Dockerfile, built for linux/amd64 and linux/arm64 and
+# pushed to the GitHub Container Registry as
+#
+#   ghcr.io/<owner>/two-place-paste-server
+#
+# It runs on the same events the desktop build does — a push to the default
+# branch, a pull request, and a release tag (release.yml calls it) — and never
+# on a push to any other branch. The tags follow the version and channel
+# scripts/version.sh computes (docs/plans/versioning-releases-and-updates.md §1):
+#
+#   release tag vX.Y.Z        → :X.Y.Z  :X.Y  :X  :latest  :sha-<7>
+#   release tag vX.Y.Z-pre    → :X.Y.Z-pre                 :sha-<7>
+#   push to the default branch→ :beta                      :sha-<7>
+#   pull request              → :sha-<7> of the PR's head commit
+#
+# Version tags are kept forever. An image whose only tags are :sha-* is deleted
+# a week after it was built (docker-cleanup.yml).
+#
+# A pull request from a fork has no token that can write packages, so it builds
+# the image as a check and pushes nothing.
+name: Docker
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "server/**"
+      - "pkg/tppclient/**"
+      - "go.work"
+      - "go.work.sum"
+      - "deploy/Dockerfile"
+      - ".github/workflows/docker.yml"
+  pull_request:
+    paths:
+      - "server/**"
+      - "pkg/tppclient/**"
+      - "go.work"
+      - "go.work.sum"
+      - "deploy/Dockerfile"
+      - ".github/workflows/docker.yml"
+  workflow_dispatch:
+  # release.yml builds a release by calling this workflow from a tag push.
+  workflow_call:
+    inputs:
+      stamp:
+        description: The build stamp to use instead of the current time.
+        type: string
+        required: false
+        default: ""
+
+# A newer push to a pull request makes the older run pointless, so it is
+# cancelled. A default-branch run is never cancelled mid-push: :beta must not
+# be left pointing at an older image than the one a later run already pushed.
+concurrency:
+  group: docker-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      channel: ${{ steps.version.outputs.channel }}
+      commit: ${{ steps.version.outputs.commit }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Compute the version
+        id: version
+        run: scripts/version.sh
+        env:
+          TPP_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # A pull_request run builds a merge commit; the image is named after
+          # the PR's head commit, as the desktop build is.
+          TPP_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TPP_STAMP: ${{ inputs.stamp }}
+
+  image:
+    name: Image
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      CHANNEL: ${{ needs.version.outputs.channel }}
+      COMMIT: ${{ needs.version.outputs.commit }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # Registry paths must be lower case; the owner's name need not be.
+      # Pushing needs a token that can write packages, which a fork's pull
+      # request does not get.
+      - name: Name the image
+        id: image
+        run: |
+          set -euo pipefail
+          echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/two-place-paste-server" >>"$GITHUB_OUTPUT"
+          echo "short=${COMMIT:0:7}" >>"$GITHUB_OUTPUT"
+          if [ "$EVENT" = pull_request ] && [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ]; then
+            echo "::notice::pull request from a fork; building the image without pushing it"
+            echo "push=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "push=true" >>"$GITHUB_OUTPUT"
+          fi
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+
+      # Tags are set from the version job's channel rather than from the git
+      # ref, so the image agrees with the desktop and Android builds of the
+      # same run. :latest and the X.Y / X tags move only for a full release,
+      # never for a pre-release.
+      - name: Compute the tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}},value=${{ env.VERSION }},enable=${{ env.CHANNEL == 'stable' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }},enable=${{ env.CHANNEL == 'stable' && env.PRERELEASE == 'false' }}
+            type=semver,pattern={{major}},value=${{ env.VERSION }},enable=${{ env.CHANNEL == 'stable' && env.PRERELEASE == 'false' }}
+            type=raw,value=latest,enable=${{ env.CHANNEL == 'stable' && env.PRERELEASE == 'false' }}
+            type=raw,value=beta,enable=${{ env.CHANNEL == 'beta' }}
+            type=raw,value=sha-${{ steps.image.outputs.short }}
+          labels: |
+            org.opencontainers.image.title=TwoPlacePaste server
+            org.opencontainers.image.description=The TwoPlacePaste relay server.
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ env.COMMIT }}
+        env:
+          # The registry's package page reads the description from the
+          # multi-platform index, not from the per-platform images.
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+
+      # The runtime stage's one RUN (adding the tpp user) executes for arm64
+      # too, which needs emulation; the Go build itself cross-compiles.
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the GitHub Container Registry
+        if: steps.image.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # No provenance attestation: it shows up in the registry as an extra
+      # "unknown/unknown" platform on every image.
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ steps.image.outputs.push == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          provenance: false
+          cache-from: type=gha,scope=server-image
+          cache-to: type=gha,scope=server-image,mode=max
+
+      - name: Summary
+        if: steps.image.outputs.push == 'true'
+        run: |
+          {
+            echo "### Server image $VERSION"
+            echo
+            echo '```'
+            echo "$TAGS"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
