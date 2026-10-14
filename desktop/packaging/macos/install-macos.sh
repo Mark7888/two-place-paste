@@ -67,7 +67,7 @@ fetch() {
 	curl -fsSL --proto '=https' --tlsv1.2 -o "$2" "$1" || die "could not download $1"
 }
 
-say "Downloading $asset…"
+say "Downloading ${asset}..."
 fetch "$base/$asset" "$tmp/$asset"
 fetch "$base/manifest-desktop.json" "$tmp/manifest.json"
 
@@ -104,7 +104,7 @@ target="$dest/$APP_NAME"
 # The service holds the localhost port; quit it so the new one can bind.
 # SIGTERM is a clean shutdown for it.
 if pkill -x tppdesktop 2>/dev/null; then
-	say "Quitting the running TwoPlacePaste…"
+	say "Quitting the running TwoPlacePaste..."
 	n=0
 	while pgrep -x tppdesktop >/dev/null && [ $n -lt 50 ]; do
 		sleep 0.2
