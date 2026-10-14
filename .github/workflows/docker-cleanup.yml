@@ -1,0 +1,58 @@
+# Server image retention: deletes the images whose only tags are :sha-* once
+# they are a week old, and the untagged images nothing kept refers to
+# (scripts/ghcr-cleanup.sh). Version tags, :latest and :beta are never deleted.
+#
+# Run it by hand with "dry run" to see what it would delete.
+name: Docker cleanup
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: List what would be deleted, and delete nothing.
+        type: boolean
+        default: true
+      keep_days:
+        description: Days to keep sha-only and untagged images.
+        type: string
+        default: "7"
+
+# Two cleanups at once would race each other over the same versions.
+concurrency:
+  group: docker-cleanup
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    name: Clean up
+    # A fork has no package of its own to clean.
+    if: github.repository == 'Mark7888/two-place-paste'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      # Reading an image's index goes through the registry; logging in makes
+      # that work while the package is still private, too.
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Delete expired images
+        run: scripts/ghcr-cleanup.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          PACKAGE: two-place-paste-server
+          # A scheduled run has no inputs: it deletes, and keeps seven days.
+          KEEP_DAYS: ${{ inputs.keep_days || '7' }}
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}

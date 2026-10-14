@@ -8,7 +8,13 @@
 #
 # docker-compose.yml in this directory does exactly that.
 
-FROM golang:1.26-alpine AS build
+# The build stage runs on the builder's own platform and cross-compiles, so a
+# multi-platform build (docker.yml: linux/amd64 and linux/arm64) compiles Go
+# natively instead of under emulation. A plain `docker build` sets both
+# platforms to the host's and builds what it always did.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 
 # Dependency layer: the module files change far less often than the code, so a
@@ -24,7 +30,7 @@ RUN cd server && GOWORK=off go mod download
 COPY . .
 # CGO is off: the result is a static binary that runs on the scratch-like
 # runtime below without a libc.
-RUN CGO_ENABLED=0 go build -C server -trimpath -ldflags="-s -w" -o /out/tpp ./cmd/tpp
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -C server -trimpath -ldflags="-s -w" -o /out/tpp ./cmd/tpp
 
 FROM alpine:3.21
 # wget comes from busybox and is what the compose healthcheck calls; there is

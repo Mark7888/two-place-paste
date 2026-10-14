@@ -3,10 +3,10 @@
 #
 #   git tag v0.1.0 && git push origin v0.1.0
 #
-# The builds are the ordinary desktop and Android workflows, called rather than
-# copied, with one stamp so every file of the release carries one version. A
-# tag with a pre-release suffix (v0.2.0-rc.1) makes a pre-release, which
-# "latest" — and so the Stable channel — never points at.
+# The builds are the ordinary desktop, Android and Docker workflows, called
+# rather than copied, with one stamp so every file of the release carries one
+# version. A tag with a pre-release suffix (v0.2.0-rc.1) makes a pre-release,
+# which "latest" — and so the Stable channel — never points at.
 #
 # Asset names are the same in every release, so the newest is always at
 #   https://github.com/Mark7888/two-place-paste/releases/latest/download/<name>
@@ -87,6 +87,18 @@ jobs:
     with:
       stamp: ${{ needs.version.outputs.stamp }}
     secrets: inherit
+
+  # The server image: :X.Y.Z, and for a full release :X.Y, :X and :latest too.
+  # It is pushed to the container registry, not attached to the release.
+  docker:
+    name: Docker
+    needs: version
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker.yml
+    with:
+      stamp: ${{ needs.version.outputs.stamp }}
 
   publish:
     name: Publish

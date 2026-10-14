@@ -41,6 +41,94 @@ Full design: [`docs/SPECS.md`](docs/SPECS.md). Crypto profile: `spec/crypto.md`.
 You need one host with Docker and a DNS name pointing at it. TLS is **not**
 terminated by the server — put a reverse proxy in front of it.
 
+### With the published image
+
+The server is published to the GitHub Container Registry as
+`ghcr.io/mark7888/two-place-paste-server`, for `linux/amd64` and `linux/arm64`.
+No clone and no build are needed — only a `docker-compose.yml` and a `.env`:
+
+```sh
+mkdir tpp && cd tpp
+curl -fsSL -o .env https://raw.githubusercontent.com/Mark7888/two-place-paste/master/deploy/.env.example
+$EDITOR .env                  # set TPP_PUBLIC_BASE_URL and ADMIN_PASSWORD
+$EDITOR docker-compose.yml    # paste the file below
+
+docker compose up -d
+curl -fsS http://127.0.0.1:8080/healthz      # -> ok
+```
+
+```yaml
+# docker-compose.yml
+name: tpp
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # The settings of deploy/redis.conf. volatile-lru is not optional:
+    # allkeys-lru would silently evict group records and destroy pairings.
+    command: >-
+      redis-server --appendonly yes --appendfsync everysec
+      --maxmemory 512mb --maxmemory-policy volatile-lru --protected-mode no
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  server:
+    image: ghcr.io/mark7888/two-place-paste-server:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TPP_REDIS_ADDR: redis:6379
+      TPP_BLOB_ROOT: /var/lib/tpp/blobs
+      TPP_HTTP_ADDR: ":8080"
+    ports:
+      # Loopback only: the reverse proxy is the one thing that should reach it.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - blob-data:/var/lib/tpp/blobs
+    user: "10001:10001"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  redis-data:
+  blob-data:
+```
+
+The image tags:
+
+| Tag | What it is |
+|---|---|
+| `latest` | The newest full release. |
+| `1.2.3`, `1.2`, `1` | A release, and the newest release of that minor and major version. Kept forever; pin one of these to upgrade only when you choose to. |
+| `1.3.0-rc.1` | A pre-release. Kept forever, never `latest`. |
+| `beta` | The newest build of the default branch — the server side of the apps' Beta channel. |
+| `sha-abc1234` | The build of one commit (a default-branch push, a pull request or a release). Deleted a week after it was built. |
+
+Upgrading is `docker compose pull && docker compose up -d`.
+
+### From source
+
 ```sh
 git clone https://github.com/Mark7888/two-place-paste
 cd two-place-paste/deploy
@@ -52,9 +140,12 @@ docker compose up -d --build
 curl -fsS http://127.0.0.1:8080/healthz      # -> ok
 ```
 
-That starts two containers: the server (built from `deploy/Dockerfile`) and
-Redis (`redis:7-alpine` with `deploy/redis.conf`). The published port is bound
-to `127.0.0.1` on purpose — only the reverse proxy should reach it.
+`deploy/docker-compose.yml` builds the server from `deploy/Dockerfile` rather
+than pulling it, and reads Redis's settings from `deploy/redis.conf`.
+
+Either way, that starts two containers: the server and Redis
+(`redis:7-alpine`). The published port is bound to `127.0.0.1` on purpose —
+only the reverse proxy should reach it.
 
 ### Required configuration
 
@@ -107,7 +198,7 @@ server.
 
 ```sh
 docker compose logs -f server                       # JSON, one object per line
-docker compose pull && docker compose up -d --build # upgrade, rolling restart
+docker compose pull && docker compose up -d         # upgrade (add --build from source)
 docker compose exec server tpp gc --verify          # cross-check blobs; deletes nothing
 ```
 
