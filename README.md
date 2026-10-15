@@ -215,7 +215,7 @@ server.
 |---|---|
 | `/healthz` | Liveness. Returns `ok`. |
 | `/ws` | The client WebSocket. |
-| `/admin/` | Admin UI (login, creation tokens: generate and revoke). |
+| `/admin/` | Admin UI: a dashboard of storage and group usage, and creation tokens (generate and revoke). |
 | `/<token>` | Group creation. `GET` returns 404 by design; only a client's `POST` spends the token. |
 
 ### Operating it
@@ -301,7 +301,8 @@ backend is in use.
 ### Create a group
 
 1. Sign in at `https://tpp.example.com/admin/` with `ADMIN_PASSWORD`.
-2. Generate a named creation token. The screen shows its URL and a QR code.
+2. Open **Tokens** and generate a named creation token. The screen shows its URL
+   and a QR code.
 3. On your first device, open the desktop app → **Pairing** → *Create a group*,
    paste the creation URL and press **Create**.
 
@@ -309,6 +310,10 @@ The device generates the group key locally and wraps it to itself; the relay
 only ever receives the wrapped form. One token creates exactly one group — a
 second attempt gets `409`. An unused token can be revoked from the admin screen,
 after which its URL no longer works.
+
+The admin **Dashboard** shows blob storage against its limits, evictions in the
+last day, and per group the devices, last activity, entry count and storage
+used — sizes and counts only, never content.
 
 ### Add a device
 

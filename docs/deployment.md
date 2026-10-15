@@ -125,7 +125,8 @@ live credential.
 ## 4. Handing out a group
 
 1. Sign in at `https://tpp.example.com/admin/`.
-2. Generate a named creation token. The screen shows its URL and a QR code.
+2. Open **Tokens** and generate a named creation token. The screen shows its URL
+   and a QR code.
 3. Send the URL — or let the user scan the code — and they select **New
    Group** in a client.
 
@@ -139,8 +140,15 @@ from the same screen. Its URL then returns 404 like any unknown token. A used
 token cannot be revoked — its group already exists; remove that group's devices
 by revoking them from a client.
 
-The admin screen lists tokens and nothing else. There is no content access to
-add later — the server holds only ciphertext (SPEC §2.3).
+The **Dashboard** is the admin landing page. It shows blob storage used against
+`TPP_BLOB_MAX_TOTAL_BYTES`, evictions in the last 24 hours, the last sweep and
+whether it failed, and one row per group — devices, last activity, live
+entries, the oldest entry's age and blob storage against the group limit,
+heaviest first. If a part cannot be read (Redis down, say) it says which, and
+renders the rest.
+
+The admin screens show tokens, sizes and counts, and nothing else. There is no
+content access to add later — the server holds only ciphertext (SPEC §2.3).
 
 ## 5. Redis settings that are not tuning
 

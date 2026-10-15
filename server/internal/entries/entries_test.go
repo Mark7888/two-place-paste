@@ -391,3 +391,36 @@ func TestStoreExistsIgnoresExpiredEntries(t *testing.T) {
 		}
 	})
 }
+
+func TestStoreGroupStats(t *testing.T) {
+	t.Parallel()
+
+	forEachStore(t, func(t *testing.T, s entries.Store) {
+		ctx := context.Background()
+		gid := newGroupID(t)
+
+		empty, err := s.GroupStats(ctx, gid)
+		if err != nil || empty.Entries != 0 || !empty.Oldest.IsZero() {
+			t.Fatalf("GroupStats(empty) = %+v, %v; want zero", empty, err)
+		}
+
+		now := time.Now().UTC().Truncate(time.Millisecond)
+		first := meta(gid, gid+"-1", now.Add(-2*time.Hour))
+		if err := s.Put(ctx, first, []byte("body")); err != nil {
+			t.Fatalf("Put() error = %v", err)
+		}
+		second := meta(gid, gid+"-2", now)
+		second.StorageRef = "2099010100/" + second.ID + ".bin"
+		if err := s.Put(ctx, second, nil); err != nil {
+			t.Fatalf("Put() error = %v", err)
+		}
+
+		got, err := s.GroupStats(ctx, gid)
+		if err != nil {
+			t.Fatalf("GroupStats() error = %v", err)
+		}
+		if got.Entries != 2 || !got.Oldest.Equal(first.CreatedAt) {
+			t.Errorf("GroupStats() = %+v, want 2 entries, oldest %v", got, first.CreatedAt)
+		}
+	})
+}

@@ -233,6 +233,26 @@ func (s *RedisStore) EntryRefs(ctx context.Context) (map[string]string, error) {
 	return refs, nil
 }
 
+// GroupStats implements Store. The group index is scored by creation time and
+// pruned only on writes, so it is read from the TTL cutoff onwards: an id
+// whose entry has expired is not counted.
+func (s *RedisStore) GroupStats(ctx context.Context, groupID string) (GroupStats, error) {
+	minScore := "(" + strconv.FormatInt(s.now().Add(-entryTTLBound).UnixMilli(), 10)
+	pipe := s.rdb.Pipeline()
+	count := pipe.ZCount(ctx, groupEntriesKey(groupID), minScore, "+inf")
+	oldest := pipe.ZRangeByScoreWithScores(ctx, groupEntriesKey(groupID), &redis.ZRangeBy{
+		Min: minScore, Max: "+inf", Count: 1,
+	})
+	if _, err := pipe.Exec(ctx); err != nil {
+		return GroupStats{}, fmt.Errorf("read entry stats of group %s: %w", groupID, err)
+	}
+	stats := GroupStats{Entries: count.Val()}
+	if z := oldest.Val(); len(z) > 0 {
+		stats.Oldest = time.UnixMilli(int64(z[0].Score)).UTC()
+	}
+	return stats, nil
+}
+
 // BlobEntries implements Store.
 func (s *RedisStore) BlobEntries(ctx context.Context) ([]Meta, error) {
 	var metas []Meta

@@ -368,3 +368,34 @@ func TestReserveConcurrent(t *testing.T) {
 		t.Errorf("usage after the race = %d bytes / %d entries; want ≤ %d and consistent", u.Bytes, u.Entries, limit)
 	}
 }
+
+func TestEvictionStats(t *testing.T) {
+	t.Parallel()
+	forEachLedger(t, quota.Limits{GroupBytes: 100}, func(t *testing.T, l quota.Ledger, clk *clock) {
+		ctx := context.Background()
+		put(t, l, "a", "g", 60, 0)
+		put(t, l, "b", "g", 30, time.Minute)
+		put(t, l, "c", "g", 70, 2*time.Minute) // evicts a (60)
+
+		clk.set(t0.Add(3 * time.Hour))
+		put(t, l, "d", "g", 90, 3*time.Hour) // evicts b (30) and c (70)
+
+		ev, err := l.Evictions(ctx)
+		if err != nil {
+			t.Fatalf("Evictions() error = %v", err)
+		}
+		if ev.Count != 3 || ev.Bytes != 160 {
+			t.Errorf("Evictions() = %+v, want 3 entries / 160 bytes", ev)
+		}
+
+		// A day later, the first hour has left the window.
+		clk.set(t0.Add(25 * time.Hour))
+		ev, err = l.Evictions(ctx)
+		if err != nil {
+			t.Fatalf("Evictions() error = %v", err)
+		}
+		if ev.Count != 2 || ev.Bytes != 100 {
+			t.Errorf("Evictions() a day later = %+v, want 2 entries / 100 bytes", ev)
+		}
+	})
+}

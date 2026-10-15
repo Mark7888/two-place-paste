@@ -1,11 +1,13 @@
-// Package admin is the operator-facing surface: the login-protected token
-// screen and the creation-token endpoint clients POST to (SPEC §3.1, §4.4).
+// Package admin is the operator-facing surface: the login-protected dashboard
+// and token screen, and the creation-token endpoint clients POST to
+// (SPEC §3.1, §4.4).
 //
-// The whole UI is one screen listing creation tokens, a button that mints
-// another and one that revokes a token nobody has used yet. That is not minimalism for its own sake: the server holds only
-// ciphertext, so there is nothing else an admin screen could truthfully show,
-// and adding content access or statistics later would require the relay to
-// learn something SPEC §2.3 says it must not.
+// The UI is two screens. The dashboard shows what the relay can know without
+// knowing any content: byte counts, entry counts, device counts and the state
+// of its storage. The token screen lists creation tokens, mints new ones and
+// revokes ones nobody has used yet. There is no content access, and none can
+// be added: the server holds only ciphertext (SPEC §2.3), and nothing here
+// shows an entry id, a content type or a filename.
 //
 // Two routes are public and both are attack surface:
 //
@@ -25,6 +27,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Mark7888/two-place-paste/server/internal/blob"
+	"github.com/Mark7888/two-place-paste/server/internal/entries"
+	"github.com/Mark7888/two-place-paste/server/internal/quota"
 	"github.com/Mark7888/two-place-paste/server/internal/store"
 )
 
@@ -43,6 +48,10 @@ type Store interface {
 
 	// RevokeToken deletes an unused token so its URL creates nothing.
 	RevokeToken(ctx context.Context, value string) error
+
+	// ListDevices returns a group's roster. The dashboard counts it and
+	// reads its last-seen times; it never shows a key.
+	ListDevices(ctx context.Context, groupID string) ([]store.Device, error)
 
 	// CreateGroup consumes a token and registers the creating device as one
 	// atomic operation (SPEC §3.1 steps 4-5).
@@ -103,6 +112,47 @@ type Options struct {
 
 	// Now supplies UTC timestamps; tests replace it.
 	Now func() time.Time
+
+	// Dashboard is what the dashboard reads beyond the store. Its zero value
+	// shows groups and devices only.
+	Dashboard Dashboard
+}
+
+// Dashboard wires the dashboard to the storage subsystems. Every field is
+// optional; a missing one hides its section.
+type Dashboard struct {
+	// Ledger reports blob storage usage and evictions.
+	Ledger StorageLedger
+
+	// Entries reports per-group entry counts.
+	Entries EntryStats
+
+	// SweepStatus reports the most recent blob sweep.
+	SweepStatus func() blob.SweepStatus
+
+	// Backend and Location describe where blobs live, e.g. "s3" and
+	// "https://s3.example.com/bucket/". They are shown as given and must
+	// hold no secret.
+	Backend  string
+	Location string
+
+	// The configured limits, in bytes. Zero total or group is unlimited.
+	TotalLimit     int64
+	GroupLimit     int64
+	EntryMaxBytes  int64
+	InlineMaxBytes int64
+}
+
+// StorageLedger is the quota.Ledger subset the dashboard reads.
+type StorageLedger interface {
+	Usage(ctx context.Context) (quota.Usage, error)
+	GroupUsage(ctx context.Context, groupID string) (quota.Usage, error)
+	Evictions(ctx context.Context) (quota.Evictions, error)
+}
+
+// EntryStats is the entries.Store subset the dashboard reads.
+type EntryStats interface {
+	GroupStats(ctx context.Context, groupID string) (entries.GroupStats, error)
 }
 
 // ErrHashedPasswordUnsupported is returned by New when ADMIN_PASSWORD_HASH is
@@ -115,9 +165,10 @@ var ErrHashedPasswordUnsupported = errors.New("admin: ADMIN_PASSWORD_HASH is not
 
 // Server serves the admin UI and the creation-token endpoint.
 type Server struct {
-	store  Store
-	logger *slog.Logger
-	now    func() time.Time
+	store     Store
+	logger    *slog.Logger
+	now       func() time.Time
+	dashboard Dashboard
 
 	baseURL   string
 	password  []byte
@@ -174,6 +225,7 @@ func New(st Store, opts Options) (*Server, error) {
 
 	return &Server{
 		store:         st,
+		dashboard:     opts.Dashboard,
 		logger:        logger,
 		now:           now,
 		baseURL:       base,

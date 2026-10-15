@@ -15,8 +15,14 @@ type Memory struct {
 	limits Limits
 	now    func() time.Time
 
-	mu      sync.Mutex
-	entries map[string]memEntry
+	mu        sync.Mutex
+	entries   map[string]memEntry
+	evictions []memEviction
+}
+
+type memEviction struct {
+	at   time.Time
+	size int64
 }
 
 type memEntry struct {
@@ -99,8 +105,10 @@ func (m *Memory) Reserve(_ context.Context, r Reservation) ([]Victim, error) {
 		}
 	}
 
+	now := m.now()
 	for _, v := range victims {
 		delete(m.entries, v.EntryID)
+		m.evictions = append(m.evictions, memEviction{at: now, size: v.Size})
 	}
 	m.entries[r.EntryID] = memEntry{Reservation: r, pending: true}
 	return victims, nil
@@ -167,6 +175,21 @@ func (m *Memory) GroupUsage(_ context.Context, groupID string) (Usage, error) {
 		}
 	}
 	return u, nil
+}
+
+// Evictions implements Ledger.
+func (m *Memory) Evictions(context.Context) (Evictions, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	since := m.now().Add(-evictionWindowHours * time.Hour)
+	var ev Evictions
+	for _, e := range m.evictions {
+		if e.at.After(since) {
+			ev.Count++
+			ev.Bytes += e.size
+		}
+	}
+	return ev, nil
 }
 
 // Rebuild implements Ledger.

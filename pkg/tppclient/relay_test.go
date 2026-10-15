@@ -206,7 +206,7 @@ func (r *relay) creationURL(t *testing.T, name string) string {
 	// The token screen renders each unused token's QR image at a URL that
 	// carries the token value, which is the only place the value appears in
 	// the markup.
-	body = r.get(t, c, "/admin/")
+	body = r.get(t, c, "/admin/tokens")
 	value := between(t, body, "/admin/tokens/", "/qr.png")
 	return r.baseURL + "/" + value
 }

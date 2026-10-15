@@ -88,6 +88,15 @@ type Usage struct {
 	Entries int64
 }
 
+// Evictions counts entries evicted over the reporting window.
+type Evictions struct {
+	Count int64
+	Bytes int64
+}
+
+// evictionWindowHours is the reporting window of Ledger.Evictions.
+const evictionWindowHours = 24
+
 // Ledger is the accounting store. Implementations must be safe for
 // concurrent use, and Reserve must be atomic: two uploads racing for the last
 // free bytes cannot both win.
@@ -118,6 +127,11 @@ type Ledger interface {
 
 	// GroupUsage reports one group's totals.
 	GroupUsage(ctx context.Context, groupID string) (Usage, error)
+
+	// Evictions reports how many entries were evicted in about the last
+	// day, and their bytes. It is for the admin dashboard: frequent evictions
+	// mean the limits are too tight for how the relay is used.
+	Evictions(ctx context.Context) (Evictions, error)
 
 	// Rebuild replaces the whole ledger with the given entries, all
 	// committed. It backs `tpp gc --rebuild-accounting`, for use after Redis

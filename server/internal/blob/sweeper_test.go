@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,5 +98,15 @@ func TestSweeperRunsTasksAfterEachSweep(t *testing.T) {
 	}
 	if !tasked.Equal(swept) {
 		t.Errorf("task ran at %v, want the sweep's instant %v", tasked, swept)
+	}
+
+	// The failing task is what the dashboard reports.
+	var st blob.SweepStatus
+	deadline := time.Now().Add(5 * time.Second)
+	for st = sweeper.Status(); st.At.IsZero() && time.Now().Before(deadline); st = sweeper.Status() {
+		time.Sleep(time.Millisecond)
+	}
+	if !st.At.Equal(swept) || st.Err == nil || !strings.Contains(st.Err.Error(), "first: failing task") {
+		t.Errorf("Status() = %+v, want the sweep at %v with the failing task's error", st, swept)
 	}
 }

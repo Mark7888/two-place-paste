@@ -1,0 +1,119 @@
+{{define "content"}}
+{{with .Dashboard}}
+<h1>Dashboard</h1>
+<p class="lede">
+  What the relay can see without seeing anything: sizes, counts and the state of
+  its storage. Entry contents, types and filenames are encrypted and never reach
+  this server.
+</p>
+
+{{range .Problems}}<p class="notice error" role="alert">{{.}}</p>{{end}}
+
+<div class="stats">
+  {{with .Storage}}
+  <section class="card stat wide" aria-labelledby="stat-storage">
+    <h2 id="stat-storage">Blob storage</h2>
+    <p class="figure">{{.Used}} <span class="muted">of {{.Limit}}</span></p>
+    {{if gt .LimitBytes 0}}
+    <meter min="0" max="{{.LimitBytes}}" value="{{.UsedBytes}}" high="{{.HighBytes}}" optimum="0"
+           aria-label="Blob storage used">{{.Percent}}%</meter>
+    {{end}}
+    <p class="sub">{{.Entries}} stored {{if eq .Entries 1}}entry{{else}}entries{{end}}</p>
+  </section>
+  {{end}}
+  <section class="card stat" aria-labelledby="stat-groups">
+    <h2 id="stat-groups">Groups</h2>
+    <p class="figure">{{.GroupCount}}</p>
+    <p class="sub">{{.UnusedTokens}} unused {{if eq .UnusedTokens 1}}token{{else}}tokens{{end}}</p>
+  </section>
+  <section class="card stat" aria-labelledby="stat-devices">
+    <h2 id="stat-devices">Devices</h2>
+    <p class="figure">{{.DeviceCount}}</p>
+    <p class="sub">across all groups</p>
+  </section>
+  {{with .Storage}}
+  <section class="card stat" aria-labelledby="stat-evictions">
+    <h2 id="stat-evictions">Evictions, 24 h</h2>
+    <p class="figure">{{.Evictions}}</p>
+    <p class="sub">{{if gt .Evictions 0}}{{.EvictedBytes}} removed early{{else}}nothing removed early{{end}}</p>
+  </section>
+  {{end}}
+</div>
+
+<div class="section-head">
+  <h2>Groups</h2>
+  {{if .Groups}}<span class="count">heaviest first</span>{{end}}
+</div>
+
+{{if .Groups}}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Group</th>
+        <th>Devices</th>
+        <th>Last active</th>
+        <th>Entries</th>
+        <th>Oldest</th>
+        {{if .Storage}}<th>Blob storage</th>{{end}}
+      </tr>
+    </thead>
+    <tbody>
+    {{range .Groups}}
+      <tr>
+        <td class="name" data-label="Group">
+          <span class="stack">{{.Name}}<code class="muted">{{.ShortID}} · {{.Created}}</code></span>
+        </td>
+        <td data-label="Devices">{{.Devices}}</td>
+        <td data-label="Last active">{{.LastSeen}}</td>
+        <td data-label="Entries">{{.Entries}}</td>
+        <td data-label="Oldest">{{.Oldest}}</td>
+        {{if .HasUsage}}
+        <td data-label="Blob storage" class="usage">
+          <span class="stack">
+            <span>{{.Used}}{{if gt .LimitBytes 0}} <span class="muted">· {{.Percent}}%</span>{{end}}</span>
+            {{if gt .LimitBytes 0}}
+            <meter min="0" max="{{.LimitBytes}}" value="{{.UsedBytes}}" high="{{.HighBytes}}" optimum="0"
+                   aria-label="Blob storage used by {{.Name}}">{{.Percent}}%</meter>
+            {{end}}
+          </span>
+        </td>
+        {{end}}
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+{{else}}
+<p class="empty">No groups yet. <a href="/admin/tokens">Generate a creation token</a> and hand it to the first device.</p>
+{{end}}
+
+{{with .Storage}}
+<div class="section-head">
+  <h2>Storage</h2>
+</div>
+<div class="card">
+  <dl class="facts">
+    <div><dt>Backend</dt><dd>{{.Backend}}</dd></div>
+    {{if .Location}}<div><dt>Location</dt><dd><code class="wrap">{{.Location}}</code></dd></div>{{end}}
+    <div><dt>Total limit</dt><dd>{{.Limit}}</dd></div>
+    <div><dt>Per-group limit</dt><dd>{{.GroupLimit}}</dd></div>
+    <div><dt>Largest entry</dt><dd>{{.EntryMax}}</dd></div>
+    <div><dt>Kept in Redis up to</dt><dd>{{.InlineMax}}</dd></div>
+    <div>
+      <dt>Last sweep</dt>
+      <dd>
+        {{if .Swept}}
+          {{.SweepAt}}, took {{.SweepTook}}
+          {{if .SweepErr}}<span class="tag bad">failed</span>{{else}}<span class="tag good">ok</span>{{end}}
+        {{else}}
+          <span class="muted">not yet</span>
+        {{end}}
+      </dd>
+    </div>
+  </dl>
+  {{if .SweepErr}}<p class="notice error"><code class="wrap">{{.SweepErr}}</code></p>{{end}}
+</div>
+{{end}}
+{{end}}
+{{end}}

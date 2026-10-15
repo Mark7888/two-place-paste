@@ -84,13 +84,33 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--gap);
+  flex-wrap: wrap;
+  gap: 0.5rem var(--gap);
   padding: 0.7rem clamp(0.9rem, 4vw, 1.75rem);
   background: var(--card);
   border-bottom: 1px solid var(--line);
 }
 
 .bar form { margin: 0; }
+
+/* The header's screen links. It sits between the brand and the log-out
+   button, and takes the free space so the button stays at the far edge. */
+.nav {
+  display: flex;
+  gap: 0.25rem;
+  margin-right: auto;
+}
+
+.nav a {
+  padding: 0.35rem 0.65rem;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-weight: 550;
+  text-decoration: none;
+}
+
+.nav a:hover { color: var(--fg); background: var(--line-soft); }
+.nav a[aria-current="page"] { color: var(--fg); background: var(--accent-soft); }
 
 .brand {
   display: flex;
@@ -388,6 +408,8 @@ code.wrap { overflow-wrap: anywhere; word-break: break-word; }
 }
 
 .tag.used { color: var(--muted); background: var(--card-sunken); }
+.tag.good { color: var(--ok); border-color: transparent; background: var(--card-sunken); }
+.tag.bad { color: var(--error); border-color: transparent; background: var(--error-soft); }
 .tag.open { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
 
 .empty {
@@ -437,6 +459,101 @@ code.wrap { overflow-wrap: anywhere; word-break: break-word; }
 
   td.actions { justify-content: flex-end; padding-top: 0.6rem; }
   td.actions::before { margin-right: auto; }
+}
+
+/* --- dashboard ----------------------------------------------------------- */
+
+/* The summary row: a grid of equal cards that wraps to fewer columns as the
+   screen narrows, down to one. The storage card spans two where there is
+   room, because it carries a bar. */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: var(--gap);
+  margin: 0 0 1.75rem;
+}
+
+.stats .card { margin: 0; gap: 0.35rem; }
+
+@media (min-width: 40rem) {
+  .stats .wide { grid-column: span 2; }
+}
+
+.stat h2 {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.stat .figure {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat .figure .muted { font-size: 0.95rem; font-weight: 500; letter-spacing: 0; }
+.stat .sub { margin: 0; color: var(--muted); font-size: 0.85rem; }
+
+/* Usage bars are <meter>s: no inline style is needed to size them, which is
+   what the page's style-src 'self' policy requires. */
+meter {
+  width: 100%;
+  height: 0.55rem;
+  border: 0;
+  border-radius: 999px;
+  background: var(--line-soft);
+}
+
+meter::-webkit-meter-bar {
+  height: 0.55rem;
+  border: 0;
+  border-radius: 999px;
+  background: var(--line-soft);
+}
+
+meter::-webkit-meter-optimum-value,
+meter::-webkit-meter-suboptimum-value { background: var(--accent); border-radius: 999px; }
+meter::-webkit-meter-even-less-good-value { background: var(--error); border-radius: 999px; }
+meter:-moz-meter-optimum::-moz-meter-bar,
+meter:-moz-meter-sub-optimum::-moz-meter-bar { background: var(--accent); border-radius: 999px; }
+meter:-moz-meter-sub-sub-optimum::-moz-meter-bar { background: var(--error); border-radius: 999px; }
+
+/* A section that follows a listing needs the space a card's margin would
+   have given it. */
+.table-wrap + .section-head,
+.empty + .section-head { margin-top: 1.75rem; }
+
+td.usage { min-width: 10rem; }
+td.usage meter { max-width: 12rem; }
+
+/* Label/value pairs, two columns where there is room. */
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.75rem 1.5rem;
+  margin: 0;
+}
+
+.facts div { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+
+.facts dt {
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.facts dd { margin: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; }
+
+@media (max-width: 46rem) {
+  td.usage meter { max-width: none; }
+  td.usage .stack { align-items: flex-end; }
 }
 
 /* --- notices ------------------------------------------------------------- */

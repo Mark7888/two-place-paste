@@ -15,6 +15,10 @@
 <header class="bar">
   <span class="brand">TwoPlacePaste <span class="muted">admin</span></span>
   {{if .Authenticated}}
+  <nav class="nav" aria-label="Admin">
+    <a href="/admin/"{{if eq .Nav "dashboard"}} aria-current="page"{{end}}>Dashboard</a>
+    <a href="/admin/tokens"{{if eq .Nav "tokens"}} aria-current="page"{{end}}>Tokens</a>
+  </nav>
   <form method="post" action="/admin/logout">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <button type="submit" class="link">Log out</button>
@@ -27,8 +31,8 @@
 </main>
 {{if .Authenticated}}
 <footer>
-  The server relays ciphertext only. This screen can list creation tokens and
-  nothing else — there is no content access here by construction (SPEC §4.4).
+  The server relays ciphertext only. These screens show creation tokens and
+  sizes and counts — there is no content access here by construction (SPEC §4.4).
 </footer>
 {{end}}
 </body>

@@ -24,6 +24,10 @@ const (
 	// parallel tests sharing one Redis cannot see each other's totals.
 	defaultNamespace = "quota:"
 
+	// evictionStatsTTL keeps an hourly eviction counter a little past the
+	// day the dashboard reports on.
+	evictionStatsTTL = 25 * 60 * 60
+
 	// expireBatch bounds the work one script call does when forgetting
 	// expired entries, so a sweep after long downtime cannot hold Redis for
 	// long in a single call.
@@ -40,7 +44,15 @@ func (k keys) groupPrefix() string              { return k.ns + "group:" }
 func (k keys) entry(id string) string           { return k.entryPrefix() + id }
 func (k keys) groupIndex(groupID string) string { return k.groupPrefix() + groupID + ":index" }
 func (k keys) groupUsage(groupID string) string { return k.groupPrefix() + groupID + ":usage" }
-func (k keys) pattern() string                  { return k.ns + "*" }
+
+// evictions is the hourly eviction counter for the UTC hour holding t. It
+// carries a TTL: it is a statistic for the dashboard, not bookkeeping, and
+// losing one costs a number on a screen.
+func (k keys) evictions(t time.Time) string {
+	return k.ns + "evictions:" + t.UTC().Format("2006010215")
+}
+
+func (k keys) pattern() string { return k.ns + "*" }
 
 // luaHelpers is shared by every script. Like internal/store's scripts it builds
 // per-group key names from a prefix rather than receiving each in KEYS; that is
@@ -79,7 +91,7 @@ end
 //
 //	KEYS[1] quota:index      ARGV[1] entry prefix    ARGV[6] expires_at (ms)
 //	KEYS[2] quota:usage      ARGV[2] group prefix    ARGV[7] now (ms)
-//	                         ARGV[3] entry id        ARGV[8] total limit (0 = none)
+//	KEYS[3] eviction hour    ARGV[3] entry id        ARGV[8] total limit (0 = none)
 //	                         ARGV[4] group id        ARGV[9] group limit (0 = none)
 //	                         ARGV[5] size
 var reserveScript = redis.NewScript(luaHelpers + `
@@ -137,6 +149,11 @@ for _, v in ipairs(victims) do
   out[#out + 1] = v[1]
   out[#out + 1] = v[2]
   out[#out + 1] = v[3]
+  redis.call('HINCRBY', KEYS[3], 'count', 1)
+  redis.call('HINCRBY', KEYS[3], 'bytes', v[3])
+end
+if #victims > 0 then
+  redis.call('EXPIRE', KEYS[3], ` + strconv.Itoa(evictionStatsTTL) + `)
 end
 
 redis.call('HSET', P_ENTRY .. id, 'group', g, 'size', ARGV[5], 'pending', '1', 'expires_at', ARGV[6])
@@ -201,10 +218,11 @@ func (q *Redis) Reserve(ctx context.Context, r Reservation) ([]Victim, error) {
 	if err := r.validate(); err != nil {
 		return nil, err
 	}
-	reply, err := reserveScript.Run(ctx, q.rdb, []string{q.k.index(), q.k.usage()},
+	now := q.now()
+	reply, err := reserveScript.Run(ctx, q.rdb, []string{q.k.index(), q.k.usage(), q.k.evictions(now)},
 		q.k.entryPrefix(), q.k.groupPrefix(),
 		r.EntryID, r.GroupID, strconv.FormatInt(r.Size, 10),
-		ms(r.ExpiresAt), ms(q.now()),
+		ms(r.ExpiresAt), ms(now),
 		strconv.FormatInt(q.limits.TotalBytes, 10), strconv.FormatInt(q.limits.GroupBytes, 10),
 	).Slice()
 	if err != nil {
@@ -303,6 +321,29 @@ func (q *Redis) usage(ctx context.Context, bytesKey, index string) (Usage, error
 	}
 	u.Entries = countCmd.Val()
 	return u, nil
+}
+
+// Evictions implements Ledger: the sum of the hourly counters covering the
+// last day, so the window is a day to within the hour.
+func (q *Redis) Evictions(ctx context.Context) (Evictions, error) {
+	now := q.now()
+	pipe := q.rdb.Pipeline()
+	cmds := make([]*redis.MapStringStringCmd, 0, evictionWindowHours)
+	for h := range evictionWindowHours {
+		cmds = append(cmds, pipe.HGetAll(ctx, q.k.evictions(now.Add(-time.Duration(h)*time.Hour))))
+	}
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+		return Evictions{}, fmt.Errorf("read eviction counters: %w", err)
+	}
+	var ev Evictions
+	for _, cmd := range cmds {
+		fields := cmd.Val()
+		n, _ := strconv.ParseInt(fields["count"], 10, 64)
+		b, _ := strconv.ParseInt(fields["bytes"], 10, 64)
+		ev.Count += n
+		ev.Bytes += b
+	}
+	return ev, nil
 }
 
 // Rebuild implements Ledger. The deletion of the old ledger and the writing of

@@ -16,6 +16,11 @@ type pageData struct {
 	CSRF          string
 	Error         string
 	Tokens        []tokenView
+	Dashboard     *dashboardView
+
+	// Nav names the screen the header marks as current: "dashboard" or
+	// "tokens". Empty on the sign-in screen.
+	Nav string
 
 	// Centered puts the page in the middle of the viewport rather than at the
 	// top of a document column. It is for the sign-in screen, which is one
@@ -55,8 +60,8 @@ type templateSet struct {
 }
 
 func parseTemplates() (*templateSet, error) {
-	set := &templateSet{pages: make(map[string]*template.Template, 2)}
-	for _, name := range []string{"login.html", "tokens.html"} {
+	set := &templateSet{pages: make(map[string]*template.Template, 3)}
+	for _, name := range []string{"login.html", "tokens.html", "dashboard.html"} {
 		t, err := template.New(name).ParseFS(webadmin.FS, "base.html", name)
 		if err != nil {
 			return nil, fmt.Errorf("admin: parse template %s: %w", name, err)

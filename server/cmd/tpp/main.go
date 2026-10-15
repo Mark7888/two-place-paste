@@ -149,6 +149,16 @@ func serve(args []string) error {
 		Logger: logger,
 	})
 
+	// The sweeper is built here so the dashboard can read its status; it is
+	// started with the other goroutines below.
+	sweeper := blob.NewSweeper(blobs, cfg.Blob.SweepInterval, logger).
+		Also("expire storage accounting", func(ctx context.Context, now time.Time) error {
+			if _, err := ledger.Expire(ctx, now); err != nil {
+				return fmt.Errorf("expire storage accounting: %w", err)
+			}
+			return nil
+		})
+
 	wsSrv = ws.New(persistent, entrySvc, ws.Options{
 		Logger:     logger,
 		PairingTTL: config.PairingTokenTTL,
@@ -159,6 +169,17 @@ func serve(args []string) error {
 		Password:      cfg.Admin.Password,
 		PasswordHash:  cfg.Admin.PasswordHash,
 		Logger:        logger,
+		Dashboard: admin.Dashboard{
+			Ledger:         ledger,
+			Entries:        ephemeral,
+			SweepStatus:    sweeper.Status,
+			Backend:        string(cfg.Blob.Backend),
+			Location:       blobLocation(cfg, blobs),
+			TotalLimit:     cfg.Blob.MaxTotalBytes,
+			GroupLimit:     cfg.Blob.MaxGroupBytes,
+			EntryMaxBytes:  cfg.Entry.MaxBytes,
+			InlineMaxBytes: cfg.Entry.InlineMaxBytes,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("build admin server: %w", err)
@@ -185,14 +206,7 @@ func serve(args []string) error {
 		// longer than a bucket harmless (SPEC §4.5).
 		// The ledger forgets expired entries on the same schedule, so the
 		// storage limits track what the sweep reclaims.
-		blob.NewSweeper(blobs, cfg.Blob.SweepInterval, logger).
-			Also("expire storage accounting", func(ctx context.Context, now time.Time) error {
-				if _, err := ledger.Expire(ctx, now); err != nil {
-					return fmt.Errorf("expire storage accounting: %w", err)
-				}
-				return nil
-			}).
-			Run(ctx)
+		sweeper.Run(ctx)
 	}()
 
 	serveErr := make(chan error, 1)
@@ -201,7 +215,7 @@ func serve(args []string) error {
 			slog.String("addr", cfg.HTTPAddr),
 			slog.String("public_base_url", cfg.PublicBaseURL),
 			slog.String("blob_backend", string(cfg.Blob.Backend)),
-			slog.String("blob_store", fmt.Sprint(blobs)),
+			slog.String("blob_store", blobLocation(cfg, blobs)),
 			slog.Int64("entry_max_bytes", cfg.Entry.MaxBytes),
 			slog.Int64("blob_max_total_bytes", cfg.Blob.MaxTotalBytes),
 			slog.Int64("blob_max_group_bytes", cfg.Blob.MaxGroupBytes))

@@ -148,6 +148,19 @@ func (m *MemoryStore) Delete(_ context.Context, groupID, entryID string) error {
 	return nil
 }
 
+// GroupStats implements Store.
+func (m *MemoryStore) GroupStats(_ context.Context, groupID string) (GroupStats, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	metas := m.live(groupID)
+	stats := GroupStats{Entries: int64(len(metas))}
+	if len(metas) > 0 {
+		stats.Oldest = metas[len(metas)-1].CreatedAt
+	}
+	return stats, nil
+}
+
 // BlobEntries implements Store.
 func (m *MemoryStore) BlobEntries(context.Context) ([]Meta, error) {
 	m.mu.Lock()

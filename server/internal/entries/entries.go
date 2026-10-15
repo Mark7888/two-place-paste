@@ -97,6 +97,16 @@ type Meta struct {
 	StorageRef string
 }
 
+// GroupStats is what the admin dashboard knows about one group's entries.
+type GroupStats struct {
+	// Entries is the number of live entries.
+	Entries int64
+
+	// Oldest is when the oldest live entry was written; zero when there is
+	// none.
+	Oldest time.Time
+}
+
 // Inline reports whether the ciphertext is stored in Redis rather than in the
 // blob backend.
 func (m Meta) Inline() bool { return m.StorageRef == "" }
@@ -143,6 +153,11 @@ type Store interface {
 	// BlobEntries returns the metadata of every live blob-backed entry. It
 	// backs `tpp gc --rebuild-accounting` only, and scans the whole zone.
 	BlobEntries(ctx context.Context) ([]Meta, error)
+
+	// GroupStats counts a group's live entries, inline and blob alike, and
+	// reports when the oldest of them was written. It backs the admin
+	// dashboard, which shows counts and never content.
+	GroupStats(ctx context.Context, groupID string) (GroupStats, error)
 
 	// Delete removes an entry before its expiry: its record, its inline body
 	// and its place in the group's history. It does not touch the blob, which

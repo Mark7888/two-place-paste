@@ -262,13 +262,19 @@ reserving room and storing the entry costs that room for at most one lifetime.
 
 Served on the public domain. Credentials from `.env`.
 
-**Scope:** a single screen listing creation tokens — name, created date, whether used,
-and the resulting group if used. Token generation, and revocation of a token that has
-not been used yet (its URL then returns 404, like any unknown token). A used token
-cannot be revoked: its group already exists, and is removed by revoking its devices.
-Nothing else.
+**Scope:** two screens.
 
-No content access, by construction. No usage statistics in MVP.
+- **Dashboard** — what the relay can know without knowing any content: blob storage
+  used against its limits, entries evicted in the last day, per group the device
+  count, last activity, live entry count, age of the oldest entry and blob storage
+  used, and the storage backend's configuration and last sweep. Sizes and counts
+  only: no entry id, content type or filename is shown, and none is available to show.
+- **Tokens** — creation tokens with name, created date, whether used, and the
+  resulting group if used. Token generation, and revocation of a token that has not
+  been used yet (its URL then returns 404, like any unknown token). A used token
+  cannot be revoked: its group already exists, and is removed by revoking its devices.
+
+No content access, by construction.
 
 **Requirements:**
 - Session cookie: `HttpOnly`, `SameSite=Strict`.

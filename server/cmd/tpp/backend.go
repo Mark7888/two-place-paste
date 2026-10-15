@@ -57,3 +57,12 @@ func checkBlobBackend(ctx context.Context, cfg *config.Config, b blob.Backend) e
 	}
 	return nil
 }
+
+// blobLocation names where blobs live, for the startup log and the dashboard.
+// It holds no secret: the S3 description is endpoint, bucket and prefix.
+func blobLocation(cfg *config.Config, b blob.Backend) string {
+	if s3, ok := b.(*blob.S3); ok {
+		return s3.String()
+	}
+	return cfg.Blob.Root
+}

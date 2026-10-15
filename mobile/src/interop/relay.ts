@@ -146,7 +146,7 @@ export class Relay {
 
     // The token screen renders each unused token's QR image at a URL carrying
     // the token value, which is the only place it appears in the markup.
-    const withToken = await (await fetch(`${this.baseUrl}/admin/`, { headers: { cookie } })).text();
+    const withToken = await (await fetch(`${this.baseUrl}/admin/tokens`, { headers: { cookie } })).text();
     return `${this.baseUrl}/${between(withToken, '/admin/tokens/', '/qr.png')}`;
   }
 
