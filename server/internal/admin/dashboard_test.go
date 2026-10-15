@@ -38,6 +38,7 @@ func newDashboardFixture(t *testing.T, limits quota.Limits) *dashboardFixture {
 		Ledger:         d.ledger,
 		Entries:        ephemeral,
 		SweepStatus:    func() blob.SweepStatus { return d.sweep },
+		Uploads:        func() (int, int64) { return 2, 30 << 20 },
 		Backend:        "s3",
 		Location:       "http://minio:9000/tpp/",
 		TotalLimit:     limits.TotalBytes,
@@ -102,7 +103,7 @@ func TestDashboard(t *testing.T) {
 	for _, want := range []string{
 		`aria-current="page">Dashboard`,
 		"50.0 KiB <span class=\"muted\">of 100 KiB</span>", // 10 + 2×20 KiB stored
-		"3 stored entries",
+		"3 stored entries · 2 uploads in progress, 30.0 MiB reserved",
 		">2</p>",                 // groups
 		"1 unused token",         // the spare
 		">3</p>",                 // devices: 2 + 1

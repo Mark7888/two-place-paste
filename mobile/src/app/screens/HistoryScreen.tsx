@@ -22,7 +22,7 @@ import { clipboard } from '../../platform';
 import { useSession } from '../SessionContext';
 import { describeItem, failureMessage, toClipboardItem } from '../session';
 import { previewOf, type Preview } from '../preview';
-import { Button, Notice } from '../ui';
+import { Button, Notice, TransferBar } from '../ui';
 import { colors, styles } from '../theme';
 
 /** Loaded is a preview that arrived, or the reason one could not. */
@@ -68,6 +68,17 @@ export function HistoryScreen(): React.JSX.Element {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // The relay removed an entry early to stay within its storage limit: it is
+  // gone, so it leaves the list now rather than failing when tapped.
+  const evicted = session.evicted;
+  useEffect(() => {
+    if (evicted === null) {
+      return;
+    }
+    setEntries((prev) => prev?.filter((e) => e.id !== evicted.id) ?? prev);
+    setOpen((cur) => (cur === evicted.id ? null : cur));
+  }, [evicted]);
 
   const toggle = (meta: EntryMeta) => {
     const id = meta.id;
@@ -123,6 +134,7 @@ export function HistoryScreen(): React.JSX.Element {
         <Text style={styles.lede}>
           Newest first. Entries expire within 24 hours. Tap one to see what is in it.
         </Text>
+        <TransferBar transfer={session.transfer} />
         {message !== '' && <Notice message={message} tone={ok ? 'ok' : 'error'} />}
       </View>
 

@@ -242,6 +242,12 @@ export interface ServiceEvent {
   epoch?: number;
   device_id?: string;
   name?: string;
+  /** The entry an "evicted" or "progress" event is about. */
+  entry_id?: string;
+  /** "progress" only: which way, and ciphertext bytes so far and in all. */
+  direction?: "upload" | "download";
+  done?: number;
+  total?: number;
 }
 
 export class ApiError extends Error {

@@ -265,6 +265,9 @@ func TestUploadsPerDeviceLimit(t *testing.T) {
 	if _, err := f.svc.BeginUpload(ctx, "g", "other-device", 1, "c", 500); err != nil {
 		t.Errorf("BeginUpload(another device) error = %v", err)
 	}
+	if n, reserved := f.svc.UploadsInProgress(); n != 3 || reserved != 1500 {
+		t.Errorf("UploadsInProgress() = %d, %d; want 3, 1500", n, reserved)
+	}
 }
 
 // TestUploadAbortAndTimeout: an upload that is aborted, or left idle past the

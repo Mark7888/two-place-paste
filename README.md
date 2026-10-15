@@ -363,8 +363,10 @@ The **Sync** tab gives you three actions:
   clipboard.
 
 Text, images and files are supported. The relay accepts up to 50 MB of ciphertext
-per entry, sending anything over 10 MB in chunks; the desktop and Android apps
-still cap what they send at 10 MB until they learn the chunked transfer.
+per entry. Anything over 10 MB travels in 8 MB chunks — the desktop and Android
+apps do this on their own and show a progress bar while a large entry moves.
+Against a relay that predates chunked transfer they fall back to its 10 MB cap
+and say so before uploading.
 
 **Watch the clipboard** (Settings) turns on polling: anything you copy is
 encrypted and uploaded as the group's latest entry. It is off by default and

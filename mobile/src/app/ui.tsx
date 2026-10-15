@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 
+import type { Progress } from '../core';
 import { clipboard } from '../platform';
 
 import { Icon, type IconName } from './icons';
@@ -130,6 +131,30 @@ export function Notice({
     <View style={[styles.notice, { backgroundColor: palette.bg }]}>
       <Icon name={palette.icon} size={16} color={palette.fg} />
       <Text style={[styles.noticeText, { color: palette.fg }]}>{message}</Text>
+    </View>
+  );
+}
+
+/** TransferBar shows a large entry moving in chunks: which way, and how far. */
+export function TransferBar({ transfer }: { transfer: Progress | null }): React.JSX.Element | null {
+  if (transfer === null || transfer.total <= 0) {
+    return null;
+  }
+  const pct = Math.min(100, Math.round((transfer.done / transfer.total) * 100));
+  const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return (
+    <View
+      style={[styles.notice, { backgroundColor: colors.accentSoft, flexDirection: 'column', alignItems: 'stretch' }]}
+      accessibilityRole="progressbar"
+      accessibilityValue={{ min: 0, max: 100, now: pct }}
+    >
+      <Text style={[styles.noticeText, { color: colors.text }]}>
+        {transfer.direction === 'upload' ? 'Uploading' : 'Downloading'} a large entry — {mb(transfer.done)} of{' '}
+        {mb(transfer.total)}
+      </Text>
+      <View style={{ height: 6, borderRadius: 3, backgroundColor: colors.border, marginTop: 8, overflow: 'hidden' }}>
+        <View style={{ height: 6, width: `${pct}%`, backgroundColor: colors.accent }} />
+      </View>
     </View>
   );
 }

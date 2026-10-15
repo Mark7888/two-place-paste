@@ -1,12 +1,7 @@
 # Plan — S3 blob storage, chunked transfer, storage quota and admin dashboard
 
-**Status:** in progress. Done: step 1 (token revocation) and step 2 (storage limits,
-accounting and eviction on the disk backend, `EntryEvicted`, `QUOTA_EXCEEDED`,
-`tpp gc --rebuild-accounting`) and step 3 (the S3 backend, the MinIO compose profile, and
-Redis and MinIO in CI), step 4 (the admin dashboard) and step 5 (chunked transfer on the
-server: `EntryLimits`, `EntryUpload{Begin,Chunk,Abort}`, commit by `upload_handle`,
-`EntryFetchChunk`; 50 MiB cap, 8 MiB chunks, upload sessions in memory). Next: step 6,
-the clients.
+**Status:** implemented, all six steps (PR #26). §6 records where the build differs
+from the plan below, and why; the plan itself is kept as it was agreed.
 **Touches:** `/proto/**` (P1), `/server/**` (P3), `/pkg/tppclient/**` (P5),
 `/desktop/**` (P6), `/mobile/**` (P7), `/deploy/**`, `/docs/**`.
 
@@ -252,3 +247,23 @@ Each step ships on its own and keeps existing clients working until step 6.
 6. Clients (4.8).
 
 Spec, README and deployment docs (4.10) are updated alongside each step.
+
+## 6. As built
+
+Every goal in §1 and every decision in §3 is in place. Where the implementation took a
+different route from a work item, it is listed here with the reason.
+
+| Plan item | As built | Why |
+|---|---|---|
+| 4.1: group limit ≤ total limit | A group limit above the total is accepted; the total is then the effective cap. Both are checked against the per-entry cap. | The 1 GiB group default would otherwise make a total below 1 GiB a startup error. |
+| 4.2: `BeginUpload` returns an upload id, with `WriteChunk`/`CompleteUpload`/`AbortUpload` on the backend | `BeginUpload` returns an `Upload` value with `Write`, `Complete` and `Abort`. | The staging state (a file, a multipart id and its parts) lives with the value instead of in a map keyed by id inside each backend. |
+| 4.2: conformance suite in `blob/backendtest` | `server/internal/blob/conformance_test.go`. | Only this package's tests use it; a separate package would only add exports. |
+| 4.2, 4.3: abandoned staging removed after the session TTL | Removed after `blob.StaleUploadAge` (2 h). | The sweep cannot see live sessions. Two hours is past any session's maximum lifetime (1 h), so it can never take an upload in use. |
+| 4.4: `blobs:*` keys, a separate `blobs:reserved` counter, upload sessions in Redis | `quota:*` keys. An in-flight upload is a *pending* entry in the same ledger, never evicted. Upload sessions live in the server's memory. | One structure holds reservations and committed entries, so `Reserve` stays one script. The relay is a single instance (SPEC §4.1) and a session holds only a handle, so nothing in it needs to outlive the process. The cost is that orphaned reservations are released at startup (`Ledger.ReleasePending`) rather than by a TTL. |
+| 4.4: `gc --verify` compares counters, index and backend listing | It compares the accounting with the entry records, next to the existing blob-vs-entry report. | The entry records are what `--rebuild-accounting` rebuilds from, so that is the comparison an operator acts on. |
+| 4.5: limits advertised in a connection hello | `EntryLimitsRequest`/`EntryLimitsResponse`, asked once per connection. | There is no hello message. A request is ignorable by old clients and answerable as `UNSUPPORTED_MESSAGE` by old relays, which is how clients detect a relay without chunking. |
+| 4.6, 4.8: frame read limit = chunk + overhead | 10 MiB + overhead on both sides. | A single-frame put or fetch (≤ 10 MiB) is still legal, and it is the larger of the two. |
+| 4.7: dashboard shows the last S3 error | It shows the last sweep's result and error, plus uploads in progress and their reserved bytes. | Every S3 call the relay makes on a schedule is in the sweep. Errors on a request are answered to the client and logged. |
+| 4.8: check memory with 50 MB entries on a low-end Android device | **Not done.** The interop suite moves 20 MiB in both directions under Node; no device was available. | Still to do by hand. The client holds the sealed container and the reassembled ciphertext, so peak use is about twice the entry. |
+| 4.9: one-shot `mc` container creating the bucket and a bucket-scoped key | No init container. MinIO's root credentials are the server's S3 keys from `.env`, and `TPP_S3_CREATE_BUCKET=true` lets the server create its bucket. `docs/deployment.md` describes switching to a scoped key. | One key pair in one file is the easy setup the goals asked for. MinIO is never exposed outside the compose network. |
+| 4.11: MinIO as a `go.yml` service container behind an `integration` build tag | Redis and MinIO are started with `docker run` in the server job. Tests that cannot reach them skip, as the Redis tests always have. | Service containers exist only on Linux runners, and the job's matrix includes macOS and Windows. A build tag would hide the tests from `go test ./...`. |

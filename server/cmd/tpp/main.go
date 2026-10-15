@@ -187,6 +187,7 @@ func serve(args []string) error {
 			Ledger:         ledger,
 			Entries:        ephemeral,
 			SweepStatus:    sweeper.Status,
+			Uploads:        entrySvc.UploadsInProgress,
 			Backend:        string(cfg.Blob.Backend),
 			Location:       blobLocation(cfg, blobs),
 			TotalLimit:     cfg.Blob.MaxTotalBytes,

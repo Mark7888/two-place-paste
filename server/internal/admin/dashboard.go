@@ -46,6 +46,10 @@ type storageView struct {
 	Evictions    int64
 	EvictedBytes string
 
+	HasUploads    bool
+	Uploads       int
+	ReservedBytes string
+
 	Swept     bool
 	SweepAt   string
 	SweepTook string
@@ -185,6 +189,13 @@ func (s *Server) storageView(ctx context.Context, now time.Time, problem func(st
 	} else {
 		v.Evictions = ev.Count
 		v.EvictedBytes = humanBytes(ev.Bytes)
+	}
+
+	if d.Uploads != nil {
+		n, reserved := d.Uploads()
+		v.HasUploads = true
+		v.Uploads = n
+		v.ReservedBytes = humanBytes(reserved)
 	}
 
 	if d.SweepStatus != nil {

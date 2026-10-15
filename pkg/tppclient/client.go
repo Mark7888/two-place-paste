@@ -69,6 +69,11 @@ type Handlers struct {
 	// to stay within its storage limit. A history view drops the entry; a
 	// fetch of it now fails with ErrNotFound.
 	OnEntryEvicted func(entryID string)
+
+	// OnProgress reports a chunked upload or download — an entry larger than
+	// one frame — as each chunk completes. It runs on the goroutine doing
+	// the transfer and must not block.
+	OnProgress func(Progress)
 }
 
 // Options configures a Client.
@@ -121,9 +126,14 @@ type Client struct {
 	maxBackoff time.Duration
 	now        func() time.Time
 
-	mu          sync.Mutex
-	state       State
-	conn        *conn
+	mu    sync.Mutex
+	state State
+	conn  *conn
+
+	// limits are the relay's entry limits, as stated on limitsConn. A new
+	// connection asks again: the relay it reaches may have been reconfigured.
+	limits      Limits
+	limitsConn  *conn
 	ready       chan struct{} // closed while a connection is live
 	invitations []*Invitation
 

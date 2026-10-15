@@ -130,6 +130,10 @@ type Dashboard struct {
 	// SweepStatus reports the most recent blob sweep.
 	SweepStatus func() blob.SweepStatus
 
+	// Uploads reports chunked uploads in progress and the bytes they hold
+	// reserved.
+	Uploads func() (count int, reserved int64)
+
 	// Backend and Location describe where blobs live, e.g. "s3" and
 	// "https://s3.example.com/bucket/". They are shown as given and must
 	// hold no secret.

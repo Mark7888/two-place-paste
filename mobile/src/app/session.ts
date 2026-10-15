@@ -110,7 +110,7 @@ export async function upload(client: Client): Promise<SyncResult> {
  * screen as a dialog, and on a tile tap as the overlay's two buttons.
  *
  * It compares against the newest entry's *metadata*, not the entry: deciding a
- * direction should not cost a 10 MB download. That listing is one entry deep
+ * direction should not cost a 50 MB download. That listing is one entry deep
  * and is not the History tab's fetch, which stays something the user asks for.
  */
 export async function sync(client: Client): Promise<SyncResult> {

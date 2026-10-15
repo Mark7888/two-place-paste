@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, events, hasToken, type ServiceEvent, type Status } from "./api";
 import { Icon, type IconName } from "./components/Icon";
+import { bytes } from "./format";
 import { SyncPanel } from "./panels/SyncPanel";
 import { HistoryPanel } from "./panels/HistoryPanel";
 import { DevicesPanel } from "./panels/DevicesPanel";
@@ -30,6 +31,11 @@ export function App() {
   // all an effect needs to depend on.
   const [lastEvent, setLastEvent] = useState<ServiceEvent | null>(null);
 
+  // transfer is the chunked upload or download in flight — an entry larger
+  // than one frame — or null. It is one strip for every tab, because a copy
+  // from History and an upload from Sync are the same wait.
+  const [transfer, setTransfer] = useState<ServiceEvent | null>(null);
+
   const refresh = useCallback(async () => {
     try {
       setStatus(await api.status());
@@ -48,6 +54,11 @@ export function App() {
   useEffect(
     () =>
       events((ev) => {
+        if (ev.kind === "progress") {
+          // One per chunk: a progress bar, not a reason to re-read the status.
+          setTransfer(ev.total && ev.done !== undefined && ev.done < ev.total ? ev : null);
+          return;
+        }
         setLastEvent(ev);
         void refresh();
       }),
@@ -114,6 +125,15 @@ export function App() {
 
       <main className="content">
         <div className="page">
+          {transfer ? (
+            <div className="transfer" role="status">
+              <span>
+                {transfer.direction === "upload" ? "Uploading" : "Downloading"} a large entry —{" "}
+                {bytes(transfer.done ?? 0)} of {bytes(transfer.total ?? 0)}
+              </span>
+              <progress max={transfer.total} value={transfer.done} />
+            </div>
+          ) : null}
           {error ? (
             <div className="notice error">
               <Icon name="alert" />

@@ -1141,3 +1141,34 @@ func TestFirstConnectionDoesNotApply(t *testing.T) {
 	default:
 	}
 }
+
+// TestEvictionAndProgressReachTheUI: the relay's eviction notice and the
+// client's transfer progress become events the UI acts on — and carry an id
+// and byte counts, never content.
+func TestEvictionAndProgressReachTheUI(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	events, stop := f.svc.Subscribe()
+	defer stop()
+
+	h := f.svc.ClientHandlers()
+	h.OnEntryEvicted("old-entry")
+	h.OnProgress(tppclient.Progress{EntryID: "big", Direction: tppclient.Download, Done: 8 << 20, Total: 25 << 20})
+
+	want := []localui.Event{
+		{Kind: localui.EventEvicted, EntryID: "old-entry"},
+		{Kind: localui.EventProgress, EntryID: "big", Direction: "download", Done: 8 << 20, Total: 25 << 20},
+	}
+	for _, w := range want {
+		select {
+		case got := <-events:
+			got.At = time.Time{}
+			if got != w {
+				t.Errorf("event = %+v, want %+v", got, w)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no %s event", w.Kind)
+		}
+	}
+}

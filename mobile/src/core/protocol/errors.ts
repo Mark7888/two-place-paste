@@ -28,7 +28,9 @@ export type TppErrorKind =
   /** The client was closed. */
   | 'closed'
   /** A malformed or unusable value — a pairing code that is not one, a server URL that is not a URL. */
-  | 'invalid';
+  | 'invalid'
+  /** The entry is larger than the relay accepts; refused here, before any upload. */
+  | 'too-large';
 
 /** TppError is a local failure with a kind a caller can switch on. */
 export class TppError extends Error {
@@ -75,7 +77,7 @@ export function isEpochConflict(err: unknown): boolean {
  * the relay's storage limit on its own (SPEC §4.3).
  */
 export function isTooLarge(err: unknown): boolean {
-  return isCode(err, ErrorCode.ERROR_CODE_TOO_LARGE);
+  return isCode(err, ErrorCode.ERROR_CODE_TOO_LARGE) || isKind(err, 'too-large');
 }
 
 /**
@@ -88,6 +90,14 @@ export function isQuotaExceeded(err: unknown): boolean {
 
 /** describe renders an error for the one-line status a screen shows. It never renders a cause chain into the UI. */
 export function describe(err: unknown): string {
+  // The two storage refusals get a sentence a person can act on; the relay's
+  // own message is written for a developer.
+  if (isTooLarge(err)) {
+    return 'That is larger than the relay accepts.';
+  }
+  if (isQuotaExceeded(err)) {
+    return 'The relay’s storage is full right now; try again shortly.';
+  }
   if (err instanceof TppError || err instanceof ProtocolError) {
     return err.message;
   }

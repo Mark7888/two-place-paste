@@ -62,6 +62,13 @@ export function HistoryPanel({
     if (["sync", "epoch", "connected", "clipboard"].includes(lastEvent.kind)) {
       void load();
     }
+    // The relay removed an entry early to stay within its storage limit: it
+    // is gone, so it leaves the list now rather than failing when opened.
+    if (lastEvent.kind === "evicted" && lastEvent.entry_id) {
+      const gone = lastEvent.entry_id;
+      setEntries((prev) => prev?.filter((e) => e.id !== gone) ?? prev);
+      setOpen((cur) => (cur === gone ? null : cur));
+    }
   }, [inGroup, lastEvent, load]);
 
   const copy = async (id: string) => {

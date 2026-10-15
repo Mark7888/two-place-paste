@@ -59,8 +59,9 @@ func buildServer() (string, error) {
 
 // startRelay brings up Redis and the relay, and tears both down with the test.
 // It skips when the machine cannot run them, which is the same contract the
-// server's own Redis-backed tests use.
-func startRelay(t *testing.T) *relay {
+// server's own Redis-backed tests use. env adds KEY=value settings for the
+// relay.
+func startRelay(t *testing.T, env ...string) *relay {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("skipping: -short, and this test runs a real server")
@@ -96,6 +97,7 @@ func startRelay(t *testing.T) *relay {
 		"TPP_BLOB_SWEEP_INTERVAL=10m",
 		"TPP_LOG_LEVEL=warn",
 	)
+	cmd.Env = append(cmd.Env, env...)
 	logs := &lockedBuffer{}
 	cmd.Stdout, cmd.Stderr = logs, logs
 	if err := cmd.Start(); err != nil {

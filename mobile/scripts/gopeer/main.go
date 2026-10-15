@@ -23,6 +23,8 @@
 //	accept-offer            admit the device the last read-offer described
 //	put <text>              write a text entry
 //	latest                  read the group's latest entry
+//	put-large <bytes>       write a binary entry of that size, in a fixed pattern
+//	latest-digest           read the latest entry; report its length and SHA-256
 //	devices                 list the group roster
 //	revoke <device-id>      prepare and confirm a revocation
 //	epoch                   report this client's epoch
@@ -32,11 +34,14 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -182,6 +187,42 @@ func run() error {
 				"body":         string(item.Body),
 				"entry_id":     item.Meta.ID,
 				"epoch":        item.Meta.Epoch,
+			})
+
+		case "put-large":
+			// A body of the given size in a pattern the phone can rebuild,
+			// so the test compares bytes without shipping them twice.
+			n, err := strconv.Atoi(argument)
+			if err != nil || n <= 0 {
+				reply(map[string]any{"ok": false, "error": "put-large needs a positive size"})
+				break
+			}
+			body := make([]byte, n)
+			for i := range body {
+				body[i] = byte(i*31 + 7)
+			}
+			meta, err := client.PutEntry(ctx, tppclient.Item{ContentType: "application/octet-stream", Filename: "large.bin", Body: body})
+			if err != nil {
+				reply(failure(err))
+				break
+			}
+			reply(map[string]any{"ok": true, "entry_id": meta.ID, "size": meta.Size})
+
+		case "latest-digest":
+			// The latest entry's plaintext by SHA-256 and length: how a large
+			// entry the phone wrote is checked without echoing it back.
+			item, err := client.GetLatest(ctx)
+			if err != nil {
+				reply(failure(err))
+				break
+			}
+			sum := sha256.Sum256(item.Body)
+			reply(map[string]any{
+				"ok":       true,
+				"entry_id": item.Meta.ID,
+				"length":   len(item.Body),
+				"sha256":   hex.EncodeToString(sum[:]),
+				"filename": item.Filename,
 			})
 
 		case "devices":

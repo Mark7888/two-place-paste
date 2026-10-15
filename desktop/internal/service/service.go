@@ -27,7 +27,7 @@ import (
 const planTTL = 10 * time.Minute
 
 // previewRunes bounds the clipboard preview the UI renders. The preview never
-// leaves this machine; it is bounded because a 10 MB paste in a status
+// leaves this machine; it is bounded because a 50 MB paste in a status
 // response helps nobody.
 const previewRunes = 240
 
@@ -246,6 +246,19 @@ func (s *Service) ClientHandlers() tppclient.Handlers {
 			s.hub.publish(localui.Event{Kind: localui.EventDeviceRevoked, DeviceID: deviceID, Epoch: epoch})
 		},
 		OnEntryAdded: s.announce,
+		OnEntryEvicted: func(entryID string) {
+			s.hub.publish(localui.Event{Kind: localui.EventEvicted, EntryID: entryID})
+		},
+		OnProgress: func(p tppclient.Progress) {
+			dir := "upload"
+			if p.Direction == tppclient.Download {
+				dir = "download"
+			}
+			s.hub.publish(localui.Event{
+				Kind: localui.EventProgress, EntryID: p.EntryID,
+				Direction: dir, Done: p.Done, Total: p.Total,
+			})
+		},
 		OnRevoked: func() {
 			s.mu.Lock()
 			s.revoked, s.connected = true, false
@@ -1286,7 +1299,7 @@ func (s *Service) noteSync(at time.Time) {
 // latest returns the relay's newest entry as metadata only.
 //
 // Metadata, not content: deciding a direction needs a timestamp, and pulling a
-// 10 MB ciphertext to read one would be a download the user never asked for.
+// 50 MB ciphertext to read one would be a download the user never asked for.
 func (s *Service) latest(ctx context.Context, relay Relay) (*localui.EntryView, error) {
 	page, err := relay.GetHistory(ctx, tppclient.HistoryQuery{Limit: 1})
 	if err != nil {

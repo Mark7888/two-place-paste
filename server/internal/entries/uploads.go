@@ -296,6 +296,18 @@ func (s *Service) ReapUploads(ctx context.Context, now time.Time) int {
 	return n
 }
 
+// UploadsInProgress reports how many chunked uploads are in progress and how
+// many bytes of storage they hold reserved. It is for the admin dashboard.
+func (s *Service) UploadsInProgress() (count int, reserved int64) {
+	s.uploads.mu.Lock()
+	defer s.uploads.mu.Unlock()
+	for _, u := range s.uploads.byHandle {
+		count++
+		reserved += u.size // fixed at begin; safe to read without u.mu
+	}
+	return count, reserved
+}
+
 // AbortAllUploads abandons every upload in progress. The server calls it on
 // shutdown, so that the room they reserved is released now rather than at the
 // next start.

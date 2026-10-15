@@ -11,11 +11,6 @@ import (
 	"github.com/Mark7888/two-place-paste/pkg/tppclient/tppcrypto"
 )
 
-// MaxCiphertextBytes is the relay's per-entry cap (SPEC §4.3). It is measured
-// on the ciphertext, so a plaintext close to it will be refused: the container
-// adds 41 bytes plus the frame header.
-const MaxCiphertextBytes = 10 << 20
-
 // newEntryID returns the identifier this client binds into an entry's
 // associated data and sends with it (/spec/crypto.md §5.3).
 //
@@ -127,20 +122,29 @@ func (c *Client) PutEntry(ctx context.Context, item Item) (EntryMeta, error) {
 	if err != nil {
 		return EntryMeta{}, fmt.Errorf("tppclient: seal the entry: %w", err)
 	}
-	if len(container) > MaxCiphertextBytes {
-		// Refused here rather than by the relay: the cap is on the ciphertext,
-		// and the caller deserves the answer before a 10 MB upload.
-		return EntryMeta{}, fmt.Errorf("tppclient: ciphertext is %d bytes, the cap is %d: %w",
-			len(container), MaxCiphertextBytes, ErrTooLarge)
+	resp := &tppv1.EntryPutResponse{}
+	if len(container) > SingleFrameMaxBytes {
+		// Larger than one frame: chunked, if the relay can. Refused here
+		// rather than by the relay when it cannot, or when the entry is over
+		// its cap: the cap is on the ciphertext, and the caller deserves the
+		// answer before the upload rather than after it.
+		l, lerr := c.Limits(ctx)
+		if lerr != nil {
+			return EntryMeta{}, lerr
+		}
+		if !l.Chunked() || int64(len(container)) > l.MaxEntryBytes {
+			return EntryMeta{}, fmt.Errorf("tppclient: ciphertext is %d bytes, the relay accepts %d: %w",
+				len(container), l.MaxEntryBytes, ErrTooLarge)
+		}
+		resp, err = c.putChunked(ctx, entryID, state.Epoch, container, l)
+	} else {
+		err = c.call(ctx, tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST, &tppv1.EntryPutRequest{
+			EntryId: entryID,
+			Epoch:   state.Epoch,
+			Size:    uint64(len(container)),
+			Body:    &tppv1.EntryPutRequest_Ciphertext{Ciphertext: container},
+		}, resp)
 	}
-
-	var resp tppv1.EntryPutResponse
-	err = c.call(ctx, tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST, &tppv1.EntryPutRequest{
-		EntryId: entryID,
-		Epoch:   state.Epoch,
-		Size:    uint64(len(container)),
-		Body:    &tppv1.EntryPutRequest_Ciphertext{Ciphertext: container},
-	}, &resp)
 	if err != nil {
 		// ErrEpochConflict means a rekey landed between sealing and sending.
 		// The caller re-encrypts under the new key once it arrives; this
@@ -241,10 +245,19 @@ func (c *Client) GetEntry(ctx context.Context, entryID string) (Item, error) {
 	return c.open(meta, ciphertext)
 }
 
-// fetch pulls one entry's ciphertext by id.
+// fetch pulls one entry's ciphertext by id: in ranges from a relay that can
+// serve them, which is the only way to read an entry larger than one frame,
+// and in one frame from a relay that predates them.
 func (c *Client) fetch(ctx context.Context, entryID string) (EntryMeta, []byte, error) {
+	l, err := c.Limits(ctx)
+	if err != nil {
+		return EntryMeta{}, nil, err
+	}
+	if l.Chunked() {
+		return c.fetchRanges(ctx, entryID, l)
+	}
 	var resp tppv1.EntryFetchResponse
-	err := c.call(ctx, tppv1.MessageType_MESSAGE_TYPE_ENTRY_FETCH_REQUEST,
+	err = c.call(ctx, tppv1.MessageType_MESSAGE_TYPE_ENTRY_FETCH_REQUEST,
 		&tppv1.EntryFetchRequest{EntryId: entryID}, &resp)
 	if err != nil {
 		return EntryMeta{}, nil, err

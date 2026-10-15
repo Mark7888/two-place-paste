@@ -13,7 +13,17 @@
  * machine cannot host it (docs/conventions.md §5).
  */
 
-import { Client, TppError, fromUTF8, utf8, type SecureStore } from '../../core';
+import { sha256 } from '@noble/hashes/sha2.js';
+
+import {
+  Client,
+  TppError,
+  fromUTF8,
+  toHex,
+  utf8,
+  type Progress,
+  type SecureStore,
+} from '../../core';
 import { GoPeer, Relay, missingTool } from '../relay';
 
 /** InMemoryStore stands in for the Android Keystore, which does not exist under Node. */
@@ -44,6 +54,7 @@ describeInterop('the phone and the Go client are one implementation of one contr
   let relay: Relay;
   let go: GoPeer;
   let phone: Client;
+  const progress: Progress[] = [];
 
   beforeAll(async () => {
     relay = await Relay.start();
@@ -51,6 +62,7 @@ describeInterop('the phone and the Go client are one implementation of one contr
     phone = await Client.open({
       store: new InMemoryStore(),
       deviceName: 'Anna — phone',
+      handlers: { onProgress: (p) => progress.push(p) },
     });
   });
 
@@ -109,6 +121,50 @@ describeInterop('the phone and the Go client are one implementation of one contr
     const oldest = page.entries[page.entries.length - 1];
     const item = await phone.getEntry(oldest.id);
     expect(item.contentType).toBe('text/plain; charset=utf-8');
+  });
+
+  test('an entry larger than one frame, written by Go, reads on the phone in ranges (SPEC §4.3)', async () => {
+    const size = 20 << 20;
+    const written = await go.send(`put-large ${size}`);
+    progress.length = 0;
+    const item = await phone.getLatest();
+
+    expect(item.meta?.id).toBe(written.entry_id);
+    expect(item.filename).toBe('large.bin');
+    expect(item.body.length).toBe(size);
+    let same = true;
+    for (let i = 0; i < size; i++) {
+      if (item.body[i] !== ((i * 31 + 7) & 0xff)) {
+        same = false;
+        break;
+      }
+    }
+    expect(same).toBe(true);
+    const downloads = progress.filter((p) => p.direction === 'download');
+    expect(downloads.length).toBeGreaterThanOrEqual(3);
+    expect(downloads[downloads.length - 1].done).toBe(downloads[downloads.length - 1].total);
+  });
+
+  test('an entry larger than one frame, written by the phone, uploads in chunks and reads in Go', async () => {
+    const body = new Uint8Array(20 << 20);
+    for (let i = 0; i < body.length; i++) {
+      body[i] = (i * 17 + 3) & 0xff;
+    }
+    progress.length = 0;
+    const meta = await phone.putEntry({
+      contentType: 'application/octet-stream',
+      filename: 'from-the-phone.bin',
+      body,
+    });
+    const read = await go.send('latest-digest');
+
+    expect(read.entry_id).toBe(meta.id);
+    expect(read.length).toBe(body.length);
+    expect(read.sha256).toBe(toHex(sha256(body)));
+    expect(read.filename).toBe('from-the-phone.bin');
+    const uploads = progress.filter((p) => p.direction === 'upload');
+    expect(uploads.length).toBeGreaterThanOrEqual(4);
+    expect(uploads[uploads.length - 1].done).toBe(meta.size);
   });
 
   test('a second phone pairs the other way round: it shows, the Go client accepts', async () => {

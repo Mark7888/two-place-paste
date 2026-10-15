@@ -19,7 +19,7 @@ import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
 import { tile } from '../platform';
 import { SessionProvider, useSession } from './SessionContext';
-import { Button, Choice, Notice } from './ui';
+import { Button, Choice, Notice, TransferBar } from './ui';
 import { colors, styles } from './theme';
 
 function Panel(): React.JSX.Element {
@@ -76,10 +76,14 @@ function Panel(): React.JSX.Element {
             <Button label="Close" variant="secondary" onPress={dismiss} />
           </>
         ) : session.syncing || !session.ready ? (
-          <View style={[styles.rowInline, { paddingVertical: 4 }]}>
-            <ActivityIndicator color={colors.accent} />
-            <Text style={[styles.text, { flex: 1 }]}>Syncing…</Text>
-          </View>
+          session.transfer !== null ? (
+            <TransferBar transfer={session.transfer} />
+          ) : (
+            <View style={[styles.rowInline, { paddingVertical: 4 }]}>
+              <ActivityIndicator color={colors.accent} />
+              <Text style={[styles.text, { flex: 1 }]}>Syncing…</Text>
+            </View>
+          )
         ) : (
           // The store closes this window as soon as it has a *successful*
           // outcome, so this is the last frame before that — and what the user

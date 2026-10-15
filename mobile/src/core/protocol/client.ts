@@ -41,12 +41,23 @@ import {
 } from '../../protocol/gen/tpp/v1/group';
 import {
   DeviceRevoked,
+  EntryEvicted,
   EpochChanged,
   WrappedKeyAvailable,
 } from '../../protocol/gen/tpp/v1/events';
 import {
+  EntryFetchChunkRequest,
+  EntryFetchChunkResponse,
   EntryFetchRequest,
   EntryFetchResponse,
+  EntryLimitsRequest,
+  EntryLimitsResponse,
+  EntryUploadAbortRequest,
+  EntryUploadAbortResponse,
+  EntryUploadBeginRequest,
+  EntryUploadBeginResponse,
+  EntryUploadChunkRequest,
+  EntryUploadChunkResponse,
   EntryHistoryRequest,
   EntryHistoryResponse,
   EntryLatestRequest,
@@ -67,7 +78,7 @@ import {
   PairingStartResponse,
   PairingWrappedKeyUpload,
 } from '../../protocol/gen/tpp/v1/pairing';
-import { Error as ErrorFrame } from '../../protocol/gen/tpp/v1/error';
+import { Error as ErrorFrame, ErrorCode } from '../../protocol/gen/tpp/v1/error';
 import {
   encodeFrame,
   decodeFrame,
@@ -82,7 +93,7 @@ import {
   wrap,
 } from '../crypto';
 import { Connection, SocketFactory, webSocketFactory } from './connection';
-import { ProtocolError, TppError } from './errors';
+import { ProtocolError, TppError, isCode } from './errors';
 import {
   decodePairingOffer,
   decodePairingPayload,
@@ -101,8 +112,45 @@ import {
 } from './state';
 import { splitCreationURL, normalizeServerURL, websocketURL } from './urls';
 
-/** MAX_CIPHERTEXT_BYTES is the relay's per-entry cap, measured on the ciphertext (SPEC §4.3). */
-export const MAX_CIPHERTEXT_BYTES = 10 << 20;
+/**
+ * SINGLE_FRAME_MAX_BYTES is the most ciphertext one frame carries, in either
+ * direction (SPEC §4.3). A larger entry is uploaded in chunks and read back in
+ * ranges; the crypto is unchanged — the entry is sealed and opened whole.
+ */
+export const SINGLE_FRAME_MAX_BYTES = 10 << 20;
+
+/**
+ * MAX_CIPHERTEXT_BYTES is the per-entry cap of a relay that predates chunked
+ * transfer.
+ *
+ * @deprecated The cap is the relay's to state: use `Client.limits()`.
+ */
+export const MAX_CIPHERTEXT_BYTES = SINGLE_FRAME_MAX_BYTES;
+
+/** Limits are a relay's entry limits, in ciphertext bytes. */
+export interface Limits {
+  maxEntryBytes: number;
+  singleFrameMaxBytes: number;
+  /** chunkBytes is zero when the relay predates chunked transfer. */
+  chunkBytes: number;
+  inlineMaxBytes: number;
+}
+
+/** LEGACY_LIMITS are what a relay that predates chunked transfer allows. */
+const LEGACY_LIMITS: Limits = {
+  maxEntryBytes: SINGLE_FRAME_MAX_BYTES,
+  singleFrameMaxBytes: SINGLE_FRAME_MAX_BYTES,
+  chunkBytes: 0,
+  inlineMaxBytes: 0,
+};
+
+/** Progress reports a chunked transfer of an entry larger than one frame, in ciphertext bytes. */
+export interface Progress {
+  entryId: string;
+  direction: 'upload' | 'download';
+  done: number;
+  total: number;
+}
 
 /** Reconnect bounds. A relay that is down comes back; a phone that hammers it while it does is a second problem. */
 const MIN_BACKOFF_MS = 500;
@@ -179,6 +227,13 @@ export interface Handlers {
    * than read from a status code.
    */
   onProbablyRevoked?: () => void;
+  /**
+   * onEntryEvicted fires when the relay removed an entry before its expiry to
+   * stay within its storage limit. A history view drops it.
+   */
+  onEntryEvicted?: (entryId: string) => void;
+  /** onProgress reports a chunked upload or download, once per chunk. */
+  onProgress?: (progress: Progress) => void;
 }
 
 /** ClientOptions configures a Client. */
@@ -301,6 +356,8 @@ export class Client {
   private readonly socketFactory: SocketFactory;
   private readonly now: () => Date;
   private readonly handlers: Handlers;
+  /** limitsCache is the relay's entry limits as stated on one connection; a new connection asks again. */
+  private limitsCache: { conn: Connection; limits: Limits } | null = null;
   private readonly healthCheck: (baseUrl: string) => Promise<boolean>;
 
   private conn: Connection | null = null;
@@ -516,6 +573,11 @@ export class Client {
       case MessageType.MESSAGE_TYPE_DEVICE_REVOKED: {
         const event = DeviceRevoked.decode(env.payload);
         this.handlers.onDeviceRevoked?.(event.deviceId, asBigInt(event.epoch));
+        break;
+      }
+      case MessageType.MESSAGE_TYPE_ENTRY_EVICTED: {
+        const event = EntryEvicted.decode(env.payload);
+        this.handlers.onEntryEvicted?.(event.entryId);
         break;
       }
       case MessageType.MESSAGE_TYPE_PAIRING_JOIN_NOTICE: {
@@ -1043,29 +1105,36 @@ export class Client {
     const entryId = newEntryID();
     const epoch = this.state.epoch;
     const container = sealEntry(this.state.groupKey, generateNonce(), epoch, entryId, frame);
-    if (container.length > MAX_CIPHERTEXT_BYTES) {
-      // Refused here rather than by the relay: the cap is on the ciphertext,
-      // and the caller deserves the answer before a 10 MB upload.
-      throw new TppError(
-        'invalid',
-        `ciphertext is ${container.length} bytes, the cap is ${MAX_CIPHERTEXT_BYTES}`,
+
+    let response: EntryPutResponse;
+    if (container.length > SINGLE_FRAME_MAX_BYTES) {
+      // Larger than one frame: chunked, if the relay can. Refused here rather
+      // than by the relay when it cannot, or when the entry is over its cap:
+      // the caller deserves the answer before the upload, not after it.
+      const limits = await this.limits();
+      if (limits.chunkBytes === 0 || container.length > limits.maxEntryBytes) {
+        throw new TppError(
+          'too-large',
+          `ciphertext is ${container.length} bytes, the relay accepts ${limits.maxEntryBytes}`,
+        );
+      }
+      response = await this.putChunked(entryId, epoch, container, limits);
+    } else {
+      const conn = await this.connection();
+      response = await conn.call(
+        MessageType.MESSAGE_TYPE_ENTRY_PUT_REQUEST,
+        {
+          codec: EntryPutRequest,
+          message: {
+            entryId,
+            epoch: epoch.toString(),
+            size: container.length.toString(),
+            ciphertext: container,
+          },
+        },
+        EntryPutResponse,
       );
     }
-
-    const conn = await this.connection();
-    const response = await conn.call(
-      MessageType.MESSAGE_TYPE_ENTRY_PUT_REQUEST,
-      {
-        codec: EntryPutRequest,
-        message: {
-          entryId,
-          epoch: epoch.toString(),
-          size: container.length.toString(),
-          ciphertext: container,
-        },
-      },
-      EntryPutResponse,
-    );
     const meta = response.meta ? toEntryMeta(response.meta) : null;
     if (meta === null || meta.id !== entryId) {
       // The relay filed the entry under an id this client did not bind, so
@@ -1143,7 +1212,170 @@ export class Client {
     return this.open(meta, ciphertext);
   }
 
+  /**
+   * limits returns the relay's entry limits, asking once per connection. A
+   * relay that predates chunked transfer answers that it does not know the
+   * question, and gets the limits it has always had.
+   */
+  async limits(): Promise<Limits> {
+    const conn = await this.connection();
+    if (this.limitsCache?.conn === conn) {
+      return this.limitsCache.limits;
+    }
+    let limits = LEGACY_LIMITS;
+    try {
+      const resp = await conn.call(
+        MessageType.MESSAGE_TYPE_ENTRY_LIMITS_REQUEST,
+        { codec: EntryLimitsRequest, message: {} },
+        EntryLimitsResponse,
+      );
+      // Never trust a relay to raise the frame cap: nothing here would read
+      // a larger frame.
+      limits = {
+        maxEntryBytes: Number(resp.maxEntryBytes),
+        singleFrameMaxBytes: Math.min(Math.max(Number(resp.singleFrameMaxBytes), 1), SINGLE_FRAME_MAX_BYTES),
+        chunkBytes: Math.min(Number(resp.chunkBytes), SINGLE_FRAME_MAX_BYTES),
+        inlineMaxBytes: Number(resp.inlineMaxBytes),
+      };
+    } catch (err) {
+      if (!isCode(err, ErrorCode.ERROR_CODE_UNSUPPORTED_MESSAGE)) {
+        throw err;
+      }
+    }
+    this.limitsCache = { conn, limits };
+    return limits;
+  }
+
+  /**
+   * putChunked uploads a sealed container larger than one frame. On any
+   * failure the upload is aborted, so the room the relay reserved for it is
+   * given back at once rather than at its timeout.
+   */
+  private async putChunked(
+    entryId: string,
+    epoch: bigint,
+    container: Uint8Array,
+    limits: Limits,
+  ): Promise<EntryPutResponse> {
+    const size = container.length;
+    const begin = await (await this.connection()).call(
+      MessageType.MESSAGE_TYPE_ENTRY_UPLOAD_BEGIN_REQUEST,
+      {
+        codec: EntryUploadBeginRequest,
+        message: { entryId, epoch: epoch.toString(), size: size.toString() },
+      },
+      EntryUploadBeginResponse,
+    );
+    const handle = begin.uploadHandle;
+    let chunk = Number(begin.chunkBytes);
+    if (!(chunk > 0 && chunk <= SINGLE_FRAME_MAX_BYTES)) {
+      chunk = limits.chunkBytes;
+    }
+    const abort = async (cause: unknown): Promise<never> => {
+      try {
+        await (await this.connection()).call(
+          MessageType.MESSAGE_TYPE_ENTRY_UPLOAD_ABORT_REQUEST,
+          { codec: EntryUploadAbortRequest, message: { uploadHandle: handle } },
+          EntryUploadAbortResponse,
+        );
+      } catch {
+        // The relay abandons it at its timeout regardless.
+      }
+      throw cause;
+    };
+
+    const progress = (done: number) =>
+      this.handlers.onProgress?.({ entryId, direction: 'upload', done, total: size });
+    progress(0);
+    try {
+      for (let index = 0, off = 0; off < size; index++, off += chunk) {
+        const end = Math.min(off + chunk, size);
+        // The connection is looked up per chunk: an upload belongs to the
+        // device, not the socket, so a reconnect mid-upload carries on.
+        await (await this.connection()).call(
+          MessageType.MESSAGE_TYPE_ENTRY_UPLOAD_CHUNK_REQUEST,
+          {
+            codec: EntryUploadChunkRequest,
+            message: { uploadHandle: handle, index, data: container.subarray(off, end) },
+          },
+          EntryUploadChunkResponse,
+        );
+        progress(end);
+      }
+      return await (await this.connection()).call(
+        MessageType.MESSAGE_TYPE_ENTRY_PUT_REQUEST,
+        {
+          codec: EntryPutRequest,
+          message: {
+            entryId,
+            epoch: epoch.toString(),
+            size: size.toString(),
+            uploadHandle: handle,
+          },
+        },
+        EntryPutResponse,
+      );
+    } catch (err) {
+      return abort(err);
+    }
+  }
+
+  /** fetchRanges reads an entry one range at a time; the first range brings the metadata. */
+  private async fetchRanges(
+    entryId: string,
+    limits: Limits,
+  ): Promise<{ meta: EntryMeta; ciphertext: Uint8Array }> {
+    let meta: EntryMeta | null = null;
+    let buf = new Uint8Array(0);
+    let filled = 0;
+    for (;;) {
+      const resp = await (await this.connection()).call(
+        MessageType.MESSAGE_TYPE_ENTRY_FETCH_CHUNK_REQUEST,
+        {
+          codec: EntryFetchChunkRequest,
+          message: { entryId, offset: filled.toString(), length: limits.chunkBytes.toString() },
+        },
+        EntryFetchChunkResponse,
+      );
+      if (!resp.meta) {
+        throw new TppError('no-entry', `the relay returned no metadata for entry ${entryId}`);
+      }
+      const m = toEntryMeta(resp.meta);
+      const size = Number(m.size);
+      if (meta === null) {
+        if (!(size > 0 && size <= Math.max(limits.maxEntryBytes, SINGLE_FRAME_MAX_BYTES))) {
+          throw new TppError('invalid', `entry ${entryId} reports ${size} bytes, outside the relay's limits`);
+        }
+        meta = m;
+        buf = new Uint8Array(size);
+      } else if (m.id !== meta.id || m.size !== meta.size) {
+        throw new TppError('invalid', `entry ${entryId} changed while it was being read`);
+      }
+      const data = resp.data;
+      if (Number(resp.offset) !== filled || data.length === 0 || filled + data.length > size) {
+        throw new TppError('invalid', `entry ${entryId}: the relay returned a range that does not continue the entry`);
+      }
+      buf.set(data, filled);
+      filled += data.length;
+      if (size > SINGLE_FRAME_MAX_BYTES) {
+        this.handlers.onProgress?.({ entryId, direction: 'download', done: filled, total: size });
+      }
+      if (filled === size) {
+        return { meta, ciphertext: buf };
+      }
+    }
+  }
+
+  /**
+   * fetch pulls one entry's ciphertext: in ranges from a relay that can serve
+   * them, which is the only way to read an entry larger than one frame, and in
+   * one frame from a relay that predates them.
+   */
   private async fetch(entryId: string): Promise<{ meta: EntryMeta; ciphertext: Uint8Array }> {
+    const limits = await this.limits();
+    if (limits.chunkBytes > 0) {
+      return this.fetchRanges(entryId, limits);
+    }
     const conn = await this.connection();
     const response = await conn.call(
       MessageType.MESSAGE_TYPE_ENTRY_FETCH_REQUEST,

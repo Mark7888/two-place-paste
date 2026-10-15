@@ -18,7 +18,7 @@
     <meter min="0" max="{{.LimitBytes}}" value="{{.UsedBytes}}" high="{{.HighBytes}}" optimum="0"
            aria-label="Blob storage used">{{.Percent}}%</meter>
     {{end}}
-    <p class="sub">{{.Entries}} stored {{if eq .Entries 1}}entry{{else}}entries{{end}}</p>
+    <p class="sub">{{.Entries}} stored {{if eq .Entries 1}}entry{{else}}entries{{end}}{{if .HasUploads}}{{if gt .Uploads 0}} · {{.Uploads}} {{if eq .Uploads 1}}upload{{else}}uploads{{end}} in progress, {{.ReservedBytes}} reserved{{end}}{{end}}</p>
   </section>
   {{end}}
   <section class="card stat" aria-labelledby="stat-groups">

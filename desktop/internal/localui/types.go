@@ -267,6 +267,16 @@ type Event struct {
 	Epoch    uint64    `json:"epoch,omitempty"`
 	DeviceID string    `json:"device_id,omitempty"`
 	Name     string    `json:"name,omitempty"`
+
+	// EntryID names the entry an evicted or progress event is about. An id
+	// is metadata the relay already holds, not content.
+	EntryID string `json:"entry_id,omitempty"`
+
+	// Direction, Done and Total describe a chunked transfer: "upload" or
+	// "download", and ciphertext bytes so far and in all.
+	Direction string `json:"direction,omitempty"`
+	Done      int64  `json:"done,omitempty"`
+	Total     int64  `json:"total,omitempty"`
 }
 
 // Event kinds. A UI refreshes on any of them; none of them carries clipboard
@@ -282,6 +292,14 @@ const (
 	EventClipboard     = "clipboard"
 	EventSync          = "sync"
 	EventSettings      = "settings"
+
+	// EventEvicted says the relay removed an entry before its expiry, to stay
+	// within its storage limit. A history view drops it.
+	EventEvicted = "evicted"
+
+	// EventProgress reports a chunked transfer of an entry larger than one
+	// frame, once per chunk.
+	EventProgress = "progress"
 )
 
 // UpdateView is the updates section's model
