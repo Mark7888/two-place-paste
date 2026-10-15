@@ -362,9 +362,15 @@ func (s *Service) FetchRange(ctx context.Context, groupID, entryID string, offse
 		return Meta{}, nil, fmt.Errorf("read entry %s: %w", meta.ID, err)
 	}
 	defer rc.Close()
-	data := make([]byte, length)
-	if _, err := io.ReadFull(rc, data); err != nil {
+	// Read through a limit rather than into a buffer sized up front: length
+	// is clamped to the chunk size above, and this way no allocation is ever
+	// sized from a request, whatever happens to that clamp later.
+	data, err := io.ReadAll(io.LimitReader(rc, length))
+	if err != nil {
 		return Meta{}, nil, fmt.Errorf("read entry %s: %w", meta.ID, err)
+	}
+	if int64(len(data)) != length {
+		return Meta{}, nil, fmt.Errorf("read entry %s: %w", meta.ID, io.ErrUnexpectedEOF)
 	}
 	return meta, data, nil
 }
