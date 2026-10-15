@@ -2,7 +2,8 @@
 
 **Status:** in progress. Done: step 1 (token revocation) and step 2 (storage limits,
 accounting and eviction on the disk backend, `EntryEvicted`, `QUOTA_EXCEEDED`,
-`tpp gc --rebuild-accounting`). Next: step 3, the S3 backend.
+`tpp gc --rebuild-accounting`) and step 3 (the S3 backend, the MinIO compose profile, and
+Redis and MinIO in CI). Next: step 4, the admin dashboard.
 **Touches:** `/proto/**` (P1), `/server/**` (P3), `/pkg/tppclient/**` (P5),
 `/desktop/**` (P6), `/mobile/**` (P7), `/deploy/**`, `/docs/**`.
 

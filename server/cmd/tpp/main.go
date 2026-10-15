@@ -124,6 +124,9 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := checkBlobBackend(ctx, cfg, blobs); err != nil {
+		return err
+	}
 	persistent := store.NewRedisStore(rdb)
 	ephemeral := entries.NewRedisStore(rdb)
 	ledger := quota.NewRedis(rdb, quota.Options{Limits: quota.Limits{
@@ -198,6 +201,7 @@ func serve(args []string) error {
 			slog.String("addr", cfg.HTTPAddr),
 			slog.String("public_base_url", cfg.PublicBaseURL),
 			slog.String("blob_backend", string(cfg.Blob.Backend)),
+			slog.String("blob_store", fmt.Sprint(blobs)),
 			slog.Int64("entry_max_bytes", cfg.Entry.MaxBytes),
 			slog.Int64("blob_max_total_bytes", cfg.Blob.MaxTotalBytes),
 			slog.Int64("blob_max_group_bytes", cfg.Blob.MaxGroupBytes))
@@ -250,18 +254,4 @@ func openRedis(ctx context.Context, cfg config.RedisConfig) (*redis.Client, erro
 		return nil, fmt.Errorf("connect to redis at %s: %w", cfg.Addr, err)
 	}
 	return rdb, nil
-}
-
-// newBlobBackend builds the configured blob backend (SPEC §4.3).
-func newBlobBackend(cfg *config.Config) (blob.Backend, error) {
-	switch cfg.Blob.Backend {
-	case config.BlobBackendDisk:
-		return blob.NewDisk(cfg.Blob.Root, cfg.Entry.MaxBytes).WithMinFreeBytes(cfg.Blob.MinFreeBytes), nil
-	case config.BlobBackendS3:
-		// Deferred (SPEC §4.3): the type exists so the interface has a second
-		// implementation, but nothing behind it is written yet.
-		return nil, errors.New("the s3 blob backend is not implemented; set TPP_BLOB_BACKEND=disk")
-	default:
-		return nil, fmt.Errorf("unknown blob backend %q", cfg.Blob.Backend)
-	}
 }

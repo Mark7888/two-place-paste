@@ -8,9 +8,8 @@ import (
 	"strings"
 )
 
-// Lister is implemented by a backend that can enumerate what it holds. Only
-// the disk backend does; the S3 backend has no reason to, because object
-// lifecycle rules reclaim its objects without anyone listing them.
+// Lister is implemented by a backend that can enumerate what it holds. Both
+// backends do; listing backs the manual verification only, never the sweep.
 type Lister interface {
 	// ListRefs returns every reference the backend currently stores.
 	ListRefs(ctx context.Context) ([]string, error)

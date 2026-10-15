@@ -66,10 +66,15 @@ func runGC(args []string) error {
 		return rebuildAccounting(ctx, os.Stdout, ephemeral, ledger)
 	}
 
-	if cfg.Blob.Backend != config.BlobBackendDisk {
+	backend, err := newBlobBackend(cfg)
+	if err != nil {
+		return err
+	}
+	lister, ok := backend.(blob.Lister)
+	if !ok {
 		return fmt.Errorf("gc --verify needs a backend that can list what it holds; %q cannot", cfg.Blob.Backend)
 	}
-	report, err := blob.Verify(ctx, blob.NewDisk(cfg.Blob.Root, cfg.Entry.MaxBytes), ephemeral)
+	report, err := blob.Verify(ctx, lister, ephemeral)
 	if err != nil {
 		return fmt.Errorf("cross-check blobs against entries: %w", err)
 	}

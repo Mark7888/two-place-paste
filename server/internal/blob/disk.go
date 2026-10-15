@@ -118,7 +118,7 @@ func (d *Disk) Put(ctx context.Context, entryID string, expiresAt time.Time, r i
 		return "", fmt.Errorf("write blob for entry %s: %w", entryID, ErrTooLarge)
 	}
 
-	return bucket + "/" + entryID + ".bin", nil
+	return refFor(bucket, entryID), nil
 }
 
 // Get implements Backend.
@@ -223,22 +223,37 @@ func (d *Disk) ListRefs(ctx context.Context) ([]string, error) {
 // path resolves a reference to an absolute filesystem path, rejecting anything
 // that is not the exact <bucket>/<entry_id>.bin layout this package writes.
 func (d *Disk) path(ref string) (string, error) {
-	bucket, file, ok := strings.Cut(ref, "/")
-	if !ok || strings.Contains(file, "/") {
-		return "", fmt.Errorf("%w: %q", ErrInvalidRef, ref)
-	}
-	if _, ok := BucketEnd(bucket); !ok {
-		return "", fmt.Errorf("%w: %q", ErrInvalidRef, ref)
-	}
-	entryID, ok := strings.CutSuffix(file, ".bin")
-	if !ok {
-		return "", fmt.Errorf("%w: %q", ErrInvalidRef, ref)
-	}
-	if err := validEntryID(entryID); err != nil {
+	bucket, entryID, err := parseRef(ref)
+	if err != nil {
 		return "", err
 	}
-	return filepath.Join(d.root, bucket, file), nil
+	return filepath.Join(d.root, bucket, entryID+".bin"), nil
 }
+
+// parseRef splits a reference into its hour bucket and entry id, rejecting
+// anything that is not the exact <bucket>/<entry_id>.bin layout every backend
+// writes. A reference comes back from Redis, so this is the guard that keeps a
+// corrupted or forged one from naming a path or key outside the layout.
+func parseRef(ref string) (bucket, entryID string, err error) {
+	bucket, file, ok := strings.Cut(ref, "/")
+	if !ok || strings.Contains(file, "/") {
+		return "", "", fmt.Errorf("%w: %q", ErrInvalidRef, ref)
+	}
+	if _, ok := BucketEnd(bucket); !ok {
+		return "", "", fmt.Errorf("%w: %q", ErrInvalidRef, ref)
+	}
+	entryID, ok = strings.CutSuffix(file, ".bin")
+	if !ok {
+		return "", "", fmt.Errorf("%w: %q", ErrInvalidRef, ref)
+	}
+	if err := validEntryID(entryID); err != nil {
+		return "", "", err
+	}
+	return bucket, entryID, nil
+}
+
+// refFor is the reference of a blob: the inverse of parseRef.
+func refFor(bucket, entryID string) string { return bucket + "/" + entryID + ".bin" }
 
 // validEntryID rejects anything that could escape the blob root. Server-issued
 // identifiers are URL-safe base64, so this only ever fires on a bug or an

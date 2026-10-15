@@ -352,3 +352,82 @@ func TestParseByteSize(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadS3(t *testing.T) {
+	t.Parallel()
+
+	secretFile := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(secretFile, []byte("from-a-file\n"), 0o600); err != nil {
+		t.Fatalf("write secret: %v", err)
+	}
+	env := minimalEnv()
+	env["TPP_BLOB_BACKEND"] = "s3"
+	env["TPP_S3_ENDPOINT"] = "http://minio:9000/"
+	env["TPP_S3_BUCKET"] = "tpp"
+	env["TPP_S3_ACCESS_KEY_ID"] = "tpp-relay"
+	env["TPP_S3_SECRET_ACCESS_KEY_FILE"] = secretFile
+	env["TPP_S3_CREATE_BUCKET"] = "yes"
+
+	cfg, err := Load(Options{DotenvPath: filepath.Join(t.TempDir(), "absent.env"), Lookup: lookupFrom(env)})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := S3Config{
+		Endpoint: "minio:9000", UseSSL: false, Region: "us-east-1", Bucket: "tpp",
+		AccessKeyID: "tpp-relay", SecretAccessKey: "from-a-file", PathStyle: "auto", CreateBucket: true,
+	}
+	if cfg.Blob.S3 != want {
+		t.Errorf("Blob.S3 = %+v, want %+v", cfg.Blob.S3, want)
+	}
+
+	// An endpoint without a scheme is https unless told otherwise, and an
+	// explicit TPP_S3_USE_SSL wins over the scheme.
+	env["TPP_S3_ENDPOINT"] = "s3.example.com"
+	cfg, err = Load(Options{DotenvPath: filepath.Join(t.TempDir(), "absent.env"), Lookup: lookupFrom(env)})
+	if err != nil || !cfg.Blob.S3.UseSSL {
+		t.Errorf("bare endpoint: UseSSL = %v, %v; want true", cfg.Blob.S3.UseSSL, err)
+	}
+	env["TPP_S3_ENDPOINT"] = "http://minio:9000"
+	env["TPP_S3_USE_SSL"] = "true"
+	cfg, err = Load(Options{DotenvPath: filepath.Join(t.TempDir(), "absent.env"), Lookup: lookupFrom(env)})
+	if err != nil || !cfg.Blob.S3.UseSSL {
+		t.Errorf("explicit TPP_S3_USE_SSL: UseSSL = %v, %v; want true", cfg.Blob.S3.UseSSL, err)
+	}
+}
+
+func TestLoadS3Errors(t *testing.T) {
+	t.Parallel()
+
+	base := func() map[string]string {
+		env := minimalEnv()
+		env["TPP_BLOB_BACKEND"] = "s3"
+		env["TPP_S3_BUCKET"] = "tpp"
+		return env
+	}
+	tests := []struct {
+		name    string
+		set     map[string]string
+		wantErr string
+	}{
+		{"no bucket", map[string]string{"TPP_S3_BUCKET": ""}, "TPP_S3_BUCKET is required"},
+		{"half the credentials", map[string]string{"TPP_S3_ACCESS_KEY_ID": "id"}, "set both TPP_S3_ACCESS_KEY_ID and TPP_S3_SECRET_ACCESS_KEY"},
+		{"endpoint with a path", map[string]string{"TPP_S3_ENDPOINT": "https://s3.example.com/tpp"}, "TPP_S3_ENDPOINT must be host[:port]"},
+		{"bad path style", map[string]string{"TPP_S3_PATH_STYLE": "sideways"}, "TPP_S3_PATH_STYLE must be auto, path or virtual"},
+		{"bad boolean", map[string]string{"TPP_S3_CREATE_BUCKET": "perhaps"}, `TPP_S3_CREATE_BUCKET: "perhaps" is not a boolean`},
+		{"secret and file", map[string]string{"TPP_S3_ACCESS_KEY_ID": "id", "TPP_S3_SECRET_ACCESS_KEY": "s", "TPP_S3_SECRET_ACCESS_KEY_FILE": "/x"}, "not both"},
+		{"missing secret file", map[string]string{"TPP_S3_ACCESS_KEY_ID": "id", "TPP_S3_SECRET_ACCESS_KEY_FILE": "/no/such/file"}, "TPP_S3_SECRET_ACCESS_KEY_FILE"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			env := base()
+			for k, v := range tt.set {
+				env[k] = v
+			}
+			_, err := Load(Options{DotenvPath: filepath.Join(t.TempDir(), "absent.env"), Lookup: lookupFrom(env)})
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("Load() error = %v, want it to contain %q", err, tt.wantErr)
+			}
+		})
+	}
+}

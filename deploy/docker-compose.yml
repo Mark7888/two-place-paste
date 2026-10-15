@@ -1,7 +1,12 @@
-# TwoPlacePaste deployment: one Go server, one Redis (SPEC §4.1).
+# TwoPlacePaste deployment: one Go server, one Redis (SPEC §4.1), and
+# optionally MinIO for blob storage.
 #
 #   cp .env.example .env    # then edit it
 #   docker compose up -d --build
+#
+# With MinIO (set the S3 block in .env first — see .env.example):
+#
+#   docker compose --profile minio up -d --build
 #
 # Build context is the repository root because the Go workspace spans three
 # modules; run compose from this directory and it resolves.
@@ -69,6 +74,10 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      # Only when the minio profile is enabled; otherwise ignored.
+      minio:
+        condition: service_healthy
+        required: false
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/healthz"]
       interval: 30s
@@ -76,8 +85,38 @@ services:
       retries: 3
       start_period: 5s
 
+  # Optional S3-compatible blob storage, enabled with --profile minio. The
+  # server reaches it as http://minio:9000 on the compose network; nothing is
+  # published, because clients never talk to it — every byte goes through the
+  # relay.
+  #
+  # Its root credentials are the server's S3 credentials from .env, so one
+  # pair configures both sides, and TPP_S3_CREATE_BUCKET=true lets the server
+  # create its bucket on first start. The secret must be at least 8 characters.
+  minio:
+    profiles: ["minio"]
+    image: ${TPP_MINIO_IMAGE:-minio/minio:latest}
+    restart: unless-stopped
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ${TPP_S3_ACCESS_KEY_ID:-}
+      MINIO_ROOT_PASSWORD: ${TPP_S3_SECRET_ACCESS_KEY:-}
+    volumes:
+      - minio-data:/data
+    # To reach the web console from this host, uncomment and add
+    # `--console-address :9001` to the command above:
+    # ports:
+    #   - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
 volumes:
-  # Named, not bind-mounted: both survive `docker compose down` and are what a
-  # backup copies (docs/deployment.md).
+  # Named, not bind-mounted: all of them survive `docker compose down` and are
+  # what a backup copies (docs/deployment.md).
   redis-data:
   blob-data:
+  minio-data:

@@ -187,6 +187,79 @@ Two kinds of finding:
 It also compares the storage accounting with the entry records (below). A
 small difference while uploads are in progress is normal.
 
+### S3 and MinIO
+
+`TPP_BLOB_BACKEND=s3` stores blobs in an S3-compatible object store instead of
+the `blob-data` volume, under the same `<YYYYMMDDHH>/<entry_id>.bin` layout
+(after `TPP_S3_PREFIX`, if set). The sweep, the storage limits and
+`tpp gc --verify` work the same on both backends. Every byte goes through the
+relay: the object store is never exposed to clients, so it belongs on a private
+network.
+
+At startup the server checks that the bucket exists — or creates it, with
+`TPP_S3_CREATE_BUCKET=true` — and writes, reads and deletes a probe object under
+`.tpp-probe/`. Any failure stops the start with the reason. There is no
+fallback to disk.
+
+**MinIO with compose.** `deploy/docker-compose.yml` has a `minio` service behind
+the `minio` profile. Its root credentials are `TPP_S3_ACCESS_KEY_ID` and
+`TPP_S3_SECRET_ACCESS_KEY` from `.env` (MinIO needs the secret to be at least 8
+characters), so one pair configures both sides:
+
+```sh
+TPP_BLOB_BACKEND=s3
+TPP_S3_ENDPOINT=http://minio:9000
+TPP_S3_BUCKET=tpp
+TPP_S3_ACCESS_KEY_ID=tpp
+TPP_S3_SECRET_ACCESS_KEY=change-me-to-at-least-8-chars
+TPP_S3_CREATE_BUCKET=true
+```
+
+```sh
+docker compose --profile minio up -d --build
+```
+
+Its data is the `minio-data` volume, which holds at most a day of ciphertext,
+like `blob-data`. MinIO no longer publishes new community images, so the
+service uses `minio/minio:latest` by default; set `TPP_MINIO_IMAGE` in `.env` to
+pin a release or to use an image you build or mirror yourself.
+
+To give the relay a key scoped to its bucket rather than the root pair, create a
+user and policy in MinIO, set `TPP_S3_ACCESS_KEY_ID` / `TPP_S3_SECRET_ACCESS_KEY`
+to that user, and set `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` for the `minio`
+service separately in an override file.
+
+**AWS S3.** Leave `TPP_S3_ENDPOINT` empty and set `TPP_S3_REGION` and
+`TPP_S3_BUCKET`. With both key variables empty the server uses the AWS
+credential chain (`AWS_*` environment variables, then an instance or task
+role). The relay needs this policy on its bucket and nothing else:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "arn:aws:s3:::my-tpp-blobs"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::my-tpp-blobs/*"
+    }
+  ]
+}
+```
+
+Add `s3:CreateBucket` only if you use `TPP_S3_CREATE_BUCKET=true`. A lifecycle
+rule that expires objects after 2 days is a good backstop for a relay that stays
+down; the server's own sweep deletes expired objects hourly.
+
+**Switching backends.** Change `TPP_BLOB_BACKEND` and restart. Entries already
+written keep pointing at the old backend and read as gone within a day; nothing
+needs migrating, because nothing lives longer than that.
+
 ### Storage limits and eviction
 
 `TPP_BLOB_MAX_TOTAL_BYTES` caps all blob storage and `TPP_BLOB_MAX_GROUP_BYTES`

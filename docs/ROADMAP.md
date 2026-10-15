@@ -945,7 +945,6 @@ moving the risk onto the member, and the work split are in
 | Push delivery for Android (FCM gateway / UnifiedPush / WS-only) | §9 |
 | Plaintext padding | §9 |
 | Admin password hashing (the P0 config loader already accommodates it) | §4.4, §9 |
-| S3 blob backend implementation | §4.3 |
 | iOS client + share-sheet extension | §7.3 |
 | Linux desktop (tray, X11/Wayland clipboard, packaging) | §7.4 |
 | Auto-sync on Android | §7.1 |

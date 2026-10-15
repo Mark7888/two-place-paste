@@ -159,7 +159,7 @@ have no default:
 
 The rest have defaults: `TPP_HTTP_ADDR` (`:8080`), `TPP_LOG_LEVEL` (`info`),
 `TPP_ADMIN_SESSION_TTL` (`12h`), `TPP_REDIS_ADDR` / `TPP_REDIS_PASSWORD` /
-`TPP_REDIS_DB`, `TPP_BLOB_BACKEND` (`disk`; `s3` is not implemented),
+`TPP_REDIS_DB`, `TPP_BLOB_BACKEND` (`disk` or `s3`, below),
 `TPP_BLOB_ROOT`, `TPP_BLOB_SWEEP_INTERVAL` (`10m`),
 `TPP_ENTRY_INLINE_MAX_BYTES` (256 KiB — larger ciphertext goes to the blob
 store) and `TPP_ENTRY_MAX_BYTES` (10 MiB hard cap).
@@ -170,6 +170,23 @@ entry would not fit, the oldest entries are evicted to make room — the writing
 group's own first, then the oldest anywhere — even inside their 24 hours.
 `TPP_BLOB_MIN_FREE_BYTES` additionally refuses writes when the disk itself runs
 low. Sizes accept units (`500MB`, `5GiB`) or plain byte counts.
+
+**S3 / MinIO.** Large entries can live in S3-compatible object storage instead of
+on disk. To use the MinIO service that `deploy/docker-compose.yml` ships behind a
+profile, set this in `.env` and start with `docker compose --profile minio up -d`:
+
+```sh
+TPP_BLOB_BACKEND=s3
+TPP_S3_ENDPOINT=http://minio:9000
+TPP_S3_BUCKET=tpp
+TPP_S3_ACCESS_KEY_ID=tpp
+TPP_S3_SECRET_ACCESS_KEY=change-me-to-at-least-8-chars   # also MinIO's root password
+TPP_S3_CREATE_BUCKET=true
+```
+
+For AWS S3, leave `TPP_S3_ENDPOINT` empty and set `TPP_S3_REGION`. Every S3
+setting is documented in `deploy/.env.example`; the server checks the bucket and
+credentials at startup and refuses to start, with the reason, if either is wrong.
 
 Configuration comes from `.env` **and** the process environment, and the
 process environment wins. The loader validates eagerly and reports every

@@ -233,9 +233,11 @@ pairing:<pairing_token>             hash    group_id, inviter_device_id         
 - Larger payloads go to a **blob backend** behind a Go interface — roughly
   `Put(entryID, expiresAt, r) (ref, error)`, `Get(ref)`, `Delete(ref)`, `Sweep(now)`.
   `expiresAt` is passed in at write time because reclamation depends on it (§4.5).
-  - MVP implementation: local disk.
-  - Planned: S3-compatible object storage. The interface exists from day one so this
-    is a new implementation, not a refactor.
+  - Local disk (the default).
+  - S3-compatible object storage — MinIO, AWS S3 or any other — chosen explicitly in
+    configuration. The server verifies the bucket and its credentials at startup and
+    refuses to start if either is wrong; it never falls back to disk. All bytes pass
+    through the relay, so the object store can stay on a private network.
 - The Redis entry holds only a reference.
 
 **Hard cap: 10 MB per entry, measured on the ciphertext** — the size the server
@@ -339,10 +341,14 @@ the backstop, that fast path is permitted to fail silently.
 
 **S3 backend**
 
-Object stores handle this natively via lifecycle expiration rules configured on the
-bucket. The S3 implementation of `Sweep()` is a **no-op**. Lifecycle granularity is one
-day rather than one hour, so objects may persist somewhat past their TTL; this is
-harmless, as Redis is the sole authority on entry visibility.
+The S3 backend uses the same layout under an optional key prefix,
+`<prefix>/<YYYYMMDDHH>/<entry_id>.bin`, and the same sweep: list the hour prefixes and
+delete everything under the ones that have fully passed. It deletes actively rather
+than relying on a bucket lifecycle rule, because lifecycle rules work in whole days and
+the storage limits (§4.3) would count dead objects for up to a day. A lifecycle rule
+expiring objects after two days remains a sensible backstop for a relay that is down.
+Writes carry `If-None-Match: *`, so the store itself refuses to replace an existing
+blob, as `O_EXCL` does on disk.
 
 **Manual verification**
 

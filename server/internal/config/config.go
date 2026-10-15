@@ -105,9 +105,8 @@ const (
 	// BlobBackendDisk stores blobs on the local filesystem (MVP, SPEC §4.3).
 	BlobBackendDisk BlobBackend = "disk"
 
-	// BlobBackendS3 is the deferred object-storage backend. Its Sweep() is a
-	// documented no-op because object stores expire objects via lifecycle
-	// rules (SPEC §4.5).
+	// BlobBackendS3 stores blobs in an S3-compatible object store: MinIO,
+	// AWS S3 or any other (SPEC §4.3).
 	BlobBackendS3 BlobBackend = "s3"
 )
 
@@ -133,10 +132,45 @@ type BlobConfig struct {
 	// else's. Zero is unlimited.
 	MaxGroupBytes int64
 
+	// S3 configures the s3 backend; it is ignored by the disk backend.
+	S3 S3Config
+
 	// MinFreeBytes is the disk backend's floor: a write is refused while the
 	// volume has less than this free, whatever the limits above allow. Zero
 	// disables the check.
 	MinFreeBytes int64
+}
+
+// S3Config addresses an S3-compatible object store.
+type S3Config struct {
+	// Endpoint is host[:port] of the S3 API, e.g. "minio:9000". Empty means
+	// AWS. A scheme may be given ("http://minio:9000"), and then decides
+	// UseSSL on its own.
+	Endpoint string
+
+	// UseSSL selects https. It defaults to true, and to false when the
+	// endpoint is written with http://.
+	UseSSL bool
+
+	Region string
+	Bucket string
+
+	// Prefix is prepended to every key, so one bucket can be shared.
+	Prefix string
+
+	// AccessKeyID and SecretAccessKey are static credentials. Both empty
+	// means the standard AWS credential chain (environment, then an
+	// instance or task role).
+	AccessKeyID     string
+	SecretAccessKey string
+
+	// PathStyle is "auto", "path" or "virtual". Auto means path-style for a
+	// custom endpoint and virtual-host style for AWS.
+	PathStyle string
+
+	// CreateBucket creates a missing bucket at startup instead of refusing
+	// to start.
+	CreateBucket bool
 }
 
 // EntryConfig bounds entry sizes. Both limits are measured on the ciphertext:
@@ -201,6 +235,7 @@ func Load(opts Options) (*Config, error) {
 			MaxTotalBytes: r.byteSize("TPP_BLOB_MAX_TOTAL_BYTES", 0),
 			MaxGroupBytes: r.byteSize("TPP_BLOB_MAX_GROUP_BYTES", DefaultGroupMax),
 			MinFreeBytes:  r.byteSize("TPP_BLOB_MIN_FREE_BYTES", 0),
+			S3:            r.s3(),
 		},
 		Entry: EntryConfig{
 			InlineMaxBytes: r.byteSize("TPP_ENTRY_INLINE_MAX_BYTES", DefaultInlineMax),
@@ -249,8 +284,21 @@ func (c *Config) Validate() error {
 			errs = append(errs, errors.New("TPP_BLOB_ROOT must not be empty for the disk backend"))
 		}
 	case BlobBackendS3:
-		// Credentials and bucket configuration land with the deferred S3
-		// implementation (SPEC §4.3); nothing to validate yet.
+		s3 := c.Blob.S3
+		if s3.Bucket == "" {
+			errs = append(errs, errors.New("TPP_S3_BUCKET is required for the s3 backend"))
+		}
+		if (s3.AccessKeyID == "") != (s3.SecretAccessKey == "") {
+			errs = append(errs, errors.New("set both TPP_S3_ACCESS_KEY_ID and TPP_S3_SECRET_ACCESS_KEY, or neither (to use the AWS credential chain)"))
+		}
+		if strings.Contains(s3.Endpoint, "/") {
+			errs = append(errs, fmt.Errorf("TPP_S3_ENDPOINT must be host[:port] with an optional http:// or https://, and no path; got %q", s3.Endpoint))
+		}
+		switch s3.PathStyle {
+		case "auto", "path", "virtual":
+		default:
+			errs = append(errs, fmt.Errorf("TPP_S3_PATH_STYLE must be auto, path or virtual, got %q", s3.PathStyle))
+		}
 	default:
 		errs = append(errs, fmt.Errorf("TPP_BLOB_BACKEND must be %q or %q, got %q", BlobBackendDisk, BlobBackendS3, c.Blob.Backend))
 	}
@@ -291,6 +339,32 @@ func (c *Config) Validate() error {
 	return errors.Join(errs...)
 }
 
+// s3 reads the S3 settings. The endpoint's scheme, when there is one, decides
+// TLS unless TPP_S3_USE_SSL says otherwise, so that "http://minio:9000" works
+// on its own.
+func (r *resolver) s3() S3Config {
+	endpoint := r.str("TPP_S3_ENDPOINT", "")
+	useSSL := true
+	switch {
+	case strings.HasPrefix(endpoint, "http://"):
+		endpoint, useSSL = strings.TrimPrefix(endpoint, "http://"), false
+	case strings.HasPrefix(endpoint, "https://"):
+		endpoint = strings.TrimPrefix(endpoint, "https://")
+	}
+	endpoint = strings.TrimRight(endpoint, "/")
+	return S3Config{
+		Endpoint:        endpoint,
+		UseSSL:          r.boolean("TPP_S3_USE_SSL", useSSL),
+		Region:          r.str("TPP_S3_REGION", "us-east-1"),
+		Bucket:          r.str("TPP_S3_BUCKET", ""),
+		Prefix:          r.str("TPP_S3_PREFIX", ""),
+		AccessKeyID:     r.secret("TPP_S3_ACCESS_KEY_ID"),
+		SecretAccessKey: r.secret("TPP_S3_SECRET_ACCESS_KEY"),
+		PathStyle:       strings.ToLower(r.str("TPP_S3_PATH_STYLE", "auto")),
+		CreateBucket:    r.boolean("TPP_S3_CREATE_BUCKET", false),
+	}
+}
+
 // resolver reads values with process-environment-over-file precedence and
 // accumulates parse errors instead of failing on the first one.
 type resolver struct {
@@ -311,6 +385,43 @@ func (r *resolver) str(key, def string) string {
 	if v, ok := r.raw(key); ok && v != "" {
 		return v
 	}
+	return def
+}
+
+// secret reads key, or the file named by key_FILE — the Docker secrets
+// convention, so a credential need not sit in the environment. Setting both is
+// an error rather than a guess.
+func (r *resolver) secret(key string) string {
+	v := r.str(key, "")
+	path := r.str(key+"_FILE", "")
+	if path == "" {
+		return v
+	}
+	if v != "" {
+		r.errs = append(r.errs, fmt.Errorf("set %s or %s_FILE, not both", key, key))
+		return v
+	}
+	b, err := os.ReadFile(path) //nolint:gosec // the operator names the file
+	if err != nil {
+		r.errs = append(r.errs, fmt.Errorf("%s_FILE: %w", key, err))
+		return ""
+	}
+	return strings.TrimRight(string(b), "\r\n")
+}
+
+// boolean reads true/false, yes/no, on/off or 1/0.
+func (r *resolver) boolean(key string, def bool) bool {
+	v, ok := r.raw(key)
+	if !ok || v == "" {
+		return def
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
+	r.errs = append(r.errs, fmt.Errorf("%s: %q is not a boolean (want true or false)", key, v))
 	return def
 }
 
