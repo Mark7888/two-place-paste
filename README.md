@@ -164,6 +164,13 @@ The rest have defaults: `TPP_HTTP_ADDR` (`:8080`), `TPP_LOG_LEVEL` (`info`),
 `TPP_ENTRY_INLINE_MAX_BYTES` (256 KiB — larger ciphertext goes to the blob
 store) and `TPP_ENTRY_MAX_BYTES` (10 MiB hard cap).
 
+**Storage limits.** `TPP_BLOB_MAX_TOTAL_BYTES` (unlimited by default, e.g.
+`5GiB`) and `TPP_BLOB_MAX_GROUP_BYTES` (`1GiB`) cap the blob store. When a new
+entry would not fit, the oldest entries are evicted to make room — the writing
+group's own first, then the oldest anywhere — even inside their 24 hours.
+`TPP_BLOB_MIN_FREE_BYTES` additionally refuses writes when the disk itself runs
+low. Sizes accept units (`500MB`, `5GiB`) or plain byte counts.
+
 Configuration comes from `.env` **and** the process environment, and the
 process environment wins. The loader validates eagerly and reports every
 problem in one pass, so a bad `.env` fails at startup with the whole list.
@@ -200,6 +207,7 @@ server.
 docker compose logs -f server                       # JSON, one object per line
 docker compose pull && docker compose up -d         # upgrade (add --build from source)
 docker compose exec server tpp gc --verify          # cross-check blobs; deletes nothing
+docker compose exec server tpp gc --rebuild-accounting  # after a Redis restore
 ```
 
 Back up the `redis-data` volume: it holds the groups, devices and wrapped keys,

@@ -10,6 +10,8 @@
 //
 //	tpp [serve]        run the relay and admin server (default)
 //	tpp gc --verify    cross-check blobs against entries; report only
+//	tpp gc --rebuild-accounting
+//	                   recompute storage accounting from the entries in Redis
 package main
 
 import (
@@ -32,6 +34,7 @@ import (
 	"github.com/Mark7888/two-place-paste/server/internal/entries"
 	"github.com/Mark7888/two-place-paste/server/internal/httpapi"
 	"github.com/Mark7888/two-place-paste/server/internal/pairlink"
+	"github.com/Mark7888/two-place-paste/server/internal/quota"
 	"github.com/Mark7888/two-place-paste/server/internal/store"
 	"github.com/Mark7888/two-place-paste/server/internal/ws"
 )
@@ -83,6 +86,9 @@ Commands:
   serve              run the relay and admin server (default)
   gc --verify        cross-check stored blobs against entries and report;
                      never deletes anything
+  gc --rebuild-accounting
+                     recompute the storage limits' bookkeeping from the
+                     entries in Redis; never deletes a blob
 
 Configuration comes from .env and the process environment; see
 deploy/.env.example and docs/deployment.md.
@@ -120,13 +126,27 @@ func serve(args []string) error {
 	}
 	persistent := store.NewRedisStore(rdb)
 	ephemeral := entries.NewRedisStore(rdb)
+	ledger := quota.NewRedis(rdb, quota.Options{Limits: quota.Limits{
+		TotalBytes: cfg.Blob.MaxTotalBytes,
+		GroupBytes: cfg.Blob.MaxGroupBytes,
+	}})
+
+	// The transport is built after the entry service but announces its
+	// evictions, so the hook reaches it through this variable. It is set
+	// before the server accepts a connection, so no eviction can precede it.
+	var wsSrv *ws.Server
 	entrySvc := entries.NewService(ephemeral, blobs, entries.Options{
 		InlineMaxBytes: cfg.Entry.InlineMaxBytes,
 		MaxBytes:       cfg.Entry.MaxBytes,
 		TTL:            config.EntryTTL,
+		Quota:          ledger,
+		OnEvict: func(ctx context.Context, groupID, entryID string) {
+			wsSrv.AnnounceEviction(ctx, groupID, entryID)
+		},
+		Logger: logger,
 	})
 
-	wsSrv := ws.New(persistent, entrySvc, ws.Options{
+	wsSrv = ws.New(persistent, entrySvc, ws.Options{
 		Logger:     logger,
 		PairingTTL: config.PairingTokenTTL,
 	})
@@ -160,7 +180,16 @@ func serve(args []string) error {
 		defer wg.Done()
 		// The sweeper runs once immediately, which is what makes downtime
 		// longer than a bucket harmless (SPEC §4.5).
-		blob.NewSweeper(blobs, cfg.Blob.SweepInterval, logger).Run(ctx)
+		// The ledger forgets expired entries on the same schedule, so the
+		// storage limits track what the sweep reclaims.
+		blob.NewSweeper(blobs, cfg.Blob.SweepInterval, logger).
+			Also("expire storage accounting", func(ctx context.Context, now time.Time) error {
+				if _, err := ledger.Expire(ctx, now); err != nil {
+					return fmt.Errorf("expire storage accounting: %w", err)
+				}
+				return nil
+			}).
+			Run(ctx)
 	}()
 
 	serveErr := make(chan error, 1)
@@ -168,7 +197,10 @@ func serve(args []string) error {
 		logger.Info("server listening",
 			slog.String("addr", cfg.HTTPAddr),
 			slog.String("public_base_url", cfg.PublicBaseURL),
-			slog.String("blob_backend", string(cfg.Blob.Backend)))
+			slog.String("blob_backend", string(cfg.Blob.Backend)),
+			slog.Int64("entry_max_bytes", cfg.Entry.MaxBytes),
+			slog.Int64("blob_max_total_bytes", cfg.Blob.MaxTotalBytes),
+			slog.Int64("blob_max_group_bytes", cfg.Blob.MaxGroupBytes))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- fmt.Errorf("http server: %w", err)
 			return
@@ -224,7 +256,7 @@ func openRedis(ctx context.Context, cfg config.RedisConfig) (*redis.Client, erro
 func newBlobBackend(cfg *config.Config) (blob.Backend, error) {
 	switch cfg.Blob.Backend {
 	case config.BlobBackendDisk:
-		return blob.NewDisk(cfg.Blob.Root, cfg.Entry.MaxBytes), nil
+		return blob.NewDisk(cfg.Blob.Root, cfg.Entry.MaxBytes).WithMinFreeBytes(cfg.Blob.MinFreeBytes), nil
 	case config.BlobBackendS3:
 		// Deferred (SPEC §4.3): the type exists so the interface has a second
 		// implementation, but nothing behind it is written yet.

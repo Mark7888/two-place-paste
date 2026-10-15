@@ -246,6 +246,57 @@ func (x *EntryAdded) GetMeta() *EntryMeta {
 	return nil
 }
 
+// EntryEvicted tells every connected device of the group that an entry was
+// removed before its expiry, because the relay's storage limit needed its room
+// for a newer entry. A client drops it from any history it is showing; a fetch
+// of it now answers ERROR_CODE_NOT_FOUND, exactly as for an expired entry.
+//
+// Eviction only ever shortens an entry's life; nothing lengthens one
+// (SPEC §4.5).
+type EntryEvicted struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	EntryId       string                 `protobuf:"bytes,1,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EntryEvicted) Reset() {
+	*x = EntryEvicted{}
+	mi := &file_tpp_v1_events_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EntryEvicted) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EntryEvicted) ProtoMessage() {}
+
+func (x *EntryEvicted) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_events_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EntryEvicted.ProtoReflect.Descriptor instead.
+func (*EntryEvicted) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_events_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *EntryEvicted) GetEntryId() string {
+	if x != nil {
+		return x.EntryId
+	}
+	return ""
+}
+
 var File_tpp_v1_events_proto protoreflect.FileDescriptor
 
 const file_tpp_v1_events_proto_rawDesc = "" +
@@ -262,7 +313,9 @@ const file_tpp_v1_events_proto_rawDesc = "" +
 	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\"3\n" +
 	"\n" +
 	"EntryAdded\x12%\n" +
-	"\x04meta\x18\x01 \x01(\v2\x11.tpp.v1.EntryMetaR\x04metaBHZFgithub.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1b\x06proto3"
+	"\x04meta\x18\x01 \x01(\v2\x11.tpp.v1.EntryMetaR\x04meta\")\n" +
+	"\fEntryEvicted\x12\x19\n" +
+	"\bentry_id\x18\x01 \x01(\tR\aentryIdBHZFgithub.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1b\x06proto3"
 
 var (
 	file_tpp_v1_events_proto_rawDescOnce sync.Once
@@ -276,16 +329,17 @@ func file_tpp_v1_events_proto_rawDescGZIP() []byte {
 	return file_tpp_v1_events_proto_rawDescData
 }
 
-var file_tpp_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_tpp_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_tpp_v1_events_proto_goTypes = []any{
 	(*EpochChanged)(nil),        // 0: tpp.v1.EpochChanged
 	(*WrappedKeyAvailable)(nil), // 1: tpp.v1.WrappedKeyAvailable
 	(*DeviceRevoked)(nil),       // 2: tpp.v1.DeviceRevoked
 	(*EntryAdded)(nil),          // 3: tpp.v1.EntryAdded
-	(*EntryMeta)(nil),           // 4: tpp.v1.EntryMeta
+	(*EntryEvicted)(nil),        // 4: tpp.v1.EntryEvicted
+	(*EntryMeta)(nil),           // 5: tpp.v1.EntryMeta
 }
 var file_tpp_v1_events_proto_depIdxs = []int32{
-	4, // 0: tpp.v1.EntryAdded.meta:type_name -> tpp.v1.EntryMeta
+	5, // 0: tpp.v1.EntryAdded.meta:type_name -> tpp.v1.EntryMeta
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
@@ -305,7 +359,7 @@ func file_tpp_v1_events_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_tpp_v1_events_proto_rawDesc), len(file_tpp_v1_events_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

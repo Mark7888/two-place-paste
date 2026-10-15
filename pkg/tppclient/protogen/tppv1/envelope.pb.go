@@ -75,6 +75,7 @@ const (
 	MessageType_MESSAGE_TYPE_WRAPPED_KEY_AVAILABLE MessageType = 51
 	MessageType_MESSAGE_TYPE_DEVICE_REVOKED        MessageType = 52
 	MessageType_MESSAGE_TYPE_ENTRY_ADDED           MessageType = 53
+	MessageType_MESSAGE_TYPE_ENTRY_EVICTED         MessageType = 54
 )
 
 // Enum value maps for MessageType.
@@ -109,6 +110,7 @@ var (
 		51: "MESSAGE_TYPE_WRAPPED_KEY_AVAILABLE",
 		52: "MESSAGE_TYPE_DEVICE_REVOKED",
 		53: "MESSAGE_TYPE_ENTRY_ADDED",
+		54: "MESSAGE_TYPE_ENTRY_EVICTED",
 	}
 	MessageType_value = map[string]int32{
 		"MESSAGE_TYPE_UNSPECIFIED":                  0,
@@ -140,6 +142,7 @@ var (
 		"MESSAGE_TYPE_WRAPPED_KEY_AVAILABLE":        51,
 		"MESSAGE_TYPE_DEVICE_REVOKED":               52,
 		"MESSAGE_TYPE_ENTRY_ADDED":                  53,
+		"MESSAGE_TYPE_ENTRY_EVICTED":                54,
 	}
 )
 
@@ -246,7 +249,7 @@ const file_tpp_v1_envelope_proto_rawDesc = "" +
 	"\bEnvelope\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
 	"\x04type\x18\x02 \x01(\x0e2\x13.tpp.v1.MessageTypeR\x04type\x12\x18\n" +
-	"\apayload\x18\x03 \x01(\fR\apayload*\xcb\b\n" +
+	"\apayload\x18\x03 \x01(\fR\apayload*\xeb\b\n" +
 	"\vMessageType\x12\x1c\n" +
 	"\x18MESSAGE_TYPE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12MESSAGE_TYPE_ERROR\x10\x01\x12%\n" +
@@ -277,7 +280,8 @@ const file_tpp_v1_envelope_proto_rawDesc = "" +
 	"\x1aMESSAGE_TYPE_EPOCH_CHANGED\x102\x12&\n" +
 	"\"MESSAGE_TYPE_WRAPPED_KEY_AVAILABLE\x103\x12\x1f\n" +
 	"\x1bMESSAGE_TYPE_DEVICE_REVOKED\x104\x12\x1c\n" +
-	"\x18MESSAGE_TYPE_ENTRY_ADDED\x105BHZFgithub.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1b\x06proto3"
+	"\x18MESSAGE_TYPE_ENTRY_ADDED\x105\x12\x1e\n" +
+	"\x1aMESSAGE_TYPE_ENTRY_EVICTED\x106BHZFgithub.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1b\x06proto3"
 
 var (
 	file_tpp_v1_envelope_proto_rawDescOnce sync.Once

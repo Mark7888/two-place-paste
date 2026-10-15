@@ -1334,7 +1334,10 @@ func (s *Service) relayError(op string, err error) error {
 			"this device is waiting for its copy of the new group key")
 	case errors.Is(err, tppclient.ErrTooLarge):
 		return localui.Errorf(http.StatusRequestEntityTooLarge, err,
-			"that is larger than the 10 MB the relay accepts")
+			"that is larger than the relay accepts")
+	case errors.Is(err, tppclient.ErrQuotaExceeded):
+		return localui.Errorf(http.StatusInsufficientStorage, err,
+			"the relay's storage is full right now; try again shortly")
 	case errors.Is(err, tppclient.ErrTokenConsumed):
 		return localui.Errorf(http.StatusConflict, err, "that token has already been used")
 	case errors.Is(err, tppclient.ErrTokenExpired):

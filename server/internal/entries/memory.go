@@ -128,6 +128,41 @@ func (m *MemoryStore) InlineBody(_ context.Context, entryID string) ([]byte, err
 	return body, nil
 }
 
+// Delete implements Store.
+func (m *MemoryStore) Delete(_ context.Context, groupID, entryID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if meta, ok := m.metas[entryID]; !ok || meta.GroupID != groupID {
+		return nil
+	}
+	delete(m.metas, entryID)
+	delete(m.bodies, entryID)
+	ids := m.byGroup[groupID]
+	for i, id := range ids {
+		if id == entryID {
+			m.byGroup[groupID] = append(ids[:i:i], ids[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
+// BlobEntries implements Store.
+func (m *MemoryStore) BlobEntries(context.Context) ([]Meta, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := m.now()
+	var metas []Meta
+	for _, meta := range m.metas {
+		if !meta.Inline() && now.Before(meta.ExpiresAt) {
+			metas = append(metas, meta)
+		}
+	}
+	return metas, nil
+}
+
 // EntryRefs implements Store.
 func (m *MemoryStore) EntryRefs(context.Context) (map[string]string, error) {
 	m.mu.Lock()

@@ -2,6 +2,7 @@ package blob_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -66,4 +67,35 @@ func TestNewSweeperRejectsNonPositiveInterval(t *testing.T) {
 		}
 	}()
 	blob.NewSweeper(&recordingBackend{}, 0, nil)
+}
+
+// TestSweeperRunsTasksAfterEachSweep: the storage ledger forgets expired
+// entries on the sweep's schedule, at the sweep's instant.
+func TestSweeperRunsTasksAfterEachSweep(t *testing.T) {
+	t.Parallel()
+
+	backend := &recordingBackend{swept: make(chan time.Time, 8)}
+	ran := make(chan time.Time, 8)
+	sweeper := blob.NewSweeper(backend, time.Hour, slog.New(slog.DiscardHandler)).
+		Also("first", func(context.Context, time.Time) error { return errors.New("failing task") }).
+		Also("second", func(_ context.Context, now time.Time) error { ran <- now; return nil })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go sweeper.Run(ctx)
+
+	var swept, tasked time.Time
+	select {
+	case swept = <-backend.swept:
+	case <-time.After(5 * time.Second):
+		t.Fatal("startup sweep did not happen")
+	}
+	select {
+	case tasked = <-ran:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the task after a failing one did not run")
+	}
+	if !tasked.Equal(swept) {
+		t.Errorf("task ran at %v, want the sweep's instant %v", tasked, swept)
+	}
 }

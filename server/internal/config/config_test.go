@@ -60,6 +60,10 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Entry.MaxBytes != DefaultEntryMax {
 		t.Errorf("Entry.MaxBytes = %d, want %d", cfg.Entry.MaxBytes, DefaultEntryMax)
 	}
+	if cfg.Blob.MaxTotalBytes != 0 || cfg.Blob.MaxGroupBytes != DefaultGroupMax || cfg.Blob.MinFreeBytes != 0 {
+		t.Errorf("Blob limits = total %d, group %d, min free %d; want 0, %d, 0",
+			cfg.Blob.MaxTotalBytes, cfg.Blob.MaxGroupBytes, cfg.Blob.MinFreeBytes, DefaultGroupMax)
+	}
 	if cfg.LogLevel != slog.LevelInfo {
 		t.Errorf("LogLevel = %s, want info", cfg.LogLevel)
 	}
@@ -213,6 +217,26 @@ func TestLoadValidationErrors(t *testing.T) {
 			wantErr: "is not a log level",
 		},
 		{
+			name:    "bad byte size",
+			env:     map[string]string{"ADMIN_PASSWORD": "pw", "TPP_PUBLIC_BASE_URL": "https://x.example", "TPP_BLOB_MAX_TOTAL_BYTES": "5 gallons"},
+			wantErr: `TPP_BLOB_MAX_TOTAL_BYTES: "5 gallons" is not a size`,
+		},
+		{
+			name:    "negative limit",
+			env:     map[string]string{"ADMIN_PASSWORD": "pw", "TPP_PUBLIC_BASE_URL": "https://x.example", "TPP_BLOB_MIN_FREE_BYTES": "-1"},
+			wantErr: "TPP_BLOB_MIN_FREE_BYTES must not be negative",
+		},
+		{
+			name:    "total limit below one entry",
+			env:     map[string]string{"ADMIN_PASSWORD": "pw", "TPP_PUBLIC_BASE_URL": "https://x.example", "TPP_BLOB_MAX_TOTAL_BYTES": "1MiB"},
+			wantErr: "TPP_BLOB_MAX_TOTAL_BYTES (1048576) must be 0 (unlimited) or at least TPP_ENTRY_MAX_BYTES",
+		},
+		{
+			name:    "group limit below one entry",
+			env:     map[string]string{"ADMIN_PASSWORD": "pw", "TPP_PUBLIC_BASE_URL": "https://x.example", "TPP_BLOB_MAX_GROUP_BYTES": "5MB"},
+			wantErr: "TPP_BLOB_MAX_GROUP_BYTES (5000000) must be 0 (unlimited) or at least TPP_ENTRY_MAX_BYTES",
+		},
+		{
 			name:    "negative sweep interval",
 			env:     map[string]string{"ADMIN_PASSWORD": "pw", "TPP_PUBLIC_BASE_URL": "https://x.example", "TPP_BLOB_SWEEP_INTERVAL": "-5m"},
 			wantErr: "TPP_BLOB_SWEEP_INTERVAL must be positive",
@@ -277,5 +301,54 @@ func TestSpecConstants(t *testing.T) {
 	}
 	if PairingTokenTTL != 5*time.Minute {
 		t.Errorf("PairingTokenTTL = %s, want 5m (SPEC §3.2)", PairingTokenTTL)
+	}
+}
+
+func TestLoadByteSizes(t *testing.T) {
+	t.Parallel()
+
+	env := minimalEnv()
+	env["TPP_BLOB_MAX_TOTAL_BYTES"] = "5GiB"
+	env["TPP_BLOB_MAX_GROUP_BYTES"] = "0"
+	env["TPP_ENTRY_MAX_BYTES"] = "10485760"
+	env["TPP_ENTRY_INLINE_MAX_BYTES"] = "256 KiB"
+	cfg, err := Load(Options{DotenvPath: filepath.Join(t.TempDir(), "absent.env"), Lookup: lookupFrom(env)})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Blob.MaxTotalBytes != 5<<30 || cfg.Blob.MaxGroupBytes != 0 {
+		t.Errorf("Blob limits = %d / %d, want %d / 0", cfg.Blob.MaxTotalBytes, cfg.Blob.MaxGroupBytes, int64(5<<30))
+	}
+	if cfg.Entry.MaxBytes != 10<<20 || cfg.Entry.InlineMaxBytes != 256<<10 {
+		t.Errorf("Entry limits = %d / %d, want %d / %d", cfg.Entry.MaxBytes, cfg.Entry.InlineMaxBytes, 10<<20, 256<<10)
+	}
+}
+
+func TestParseByteSize(t *testing.T) {
+	t.Parallel()
+
+	good := map[string]int64{
+		"0":        0,
+		"1048576":  1 << 20,
+		"512B":     512,
+		"500MB":    500e6,
+		"500mb":    500e6,
+		"5GiB":     5 << 30,
+		"5 GiB":    5 << 30,
+		"1.5GiB":   3 << 29,
+		"64k":      64 << 10,
+		"2T":       2 << 40,
+		" 10MiB  ": 10 << 20,
+	}
+	for in, want := range good {
+		got, err := ParseByteSize(in)
+		if err != nil || got != want {
+			t.Errorf("ParseByteSize(%q) = %d, %v; want %d, nil", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "GiB", "5 gallons", "1..5MB", "9999999999999TiB", "1e3"} {
+		if got, err := ParseByteSize(in); err == nil {
+			t.Errorf("ParseByteSize(%q) = %d, nil; want an error", in, got)
+		}
 	}
 }

@@ -38,6 +38,11 @@ var (
 	// filename, so it is validated before it reaches either (SPEC §4.2, §4.5).
 	ErrInvalidID = errors.New("entries: entry id is not usable")
 
+	// ErrQuotaExceeded is returned when blob storage is full and evicting
+	// older entries cannot make room, because what remains is held by
+	// uploads still in progress.
+	ErrQuotaExceeded = errors.New("entries: blob storage is full")
+
 	// ErrEntryExists is returned when a client-chosen entry id is already
 	// taken. Entry keys are global, so accepting a duplicate would let one
 	// group overwrite another group's entry; the write is refused instead.
@@ -134,4 +139,16 @@ type Store interface {
 	// valued by entry id. It backs `tpp gc --verify` only; normal reclamation
 	// never queries Redis (SPEC §4.5).
 	EntryRefs(ctx context.Context) (map[string]string, error)
+
+	// BlobEntries returns the metadata of every live blob-backed entry. It
+	// backs `tpp gc --rebuild-accounting` only, and scans the whole zone.
+	BlobEntries(ctx context.Context) ([]Meta, error)
+
+	// Delete removes an entry before its expiry: its record, its inline body
+	// and its place in the group's history. It does not touch the blob, which
+	// is the caller's to delete. Deleting an unknown entry is not an error.
+	//
+	// It is how a storage eviction takes an entry away. That shortens an
+	// entry's life, which SPEC §4.5 permits; nothing may lengthen one.
+	Delete(ctx context.Context, groupID, entryID string) error
 }

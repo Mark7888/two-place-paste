@@ -222,7 +222,20 @@ func (s *RedisStore) InlineBody(ctx context.Context, entryID string) ([]byte, er
 
 // EntryRefs implements Store.
 func (s *RedisStore) EntryRefs(ctx context.Context) (map[string]string, error) {
-	refs := make(map[string]string)
+	metas, err := s.BlobEntries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	refs := make(map[string]string, len(metas))
+	for _, m := range metas {
+		refs[m.StorageRef] = m.ID
+	}
+	return refs, nil
+}
+
+// BlobEntries implements Store.
+func (s *RedisStore) BlobEntries(ctx context.Context) ([]Meta, error) {
+	var metas []Meta
 	var cursor uint64
 	for {
 		keys, next, err := s.rdb.Scan(ctx, cursor, entryPrefix+"*", 256).Result()
@@ -233,21 +246,53 @@ func (s *RedisStore) EntryRefs(ctx context.Context) (map[string]string, error) {
 			if strings.HasSuffix(key, entryBlobSuffix) {
 				continue
 			}
-			ref, err := s.rdb.HGet(ctx, key, "storage_ref").Result()
-			if errors.Is(err, redis.Nil) || ref == "" {
-				continue
-			}
+			fields, err := s.rdb.HGetAll(ctx, key).Result()
 			if err != nil {
-				return nil, fmt.Errorf("read storage ref of %s: %w", key, err)
+				return nil, fmt.Errorf("read %s: %w", key, err)
 			}
-			refs[ref] = strings.TrimPrefix(key, entryPrefix)
+			if len(fields) == 0 || fields["storage_ref"] == "" {
+				continue // expired since the scan, or inline
+			}
+			m, err := metaFromFields(strings.TrimPrefix(key, entryPrefix), fields)
+			if err != nil {
+				return nil, err
+			}
+			metas = append(metas, m)
 		}
 		if next == 0 {
-			return refs, nil
+			return metas, nil
 		}
 		cursor = next
 	}
 }
+
+// Delete implements Store. The group check and the deletes are one script, so
+// a delete addressed to the wrong group cannot remove anything.
+func (s *RedisStore) Delete(ctx context.Context, groupID, entryID string) error {
+	err := deleteEntryScript.Run(ctx, s.rdb,
+		[]string{entryKey(entryID), entryBlobKey(entryID), groupEntriesKey(groupID)},
+		groupID, entryID,
+	).Err()
+	if err != nil {
+		return fmt.Errorf("delete entry %s: %w", entryID, err)
+	}
+	return nil
+}
+
+// deleteEntryScript removes an entry that belongs to the named group. The
+// index member is removed regardless, so a stale id cannot linger there.
+//
+//	KEYS[1] entry key         ARGV[1] group id
+//	KEYS[2] entry blob key    ARGV[2] entry id
+//	KEYS[3] group index key
+var deleteEntryScript = redis.NewScript(`
+redis.call('ZREM', KEYS[3], ARGV[2])
+local g = redis.call('HGET', KEYS[1], 'group_id')
+if g == ARGV[1] then
+  redis.call('DEL', KEYS[1], KEYS[2])
+end
+return 0
+`)
 
 func metaFromFields(entryID string, fields map[string]string) (Meta, error) {
 	epoch, err := strconv.ParseUint(fields["epoch"], 10, 64)

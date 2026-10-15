@@ -19,6 +19,13 @@ type Disk struct {
 	root    string
 	maxSize int64
 
+	// minFree is the free-space floor below which Put refuses to write.
+	// Zero disables the check. freeBytes reports the space available on the
+	// volume holding root, and whether it could be determined; it is a field
+	// so that a test can fill the disk without filling the disk.
+	minFree   int64
+	freeBytes func(path string) (int64, bool)
+
 	// readDir and removeAll are the only filesystem operations the sweep
 	// performs. They are fields so that a test can count them and prove the
 	// sweep costs one listing plus one removal per expired bucket, whatever
@@ -37,7 +44,20 @@ func NewDisk(root string, maxSize int64) *Disk {
 		maxSize:   maxSize,
 		readDir:   os.ReadDir,
 		removeAll: os.RemoveAll,
+		freeBytes: freeBytes,
 	}
+}
+
+// WithMinFreeBytes makes Put refuse with ErrStorageFull while the volume has
+// less than n bytes free, plus the room the new blob could take. It returns d
+// so it can follow NewDisk.
+//
+// This guards the host, not the quota: the storage limits are bookkeeping,
+// and they cannot see a disk that something else is filling. On a platform
+// where free space cannot be read the check is skipped.
+func (d *Disk) WithMinFreeBytes(n int64) *Disk {
+	d.minFree = n
+	return d
 }
 
 // Put implements Backend.
@@ -58,6 +78,13 @@ func (d *Disk) Put(ctx context.Context, entryID string, expiresAt time.Time, r i
 	dir := filepath.Join(d.root, bucket)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create blob bucket %s: %w", bucket, err)
+	}
+	if d.minFree > 0 {
+		// The blob's own size is not known until it is read, so the room it
+		// could take — the per-entry cap — is what is set aside.
+		if free, ok := d.freeBytes(dir); ok && free < d.minFree+d.maxSize {
+			return "", fmt.Errorf("put blob for entry %s: %w: %d bytes free, floor is %d", entryID, ErrStorageFull, free, d.minFree)
+		}
 	}
 
 	// O_EXCL rather than O_TRUNC: the filename is the entry id, and the id

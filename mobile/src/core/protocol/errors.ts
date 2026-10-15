@@ -70,9 +70,20 @@ export function isEpochConflict(err: unknown): boolean {
   return isCode(err, ErrorCode.ERROR_CODE_EPOCH_CONFLICT);
 }
 
-/** isTooLarge means the ciphertext exceeded the 10 MB per-entry cap (SPEC §4.3). */
+/**
+ * isTooLarge means the ciphertext exceeded the per-entry cap, or is larger than
+ * the relay's storage limit on its own (SPEC §4.3).
+ */
 export function isTooLarge(err: unknown): boolean {
   return isCode(err, ErrorCode.ERROR_CODE_TOO_LARGE);
+}
+
+/**
+ * isQuotaExceeded means the relay's storage is full and evicting older entries
+ * could not make room. Retry later.
+ */
+export function isQuotaExceeded(err: unknown): boolean {
+  return isCode(err, ErrorCode.ERROR_CODE_QUOTA_EXCEEDED);
 }
 
 /** describe renders an error for the one-line status a screen shows. It never renders a cause chain into the UI. */

@@ -244,6 +244,18 @@ actually receives. The server has no knowledge of plaintext size.
 Redis expiry removes the entry record but does not touch the stored blob. Blob
 reclamation is specified in §4.5.
 
+**Storage limits.** Blob storage is capped in total and per group (configurable;
+the per-group default is 1 GiB). Only blobs are counted. When a new entry would not
+fit, the oldest committed entries are evicted — the writing group's own first, down
+to the group limit, then the oldest anywhere, down to the total limit — and every
+online device of each affected group receives `EntryEvicted`. Uploads still in
+progress are never evicted; when only they hold the room, the write is refused with
+`QUOTA_EXCEEDED`. An entry larger than a limit on its own is `TOO_LARGE`.
+
+The accounting is kept in Redis, outside the ephemeral zone's TTLs. Every accounted
+entry carries its expiry and is forgotten by the sweep after it, so a crash between
+reserving room and storing the entry costs that room for at most one lifetime.
+
 ### 4.4 Admin UI
 
 Served on the public domain. Credentials from `.env`.
@@ -314,6 +326,11 @@ the resulting orphan sits in a bucket that will be deleted within 24 hours regar
 No crash-recovery logic is required.
 
 **Explicitly deleted entries**
+
+An entry may be deleted before its expiry — today only by a storage-limit eviction
+(§4.3). That shortens a lifetime and never lengthens one, so the invariant above
+holds. Its record is deleted first and then its blob; a blob whose delete fails stays
+on disk until its bucket expires.
 
 A blob whose entry is deleted early remains on disk until its bucket expires. This is
 bounded by the 24-hour TTL and the 10 MB per-entry cap, so the waste is small. An

@@ -1,6 +1,8 @@
 # Plan — S3 blob storage, chunked transfer, storage quota and admin dashboard
 
-**Status:** planned. Decisions below are agreed; nothing is implemented yet.
+**Status:** in progress. Done: step 1 (token revocation) and step 2 (storage limits,
+accounting and eviction on the disk backend, `EntryEvicted`, `QUOTA_EXCEEDED`,
+`tpp gc --rebuild-accounting`). Next: step 3, the S3 backend.
 **Touches:** `/proto/**` (P1), `/server/**` (P3), `/pkg/tppclient/**` (P5),
 `/desktop/**` (P6), `/mobile/**` (P7), `/deploy/**`, `/docs/**`.
 

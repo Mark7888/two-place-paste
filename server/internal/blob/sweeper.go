@@ -17,6 +17,13 @@ type Sweeper struct {
 	interval time.Duration
 	logger   *slog.Logger
 	now      func() time.Time
+	tasks    []sweepTask
+}
+
+// sweepTask is extra work run on the sweep's schedule, after the bucket sweep.
+type sweepTask struct {
+	name string
+	run  func(ctx context.Context, now time.Time) error
 }
 
 // NewSweeper returns a sweeper for backend. A non-positive interval is a
@@ -35,6 +42,15 @@ func NewSweeper(backend Backend, interval time.Duration, logger *slog.Logger) *S
 		logger:   logger,
 		now:      func() time.Time { return time.Now().UTC() },
 	}
+}
+
+// Also adds a task that runs after every bucket sweep, at the same instant, so
+// that bookkeeping keyed by expiry — the storage ledger — forgets what the
+// sweep reclaims on the same schedule. A failing task is logged and does not
+// stop the others. Call it before Run.
+func (s *Sweeper) Also(name string, run func(ctx context.Context, now time.Time) error) *Sweeper {
+	s.tasks = append(s.tasks, sweepTask{name: name, run: run})
+	return s
 }
 
 // Run sweeps immediately and then every interval until ctx is done. It is the
@@ -62,8 +78,17 @@ func (s *Sweeper) sweepOnce(ctx context.Context) {
 			return // shutting down; not an operator's problem
 		}
 		s.logger.ErrorContext(ctx, "blob sweep failed", slog.Any("error", err))
-		return
+	} else {
+		s.logger.DebugContext(ctx, "blob sweep completed",
+			slog.Duration("took", s.now().Sub(started)))
 	}
-	s.logger.DebugContext(ctx, "blob sweep completed",
-		slog.Duration("took", s.now().Sub(started)))
+
+	for _, t := range s.tasks {
+		if err := t.run(ctx, started); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			s.logger.ErrorContext(ctx, "sweep task failed", slog.String("task", t.name), slog.Any("error", err))
+		}
+	}
 }

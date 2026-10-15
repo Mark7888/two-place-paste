@@ -39,6 +39,11 @@ var (
 	// another group's, since a blob's filename is the entry id and nothing
 	// else.
 	ErrExists = errors.New("blob: a blob already exists for this entry")
+
+	// ErrStorageFull is returned when the backend itself is out of room —
+	// the disk backend's free-space floor — regardless of what the storage
+	// limits would allow. Nothing is left behind.
+	ErrStorageFull = errors.New("blob: storage is full")
 )
 
 // BucketLayout is the time format of an hour bucket directory: the UTC hour in

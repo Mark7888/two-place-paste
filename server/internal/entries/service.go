@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 
 	"github.com/Mark7888/two-place-paste/server/internal/blob"
+	"github.com/Mark7888/two-place-paste/server/internal/quota"
 )
 
 // Service is the entry write and read path: it decides between inline storage
@@ -18,6 +20,10 @@ import (
 type Service struct {
 	store Store
 	blobs blob.Backend
+	quota quota.Ledger
+
+	onEvict func(ctx context.Context, groupID, entryID string)
+	logger  *slog.Logger
 
 	inlineMax int64
 	maxBytes  int64
@@ -42,6 +48,18 @@ type Options struct {
 
 	// Now supplies UTC timestamps; tests replace it.
 	Now func() time.Time
+
+	// Quota accounts for blob storage and enforces its limits by evicting
+	// the oldest entries. Nil disables accounting: every blob is accepted
+	// and nothing is ever evicted.
+	Quota quota.Ledger
+
+	// OnEvict is told about every entry evicted to make room, after it is
+	// gone, so that the transport can tell the group. Optional.
+	OnEvict func(ctx context.Context, groupID, entryID string)
+
+	// Logger receives eviction and cleanup logs. Defaults to slog.Default().
+	Logger *slog.Logger
 }
 
 // NewService returns an entry service over the given store and blob backend.
@@ -53,6 +71,12 @@ func NewService(store Store, blobs blob.Backend, opts Options) *Service {
 		maxBytes:  opts.MaxBytes,
 		ttl:       opts.TTL,
 		now:       opts.Now,
+		quota:     opts.Quota,
+		onEvict:   opts.OnEvict,
+		logger:    opts.Logger,
+	}
+	if s.logger == nil {
+		s.logger = slog.Default()
 	}
 	if s.inlineMax <= 0 {
 		s.inlineMax = 256 << 10
@@ -136,9 +160,28 @@ func (s *Service) Put(ctx context.Context, groupID string, epoch uint64, entryID
 		}
 		meta.Size = int64(len(inline))
 	} else {
-		ref, err := s.blobs.Put(ctx, meta.ID, meta.ExpiresAt, io.LimitReader(body, s.maxBytes+1))
+		if err := s.reserve(ctx, meta, declaredSize); err != nil {
+			return Meta{}, err
+		}
+		// From here every failure gives the room back. Released without the
+		// request's cancellation: a client that hangs up mid-upload must not
+		// leave its reservation holding bytes for a day.
+		committed := false
+		defer func() {
+			if committed {
+				s.commit(context.WithoutCancel(ctx), meta.ID)
+			} else {
+				s.release(context.WithoutCancel(ctx), meta.ID)
+			}
+		}()
+
+		counted := &countingReader{r: io.LimitReader(body, s.maxBytes+1)}
+		ref, err := s.blobs.Put(ctx, meta.ID, meta.ExpiresAt, counted)
 		if errors.Is(err, blob.ErrTooLarge) {
 			return Meta{}, fmt.Errorf("put entry %s: %w", meta.ID, ErrTooLarge)
+		}
+		if errors.Is(err, blob.ErrStorageFull) {
+			return Meta{}, fmt.Errorf("put entry %s: %w", meta.ID, ErrQuotaExceeded)
 		}
 		if errors.Is(err, blob.ErrExists) {
 			// The id is taken by an entry whose blob is already on disk. The
@@ -150,28 +193,126 @@ func (s *Service) Put(ctx context.Context, groupID string, epoch uint64, entryID
 			return Meta{}, fmt.Errorf("put entry %s: %w", meta.ID, err)
 		}
 		meta.StorageRef = ref
-		meta.Size = declaredSize
+		meta.Size = counted.n
+		if meta.Size != declaredSize {
+			// The reservation was for the declared size, so a body that is
+			// shorter must not be stored under it: a client could otherwise
+			// hold room it never used. Best-effort; the sweep is the backstop.
+			_ = s.blobs.Delete(context.WithoutCancel(ctx), ref)
+			return Meta{}, fmt.Errorf("put entry %s: %w: declared %d, received %d", meta.ID, ErrSizeMismatch, declaredSize, meta.Size)
+		}
+
+		if err := s.store.Put(ctx, meta, nil); err != nil {
+			if errors.Is(err, ErrEntryExists) {
+				// Lost a race for the id. The blob is this call's own — the
+				// backend creates and never replaces — so removing it takes
+				// nothing but its own bytes. Best-effort; the bucket sweep is
+				// the backstop (SPEC §4.5).
+				_ = s.blobs.Delete(context.WithoutCancel(ctx), meta.StorageRef)
+			}
+			return Meta{}, fmt.Errorf("put entry %s: %w", meta.ID, err)
+		}
+		committed = true
+		return meta, nil
 	}
 
 	if meta.Size != declaredSize {
-		// Best-effort cleanup; the bucket sweep is the backstop either way.
-		if meta.StorageRef != "" {
-			_ = s.blobs.Delete(ctx, meta.StorageRef)
-		}
 		return Meta{}, fmt.Errorf("put entry %s: %w: declared %d, received %d", meta.ID, ErrSizeMismatch, declaredSize, meta.Size)
 	}
-
 	if err := s.store.Put(ctx, meta, inline); err != nil {
-		if errors.Is(err, ErrEntryExists) && meta.StorageRef != "" {
-			// Lost a race for the id. The blob is this call's own — the
-			// backend creates and never replaces — so removing it takes
-			// nothing but its own bytes. Best-effort; the bucket sweep is the
-			// backstop (SPEC §4.5).
-			_ = s.blobs.Delete(ctx, meta.StorageRef)
-		}
 		return Meta{}, fmt.Errorf("put entry %s: %w", meta.ID, err)
 	}
 	return meta, nil
+}
+
+// reserve claims room for a blob-backed entry and evicts whatever the ledger
+// chose to make that room. Without a ledger it does nothing.
+//
+// The reservation is the declared size, which the blob backend then enforces:
+// a body that turns out longer fails ErrTooLarge, shorter fails the size
+// check, and either way the reservation is released.
+func (s *Service) reserve(ctx context.Context, meta Meta, size int64) error {
+	if s.quota == nil {
+		return nil
+	}
+	victims, err := s.quota.Reserve(ctx, quota.Reservation{
+		EntryID:   meta.ID,
+		GroupID:   meta.GroupID,
+		Size:      size,
+		ExpiresAt: meta.ExpiresAt,
+	})
+	switch {
+	case errors.Is(err, quota.ErrTooLarge):
+		return fmt.Errorf("put entry %s: %w: larger than the storage limit", meta.ID, ErrTooLarge)
+	case errors.Is(err, quota.ErrExceeded):
+		return fmt.Errorf("put entry %s: %w", meta.ID, ErrQuotaExceeded)
+	case errors.Is(err, quota.ErrExists):
+		return fmt.Errorf("put entry %s: %w", meta.ID, ErrEntryExists)
+	case err != nil:
+		return fmt.Errorf("put entry %s: reserve storage: %w", meta.ID, err)
+	}
+	s.evict(context.WithoutCancel(ctx), victims)
+	return nil
+}
+
+// evict removes entries the ledger has already given up, oldest first: the
+// record goes before the blob, so a reader racing an eviction finds the entry
+// gone (ErrNotFound) rather than a record whose blob is missing.
+//
+// Failures are logged, not returned. The ledger has already freed the room —
+// that decision was atomic — and a blob left behind is reclaimed by the bucket
+// sweep when its hour expires (SPEC §4.5).
+func (s *Service) evict(ctx context.Context, victims []quota.Victim) {
+	for _, v := range victims {
+		meta, err := s.store.Get(ctx, v.GroupID, v.EntryID)
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			s.logger.ErrorContext(ctx, "eviction: read entry failed",
+				slog.String("entry_id", v.EntryID), slog.Any("error", err))
+			continue
+		}
+		if err := s.store.Delete(ctx, v.GroupID, v.EntryID); err != nil {
+			s.logger.ErrorContext(ctx, "eviction: delete entry failed",
+				slog.String("entry_id", v.EntryID), slog.Any("error", err))
+			continue
+		}
+		if meta.StorageRef != "" {
+			if err := s.blobs.Delete(ctx, meta.StorageRef); err != nil {
+				s.logger.WarnContext(ctx, "eviction: delete blob failed; the bucket sweep will reclaim it",
+					slog.String("entry_id", v.EntryID), slog.Any("error", err))
+			}
+		}
+		s.logger.InfoContext(ctx, "entry evicted to stay within the storage limit",
+			slog.String("group_id", v.GroupID),
+			slog.String("entry_id", v.EntryID),
+			slog.Int64("size", v.Size))
+		if s.onEvict != nil {
+			s.onEvict(ctx, v.GroupID, v.EntryID)
+		}
+	}
+}
+
+func (s *Service) release(ctx context.Context, entryID string) {
+	if s.quota == nil {
+		return
+	}
+	if err := s.quota.Release(ctx, entryID); err != nil {
+		// Not fatal: the reservation carries the entry's expiry and is
+		// forgotten then, so the cost of a lost release is bounded.
+		s.logger.WarnContext(ctx, "release storage reservation failed",
+			slog.String("entry_id", entryID), slog.Any("error", err))
+	}
+}
+
+func (s *Service) commit(ctx context.Context, entryID string) {
+	if s.quota == nil {
+		return
+	}
+	if err := s.quota.Commit(ctx, entryID); err != nil {
+		// The entry is stored and readable; it is only not evictable until it
+		// expires. Worth an operator's attention, not the client's.
+		s.logger.WarnContext(ctx, "commit storage reservation failed",
+			slog.String("entry_id", entryID), slog.Any("error", err))
+	}
 }
 
 // Latest returns the group's most recent entry (SPEC §6).
@@ -243,6 +384,18 @@ func (s *Service) body(ctx context.Context, meta Meta) ([]byte, error) {
 		return nil, fmt.Errorf("read entry %s: %w", meta.ID, err)
 	}
 	return body, nil
+}
+
+// countingReader counts the bytes read through it.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err //nolint:wrapcheck // io.Reader's contract: io.EOF must pass through as is
 }
 
 // readAtMost reads up to limit bytes and reports ErrTooLarge if the source has

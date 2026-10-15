@@ -64,6 +64,11 @@ type Handlers struct {
 	// handler that wants the content fetches it on a goroutine of its own.
 	// Nothing about it touches the clipboard unless the handler does.
 	OnEntryAdded func(EntryMeta)
+
+	// OnEntryEvicted fires when the relay removed an entry before its expiry
+	// to stay within its storage limit. A history view drops the entry; a
+	// fetch of it now fails with ErrNotFound.
+	OnEntryEvicted func(entryID string)
 }
 
 // Options configures a Client.
@@ -594,6 +599,15 @@ func (c *Client) onEvent(env *tppv1.Envelope) {
 		}
 		if c.handlers.OnEntryAdded != nil {
 			c.handlers.OnEntryAdded(entryMeta(ev.GetMeta()))
+		}
+
+	case tppv1.MessageType_MESSAGE_TYPE_ENTRY_EVICTED:
+		var ev tppv1.EntryEvicted
+		if err := proto.Unmarshal(env.GetPayload(), &ev); err != nil {
+			return
+		}
+		if c.handlers.OnEntryEvicted != nil {
+			c.handlers.OnEntryEvicted(ev.GetEntryId())
 		}
 
 	case tppv1.MessageType_MESSAGE_TYPE_PAIRING_JOIN_NOTICE:

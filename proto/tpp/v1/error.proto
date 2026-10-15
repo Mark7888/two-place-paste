@@ -64,4 +64,10 @@ enum ErrorCode {
   // Server-side failure. The caller may retry; nothing about the cause is
   // disclosed beyond this code.
   ERROR_CODE_INTERNAL = 11;
+
+  // The relay's blob storage is full and evicting older entries cannot make
+  // room, because what remains is held by uploads still in progress. The
+  // caller may retry later. An entry larger than a storage limit on its own
+  // gets ERROR_CODE_TOO_LARGE instead (SPEC §4.3).
+  ERROR_CODE_QUOTA_EXCEEDED = 12;
 }

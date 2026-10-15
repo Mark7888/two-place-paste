@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -39,6 +40,11 @@ const (
 	DefaultSessionTTL    = 12 * time.Hour
 	DefaultInlineMax     = 256 << 10 // 256 KiB, SPEC §4.3
 	DefaultEntryMax      = 10 << 20  // 10 MiB ciphertext, SPEC §4.3
+
+	// DefaultGroupMax is the per-group blob storage limit. The total limit
+	// defaults to unlimited: only the operator knows how big the volume or
+	// bucket is.
+	DefaultGroupMax = 1 << 30 // 1 GiB
 )
 
 // Config is the fully resolved server configuration.
@@ -116,6 +122,21 @@ type BlobConfig struct {
 
 	// SweepInterval is how often the bucket sweep runs after the startup pass.
 	SweepInterval time.Duration
+
+	// MaxTotalBytes caps the ciphertext held in the blob backend across every
+	// group. When a new entry would not fit, the oldest entries are evicted,
+	// even inside their 24 hours. Zero is unlimited.
+	MaxTotalBytes int64
+
+	// MaxGroupBytes caps one group's blob storage, evicting that group's
+	// oldest entries first, so one busy group cannot push out everyone
+	// else's. Zero is unlimited.
+	MaxGroupBytes int64
+
+	// MinFreeBytes is the disk backend's floor: a write is refused while the
+	// volume has less than this free, whatever the limits above allow. Zero
+	// disables the check.
+	MinFreeBytes int64
 }
 
 // EntryConfig bounds entry sizes. Both limits are measured on the ciphertext:
@@ -177,10 +198,13 @@ func Load(opts Options) (*Config, error) {
 			Backend:       BlobBackend(r.str("TPP_BLOB_BACKEND", string(BlobBackendDisk))),
 			Root:          r.str("TPP_BLOB_ROOT", DefaultBlobRoot),
 			SweepInterval: r.duration("TPP_BLOB_SWEEP_INTERVAL", DefaultSweepInterval),
+			MaxTotalBytes: r.byteSize("TPP_BLOB_MAX_TOTAL_BYTES", 0),
+			MaxGroupBytes: r.byteSize("TPP_BLOB_MAX_GROUP_BYTES", DefaultGroupMax),
+			MinFreeBytes:  r.byteSize("TPP_BLOB_MIN_FREE_BYTES", 0),
 		},
 		Entry: EntryConfig{
-			InlineMaxBytes: r.int64Val("TPP_ENTRY_INLINE_MAX_BYTES", DefaultInlineMax),
-			MaxBytes:       r.int64Val("TPP_ENTRY_MAX_BYTES", DefaultEntryMax),
+			InlineMaxBytes: r.byteSize("TPP_ENTRY_INLINE_MAX_BYTES", DefaultInlineMax),
+			MaxBytes:       r.byteSize("TPP_ENTRY_MAX_BYTES", DefaultEntryMax),
 		},
 	}
 
@@ -233,6 +257,26 @@ func (c *Config) Validate() error {
 	if c.Blob.SweepInterval <= 0 {
 		errs = append(errs, fmt.Errorf("TPP_BLOB_SWEEP_INTERVAL must be positive, got %s", c.Blob.SweepInterval))
 	}
+	for _, lim := range []struct {
+		key string
+		v   int64
+	}{
+		{"TPP_BLOB_MAX_TOTAL_BYTES", c.Blob.MaxTotalBytes},
+		{"TPP_BLOB_MAX_GROUP_BYTES", c.Blob.MaxGroupBytes},
+		{"TPP_BLOB_MIN_FREE_BYTES", c.Blob.MinFreeBytes},
+	} {
+		if lim.v < 0 {
+			errs = append(errs, fmt.Errorf("%s must not be negative, got %d", lim.key, lim.v))
+		}
+	}
+	// A limit smaller than one entry would refuse every large entry outright,
+	// which is a misconfiguration rather than a policy.
+	if c.Blob.MaxTotalBytes > 0 && c.Blob.MaxTotalBytes < c.Entry.MaxBytes {
+		errs = append(errs, fmt.Errorf("TPP_BLOB_MAX_TOTAL_BYTES (%d) must be 0 (unlimited) or at least TPP_ENTRY_MAX_BYTES (%d)", c.Blob.MaxTotalBytes, c.Entry.MaxBytes))
+	}
+	if c.Blob.MaxGroupBytes > 0 && c.Blob.MaxGroupBytes < c.Entry.MaxBytes {
+		errs = append(errs, fmt.Errorf("TPP_BLOB_MAX_GROUP_BYTES (%d) must be 0 (unlimited) or at least TPP_ENTRY_MAX_BYTES (%d)", c.Blob.MaxGroupBytes, c.Entry.MaxBytes))
+	}
 
 	if c.Entry.MaxBytes <= 0 {
 		errs = append(errs, fmt.Errorf("TPP_ENTRY_MAX_BYTES must be positive, got %d", c.Entry.MaxBytes))
@@ -283,17 +327,59 @@ func (r *resolver) intVal(key string, def int) int {
 	return n
 }
 
-func (r *resolver) int64Val(key string, def int64) int64 {
+// byteSize reads a size in bytes: a plain integer, or a number with a unit —
+// "256KiB", "10MB", "5 GiB". Units are case-insensitive; KB/MB/GB/TB are
+// decimal and KiB/MiB/GiB/TiB binary, as everywhere else.
+func (r *resolver) byteSize(key string, def int64) int64 {
 	v, ok := r.raw(key)
 	if !ok || v == "" {
 		return def
 	}
-	n, err := strconv.ParseInt(v, 10, 64)
+	n, err := ParseByteSize(v)
 	if err != nil {
-		r.errs = append(r.errs, fmt.Errorf("%s: %q is not an integer", key, v))
+		r.errs = append(r.errs, fmt.Errorf("%s: %w", key, err))
 		return def
 	}
 	return n
+}
+
+// byteUnits maps a lower-cased unit suffix to its multiplier.
+var byteUnits = map[string]int64{
+	"": 1, "b": 1,
+	"kb": 1e3, "mb": 1e6, "gb": 1e9, "tb": 1e12,
+	"k": 1 << 10, "m": 1 << 20, "g": 1 << 30, "t": 1 << 40,
+	"kib": 1 << 10, "mib": 1 << 20, "gib": 1 << 30, "tib": 1 << 40,
+}
+
+// ParseByteSize parses a byte count such as "5GiB", "500MB" or "1048576".
+// Fractions are allowed with a unit ("1.5GiB"); the result is truncated to a
+// whole byte.
+func ParseByteSize(s string) (int64, error) {
+	t := strings.TrimSpace(s)
+	i := 0
+	for i < len(t) && (t[i] >= '0' && t[i] <= '9' || t[i] == '.' || t[i] == '-') {
+		i++
+	}
+	num, unit := t[:i], strings.ToLower(strings.TrimSpace(t[i:]))
+	mult, ok := byteUnits[unit]
+	if num == "" || !ok {
+		return 0, fmt.Errorf("%q is not a size (want e.g. \"1048576\", \"500MB\", \"5GiB\")", s)
+	}
+	if n, err := strconv.ParseInt(num, 10, 64); err == nil {
+		if n != 0 && (n > math.MaxInt64/mult || n < math.MinInt64/mult) {
+			return 0, fmt.Errorf("%q is too large", s)
+		}
+		return n * mult, nil
+	}
+	f, err := strconv.ParseFloat(num, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a size (want e.g. \"1048576\", \"500MB\", \"5GiB\")", s)
+	}
+	f *= float64(mult)
+	if f >= math.MaxInt64 || f <= math.MinInt64 {
+		return 0, fmt.Errorf("%q is too large", s)
+	}
+	return int64(f), nil
 }
 
 func (r *resolver) duration(key string, def time.Duration) time.Duration {

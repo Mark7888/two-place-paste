@@ -564,8 +564,15 @@ func (s *Server) handleEntryPut(ctx context.Context, env *tppv1.Envelope, device
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
 			"entry_id is already in use")
 	case errors.Is(err, entries.ErrTooLarge):
+		if declared > s.entries.MaxBytes() {
+			return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_TOO_LARGE,
+				"ciphertext of %d bytes exceeds the per-entry cap of %d", declared, s.entries.MaxBytes())
+		}
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_TOO_LARGE,
-			"ciphertext of %d bytes exceeds the per-entry cap of %d", declared, s.entries.MaxBytes())
+			"ciphertext of %d bytes is larger than the relay's storage limit", declared)
+	case errors.Is(err, entries.ErrQuotaExceeded):
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_QUOTA_EXCEEDED,
+			"the relay's storage is full; try again shortly")
 	case errors.Is(err, entries.ErrSizeMismatch):
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
 			"declared size %d does not match the %d bytes received", declared, len(ciphertext))
@@ -591,6 +598,22 @@ func (s *Server) announceEntry(ctx context.Context, groupID, authorID string, me
 		return
 	}
 	s.hub.broadcast(groupID, frame, authorID)
+}
+
+// AnnounceEviction tells every connected device of a group — the author of
+// the entry that needed the room included — that an entry was evicted to stay
+// within the storage limit. It is the entries service's OnEvict hook.
+//
+// Like EntryAdded it is a courtesy to whoever is online: a device that misses
+// it finds the entry gone when it next lists or fetches.
+func (s *Server) AnnounceEviction(ctx context.Context, groupID, entryID string) {
+	frame, err := encode(newCorrelationID(), tppv1.MessageType_MESSAGE_TYPE_ENTRY_EVICTED,
+		&tppv1.EntryEvicted{EntryId: entryID})
+	if err != nil {
+		s.logger.ErrorContext(ctx, "encoding entry evicted event failed", slog.Any("error", err))
+		return
+	}
+	s.hub.broadcast(groupID, frame)
 }
 
 // handleEntryLatest returns the group's newest entry. The ciphertext travels

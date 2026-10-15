@@ -169,6 +169,98 @@ func TestStoreEntryRefs(t *testing.T) {
 	})
 }
 
+func TestStoreBlobEntries(t *testing.T) {
+	t.Parallel()
+
+	forEachStore(t, func(t *testing.T, s entries.Store) {
+		ctx := context.Background()
+		gid := newGroupID(t)
+		now := time.Now().UTC().Truncate(time.Millisecond)
+
+		if err := s.Put(ctx, meta(gid, gid+"-inline", now), []byte("body")); err != nil {
+			t.Fatalf("Put() error = %v", err)
+		}
+		stored := meta(gid, gid+"-stored", now)
+		stored.StorageRef = "2099010100/" + stored.ID + ".bin"
+		if err := s.Put(ctx, stored, nil); err != nil {
+			t.Fatalf("Put() error = %v", err)
+		}
+
+		all, err := s.BlobEntries(ctx)
+		if err != nil {
+			t.Fatalf("BlobEntries() error = %v", err)
+		}
+		var found bool
+		for _, m := range all {
+			if m.ID == gid+"-inline" {
+				t.Errorf("BlobEntries() listed an inline entry")
+			}
+			if m.ID == stored.ID {
+				found = true
+				if m != stored {
+					t.Errorf("BlobEntries() = %+v, want %+v", m, stored)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("BlobEntries() did not list %s", stored.ID)
+		}
+	})
+}
+
+// TestStoreDelete: an evicted entry is gone from every read path, and a
+// delete addressed to the wrong group removes nothing.
+func TestStoreDelete(t *testing.T) {
+	t.Parallel()
+
+	forEachStore(t, func(t *testing.T, s entries.Store) {
+		ctx := context.Background()
+		gid := newGroupID(t)
+		now := time.Now().UTC()
+
+		older := meta(gid, gid+"-older", now.Add(-time.Minute))
+		if err := s.Put(ctx, older, []byte("old!")); err != nil {
+			t.Fatalf("Put() error = %v", err)
+		}
+		victim := meta(gid, gid+"-victim", now)
+		if err := s.Put(ctx, victim, []byte("body")); err != nil {
+			t.Fatalf("Put() error = %v", err)
+		}
+
+		if err := s.Delete(ctx, newGroupID(t), victim.ID); err != nil {
+			t.Fatalf("Delete(wrong group) error = %v", err)
+		}
+		if _, err := s.Get(ctx, gid, victim.ID); err != nil {
+			t.Fatalf("Get() after a wrong-group delete error = %v, want the entry intact", err)
+		}
+
+		if err := s.Delete(ctx, gid, victim.ID); err != nil {
+			t.Fatalf("Delete() error = %v", err)
+		}
+		if _, err := s.Get(ctx, gid, victim.ID); !errors.Is(err, entries.ErrNotFound) {
+			t.Errorf("Get(deleted) error = %v, want %v", err, entries.ErrNotFound)
+		}
+		if _, err := s.InlineBody(ctx, victim.ID); !errors.Is(err, entries.ErrNotFound) {
+			t.Errorf("InlineBody(deleted) error = %v, want %v", err, entries.ErrNotFound)
+		}
+		if ok, _ := s.Exists(ctx, victim.ID); ok {
+			t.Errorf("Exists(deleted) = true, want false")
+		}
+		latest, err := s.Latest(ctx, gid)
+		if err != nil || latest.ID != older.ID {
+			t.Errorf("Latest() = %q, %v; want the older entry %q", latest.ID, err, older.ID)
+		}
+		page, _, err := s.History(ctx, gid, 10, time.Time{})
+		if err != nil || len(page) != 1 || page[0].ID != older.ID {
+			t.Errorf("History() = %v, %v; want only %q", ids(page), err, older.ID)
+		}
+
+		if err := s.Delete(ctx, gid, victim.ID); err != nil {
+			t.Errorf("Delete(already gone) error = %v, want nil", err)
+		}
+	})
+}
+
 func ids(metas []entries.Meta) []string {
 	out := make([]string, len(metas))
 	for i, m := range metas {

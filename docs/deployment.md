@@ -184,6 +184,43 @@ Two kinds of finding:
 - *dangling entries* — entries whose blob is missing. These are the ones that
   matter: the entry is listed and unreadable.
 
+It also compares the storage accounting with the entry records (below). A
+small difference while uploads are in progress is normal.
+
+### Storage limits and eviction
+
+`TPP_BLOB_MAX_TOTAL_BYTES` caps all blob storage and `TPP_BLOB_MAX_GROUP_BYTES`
+(1 GiB by default) caps each group. Only blobs count; inline entries live in
+Redis and are bounded by its `maxmemory`.
+
+When a new entry would not fit, the server evicts the **oldest** entries to
+make room, even ones inside their 24 hours: first the writing group's own,
+down to its group limit, then the oldest anywhere, down to the total limit. An
+evicted entry is deleted — record, then blob — and every online device of its
+group is told, so its history updates; to anyone else it reads as gone, like
+an expired entry. Each eviction is logged at `info` with the group, entry id
+and size. If evictions are frequent, the limits are too tight for how the
+relay is used.
+
+A write is refused with `QUOTA_EXCEEDED` only when the room it needs is held by
+uploads still in progress, and with `TOO_LARGE` when the entry alone is larger
+than a limit. The disk backend also refuses writes while its volume has less
+than `TPP_BLOB_MIN_FREE_BYTES` free, which protects the host from something
+else filling the disk.
+
+The accounting lives in Redis under `quota:*` keys with no TTL. Every
+accounted entry carries its expiry and is forgotten at the next sweep after
+it, so the accounting corrects itself within a day of any crash. After
+restoring Redis from a backup, recompute it at once instead:
+
+```sh
+docker compose exec server tpp gc --rebuild-accounting
+```
+
+It reads the entry records and replaces the accounting; it deletes no blob.
+Uploads in flight while it runs are not counted until they expire, so run it
+when the relay is quiet.
+
 ## 7. Backup and restore
 
 Back up both volumes. Redis is the one that cannot be rebuilt.
@@ -201,7 +238,9 @@ docker run --rm -v tpp_blob-data:/blobs -v "$PWD":/backup alpine \
 
 Restore is the same in reverse, into a stopped stack. After restoring Redis
 without its blobs, run `tpp gc --verify` and expect dangling entries for
-anything larger than 256 KB; they expire within a day.
+anything larger than 256 KB; they expire within a day. Then run
+`tpp gc --rebuild-accounting` so the storage limits count what is really
+stored.
 
 ## 8. Upgrades and operations
 
