@@ -43,7 +43,10 @@ export enum ErrorCode {
    * (SPEC §3.3 step 4).
    */
   ERROR_CODE_EPOCH_CONFLICT = 7,
-  /** ERROR_CODE_TOO_LARGE - The ciphertext exceeds the 10 MB per-entry cap (SPEC §4.3). */
+  /**
+   * ERROR_CODE_TOO_LARGE - The ciphertext exceeds the per-entry cap or a storage limit, or is too
+   * large for the single-frame path it was sent or requested on (SPEC §4.3).
+   */
   ERROR_CODE_TOO_LARGE = 8,
   /** ERROR_CODE_RATE_LIMITED - Rate limited. The caller backs off and retries. */
   ERROR_CODE_RATE_LIMITED = 9,

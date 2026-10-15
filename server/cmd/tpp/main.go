@@ -143,11 +143,25 @@ func serve(args []string) error {
 		MaxBytes:       cfg.Entry.MaxBytes,
 		TTL:            config.EntryTTL,
 		Quota:          ledger,
+
+		SingleFrameMaxBytes: config.SingleFrameMaxBytes,
+		ChunkBytes:          cfg.Entry.ChunkBytes,
+		UploadTTL:           cfg.Entry.UploadTTL,
 		OnEvict: func(ctx context.Context, groupID, entryID string) {
 			wsSrv.AnnounceEviction(ctx, groupID, entryID)
 		},
 		Logger: logger,
 	})
+
+	// Chunked uploads live in this process's memory, so any upload still
+	// holding room in the ledger now was orphaned by the previous process.
+	// Released before the server takes traffic, while nothing can be pending
+	// legitimately.
+	if n, err := ledger.ReleasePending(ctx); err != nil {
+		return fmt.Errorf("release orphaned storage reservations: %w", err)
+	} else if n > 0 {
+		logger.Info("released storage reserved by uploads a previous run left unfinished", slog.Int("uploads", n))
+	}
 
 	// The sweeper is built here so the dashboard can read its status; it is
 	// started with the other goroutines below.
@@ -208,6 +222,11 @@ func serve(args []string) error {
 		// storage limits track what the sweep reclaims.
 		sweeper.Run(ctx)
 	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		reapUploads(ctx, entrySvc)
+	}()
 
 	serveErr := make(chan error, 1)
 	go func() {
@@ -217,6 +236,7 @@ func serve(args []string) error {
 			slog.String("blob_backend", string(cfg.Blob.Backend)),
 			slog.String("blob_store", blobLocation(cfg, blobs)),
 			slog.Int64("entry_max_bytes", cfg.Entry.MaxBytes),
+			slog.Int64("entry_chunk_bytes", cfg.Entry.ChunkBytes),
 			slog.Int64("blob_max_total_bytes", cfg.Blob.MaxTotalBytes),
 			slog.Int64("blob_max_group_bytes", cfg.Blob.MaxGroupBytes))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -240,11 +260,33 @@ func serve(args []string) error {
 	defer cancel()
 	err = srv.Shutdown(shutdownCtx)
 	wg.Wait()
+	// Uploads cut off by the shutdown release their room now, rather than at
+	// the next start.
+	entrySvc.AbortAllUploads(shutdownCtx)
 	if err != nil {
 		return fmt.Errorf("graceful shutdown: %w", err)
 	}
 	logger.Info("server stopped")
 	return <-serveErr
+}
+
+// uploadReapInterval is how often idle chunked uploads are looked for. An
+// upload also ends the moment its next chunk finds it timed out; this is for
+// the ones whose client never comes back.
+const uploadReapInterval = time.Minute
+
+// reapUploads abandons idle chunked uploads until ctx is done.
+func reapUploads(ctx context.Context, svc *entries.Service) {
+	ticker := time.NewTicker(uploadReapInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			svc.ReapUploads(ctx, now.UTC())
+		}
+	}
 }
 
 // newLogger builds the process-wide logger. Libraries never configure logging

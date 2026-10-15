@@ -323,6 +323,44 @@ func (q *Redis) usage(ctx context.Context, bytesKey, index string) (Usage, error
 	return u, nil
 }
 
+// ReleasePending implements Ledger. It reads the index in pages and releases
+// each pending entry with the release script, so it never holds Redis for long.
+func (q *Redis) ReleasePending(ctx context.Context) (int, error) {
+	const page = 500
+	var pending []string
+	for start := int64(0); ; start += page {
+		ids, err := q.rdb.ZRange(ctx, q.k.index(), start, start+page-1).Result()
+		if err != nil {
+			return 0, fmt.Errorf("list accounted entries: %w", err)
+		}
+		if len(ids) == 0 {
+			break
+		}
+		pipe := q.rdb.Pipeline()
+		flags := make([]*redis.StringCmd, len(ids))
+		for i, id := range ids {
+			flags[i] = pipe.HGet(ctx, q.k.entry(id), "pending")
+		}
+		if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+			return 0, fmt.Errorf("read pending flags: %w", err)
+		}
+		for i, f := range flags {
+			if f.Val() == "1" {
+				pending = append(pending, ids[i])
+			}
+		}
+		if len(ids) < page {
+			break
+		}
+	}
+	for _, id := range pending {
+		if err := q.Release(ctx, id); err != nil {
+			return 0, err
+		}
+	}
+	return len(pending), nil
+}
+
 // Evictions implements Ledger: the sum of the hourly counters covering the
 // last day, so the window is a day to within the hour.
 func (q *Redis) Evictions(ctx context.Context) (Evictions, error) {

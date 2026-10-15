@@ -162,7 +162,9 @@ The rest have defaults: `TPP_HTTP_ADDR` (`:8080`), `TPP_LOG_LEVEL` (`info`),
 `TPP_REDIS_DB`, `TPP_BLOB_BACKEND` (`disk` or `s3`, below),
 `TPP_BLOB_ROOT`, `TPP_BLOB_SWEEP_INTERVAL` (`10m`),
 `TPP_ENTRY_INLINE_MAX_BYTES` (256 KiB — larger ciphertext goes to the blob
-store) and `TPP_ENTRY_MAX_BYTES` (10 MiB hard cap).
+store), `TPP_ENTRY_MAX_BYTES` (50 MiB hard cap; anything over 10 MiB travels in
+chunks of `TPP_ENTRY_CHUNK_BYTES`, 8 MiB) and `TPP_UPLOAD_SESSION_TTL` (`10m`, how
+long an unfinished chunked upload may sit idle).
 
 **Storage limits.** `TPP_BLOB_MAX_TOTAL_BYTES` (unlimited by default, e.g.
 `5GiB`) and `TPP_BLOB_MAX_GROUP_BYTES` (`1GiB`) cap the blob store. When a new
@@ -360,7 +362,9 @@ The **Sync** tab gives you three actions:
 - **Copy the latest entry here** — pull the group's newest entry onto this
   clipboard.
 
-Text, images and files are supported. Ciphertext is capped at 10 MB per entry.
+Text, images and files are supported. The relay accepts up to 50 MB of ciphertext
+per entry, sending anything over 10 MB in chunks; the desktop and Android apps
+still cap what they send at 10 MB until they learn the chunked transfer.
 
 **Watch the clipboard** (Settings) turns on polling: anything you copy is
 encrypted and uploaded as the group's latest entry. It is off by default and

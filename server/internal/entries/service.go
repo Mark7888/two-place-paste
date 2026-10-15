@@ -29,6 +29,12 @@ type Service struct {
 	maxBytes  int64
 	ttl       time.Duration
 
+	frameMax            int64
+	chunkBytes          int64
+	uploadTTL           time.Duration
+	maxUploadsPerDevice int
+	uploads             uploads
+
 	now func() time.Time
 }
 
@@ -60,6 +66,22 @@ type Options struct {
 
 	// Logger receives eviction and cleanup logs. Defaults to slog.Default().
 	Logger *slog.Logger
+
+	// SingleFrameMaxBytes is the most ciphertext one frame carries, in a put
+	// or a fetch; a larger entry goes through the chunked path. Defaults to
+	// 10 MiB, the protocol's value.
+	SingleFrameMaxBytes int64
+
+	// ChunkBytes is the chunked path's chunk size. Defaults to 8 MiB.
+	ChunkBytes int64
+
+	// UploadTTL is how long a chunked upload may sit idle. Defaults to 10
+	// minutes.
+	UploadTTL time.Duration
+
+	// MaxUploadsPerDevice bounds the uploads one device may have in progress.
+	// Defaults to 4.
+	MaxUploadsPerDevice int
 }
 
 // NewService returns an entry service over the given store and blob backend.
@@ -74,6 +96,24 @@ func NewService(store Store, blobs blob.Backend, opts Options) *Service {
 		quota:     opts.Quota,
 		onEvict:   opts.OnEvict,
 		logger:    opts.Logger,
+
+		frameMax:            opts.SingleFrameMaxBytes,
+		chunkBytes:          opts.ChunkBytes,
+		uploadTTL:           opts.UploadTTL,
+		maxUploadsPerDevice: opts.MaxUploadsPerDevice,
+		uploads:             uploads{byHandle: make(map[string]*uploadSession)},
+	}
+	if s.frameMax <= 0 {
+		s.frameMax = 10 << 20
+	}
+	if s.chunkBytes <= 0 {
+		s.chunkBytes = 8 << 20
+	}
+	if s.uploadTTL <= 0 {
+		s.uploadTTL = 10 * time.Minute
+	}
+	if s.maxUploadsPerDevice <= 0 {
+		s.maxUploadsPerDevice = 4
 	}
 	if s.logger == nil {
 		s.logger = slog.Default()
@@ -93,9 +133,12 @@ func NewService(store Store, blobs blob.Backend, opts Options) *Service {
 	return s
 }
 
-// MaxBytes is the per-entry ciphertext cap this service enforces. The
-// transport uses it to bound a frame before reading it.
+// MaxBytes is the per-entry ciphertext cap this service enforces.
 func (s *Service) MaxBytes() int64 { return s.maxBytes }
+
+// FrameMaxBytes is the most ciphertext one frame carries. The transport bounds
+// every frame it reads by it.
+func (s *Service) FrameMaxBytes() int64 { return max(s.frameMax, s.chunkBytes) }
 
 // Put stores one encrypted entry and returns its metadata.
 //
@@ -117,6 +160,9 @@ func (s *Service) Put(ctx context.Context, groupID string, epoch uint64, entryID
 	}
 	if declaredSize > s.maxBytes {
 		return Meta{}, fmt.Errorf("put entry: %w: declared %d bytes, cap is %d", ErrTooLarge, declaredSize, s.maxBytes)
+	}
+	if declaredSize > s.frameMax {
+		return Meta{}, fmt.Errorf("put entry: %w: declared %d bytes, more than one frame carries; upload it in chunks", ErrTooLarge, declaredSize)
 	}
 	if entryID == "" {
 		entryID = newEntryID()
@@ -175,7 +221,7 @@ func (s *Service) Put(ctx context.Context, groupID string, epoch uint64, entryID
 			}
 		}()
 
-		counted := &countingReader{r: io.LimitReader(body, s.maxBytes+1)}
+		counted := &countingReader{r: io.LimitReader(body, s.frameMax+1)}
 		ref, err := s.blobs.Put(ctx, meta.ID, meta.ExpiresAt, counted)
 		if errors.Is(err, blob.ErrTooLarge) {
 			return Meta{}, fmt.Errorf("put entry %s: %w", meta.ID, ErrTooLarge)
@@ -352,6 +398,9 @@ func (s *Service) Fetch(ctx context.Context, groupID, entryID string) (Meta, []b
 	meta, err := s.store.Get(ctx, groupID, entryID)
 	if err != nil {
 		return Meta{}, nil, fmt.Errorf("read entry %s: %w", entryID, err)
+	}
+	if meta.Size > s.frameMax {
+		return Meta{}, nil, fmt.Errorf("read entry %s: %w: %d bytes do not fit one frame; fetch it in ranges", entryID, ErrTooLarge, meta.Size)
 	}
 	body, err := s.body(ctx, meta)
 	if err != nil {

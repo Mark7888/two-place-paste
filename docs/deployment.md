@@ -94,7 +94,8 @@ server {
     ssl_certificate     /etc/letsencrypt/live/tpp.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/tpp.example.com/privkey.pem;
 
-    # 10 MB ciphertext cap (SPEC §4.3), plus room for framing.
+    # A WebSocket frame carries at most 10 MiB of ciphertext (SPEC §4.3); larger
+    # entries are chunked. This bounds plain HTTP bodies, plus framing room.
     client_max_body_size 12m;
 
     location / {
@@ -162,9 +163,9 @@ content access to add later — the server holds only ciphertext (SPEC §2.3).
   records, device records and wrapped keys**, destroying groups and pairings
   under memory pressure with no error anywhere (SPEC §4.2).
 
-Size `maxmemory` for the ephemeral zone. Entries are capped at 10 MB of
-ciphertext and only those at or below 256 KB are stored in Redis at all
-(SPEC §4.3).
+Size `maxmemory` for the ephemeral zone. Only entries at or below 256 KB of
+ciphertext are stored in Redis at all (SPEC §4.3); larger ones live in the blob
+backend.
 
 ## 6. Blob storage and garbage collection
 

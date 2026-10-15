@@ -72,4 +72,13 @@ type Entries interface {
 	History(ctx context.Context, groupID string, limit int, before time.Time) ([]entries.Meta, time.Time, error)
 	Fetch(ctx context.Context, groupID, entryID string) (entries.Meta, []byte, error)
 	MaxBytes() int64
+	FrameMaxBytes() int64
+
+	// The chunked path (SPEC §4.3).
+	Limits() entries.UploadLimits
+	BeginUpload(ctx context.Context, groupID, deviceID string, epoch uint64, entryID string, size int64) (entries.UploadInfo, error)
+	WriteChunk(ctx context.Context, groupID, deviceID, handle string, index uint32, data []byte) (int64, error)
+	CommitUpload(ctx context.Context, groupID, deviceID, handle, entryID string, epoch uint64, size int64) (entries.Meta, error)
+	AbortUpload(ctx context.Context, groupID, deviceID, handle string) error
+	FetchRange(ctx context.Context, groupID, entryID string, offset, length int64) (entries.Meta, []byte, error)
 }

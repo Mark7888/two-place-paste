@@ -399,3 +399,21 @@ func TestEvictionStats(t *testing.T) {
 		}
 	})
 }
+
+func TestReleasePending(t *testing.T) {
+	t.Parallel()
+	forEachLedger(t, quota.Limits{}, func(t *testing.T, l quota.Ledger, _ *clock) {
+		ctx := context.Background()
+		put(t, l, "stored", "g", 10, 0)
+		for _, id := range []string{"orphan-1", "orphan-2"} {
+			if _, err := l.Reserve(ctx, quota.Reservation{EntryID: id, GroupID: "g", Size: 100, ExpiresAt: t0.Add(24 * time.Hour)}); err != nil {
+				t.Fatalf("Reserve() error = %v", err)
+			}
+		}
+		n, err := l.ReleasePending(ctx)
+		if err != nil || n != 2 {
+			t.Fatalf("ReleasePending() = %d, %v; want 2, nil", n, err)
+		}
+		wantUsage(t, l, "g", 10, 1)
+	})
+}

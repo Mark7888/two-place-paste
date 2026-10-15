@@ -151,7 +151,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.logger.DebugContext(ctx, "websocket upgrade failed", slog.Any("error", err))
 		return
 	}
-	sock.SetReadLimit(s.entries.MaxBytes() + frameOverhead)
+	// A frame carries at most one frame's worth of ciphertext, whatever the
+	// entry cap: larger entries arrive in chunks (SPEC §4.3).
+	sock.SetReadLimit(s.entries.FrameMaxBytes() + frameOverhead)
 
 	c := newConn(sock, s.logger)
 	defer func() {

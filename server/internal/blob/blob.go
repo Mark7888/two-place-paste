@@ -44,7 +44,18 @@ var (
 	// the disk backend's free-space floor — regardless of what the storage
 	// limits would allow. Nothing is left behind.
 	ErrStorageFull = errors.New("blob: storage is full")
+
+	// ErrIncomplete is returned when a chunked upload is completed before it
+	// has received the size it was begun with.
+	ErrIncomplete = errors.New("blob: upload is incomplete")
 )
+
+// StaleUploadAge is how old an unfinished chunked upload must be before the
+// sweep removes what it left behind. It is well above any upload session
+// timeout the server allows, so the sweep never takes an upload that is still
+// in use; it exists for uploads abandoned by a crash, which no session
+// remembers.
+const StaleUploadAge = 2 * time.Hour
 
 // BucketLayout is the time format of an hour bucket directory: the UTC hour in
 // which everything inside it expires.
@@ -73,8 +84,36 @@ type Backend interface {
 	// bounded by the 24-hour TTL (SPEC §4.5).
 	Delete(ctx context.Context, ref string) error
 
-	// Sweep reclaims every bucket that has fully passed at now.
+	// Sweep reclaims every bucket that has fully passed at now, and anything
+	// an unfinished upload left behind more than StaleUploadAge ago.
 	Sweep(ctx context.Context, now time.Time) error
+
+	// BeginUpload starts a blob that arrives in chunks, for an entry larger
+	// than one frame. size is the exact final length; more is refused with
+	// ErrTooLarge. Like Put, nothing is visible under the entry's reference
+	// until Complete, and Complete creates and never replaces.
+	BeginUpload(ctx context.Context, entryID string, expiresAt time.Time, size int64) (Upload, error)
+
+	// GetRange opens length bytes of a stored blob from offset. The caller
+	// keeps the range inside the blob and closes the reader.
+	GetRange(ctx context.Context, ref string, offset, length int64) (io.ReadCloser, error)
+}
+
+// Upload is a blob being written in chunks. Its methods are called from one
+// goroutine at a time, in order: Write any number of times, then exactly one
+// of Complete or Abort.
+type Upload interface {
+	// Write appends one chunk. Data past the size the upload was begun with
+	// fails with ErrTooLarge and is not written.
+	Write(ctx context.Context, chunk []byte) error
+
+	// Complete makes the blob visible and returns its reference. It fails
+	// with ErrIncomplete short of the declared size, and with ErrExists when
+	// the entry id already has a blob; either way nothing is left behind.
+	Complete(ctx context.Context) (ref string, err error)
+
+	// Abort discards what was written. It is safe after a failed Complete.
+	Abort(ctx context.Context) error
 }
 
 // Bucket returns the hour-bucket directory name for a blob expiring at

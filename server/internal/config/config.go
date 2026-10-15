@@ -29,6 +29,12 @@ const (
 
 	// PairingTokenTTL is the lifetime of a single-use pairing token (SPEC §3.2).
 	PairingTokenTTL = 5 * time.Minute
+
+	// SingleFrameMaxBytes is the most ciphertext one WebSocket frame may
+	// carry, in either direction (SPEC §4.3). It is the cap clients released
+	// before chunked transfer shipped were built against, so it is a protocol
+	// constant, not a setting: an entry above it travels in chunks.
+	SingleFrameMaxBytes = 10 << 20
 )
 
 // Defaults for values that are configurable.
@@ -39,7 +45,9 @@ const (
 	DefaultSweepInterval = 10 * time.Minute
 	DefaultSessionTTL    = 12 * time.Hour
 	DefaultInlineMax     = 256 << 10 // 256 KiB, SPEC §4.3
-	DefaultEntryMax      = 10 << 20  // 10 MiB ciphertext, SPEC §4.3
+	DefaultEntryMax      = 50 << 20  // 50 MiB ciphertext, SPEC §4.3
+	DefaultChunk         = 8 << 20   // 8 MiB: under the frame cap, over S3's 5 MiB part floor
+	DefaultUploadTTL     = 10 * time.Minute
 
 	// DefaultGroupMax is the per-group blob storage limit. The total limit
 	// defaults to unlimited: only the operator knows how big the volume or
@@ -180,8 +188,17 @@ type EntryConfig struct {
 	InlineMaxBytes int64
 
 	// MaxBytes is the hard per-entry cap, enforced at the reader rather than
-	// after buffering.
+	// after buffering. An entry above SingleFrameMaxBytes is uploaded and
+	// fetched in chunks.
 	MaxBytes int64
+
+	// ChunkBytes is the chunk size of the chunked path: every chunk but the
+	// last is exactly this long.
+	ChunkBytes int64
+
+	// UploadTTL is how long a chunked upload may sit idle before the server
+	// abandons it and releases the room it reserved.
+	UploadTTL time.Duration
 }
 
 // Options controls Load.
@@ -240,6 +257,8 @@ func Load(opts Options) (*Config, error) {
 		Entry: EntryConfig{
 			InlineMaxBytes: r.byteSize("TPP_ENTRY_INLINE_MAX_BYTES", DefaultInlineMax),
 			MaxBytes:       r.byteSize("TPP_ENTRY_MAX_BYTES", DefaultEntryMax),
+			ChunkBytes:     r.byteSize("TPP_ENTRY_CHUNK_BYTES", DefaultChunk),
+			UploadTTL:      r.duration("TPP_UPLOAD_SESSION_TTL", DefaultUploadTTL),
 		},
 	}
 
@@ -334,6 +353,24 @@ func (c *Config) Validate() error {
 	}
 	if c.Entry.InlineMaxBytes > c.Entry.MaxBytes {
 		errs = append(errs, fmt.Errorf("TPP_ENTRY_INLINE_MAX_BYTES (%d) must not exceed TPP_ENTRY_MAX_BYTES (%d)", c.Entry.InlineMaxBytes, c.Entry.MaxBytes))
+	}
+	if c.Entry.InlineMaxBytes > SingleFrameMaxBytes {
+		errs = append(errs, fmt.Errorf("TPP_ENTRY_INLINE_MAX_BYTES (%d) must not exceed the single-frame cap of %d", c.Entry.InlineMaxBytes, SingleFrameMaxBytes))
+	}
+	// The chunk must fit in a frame, and on S3 every chunk but the last is a
+	// multipart part, which S3 refuses below 5 MiB.
+	minChunk := int64(64 << 10)
+	if c.Blob.Backend == BlobBackendS3 {
+		minChunk = 5 << 20
+	}
+	if c.Entry.ChunkBytes < minChunk || c.Entry.ChunkBytes > SingleFrameMaxBytes {
+		errs = append(errs, fmt.Errorf("TPP_ENTRY_CHUNK_BYTES must be between %d and %d bytes for the %s backend, got %d",
+			minChunk, int64(SingleFrameMaxBytes), c.Blob.Backend, c.Entry.ChunkBytes))
+	}
+	// An idle upload is abandoned after this; the blob sweep then cleans up
+	// after crashed ones at blob.StaleUploadAge (2 h), which must stay longer.
+	if c.Entry.UploadTTL < time.Minute || c.Entry.UploadTTL > time.Hour {
+		errs = append(errs, fmt.Errorf("TPP_UPLOAD_SESSION_TTL must be between 1m and 1h, got %s", c.Entry.UploadTTL))
 	}
 
 	return errors.Join(errs...)

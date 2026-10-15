@@ -66,13 +66,15 @@ message EntryPutRequest {
   uint64 size = 2;
 
   oneof body {
-    // Inline ciphertext, for entries up to 256 KB (SPEC §4.3).
+    // The whole ciphertext in this frame. Allowed up to
+    // EntryLimitsResponse.single_frame_max_bytes (10 MiB); anything larger is
+    // uploaded in chunks.
     bytes ciphertext = 3;
 
-    // Handle for ciphertext already streamed to the blob backend out of band.
-    // Reserved for the large-entry upload path; how a handle is obtained is
-    // ROADMAP P3c's to define. Clients that only send inline entries never set
-    // this field.
+    // Commits a chunked upload: the handle from EntryUploadBeginResponse,
+    // after every chunk has been acknowledged. entry_id, epoch and size must
+    // match what the upload was begun with. The entry becomes visible, and
+    // the group's latest, only now.
     string upload_handle = 4;
   }
 }
@@ -84,6 +86,106 @@ message EntryPutResponse {
   // and gets a different id back must treat the entry as unreadable rather
   // than trusting it: the id it bound is not the id the entry now carries.
   EntryMeta meta = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Chunked transfer, for entries larger than one frame (SPEC §4.3)
+//
+// No frame ever carries more than single_frame_max_bytes of ciphertext. A
+// larger entry is uploaded as: EntryUploadBeginRequest, then one
+// EntryUploadChunkRequest per chunk in order, each acknowledged before the
+// next is sent, then EntryPutRequest with the upload_handle. It is read back
+// with EntryFetchChunkRequest, one range at a time.
+//
+// The crypto is unchanged: the client seals the whole entry as one container
+// (/spec/crypto.md §5) and only the transport splits it.
+// ---------------------------------------------------------------------------
+
+// EntryLimitsRequest asks the relay for its entry limits. A client asks once
+// per connection, before its first large upload.
+message EntryLimitsRequest {}
+
+// EntryLimitsResponse states the relay's limits, all in ciphertext bytes.
+message EntryLimitsResponse {
+  // The largest entry the relay accepts at all.
+  uint64 max_entry_bytes = 1;
+  // The largest ciphertext that may travel in one frame: an EntryPutRequest
+  // body or an EntryFetchResponse. Anything larger uses the chunked path.
+  uint64 single_frame_max_bytes = 2;
+  // The chunk size of the chunked path. Every chunk but the last must be
+  // exactly this size.
+  uint64 chunk_bytes = 3;
+  // Entries at or below this size are stored inline and delivered with
+  // their metadata; the chunked path is for entries above it.
+  uint64 inline_max_bytes = 4;
+}
+
+// EntryUploadBeginRequest starts a chunked upload. The relay reserves room for
+// size bytes here, evicting older entries if it must, so a full relay refuses
+// before any chunk is sent.
+message EntryUploadBeginRequest {
+  // As in EntryPutRequest: chosen by the client and bound into the
+  // ciphertext. Empty means the relay assigns one.
+  string entry_id = 1;
+  // The epoch the ciphertext is encrypted under. Checked again at commit.
+  uint64 epoch = 2;
+  // The exact ciphertext length. It must be above inline_max_bytes and at
+  // most max_entry_bytes.
+  uint64 size = 3;
+}
+
+// EntryUploadBeginResponse returns the handle for the chunks and the commit.
+message EntryUploadBeginResponse {
+  // Opaque. Valid only for the device that began the upload, and only until
+  // it has been idle for the relay's upload timeout.
+  string upload_handle = 1;
+  // The entry id, echoed or assigned.
+  string entry_id = 2;
+  // The size every chunk but the last must have.
+  uint64 chunk_bytes = 3;
+}
+
+// EntryUploadChunkRequest carries one chunk.
+message EntryUploadChunkRequest {
+  string upload_handle = 1;
+  // Zero-based, consecutive. A chunk out of order is refused with
+  // ERROR_CODE_INVALID_ARGUMENT and changes nothing.
+  uint32 index = 2;
+  bytes data = 3;
+}
+
+// EntryUploadChunkResponse acknowledges a chunk once it is stored.
+message EntryUploadChunkResponse {
+  // Total bytes received so far.
+  uint64 received_bytes = 1;
+}
+
+// EntryUploadAbortRequest abandons an upload and releases its reserved room.
+// Aborting an unknown or finished upload is not an error.
+message EntryUploadAbortRequest {
+  string upload_handle = 1;
+}
+
+// EntryUploadAbortResponse confirms the abort.
+message EntryUploadAbortResponse {}
+
+// EntryFetchChunkRequest reads a range of an entry's ciphertext. It works for
+// every entry, inline or not, but exists for those larger than one frame.
+message EntryFetchChunkRequest {
+  string entry_id = 1;
+  // Where to start, in bytes; less than the entry's size.
+  uint64 offset = 2;
+  // How much to read. Zero, or more than chunk_bytes, means chunk_bytes. The
+  // range is cut at the end of the entry.
+  uint64 length = 3;
+}
+
+// EntryFetchChunkResponse returns the range.
+message EntryFetchChunkResponse {
+  // The entry's metadata, so the first range also says how many follow.
+  EntryMeta meta = 1;
+  uint64 offset = 2;
+  bytes data = 3;
 }
 
 // EntryLatestRequest asks for the group's most recent entry. Sync operates on
@@ -130,6 +232,8 @@ message EntryFetchRequest {
 
 // EntryFetchResponse returns the ciphertext, whether it was stored inline or in
 // the blob backend; that distinction is the server's problem, not the client's.
+// An entry larger than one frame is refused with ERROR_CODE_TOO_LARGE; it is
+// read with EntryFetchChunkRequest instead.
 message EntryFetchResponse {
   EntryMeta meta = 1;
   bytes ciphertext = 2;

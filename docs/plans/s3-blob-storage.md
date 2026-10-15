@@ -3,8 +3,10 @@
 **Status:** in progress. Done: step 1 (token revocation) and step 2 (storage limits,
 accounting and eviction on the disk backend, `EntryEvicted`, `QUOTA_EXCEEDED`,
 `tpp gc --rebuild-accounting`) and step 3 (the S3 backend, the MinIO compose profile, and
-Redis and MinIO in CI) and step 4 (the admin dashboard). Next: step 5, the chunked
-transfer protocol.
+Redis and MinIO in CI), step 4 (the admin dashboard) and step 5 (chunked transfer on the
+server: `EntryLimits`, `EntryUpload{Begin,Chunk,Abort}`, commit by `upload_handle`,
+`EntryFetchChunk`; 50 MiB cap, 8 MiB chunks, upload sessions in memory). Next: step 6,
+the clients.
 **Touches:** `/proto/**` (P1), `/server/**` (P3), `/pkg/tppclient/**` (P5),
 `/desktop/**` (P6), `/mobile/**` (P7), `/deploy/**`, `/docs/**`.
 

@@ -75,6 +75,7 @@ type S3Options struct {
 // store, so it can stay on a private network.
 type S3 struct {
 	client  *minio.Client
+	core    minio.Core // the same client, for multipart calls
 	bucket  string
 	prefix  string // "" or "<prefix>/"
 	maxSize int64
@@ -143,6 +144,7 @@ func NewS3(opts S3Options) (*S3, error) {
 	}
 	return &S3{
 		client:  client,
+		core:    minio.Core{Client: client},
 		bucket:  opts.Bucket,
 		prefix:  prefix,
 		maxSize: opts.MaxSize,
@@ -305,7 +307,123 @@ func (s *S3) Sweep(ctx context.Context, now time.Time) error {
 			errs = append(errs, fmt.Errorf("remove expired bucket %s: %w", b, err))
 		}
 	}
+	if err := s.abortStaleUploads(ctx, now); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
+}
+
+// abortStaleUploads aborts multipart uploads under the prefix that were
+// started more than StaleUploadAge ago: ones a crash abandoned. Their parts
+// are billed storage that no listing of objects shows.
+func (s *S3) abortStaleUploads(ctx context.Context, now time.Time) error {
+	var errs []error
+	for u := range s.client.ListIncompleteUploads(ctx, s.bucket, s.prefix, true) {
+		if u.Err != nil {
+			return fmt.Errorf("list unfinished uploads: %w", u.Err)
+		}
+		if now.Sub(u.Initiated) < StaleUploadAge {
+			continue
+		}
+		if err := s.core.AbortMultipartUpload(ctx, s.bucket, u.Key, u.UploadID); err != nil {
+			errs = append(errs, fmt.Errorf("abort stale upload of %s: %w", u.Key, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// BeginUpload implements Backend with an S3 multipart upload: one part per
+// chunk, completed with If-None-Match: * so that, like Put, it never replaces
+// an existing blob. Every part but the last must be at least 5 MiB, which the
+// server's chunk size guarantees.
+func (s *S3) BeginUpload(ctx context.Context, entryID string, expiresAt time.Time, size int64) (Upload, error) {
+	if err := validEntryID(entryID); err != nil {
+		return nil, err
+	}
+	if size > s.maxSize {
+		return nil, fmt.Errorf("begin upload for entry %s: %w", entryID, ErrTooLarge)
+	}
+	bucket := Bucket(expiresAt)
+	key := s.key(bucket, entryID)
+	id, err := s.core.NewMultipartUpload(ctx, s.bucket, key, minio.PutObjectOptions{ContentType: "application/octet-stream"})
+	if err != nil {
+		return nil, fmt.Errorf("begin upload for entry %s: %w", entryID, err)
+	}
+	return &s3Upload{s: s, entryID: entryID, bucket: bucket, key: key, uploadID: id, size: size}, nil
+}
+
+type s3Upload struct {
+	s        *S3
+	entryID  string
+	bucket   string
+	key      string
+	uploadID string
+	size     int64
+	written  int64
+	parts    []minio.CompletePart
+}
+
+func (u *s3Upload) Write(ctx context.Context, chunk []byte) error {
+	if u.written+int64(len(chunk)) > u.size {
+		return fmt.Errorf("write upload chunk for entry %s: %w", u.entryID, ErrTooLarge)
+	}
+	n := len(u.parts) + 1
+	part, err := u.s.core.PutObjectPart(ctx, u.s.bucket, u.key, u.uploadID, n,
+		bytes.NewReader(chunk), int64(len(chunk)), minio.PutObjectPartOptions{})
+	if err != nil {
+		return fmt.Errorf("write upload chunk for entry %s: %w", u.entryID, err)
+	}
+	u.parts = append(u.parts, minio.CompletePart{PartNumber: n, ETag: part.ETag})
+	u.written += int64(len(chunk))
+	return nil
+}
+
+func (u *s3Upload) Complete(ctx context.Context) (string, error) {
+	if u.written != u.size {
+		return "", fmt.Errorf("complete upload for entry %s: %w: %d of %d bytes", u.entryID, ErrIncomplete, u.written, u.size)
+	}
+	opts := minio.PutObjectOptions{}
+	opts.SetMatchETagExcept("*")
+	if _, err := u.s.core.CompleteMultipartUpload(ctx, u.s.bucket, u.key, u.uploadID, u.parts, opts); err != nil {
+		_ = u.Abort(context.WithoutCancel(ctx))
+		resp := minio.ToErrorResponse(err)
+		if resp.StatusCode == http.StatusPreconditionFailed || resp.StatusCode == http.StatusConflict {
+			return "", fmt.Errorf("complete upload for entry %s: %w", u.entryID, ErrExists)
+		}
+		return "", fmt.Errorf("complete upload for entry %s: %w", u.entryID, err)
+	}
+	return refFor(u.bucket, u.entryID), nil
+}
+
+func (u *s3Upload) Abort(ctx context.Context) error {
+	err := u.s.core.AbortMultipartUpload(ctx, u.s.bucket, u.key, u.uploadID)
+	if err != nil && minio.ToErrorResponse(err).Code != "NoSuchUpload" {
+		return fmt.Errorf("abort upload for entry %s: %w", u.entryID, err)
+	}
+	return nil
+}
+
+// GetRange implements Backend.
+func (s *S3) GetRange(ctx context.Context, ref string, offset, length int64) (io.ReadCloser, error) {
+	bucket, entryID, err := parseRef(ref)
+	if err != nil {
+		return nil, err
+	}
+	if length <= 0 {
+		return io.NopCloser(bytes.NewReader(nil)), nil
+	}
+	opts := minio.GetObjectOptions{}
+	if err := opts.SetRange(offset, offset+length-1); err != nil {
+		return nil, fmt.Errorf("open blob %s: %w", ref, err)
+	}
+	rc, _, _, err := s.core.GetObject(ctx, s.bucket, s.key(bucket, entryID), opts)
+	if err != nil {
+		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("open blob %s: %w", ref, err)
+	}
+	return rc, nil
 }
 
 // ListRefs implements Lister. It backs `tpp gc --verify` only.

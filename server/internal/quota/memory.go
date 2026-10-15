@@ -177,6 +177,20 @@ func (m *Memory) GroupUsage(_ context.Context, groupID string) (Usage, error) {
 	return u, nil
 }
 
+// ReleasePending implements Ledger.
+func (m *Memory) ReleasePending(context.Context) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for id, e := range m.entries {
+		if e.pending {
+			delete(m.entries, id)
+			n++
+		}
+	}
+	return n, nil
+}
+
 // Evictions implements Ledger.
 func (m *Memory) Evictions(context.Context) (Evictions, error) {
 	m.mu.Lock()

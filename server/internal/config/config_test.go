@@ -304,6 +304,38 @@ func TestSpecConstants(t *testing.T) {
 	}
 }
 
+func TestLoadChunkSettings(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(Options{DotenvPath: filepath.Join(t.TempDir(), "absent.env"), Lookup: lookupFrom(minimalEnv())})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Entry.MaxBytes != 50<<20 || cfg.Entry.ChunkBytes != 8<<20 || cfg.Entry.UploadTTL != 10*time.Minute {
+		t.Errorf("Entry = %+v, want 50 MiB cap, 8 MiB chunks, 10m upload TTL", cfg.Entry)
+	}
+
+	for _, tt := range []struct {
+		set     map[string]string
+		wantErr string
+	}{
+		{map[string]string{"TPP_ENTRY_CHUNK_BYTES": "11MiB"}, "TPP_ENTRY_CHUNK_BYTES must be between"},
+		{map[string]string{"TPP_ENTRY_CHUNK_BYTES": "1KiB"}, "TPP_ENTRY_CHUNK_BYTES must be between"},
+		{map[string]string{"TPP_BLOB_BACKEND": "s3", "TPP_S3_BUCKET": "b", "TPP_ENTRY_CHUNK_BYTES": "4MiB"}, "between 5242880 and 10485760 bytes for the s3 backend"},
+		{map[string]string{"TPP_UPLOAD_SESSION_TTL": "3h"}, "TPP_UPLOAD_SESSION_TTL must be between 1m and 1h"},
+		{map[string]string{"TPP_ENTRY_INLINE_MAX_BYTES": "11MiB"}, "must not exceed the single-frame cap"},
+	} {
+		env := minimalEnv()
+		for k, v := range tt.set {
+			env[k] = v
+		}
+		_, err := Load(Options{DotenvPath: filepath.Join(t.TempDir(), "absent.env"), Lookup: lookupFrom(env)})
+		if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+			t.Errorf("Load(%v) error = %v, want it to contain %q", tt.set, err, tt.wantErr)
+		}
+	}
+}
+
 func TestLoadByteSizes(t *testing.T) {
 	t.Parallel()
 

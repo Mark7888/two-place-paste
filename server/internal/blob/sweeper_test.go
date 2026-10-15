@@ -110,3 +110,11 @@ func TestSweeperRunsTasksAfterEachSweep(t *testing.T) {
 		t.Errorf("Status() = %+v, want the sweep at %v with the failing task's error", st, swept)
 	}
 }
+
+func (b *recordingBackend) BeginUpload(context.Context, string, time.Time, int64) (blob.Upload, error) {
+	return nil, errors.New("not used")
+}
+
+func (b *recordingBackend) GetRange(context.Context, string, int64, int64) (io.ReadCloser, error) {
+	return nil, errors.New("not used")
+}

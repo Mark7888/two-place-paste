@@ -232,3 +232,151 @@ func TestBackendSweepAndList(t *testing.T) {
 		}
 	})
 }
+
+// chunk is a deterministic chunk of n bytes, distinct per index, so a part
+// written out of place would be noticed.
+func chunk(index, n int) []byte {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = byte('a' + (index+i)%26)
+	}
+	return b
+}
+
+func TestBackendChunkedUpload(t *testing.T) {
+	t.Parallel()
+	// S3 parts other than the last must be at least 5 MiB.
+	const part = 5 << 20
+	forEachBackend(t, 3*part, func(t *testing.T, b backendUnderTest) {
+		ctx := context.Background()
+		expires := time.Date(2026, 9, 8, 14, 30, 0, 0, time.UTC)
+		size := int64(2*part + 1234)
+
+		up, err := b.BeginUpload(ctx, "chunked", expires, size)
+		if err != nil {
+			t.Fatalf("BeginUpload() error = %v", err)
+		}
+		var want []byte
+		for i, n := range []int{part, part, 1234} {
+			c := chunk(i, n)
+			want = append(want, c...)
+			if err := up.Write(ctx, c); err != nil {
+				t.Fatalf("Write(%d) error = %v", i, err)
+			}
+		}
+		if err := up.Write(ctx, []byte("x")); !errors.Is(err, blob.ErrTooLarge) {
+			t.Errorf("Write(past size) error = %v, want %v", err, blob.ErrTooLarge)
+		}
+
+		// Nothing is visible before Complete.
+		if _, err := b.Get(ctx, "2026090815/chunked.bin"); !errors.Is(err, blob.ErrNotFound) {
+			t.Errorf("Get(before Complete) error = %v, want %v", err, blob.ErrNotFound)
+		}
+
+		ref, err := up.Complete(ctx)
+		if err != nil {
+			t.Fatalf("Complete() error = %v", err)
+		}
+		if ref != "2026090815/chunked.bin" {
+			t.Errorf("Complete() ref = %q", ref)
+		}
+		if got := readAll(t, b, ref); got != string(want) {
+			t.Errorf("Get() returned %d bytes, not the %d written in order", len(got), len(want))
+		}
+
+		// Ranges: across a part boundary, and at the very end.
+		for _, r := range [][2]int64{{part - 10, 20}, {size - 5, 5}, {0, 1}} {
+			rc, err := b.GetRange(ctx, ref, r[0], r[1])
+			if err != nil {
+				t.Fatalf("GetRange(%d, %d) error = %v", r[0], r[1], err)
+			}
+			got, err := io.ReadAll(rc)
+			rc.Close()
+			if err != nil || string(got) != string(want[r[0]:r[0]+r[1]]) {
+				t.Errorf("GetRange(%d, %d) = %q, %v; want %q", r[0], r[1], got, err, want[r[0]:r[0]+r[1]])
+			}
+		}
+		if _, err := b.GetRange(ctx, "2026090815/missing.bin", 0, 1); !errors.Is(err, blob.ErrNotFound) {
+			t.Errorf("GetRange(missing) error = %v, want %v", err, blob.ErrNotFound)
+		}
+
+		// Create, never replace: a second upload for the same id fails at
+		// Complete and the first blob survives.
+		again, err := b.BeginUpload(ctx, "chunked", expires, 3)
+		if err != nil {
+			t.Fatalf("BeginUpload(again) error = %v", err)
+		}
+		if err := again.Write(ctx, []byte("new")); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		if _, err := again.Complete(ctx); !errors.Is(err, blob.ErrExists) {
+			t.Errorf("Complete(duplicate) error = %v, want %v", err, blob.ErrExists)
+		}
+		if got := readAll(t, b, ref); len(got) != int(size) {
+			t.Errorf("first blob after a refused duplicate is %d bytes, want %d", len(got), size)
+		}
+	})
+}
+
+func TestBackendUploadRefusals(t *testing.T) {
+	t.Parallel()
+	forEachBackend(t, 1024, func(t *testing.T, b backendUnderTest) {
+		ctx := context.Background()
+		expires := time.Date(2026, 9, 8, 14, 30, 0, 0, time.UTC)
+
+		if _, err := b.BeginUpload(ctx, "huge", expires, 1025); !errors.Is(err, blob.ErrTooLarge) {
+			t.Errorf("BeginUpload(over cap) error = %v, want %v", err, blob.ErrTooLarge)
+		}
+		if _, err := b.BeginUpload(ctx, "../x", expires, 10); !errors.Is(err, blob.ErrInvalidRef) {
+			t.Errorf("BeginUpload(bad id) error = %v, want %v", err, blob.ErrInvalidRef)
+		}
+
+		short, err := b.BeginUpload(ctx, "short", expires, 10)
+		if err != nil {
+			t.Fatalf("BeginUpload() error = %v", err)
+		}
+		if err := short.Write(ctx, []byte("12345")); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		if _, err := short.Complete(ctx); !errors.Is(err, blob.ErrIncomplete) {
+			t.Errorf("Complete(short) error = %v, want %v", err, blob.ErrIncomplete)
+		}
+		if err := short.Abort(ctx); err != nil {
+			t.Errorf("Abort() error = %v", err)
+		}
+		if _, err := b.Get(ctx, "2026090815/short.bin"); !errors.Is(err, blob.ErrNotFound) {
+			t.Errorf("Get(aborted) error = %v, want %v", err, blob.ErrNotFound)
+		}
+	})
+}
+
+// TestBackendSweepsAbandonedUploads: an upload nobody completes or aborts —
+// the server crashed — is cleaned up by the sweep once it is old enough, and
+// not before.
+func TestBackendSweepsAbandonedUploads(t *testing.T) {
+	t.Parallel()
+	forEachBackend(t, 1024, func(t *testing.T, b backendUnderTest) {
+		ctx := context.Background()
+		up, err := b.BeginUpload(ctx, "abandoned", time.Now().Add(24*time.Hour), 10)
+		if err != nil {
+			t.Fatalf("BeginUpload() error = %v", err)
+		}
+		if err := up.Write(ctx, []byte("12345")); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+
+		if err := b.Sweep(ctx, time.Now()); err != nil {
+			t.Fatalf("Sweep() error = %v", err)
+		}
+		if err := up.Write(ctx, []byte("67890")); err != nil {
+			t.Fatalf("Write() after a sweep error = %v; a live upload must survive it", err)
+		}
+
+		if err := b.Sweep(ctx, time.Now().Add(blob.StaleUploadAge+time.Minute)); err != nil {
+			t.Fatalf("Sweep(later) error = %v", err)
+		}
+		if _, err := up.Complete(ctx); err == nil {
+			t.Errorf("Complete() after the sweep took the upload = nil error, want a failure")
+		}
+	})
+}

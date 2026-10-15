@@ -49,7 +49,8 @@ const (
 	// another device rekeyed first. The caller refetches the roster and retries
 	// (SPEC §3.3 step 4).
 	ErrorCode_ERROR_CODE_EPOCH_CONFLICT ErrorCode = 7
-	// The ciphertext exceeds the 10 MB per-entry cap (SPEC §4.3).
+	// The ciphertext exceeds the per-entry cap or a storage limit, or is too
+	// large for the single-frame path it was sent or requested on (SPEC §4.3).
 	ErrorCode_ERROR_CODE_TOO_LARGE ErrorCode = 8
 	// Rate limited. The caller backs off and retries.
 	ErrorCode_ERROR_CODE_RATE_LIMITED ErrorCode = 9

@@ -26,6 +26,8 @@ import (
 // ratio is what matters, not the absolute size.
 const (
 	testInlineMax = 64
+	testFrameMax  = 1024
+	testChunk     = 512
 	testMaxBytes  = 4096
 )
 
@@ -54,9 +56,11 @@ func newHarnessWithQuota(t *testing.T, opts ws.Options, ledger quota.Ledger) *ha
 	st := store.NewMemoryStore()
 	var server *ws.Server
 	svc := entries.NewService(entries.NewMemoryStore(), blob.NewDisk(t.TempDir(), testMaxBytes), entries.Options{
-		InlineMaxBytes: testInlineMax,
-		MaxBytes:       testMaxBytes,
-		Quota:          ledger,
+		InlineMaxBytes:      testInlineMax,
+		MaxBytes:            testMaxBytes,
+		SingleFrameMaxBytes: testFrameMax,
+		ChunkBytes:          testChunk,
+		Quota:               ledger,
 		OnEvict: func(ctx context.Context, groupID, entryID string) {
 			server.AnnounceEviction(ctx, groupID, entryID)
 		},
@@ -517,7 +521,7 @@ func TestEntrySizePaths(t *testing.T) {
 	}{
 		{name: "inline", size: testInlineMax, wantInline: true},
 		{name: "blob backend", size: testInlineMax + 1, wantInline: false},
-		{name: "at the cap", size: testMaxBytes, wantInline: false},
+		{name: "at the frame cap", size: testFrameMax, wantInline: false},
 	}
 
 	for _, tt := range tests {
@@ -560,12 +564,21 @@ func TestEntrySizePaths(t *testing.T) {
 		t.Errorf("oversize put = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_TOO_LARGE)
 	}
 
+	// Above one frame but under the entry cap: the chunked path's job.
+	laptop.send("put-over-frame", tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST, &tppv1.EntryPutRequest{
+		Epoch: 1, Size: testFrameMax + 1,
+		Body: &tppv1.EntryPutRequest_Ciphertext{Ciphertext: bytes.Repeat([]byte("c"), testFrameMax+1)},
+	})
+	if got := laptop.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_TOO_LARGE || !strings.Contains(got.GetMessage(), "in chunks") {
+		t.Errorf("put over one frame = %s %q, want %s naming the chunked path", got.GetCode(), got.GetMessage(), tppv1.ErrorCode_ERROR_CODE_TOO_LARGE)
+	}
+
 	laptop.send("put-handle", tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST, &tppv1.EntryPutRequest{
 		Epoch: 1, Size: 10,
-		Body: &tppv1.EntryPutRequest_UploadHandle{UploadHandle: "reserved"},
+		Body: &tppv1.EntryPutRequest_UploadHandle{UploadHandle: "no-such-upload"},
 	})
-	if got := laptop.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_UNSUPPORTED_MESSAGE {
-		t.Errorf("put with an upload handle = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_UNSUPPORTED_MESSAGE)
+	if got := laptop.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_NOT_FOUND {
+		t.Errorf("put with an unknown upload handle = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_NOT_FOUND)
 	}
 }
 

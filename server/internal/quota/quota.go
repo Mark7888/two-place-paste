@@ -128,6 +128,13 @@ type Ledger interface {
 	// GroupUsage reports one group's totals.
 	GroupUsage(ctx context.Context, groupID string) (Usage, error)
 
+	// ReleasePending forgets every entry still pending — reserved, never
+	// committed — and reports how many. The server calls it once at startup,
+	// before it takes traffic: uploads live in its memory, so any pending
+	// entry then was orphaned by the previous process and would otherwise
+	// hold its room, unevictable, until it expired.
+	ReleasePending(ctx context.Context) (int, error)
+
 	// Evictions reports how many entries were evicted in about the last
 	// day, and their bytes. It is for the admin dashboard: frequent evictions
 	// mean the limits are too tight for how the relay is used.

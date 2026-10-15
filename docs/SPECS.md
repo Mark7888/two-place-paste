@@ -240,8 +240,36 @@ pairing:<pairing_token>             hash    group_id, inviter_device_id         
     through the relay, so the object store can stay on a private network.
 - The Redis entry holds only a reference.
 
-**Hard cap: 10 MB per entry, measured on the ciphertext** — the size the server
-actually receives. The server has no knowledge of plaintext size.
+**Per-entry cap: 50 MB by default, configurable, measured on the ciphertext** — the
+size the server actually receives. The server has no knowledge of plaintext size.
+
+**No frame carries more than 10 MB of ciphertext.** An entry up to that size travels
+in one frame (`EntryPutRequest`, `EntryFetchResponse`). A larger one is **chunked**:
+
+1. `EntryLimitsRequest` reports the entry cap, the single-frame cap, the chunk size
+   (8 MiB by default) and the inline threshold.
+2. `EntryUploadBeginRequest` declares the entry id, epoch and exact size. Room is
+   reserved against the storage limits here — evicting older entries if needed — so a
+   full relay refuses before any chunk is sent.
+3. `EntryUploadChunkRequest` carries chunk 0, 1, 2, … in order, each acknowledged
+   before the next; every chunk but the last is exactly the chunk size.
+4. `EntryPutRequest` with the `upload_handle` commits. The entry is created — and
+   becomes the group's latest — only now; the epoch is checked again, and a re-key in
+   between ends the upload.
+
+`EntryUploadAbortRequest` abandons an upload. An upload idle for 10 minutes, or older
+than an hour, is abandoned by the server; either way its reserved room is released.
+Upload handles are bound to the device that began them. A large entry is read back with
+`EntryFetchChunkRequest`, one range at a time.
+
+Chunking is transport only: the client seals the whole entry as one container
+(`/spec/crypto.md` §5) and opens it once all ranges are back.
+
+Upload sessions live in the server's memory (§4.1: one instance). The blob being
+written is staged in the backend — a file under `.uploads/` on disk, a multipart upload
+on S3 — and the sweep removes what a crash abandoned. At startup the server releases
+every storage reservation still pending, since no upload can have survived the
+restart.
 
 Redis expiry removes the entry record but does not touch the stored blob. Blob
 reclamation is specified in §4.5.
@@ -329,6 +357,10 @@ bucket that expired while the server was down is removed in a single pass.
 
 **Write ordering**
 
+A chunked upload fixes its blob's expiry when it begins and its entry's when it
+commits. The blob is filed one hour (the longest an upload may take) later than the
+entry could expire, so its bucket always outlives the entry.
+
 Write the blob **before** writing the Redis entry. If the server crashes in between,
 the resulting orphan sits in a bucket that will be deleted within 24 hours regardless.
 No crash-recovery logic is required.
@@ -341,7 +373,7 @@ holds. Its record is deleted first and then its blob; a blob whose delete fails 
 on disk until its bucket expires.
 
 A blob whose entry is deleted early remains on disk until its bucket expires. This is
-bounded by the 24-hour TTL and the 10 MB per-entry cap, so the waste is small. An
+bounded by the 24-hour TTL and the per-entry cap, so the waste is small. An
 optional fast-path unlink on explicit delete may be added; because the bucket sweep is
 the backstop, that fast path is permitted to fail silently.
 
