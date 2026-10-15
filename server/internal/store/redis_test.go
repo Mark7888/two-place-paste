@@ -87,6 +87,41 @@ func TestConsumeTokenConcurrent(t *testing.T) {
 	}
 }
 
+// TestRevokeTokenRacesConsume: a token revoked at the same instant a client
+// presents it ends up exactly one of revoked or consumed — never a group the
+// admin was told did not get created.
+func TestRevokeTokenRacesConsume(t *testing.T) {
+	t.Parallel()
+
+	s := newTestRedisStore(t)
+	ctx := context.Background()
+
+	for range 20 {
+		tok, err := s.CreateToken(ctx, "raced")
+		if err != nil {
+			t.Fatalf("CreateToken() error = %v", err)
+		}
+
+		var revokeErr, consumeErr error
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() { defer wg.Done(); <-start; revokeErr = s.RevokeToken(ctx, tok.Value) }()
+		go func() { defer wg.Done(); <-start; _, consumeErr = s.ConsumeToken(ctx, tok.Value) }()
+		close(start)
+		wg.Wait()
+
+		switch {
+		case revokeErr == nil && errors.Is(consumeErr, store.ErrNotFound):
+			// Revoked first; the client found nothing.
+		case consumeErr == nil && errors.Is(revokeErr, store.ErrTokenConsumed):
+			// Consumed first; the revoke was refused.
+		default:
+			t.Fatalf("revoke = %v, consume = %v; want exactly one to win", revokeErr, consumeErr)
+		}
+	}
+}
+
 // TestAcceptOfferConcurrent is the race the accept script exists for: two
 // members that scanned the same code must admit exactly one device, not two
 // devices sharing one offer.

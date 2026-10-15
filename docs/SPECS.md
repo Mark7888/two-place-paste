@@ -249,7 +249,10 @@ reclamation is specified in §4.5.
 Served on the public domain. Credentials from `.env`.
 
 **Scope:** a single screen listing creation tokens — name, created date, whether used,
-and the resulting group if used. Token generation. Nothing else.
+and the resulting group if used. Token generation, and revocation of a token that has
+not been used yet (its URL then returns 404, like any unknown token). A used token
+cannot be revoked: its group already exists, and is removed by revoking its devices.
+Nothing else.
 
 No content access, by construction. No usage statistics in MVP.
 

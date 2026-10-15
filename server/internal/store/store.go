@@ -188,6 +188,13 @@ type Store interface {
 	// GetToken returns one token by value.
 	GetToken(ctx context.Context, value string) (Token, error)
 
+	// RevokeToken deletes an unused creation token, so its URL can no longer
+	// create a group. It returns ErrTokenConsumed for a token that has already
+	// produced one — revoking it would change nothing about that group — and
+	// ErrNotFound for an unknown token. It is atomic with ConsumeToken: a
+	// token is either revoked or consumed, never both.
+	RevokeToken(ctx context.Context, value string) error
+
 	// ConsumeToken atomically marks a token used and creates the group it
 	// names, at epoch 1. It returns ErrTokenConsumed if the token has already
 	// produced a group and ErrNotFound if it does not exist. Concurrent calls

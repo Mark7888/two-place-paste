@@ -193,6 +193,47 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	s.redirect(w, r, "/admin/")
 }
 
+// handleRevokeToken deletes an unused creation token, so the URL that was
+// handed out for it stops working. A used token is refused with a message
+// rather than deleted: its group already exists, and removing the record
+// would only hide which token created it.
+func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(r)
+	if !ok {
+		s.redirect(w, r, "/admin/login")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBodyBytes)
+	if err := r.ParseForm(); err != nil {
+		s.renderTokens(w, r, sess, http.StatusBadRequest, "That request could not be read.")
+		return
+	}
+	if !s.checkCSRF(w, r, sess) {
+		return
+	}
+
+	value := r.PathValue("token")
+	tok, err := s.store.GetToken(r.Context(), value)
+	if err == nil {
+		err = s.store.RevokeToken(r.Context(), value)
+	}
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		s.renderTokens(w, r, sess, http.StatusNotFound, "That token no longer exists.")
+		return
+	case errors.Is(err, store.ErrTokenConsumed):
+		s.renderTokens(w, r, sess, http.StatusConflict, "That token has already created a group, so there is nothing to revoke.")
+		return
+	case err != nil:
+		s.logger.ErrorContext(r.Context(), "revoke token", "error", err)
+		s.renderTokens(w, r, sess, http.StatusInternalServerError, "The token could not be revoked.")
+		return
+	}
+	// Logged by name only: the value is a credential (docs/conventions.md §2).
+	s.logger.InfoContext(r.Context(), "creation token revoked", slog.String("token_name", tok.Name))
+	s.redirect(w, r, "/admin/")
+}
+
 // handleTokenQR renders a token's creation URL as a QR code, so first-device
 // onboarding is a scan rather than typing a URL on a phone (SPEC §4.4).
 func (s *Server) handleTokenQR(w http.ResponseWriter, r *http.Request) {
@@ -333,6 +374,7 @@ func (s *Server) renderTokens(w http.ResponseWriter, r *http.Request, sess sessi
 		if !t.Used {
 			v.URL = s.creationURL(t.Value)
 			v.QRPath = "/admin/tokens/" + url.PathEscape(t.Value) + "/qr.png"
+			v.RevokePath = "/admin/tokens/" + url.PathEscape(t.Value) + "/revoke"
 			v.Fresh = fresh != "" && subtle.ConstantTimeCompare([]byte(fresh), []byte(t.Value)) == 1
 		}
 		data.Tokens = append(data.Tokens, v)

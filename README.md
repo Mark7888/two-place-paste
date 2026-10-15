@@ -191,7 +191,7 @@ server.
 |---|---|
 | `/healthz` | Liveness. Returns `ok`. |
 | `/ws` | The client WebSocket. |
-| `/admin/` | Admin UI (login, creation tokens). |
+| `/admin/` | Admin UI (login, creation tokens: generate and revoke). |
 | `/<token>` | Group creation. `GET` returns 404 by design; only a client's `POST` spends the token. |
 
 ### Operating it
@@ -282,7 +282,8 @@ backend is in use.
 
 The device generates the group key locally and wraps it to itself; the relay
 only ever receives the wrapped form. One token creates exactly one group — a
-second attempt gets `409`.
+second attempt gets `409`. An unused token can be revoked from the admin screen,
+after which its URL no longer works.
 
 ### Add a device
 

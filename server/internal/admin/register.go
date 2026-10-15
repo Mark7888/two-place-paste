@@ -32,6 +32,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/logout", s.handleLogout)
 	mux.HandleFunc("POST /admin/tokens", s.handleCreateToken)
 	mux.HandleFunc("GET /admin/tokens/{token}/qr.png", s.handleTokenQR)
+	mux.HandleFunc("POST /admin/tokens/{token}/revoke", s.handleRevokeToken)
 
 	mux.HandleFunc("GET /{token}", s.handleTokenGet)
 	mux.HandleFunc("POST /{token}", s.handleTokenPost)

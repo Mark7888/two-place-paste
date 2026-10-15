@@ -236,12 +236,13 @@ ErrorCode QUOTA_EXCEEDED
 
 ## 5. Order of work
 
-Each step ships on its own and keeps existing clients working until step 5.
+Each step ships on its own and keeps existing clients working until step 6.
 
-1. Config (4.1) + quota/accounting (4.4) + backend interface on disk (4.2).
-2. S3 backend (4.3) + MinIO compose profile (4.9).
-3. Admin dashboard + token revocation (4.7). Revocation does not depend on 1–2 and can
-   go first.
-4. Chunked protocol + server wiring (4.5, 4.6).
-5. Clients (4.8).
-6. Spec, README and deployment docs (4.10), updated alongside each step above.
+1. Token revocation (4.7, second half). Independent of everything else.
+2. Config (4.1) + quota/accounting (4.4) on the disk backend.
+3. S3 backend (4.3) + MinIO compose profile (4.9).
+4. Admin dashboard (4.7, first half).
+5. Chunked protocol (4.2 multipart methods, 4.5, 4.6).
+6. Clients (4.8).
+
+Spec, README and deployment docs (4.10) are updated alongside each step.

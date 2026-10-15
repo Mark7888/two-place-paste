@@ -306,6 +306,17 @@ button.link:hover { color: var(--fg); background: var(--line-soft); filter: none
 
 button.small { height: 2.1rem; padding: 0 0.7rem; font-size: 0.85rem; }
 
+button.danger {
+  color: var(--error);
+  background: var(--card);
+  border-color: var(--line);
+}
+
+button.danger:hover { background: var(--error-soft); filter: none; }
+
+/* A one-button form sitting in a row of actions, e.g. Revoke. */
+.inline-form { display: inline; margin: 0 0 0 0.4rem; }
+
 /* --- listing ------------------------------------------------------------- */
 
 .section-head {

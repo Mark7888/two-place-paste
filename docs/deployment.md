@@ -134,6 +134,11 @@ crawler, a link preview or a mail scanner following the link cannot burn the
 token, because only the client's `POST` consumes it. One token creates exactly
 one group; a second attempt gets `409`.
 
+A token handed out by mistake, or one that was never used, can be **revoked**
+from the same screen. Its URL then returns 404 like any unknown token. A used
+token cannot be revoked — its group already exists; remove that group's devices
+by revoking them from a client.
+
 The admin screen lists tokens and nothing else. There is no content access to
 add later — the server holds only ciphertext (SPEC §2.3).
 

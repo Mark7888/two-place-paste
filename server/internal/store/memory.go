@@ -78,6 +78,22 @@ func (m *MemoryStore) GetToken(_ context.Context, value string) (Token, error) {
 	return tok, nil
 }
 
+// RevokeToken implements Store.
+func (m *MemoryStore) RevokeToken(_ context.Context, value string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	tok, ok := m.tokens[value]
+	if !ok {
+		return ErrNotFound
+	}
+	if tok.Used {
+		return ErrTokenConsumed
+	}
+	delete(m.tokens, value)
+	return nil
+}
+
 // ConsumeToken implements Store.
 func (m *MemoryStore) ConsumeToken(_ context.Context, token string) (Group, error) {
 	m.mu.Lock()

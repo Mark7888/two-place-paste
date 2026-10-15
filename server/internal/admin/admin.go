@@ -1,8 +1,8 @@
 // Package admin is the operator-facing surface: the login-protected token
 // screen and the creation-token endpoint clients POST to (SPEC §3.1, §4.4).
 //
-// The whole UI is one screen listing creation tokens plus a button that mints
-// another. That is not minimalism for its own sake: the server holds only
+// The whole UI is one screen listing creation tokens, a button that mints
+// another and one that revokes a token nobody has used yet. That is not minimalism for its own sake: the server holds only
 // ciphertext, so there is nothing else an admin screen could truthfully show,
 // and adding content access or statistics later would require the relay to
 // learn something SPEC §2.3 says it must not.
@@ -40,6 +40,9 @@ type Store interface {
 	// GetToken returns one token by value. The QR handler uses it so that a
 	// stale page cannot render a code for a token that no longer exists.
 	GetToken(ctx context.Context, value string) (store.Token, error)
+
+	// RevokeToken deletes an unused token so its URL creates nothing.
+	RevokeToken(ctx context.Context, value string) error
 
 	// CreateGroup consumes a token and registers the creating device as one
 	// atomic operation (SPEC §3.1 steps 4-5).

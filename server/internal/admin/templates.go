@@ -38,6 +38,10 @@ type tokenView struct {
 	// exactly once, by net/url.
 	QRPath string
 
+	// RevokePath is where the revoke form posts. Empty for a used token,
+	// which cannot be revoked.
+	RevokePath string
+
 	// Fresh marks the token this render was redirected to show: the listing
 	// opens its code in a dialog, once, without the user hunting for the row.
 	Fresh bool
