@@ -396,6 +396,8 @@ expire within a day.
 | Setting | Default | Notes |
 |---|---|---|
 | Watch the clipboard | off | Opt-in polling, as above. |
+| Upload automatically up to | 25 MB | What watching the clipboard uploads on its own. Anything larger is left for **Upload**; a notice says so. Empty is no limit. |
+| Download automatically up to | 25 MB | What taking other devices' uploads fetches on its own, decided before anything is downloaded. Anything larger is left for **Download** or History. Empty is no limit. |
 | Start at login | off | A per-user login item: a launchd agent on macOS, the `HKCU\...\Run` key on Windows. |
 | Localhost port | 47821 | Applies at the next launch. |
 | This device's name | hostname | What your other devices show in their revocation dialog. Applies at the next launch. |

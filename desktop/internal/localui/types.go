@@ -224,10 +224,16 @@ type OfferPlan struct {
 
 // SettingsView is the settings screen's model.
 type SettingsView struct {
-	Port               int    `json:"port"`
-	ListenPort         int    `json:"listen_port"`
-	AutoWatch          bool   `json:"auto_watch"`
-	AutoApply          bool   `json:"auto_apply"`
+	Port       int  `json:"port"`
+	ListenPort int  `json:"listen_port"`
+	AutoWatch  bool `json:"auto_watch"`
+	AutoApply  bool `json:"auto_apply"`
+
+	// The automatic transfer limits in bytes, as they apply now; zero is no
+	// limit. Manual transfers are never limited by them.
+	AutoUploadMaxBytes   int64 `json:"auto_upload_max_bytes"`
+	AutoDownloadMaxBytes int64 `json:"auto_download_max_bytes"`
+
 	Autostart          bool   `json:"autostart"`
 	AutostartSupported bool   `json:"autostart_supported"`
 	ClipboardSupported bool   `json:"clipboard_supported"`
@@ -246,11 +252,16 @@ type SettingsView struct {
 // SettingsPatch is a partial settings update. A nil field is left alone, which
 // is what lets the UI toggle one switch without echoing the rest.
 type SettingsPatch struct {
-	Port       *int    `json:"port"`
-	AutoWatch  *bool   `json:"auto_watch"`
-	AutoApply  *bool   `json:"auto_apply"`
-	Autostart  *bool   `json:"autostart"`
-	DeviceName *string `json:"device_name"`
+	Port      *int  `json:"port"`
+	AutoWatch *bool `json:"auto_watch"`
+	AutoApply *bool `json:"auto_apply"`
+	Autostart *bool `json:"autostart"`
+
+	// AutoUploadMaxBytes and AutoDownloadMaxBytes set the automatic transfer
+	// limits; zero is no limit.
+	AutoUploadMaxBytes   *int64  `json:"auto_upload_max_bytes"`
+	AutoDownloadMaxBytes *int64  `json:"auto_download_max_bytes"`
+	DeviceName           *string `json:"device_name"`
 
 	UpdateChannel *string `json:"update_channel"`
 	AutoUpdate    *bool   `json:"auto_update"`
@@ -296,6 +307,11 @@ const (
 	// EventEvicted says the relay removed an entry before its expiry, to stay
 	// within its storage limit. A history view drops it.
 	EventEvicted = "evicted"
+
+	// EventSkipped says an automatic upload or download was not made because
+	// the entry is over the user's limit for it; Direction and Total say
+	// which and how big. The user can still send or fetch it by hand.
+	EventSkipped = "skipped"
 
 	// EventProgress reports a chunked transfer of an entry larger than one
 	// frame, once per chunk.

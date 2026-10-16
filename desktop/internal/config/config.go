@@ -47,6 +47,19 @@ type Settings struct {
 	// clipboard as soon as the relay announces it. Off by default.
 	AutoApply bool `json:"auto_apply"`
 
+	// AutoUploadMaxBytes bounds what AutoWatch uploads on its own: a clipboard
+	// change larger than this is left for the user to send with Upload.
+	// Absent means DefaultAutoMaxBytes; zero means no limit. Measured on the
+	// clipboard content.
+	AutoUploadMaxBytes *int64 `json:"auto_upload_max_bytes,omitempty"`
+
+	// AutoDownloadMaxBytes bounds what AutoApply fetches on its own: an
+	// announced entry larger than this is left for the user to fetch with
+	// Download or from History. Absent means DefaultAutoMaxBytes; zero means
+	// no limit. Measured on the entry as the relay reports it, which is the
+	// content plus a few dozen bytes of encryption.
+	AutoDownloadMaxBytes *int64 `json:"auto_download_max_bytes,omitempty"`
+
 	// Autostart records the user's intent for the login item. The truth lives
 	// in launchd or the registry; this is what the UI shows and what a
 	// reinstall restores.
@@ -68,6 +81,29 @@ type Settings struct {
 	// NightlyCommit is the full SHA of the commit whose build the Nightly
 	// channel installs. Only meaningful on ChannelNightly.
 	NightlyCommit string `json:"nightly_commit"`
+}
+
+// DefaultAutoMaxBytes is the automatic transfer limit when the settings file
+// names none: big enough for any screenshot or document a clipboard usually
+// carries, small enough that a video copied by accident does not travel on
+// its own.
+const DefaultAutoMaxBytes int64 = 25 << 20
+
+// MaxAutoLimitBytes bounds what the limits may be set to. Nothing larger can
+// travel at all: it is far above any relay's per-entry cap.
+const MaxAutoLimitBytes int64 = 1 << 40
+
+// AutoUploadLimit is the effective auto-upload limit; zero is no limit.
+func (s Settings) AutoUploadLimit() int64 { return autoLimit(s.AutoUploadMaxBytes) }
+
+// AutoDownloadLimit is the effective auto-download limit; zero is no limit.
+func (s Settings) AutoDownloadLimit() int64 { return autoLimit(s.AutoDownloadMaxBytes) }
+
+func autoLimit(v *int64) int64 {
+	if v == nil {
+		return DefaultAutoMaxBytes
+	}
+	return *v
 }
 
 // Update channels.
@@ -184,6 +220,14 @@ func (s Settings) Validate() error {
 	case "", ChannelStable, ChannelBeta, ChannelNightly:
 	default:
 		return fmt.Errorf("config: update channel %q is not stable, beta or nightly", s.UpdateChannel)
+	}
+	for _, lim := range []struct {
+		name string
+		v    *int64
+	}{{"auto_upload_max_bytes", s.AutoUploadMaxBytes}, {"auto_download_max_bytes", s.AutoDownloadMaxBytes}} {
+		if lim.v != nil && (*lim.v < 0 || *lim.v > MaxAutoLimitBytes) {
+			return fmt.Errorf("config: %s must be between 0 (no limit) and %d, got %d", lim.name, MaxAutoLimitBytes, *lim.v)
+		}
 	}
 	if s.NightlyCommit != "" && !IsFullSHA(s.NightlyCommit) {
 		return fmt.Errorf("config: nightly commit %q is not a full 40-character commit hash", s.NightlyCommit)

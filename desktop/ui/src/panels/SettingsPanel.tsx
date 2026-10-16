@@ -178,6 +178,26 @@ export function SettingsPanel({
       </section>
 
       <section className="group">
+        <h2>Automatic size limits</h2>
+        <div className="card stack" style={{ gap: "1rem" }}>
+          <LimitField
+            label="Upload automatically up to"
+            bytes={settings.auto_upload_max_bytes}
+            onSave={(b) => patch({ auto_upload_max_bytes: b })}
+          />
+          <LimitField
+            label="Download automatically up to"
+            bytes={settings.auto_download_max_bytes}
+            onSave={(b) => patch({ auto_download_max_bytes: b })}
+          />
+          <p className="muted small">
+            In megabytes; leave empty for no limit. Anything larger is left for you to send with
+            Upload or fetch with Download or History — those are never limited.
+          </p>
+        </div>
+      </section>
+
+      <section className="group">
         <h2>This device</h2>
         <div className="card stack" style={{ gap: "1rem" }}>
           <div className="inline-form">
@@ -303,5 +323,51 @@ export function SettingsPanel({
         </p>
       </Modal>
     </>
+  );
+}
+
+const MB = 1024 * 1024;
+
+/**
+ * LimitField edits one automatic size limit in megabytes. Empty is no limit;
+ * the service stores bytes, and 0 there means the same.
+ */
+function LimitField({
+  label,
+  bytes,
+  onSave,
+}: {
+  label: string;
+  bytes: number;
+  onSave: (bytes: number) => Promise<boolean>;
+}) {
+  const shown = bytes > 0 ? String(Math.round((bytes / MB) * 10) / 10) : "";
+  const [value, setValue] = useState(shown);
+  useEffect(() => setValue(shown), [shown]);
+
+  const trimmed = value.trim();
+  const mb = trimmed === "" ? 0 : Number(trimmed);
+  const valid = trimmed === "" || (Number.isFinite(mb) && mb > 0 && mb <= 1024 * 1024);
+  const next = Math.round(mb * MB);
+
+  return (
+    <div className="inline-form">
+      <label className="field">
+        <span className="label">{label}</span>
+        <input
+          type="number"
+          inputMode="decimal"
+          min={0}
+          step="any"
+          placeholder="No limit"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
+      </label>
+      <span className="muted">MB</span>
+      <button className="action" disabled={!valid || next === bytes} onClick={() => void onSave(next)}>
+        Save
+      </button>
+    </div>
   );
 }

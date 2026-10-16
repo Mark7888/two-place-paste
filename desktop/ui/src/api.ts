@@ -140,6 +140,9 @@ export interface SettingsView {
   listen_port: number;
   auto_watch: boolean;
   auto_apply: boolean;
+  /** Bytes; 0 is no limit. Manual transfers are never limited. */
+  auto_upload_max_bytes: number;
+  auto_download_max_bytes: number;
   autostart: boolean;
   autostart_supported: boolean;
   clipboard_supported: boolean;
@@ -154,6 +157,8 @@ export interface SettingsPatch {
   port?: number;
   auto_watch?: boolean;
   auto_apply?: boolean;
+  auto_upload_max_bytes?: number;
+  auto_download_max_bytes?: number;
   autostart?: boolean;
   device_name?: string;
   update_channel?: UpdateChannel;

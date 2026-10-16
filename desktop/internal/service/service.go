@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -996,18 +997,20 @@ func (s *Service) settingsView(set config.Settings) localui.SettingsView {
 		on = set.Autostart
 	}
 	return localui.SettingsView{
-		Port:               set.Port,
-		ListenPort:         s.listenPort(),
-		AutoWatch:          s.watcher.Enabled(),
-		AutoApply:          set.AutoApply && s.clip.Available(),
-		Autostart:          on,
-		AutostartSupported: s.auto.Available(),
-		ClipboardSupported: s.clip.Available(),
-		DeviceName:         set.DeviceName,
-		UpdateChannel:      set.Channel(),
-		AutoUpdate:         set.AutoUpdate,
-		NightlyCommit:      set.NightlyCommit,
-		RestartRequired:    set.ListenPort() != s.listenPort(),
+		Port:                 set.Port,
+		ListenPort:           s.listenPort(),
+		AutoWatch:            s.watcher.Enabled(),
+		AutoApply:            set.AutoApply && s.clip.Available(),
+		AutoUploadMaxBytes:   set.AutoUploadLimit(),
+		AutoDownloadMaxBytes: set.AutoDownloadLimit(),
+		Autostart:            on,
+		AutostartSupported:   s.auto.Available(),
+		ClipboardSupported:   s.clip.Available(),
+		DeviceName:           set.DeviceName,
+		UpdateChannel:        set.Channel(),
+		AutoUpdate:           set.AutoUpdate,
+		NightlyCommit:        set.NightlyCommit,
+		RestartRequired:      set.ListenPort() != s.listenPort(),
 	}
 }
 
@@ -1043,6 +1046,20 @@ func (s *Service) UpdateSettings(ctx context.Context, p localui.SettingsPatch) (
 				"this build cannot reach a clipboard, so it cannot write one")
 		}
 		next.AutoApply = *p.AutoApply
+	}
+	if p.AutoUploadMaxBytes != nil {
+		v := *p.AutoUploadMaxBytes
+		next.AutoUploadMaxBytes = &v
+	}
+	if p.AutoDownloadMaxBytes != nil {
+		v := *p.AutoDownloadMaxBytes
+		next.AutoDownloadMaxBytes = &v
+	}
+	if p.AutoUploadMaxBytes != nil || p.AutoDownloadMaxBytes != nil {
+		if err := next.Validate(); err != nil {
+			return localui.SettingsView{}, localui.Errorf(http.StatusBadRequest, err,
+				"a limit must be between 0 (no limit) and 1 TB")
+		}
 	}
 	if p.UpdateChannel != nil {
 		next.UpdateChannel = *p.UpdateChannel
@@ -1098,6 +1115,7 @@ func (s *Service) UpdateSettings(ctx context.Context, p localui.SettingsPatch) (
 
 	s.logger.Info("settings updated",
 		"auto_watch", next.AutoWatch, "auto_apply", next.AutoApply, "autostart", next.Autostart, "port", next.Port,
+		"auto_upload_max_bytes", next.AutoUploadLimit(), "auto_download_max_bytes", next.AutoDownloadLimit(),
 		"update_channel", next.Channel(), "auto_update", next.AutoUpdate)
 	s.hub.publish(localui.Event{Kind: localui.EventSettings})
 	return s.settingsView(next), nil
@@ -1111,6 +1129,22 @@ func (s *Service) onClipboardChange(ctx context.Context, c clipboard.Content, at
 		return
 	}
 	s.hub.publish(localui.Event{Kind: localui.EventClipboard, Message: string(c.Kind())})
+
+	s.mu.Lock()
+	limit := s.settings.AutoUploadLimit()
+	s.mu.Unlock()
+	if size := int64(len(c.Body)); limit > 0 && size > limit {
+		// Over the user's limit for automatic uploads: left for them to send
+		// by hand, which nothing here limits. Said once, on the screen.
+		s.logger.InfoContext(ctx, "clipboard change not uploaded automatically: over the auto-upload limit",
+			"bytes", size, "limit", limit)
+		s.hub.publish(localui.Event{
+			Kind: localui.EventSkipped, Direction: "upload", Total: size,
+			Message: fmt.Sprintf("Not uploaded automatically: %s is over your %s auto-upload limit. Use Upload to send it.",
+				formatBytes(size), formatBytes(limit)),
+		})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
@@ -1239,12 +1273,24 @@ func (s *Service) applyIncoming(ctx context.Context) {
 // same comparison a manual sync would make (SPEC §6).
 func (s *Service) applyAnnounced(ctx context.Context, meta tppclient.EntryMeta) {
 	s.mu.Lock()
-	on, applied := s.settings.AutoApply, s.lastApplied
+	on, applied, limit := s.settings.AutoApply, s.lastApplied, s.settings.AutoDownloadLimit()
 	s.mu.Unlock()
 	if !on || !s.clip.Available() {
 		return
 	}
 	if meta.CreatedAt.Before(applied) || meta.CreatedAt.Before(s.watcher.LastChange()) {
+		return
+	}
+	if limit > 0 && meta.Size > limit {
+		// Decided from the announcement's metadata, before a byte is
+		// fetched: the point of the limit is not to download it.
+		s.logger.InfoContext(ctx, "announced entry not applied automatically: over the auto-download limit",
+			"entry_id", meta.ID, "bytes", meta.Size, "limit", limit)
+		s.hub.publish(localui.Event{
+			Kind: localui.EventSkipped, Direction: "download", EntryID: meta.ID, Total: meta.Size,
+			Message: fmt.Sprintf("A %s entry arrived and was not copied here automatically: it is over your %s auto-download limit. Use Download or History to get it.",
+				formatBytes(meta.Size), formatBytes(limit)),
+		})
 		return
 	}
 	relay, err := s.ready()
@@ -1274,6 +1320,20 @@ func (s *Service) applyAnnounced(ctx context.Context, meta tppclient.EntryMeta) 
 		s.lastApplied = item.Meta.CreatedAt
 	}
 	s.mu.Unlock()
+}
+
+// formatBytes renders a size the way the settings screen states limits: whole
+// or one-decimal megabytes (MiB), kilobytes below one.
+func formatBytes(n int64) string {
+	const mb = 1 << 20
+	switch {
+	case n >= mb && n%mb == 0:
+		return fmt.Sprintf("%d MB", n/mb)
+	case n >= mb:
+		return fmt.Sprintf("%.1f MB", float64(n)/mb)
+	default:
+		return fmt.Sprintf("%.0f KB", math.Ceil(float64(n)/1024))
+	}
 }
 
 // NotifyUpdate tells every open UI the update state changed.
