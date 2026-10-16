@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
+
+	"google.golang.org/protobuf/proto"
 
 	tppv1 "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1"
 )
@@ -22,6 +25,43 @@ const SingleFrameMaxBytes = 10 << 20
 //
 // Deprecated: the cap is the relay's to state. Use Client.Limits.
 const MaxCiphertextBytes = SingleFrameMaxBytes
+
+// Entry requests carry their own deadline, one per request rather than one
+// for the whole transfer: a 50 MB entry on a slow link takes as long as it
+// takes, and a caller that bounded it as a whole would fail it for being
+// large. What is bounded is each step — a request that moves n bytes gets
+// CallTimeout plus the time n bytes take at MinTransferRate — so a transfer
+// that has stalled still fails, and one that is merely slow does not.
+const (
+	// CallTimeout is the deadline of an entry request that moves no bulk.
+	CallTimeout = 30 * time.Second
+
+	// MinTransferRate is the slowest link, in bytes per second, an entry
+	// request is given time for.
+	MinTransferRate = 128 << 10
+)
+
+// entryCallTimeout is the deadline for one entry request, by what it moves;
+// false for a request that is not an entry request and keeps the caller's.
+func entryCallTimeout(msg proto.Message) (time.Duration, bool) {
+	var n int
+	switch m := msg.(type) {
+	case *tppv1.EntryPutRequest:
+		n = len(m.GetCiphertext())
+	case *tppv1.EntryUploadChunkRequest:
+		n = len(m.GetData())
+	case *tppv1.EntryFetchChunkRequest:
+		n = int(min(m.GetLength(), SingleFrameMaxBytes)) //nolint:gosec // capped
+	case *tppv1.EntryFetchRequest:
+		// The response is up to one frame; its size is not known in advance.
+		n = SingleFrameMaxBytes
+	case *tppv1.EntryLimitsRequest, *tppv1.EntryLatestRequest, *tppv1.EntryHistoryRequest,
+		*tppv1.EntryUploadBeginRequest, *tppv1.EntryUploadAbortRequest:
+	default:
+		return 0, false
+	}
+	return CallTimeout + time.Duration(n)*time.Second/MinTransferRate, true
+}
 
 // errUnsupported matches a relay's answer to a message type it does not know.
 var errUnsupported error = codeError(tppv1.ErrorCode_ERROR_CODE_UNSUPPORTED_MESSAGE)
@@ -85,7 +125,9 @@ func (c *Client) Limits(ctx context.Context) (Limits, error) {
 
 	var resp tppv1.EntryLimitsResponse
 	l := legacyLimits
-	err = conn.call(ctx, tppv1.MessageType_MESSAGE_TYPE_ENTRY_LIMITS_REQUEST, &tppv1.EntryLimitsRequest{}, &resp)
+	callCtx, cancel := context.WithTimeout(ctx, CallTimeout)
+	err = conn.call(callCtx, tppv1.MessageType_MESSAGE_TYPE_ENTRY_LIMITS_REQUEST, &tppv1.EntryLimitsRequest{}, &resp)
+	cancel()
 	switch {
 	case errors.Is(err, errUnsupported):
 	case err != nil:

@@ -34,6 +34,27 @@ type fakeRelay struct {
 	forgot  bool
 
 	reconnects int
+
+	// putGate and getGate, when set, hold PutEntry and GetEntry until they
+	// are closed or the call's context ends: a transfer still in flight.
+	putGate chan struct{}
+	getGate chan struct{}
+}
+
+// wait blocks on a gate, if there is one.
+func (f *fakeRelay) wait(ctx context.Context, gate func(*fakeRelay) chan struct{}) error {
+	f.mu.Lock()
+	g := gate(f)
+	f.mu.Unlock()
+	if g == nil {
+		return nil
+	}
+	select {
+	case <-g:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func newFakeRelay(now func() time.Time) *fakeRelay {
@@ -88,7 +109,10 @@ func (f *fakeRelay) Revoke(_ context.Context, deviceID string) (Revocation, erro
 	return f.rev, nil
 }
 
-func (f *fakeRelay) PutEntry(_ context.Context, item tppclient.Item) (tppclient.EntryMeta, error) {
+func (f *fakeRelay) PutEntry(ctx context.Context, item tppclient.Item) (tppclient.EntryMeta, error) {
+	if err := f.wait(ctx, func(f *fakeRelay) chan struct{} { return f.putGate }); err != nil {
+		return tppclient.EntryMeta{}, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.putErr != nil {
@@ -133,7 +157,10 @@ func (f *fakeRelay) GetHistory(_ context.Context, q tppclient.HistoryQuery) (tpp
 	return out, nil
 }
 
-func (f *fakeRelay) GetEntry(_ context.Context, entryID string) (tppclient.Item, error) {
+func (f *fakeRelay) GetEntry(ctx context.Context, entryID string) (tppclient.Item, error) {
+	if err := f.wait(ctx, func(f *fakeRelay) chan struct{} { return f.getGate }); err != nil {
+		return tppclient.Item{}, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, e := range f.entries {

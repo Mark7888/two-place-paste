@@ -437,7 +437,16 @@ remains an open design question — see §9.
 - Sync operates on the **latest entry only**.
 - History is browsable in-app, and any historical entry can be explicitly copied to
   the local clipboard on demand.
-- **Conflict resolution:** last write to reach the server wins.
+- **Conflict resolution:** last write to reach the server wins. An entry's time is when
+  its upload completed, not when it was copied. A client applying entries automatically
+  follows that rule while transfers overlap:
+  - an entry announced while one of its own uploads is in flight is held, not applied:
+    the upload will reach the server later and win. It is applied after all only if the
+    upload fails, or if it reached the server after the upload did;
+  - an automatic download is abandoned when a newer entry is announced, or when the user
+    copies something locally, and it never overwrites a local copy made while it ran;
+  - transfers have no overall deadline. Each request is bounded by the bytes it moves,
+    so a large entry on a slow link is slow rather than failed.
 - **Direction:** if the local clipboard is newer than the server's latest entry,
   upload; otherwise download. Where timestamp comparison isn't reliable on a platform,
   clients expose two explicit directional buttons instead.

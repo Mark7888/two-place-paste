@@ -177,6 +177,40 @@ func (w *Watcher) MarkLocal(c Content, at time.Time) {
 	w.digest, w.primed, w.lastChange = d, true, at
 }
 
+// Pending reports whether the clipboard holds a user change the watcher has
+// not reported yet — a copy the next poll would upload — without consuming
+// it: the poll still reports it.
+//
+// It is what stops a download from landing on top of something the user
+// copied while it was in flight. A disabled watcher tracks nothing, so it
+// reports false, and so does one with no baseline yet.
+func (w *Watcher) Pending(ctx context.Context) bool {
+	w.mu.Lock()
+	enabled, primed, seen, haveSeq, digest := w.enabled, w.primed, w.seq, w.haveSeq, w.digest
+	suppressed := append([][32]byte(nil), w.suppressed...)
+	w.mu.Unlock()
+	if !enabled || !primed {
+		return false
+	}
+	if seq, err := w.cb.Sequence(ctx); err == nil && haveSeq && seq == seen {
+		return false
+	}
+	c, err := w.cb.Read(ctx)
+	if err != nil {
+		return false
+	}
+	d := c.Digest()
+	if d == digest {
+		return false
+	}
+	for _, s := range suppressed {
+		if s == d {
+			return false
+		}
+	}
+	return true
+}
+
 // Poll looks at the clipboard once and reports whether the user changed it.
 //
 // It is exported because it is the whole of the watcher's logic and deserves

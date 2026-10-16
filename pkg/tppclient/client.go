@@ -555,6 +555,11 @@ func (c *Client) connection(ctx context.Context) (*conn, error) {
 
 // call runs one request over the supervised connection.
 func (c *Client) call(ctx context.Context, typ tppv1.MessageType, msg, out proto.Message) error {
+	if d, ok := entryCallTimeout(msg); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, d)
+		defer cancel()
+	}
 	conn, err := c.connection(ctx)
 	if err != nil {
 		return err

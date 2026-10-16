@@ -52,9 +52,9 @@ type Status struct {
 	Skipped *SkippedView `json:"skipped,omitempty"`
 }
 
-// SkippedView is an automatic upload or download that was not made because it
-// is over the user's limit for it. It carries a size and an entry id, never
-// content.
+// SkippedView is an automatic upload or download that was not made: over the
+// user's limit for it, or an automatic upload that failed. It carries a size
+// and an entry id, never content.
 type SkippedView struct {
 	// Direction is "upload" or "download".
 	Direction string `json:"direction"`
