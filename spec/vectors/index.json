@@ -3,7 +3,7 @@
   "profile": "tpp-crypto-v1",
   "spec": "spec/crypto.md",
   "description": "Cross-language test vectors for the TwoPlacePaste crypto profile. All byte strings are lowercase hex. A client that cannot reproduce every vector in this corpus does not ship (docs/conventions.md §11).",
-  "total_vectors": 42,
+  "total_vectors": 56,
   "suites": [
     {
       "file": "x25519.json",
@@ -36,9 +36,15 @@
       "description": "end-to-end entry encryption"
     },
     {
+      "file": "header.json",
+      "suite": "header",
+      "vectors": 4,
+      "description": "entry header encryption"
+    },
+    {
       "file": "failure.json",
       "suite": "failure",
-      "vectors": 18,
+      "vectors": 28,
       "description": "inputs that every implementation must reject"
     }
   ]

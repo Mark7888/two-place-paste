@@ -291,6 +291,25 @@ describe('entries (SPEC §6)', () => {
     const item = await laptop.getEntry(page.entries[0].id);
     expect(fromUTF8(item.body)).toBe('one');
   });
+
+  test('each entry carries a sealed header the history reads without a fetch', async () => {
+    const relay = new FakeRelay();
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const put = await laptop.putEntry({
+      contentType: 'image/png',
+      filename: 'shot.png',
+      body: new Uint8Array(1234),
+    });
+    expect(put.header).toEqual({ contentType: 'image/png', filename: 'shot.png', size: 1234 });
+
+    const page = await laptop.getHistory({ limit: 10 });
+    expect(page.entries[0].header).toEqual({
+      contentType: 'image/png',
+      filename: 'shot.png',
+      size: 1234,
+    });
+  });
 });
 
 describe('revocation and rekey (SPEC §3.3, spec/crypto.md §7)', () => {

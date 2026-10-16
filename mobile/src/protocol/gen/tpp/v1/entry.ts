@@ -13,8 +13,8 @@ export const protobufPackage = "tpp.v1";
 
 /**
  * EntryMeta is everything the server knows about an entry. Note what is absent:
- * content type, filename and plaintext size are inside the ciphertext and are
- * never visible here (SPEC §2.3).
+ * content type, filename and plaintext size are inside the ciphertext, and in
+ * the sealed header, and are never visible here (SPEC §2.3).
  */
 export interface EntryMeta {
   /**
@@ -43,6 +43,12 @@ export interface EntryMeta {
    * must be pulled with EntryFetchRequest.
    */
   inline: boolean;
+  /**
+   * The sealed entry header the writer sent with the entry
+   * (EntryPutRequest.header), returned as stored. Empty when the writer sent
+   * none. Opaque to the server.
+   */
+  header: Uint8Array;
 }
 
 /**
@@ -95,7 +101,19 @@ export interface EntryPutRequest {
    * match what the upload was begun with. The entry becomes visible, and
    * the group's latest, only now.
    */
-  uploadHandle?: string | undefined;
+  uploadHandle?:
+    | string
+    | undefined;
+  /**
+   * The sealed entry header (/spec/crypto.md §5.5): content type, filename
+   * and plaintext size, encrypted under the group key, so a reader can show
+   * what the entry is without fetching it. It is exactly 297 bytes for every
+   * entry, so its length tells the server nothing; any other non-empty length
+   * is refused with ERROR_CODE_INVALID_ARGUMENT. Optional: an entry without
+   * one is stored and delivered normally, and readers show it as of unknown
+   * type. On a chunked upload it is sent with the commit.
+   */
+  header: Uint8Array;
 }
 
 /**
@@ -290,7 +308,15 @@ export interface EntryFetchResponse {
 }
 
 function createBaseEntryMeta(): EntryMeta {
-  return { entryId: "", epoch: "0", size: "0", createdAtUnixMs: "0", expiresAtUnixMs: "0", inline: false };
+  return {
+    entryId: "",
+    epoch: "0",
+    size: "0",
+    createdAtUnixMs: "0",
+    expiresAtUnixMs: "0",
+    inline: false,
+    header: new Uint8Array(0),
+  };
 }
 
 export const EntryMeta: MessageFns<EntryMeta> = {
@@ -312,6 +338,9 @@ export const EntryMeta: MessageFns<EntryMeta> = {
     }
     if (message.inline !== false) {
       writer.uint32(48).bool(message.inline);
+    }
+    if (message.header.length !== 0) {
+      writer.uint32(58).bytes(message.header);
     }
     return writer;
   },
@@ -377,6 +406,14 @@ export const EntryMeta: MessageFns<EntryMeta> = {
             message.inline = reader.bool();
             continue;
           }
+          case 7: {
+            if (tag !== 58) {
+              break;
+            }
+
+            message.header = reader.bytes();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -409,6 +446,7 @@ export const EntryMeta: MessageFns<EntryMeta> = {
         ? globalThis.String(object.expires_at_unix_ms)
         : "0",
       inline: isSet(object.inline) ? globalThis.Boolean(object.inline) : false,
+      header: isSet(object.header) ? bytesFromBase64(object.header) : new Uint8Array(0),
     };
   },
 
@@ -432,6 +470,9 @@ export const EntryMeta: MessageFns<EntryMeta> = {
     if (message.inline !== false) {
       obj.inline = message.inline;
     }
+    if (message.header.length !== 0) {
+      obj.header = base64FromBytes(message.header);
+    }
     return obj;
   },
 
@@ -446,12 +487,20 @@ export const EntryMeta: MessageFns<EntryMeta> = {
     message.createdAtUnixMs = object.createdAtUnixMs ?? "0";
     message.expiresAtUnixMs = object.expiresAtUnixMs ?? "0";
     message.inline = object.inline ?? false;
+    message.header = object.header ?? new Uint8Array(0);
     return message;
   },
 };
 
 function createBaseEntryPutRequest(): EntryPutRequest {
-  return { entryId: "", epoch: "0", size: "0", ciphertext: undefined, uploadHandle: undefined };
+  return {
+    entryId: "",
+    epoch: "0",
+    size: "0",
+    ciphertext: undefined,
+    uploadHandle: undefined,
+    header: new Uint8Array(0),
+  };
 }
 
 export const EntryPutRequest: MessageFns<EntryPutRequest> = {
@@ -470,6 +519,9 @@ export const EntryPutRequest: MessageFns<EntryPutRequest> = {
     }
     if (message.uploadHandle !== undefined) {
       writer.uint32(34).string(message.uploadHandle);
+    }
+    if (message.header.length !== 0) {
+      writer.uint32(50).bytes(message.header);
     }
     return writer;
   },
@@ -527,6 +579,14 @@ export const EntryPutRequest: MessageFns<EntryPutRequest> = {
             message.uploadHandle = reader.string();
             continue;
           }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.header = reader.bytes();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -554,6 +614,7 @@ export const EntryPutRequest: MessageFns<EntryPutRequest> = {
         : isSet(object.upload_handle)
         ? globalThis.String(object.upload_handle)
         : undefined,
+      header: isSet(object.header) ? bytesFromBase64(object.header) : new Uint8Array(0),
     };
   },
 
@@ -574,6 +635,9 @@ export const EntryPutRequest: MessageFns<EntryPutRequest> = {
     if (message.uploadHandle !== undefined) {
       obj.uploadHandle = message.uploadHandle;
     }
+    if (message.header.length !== 0) {
+      obj.header = base64FromBytes(message.header);
+    }
     return obj;
   },
 
@@ -587,6 +651,7 @@ export const EntryPutRequest: MessageFns<EntryPutRequest> = {
     message.size = object.size ?? "0";
     message.ciphertext = object.ciphertext ?? undefined;
     message.uploadHandle = object.uploadHandle ?? undefined;
+    message.header = object.header ?? new Uint8Array(0);
     return message;
   },
 };

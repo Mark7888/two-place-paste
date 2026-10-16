@@ -124,6 +124,61 @@ function decodeFrame(b) {
   return { content_type: contentType, filename, created_at_unix_ms: createdAt, pad_len: 0, body: hex(body) };
 }
 
+// §5.5 entry header: fixed 256 bytes, sealed under its own key and nonce.
+const HEADER_SIZE = 256;
+
+function encodeHeader(h) {
+  let contentType = utf8(h.content_type);
+  if (contentType.length === 0) throw new Error('content_type is mandatory');
+  if (contentType.length > 128) contentType = utf8('application/octet-stream');
+  let filename = utf8(h.filename);
+  let n = HEADER_SIZE - 13 - contentType.length;
+  if (filename.length > n) {
+    while (n > 0 && (filename[n] & 0xc0) === 0x80) n--;
+    filename = filename.slice(0, n);
+  }
+  const body = cat(Uint8Array.of(0x01), u16be(contentType.length), contentType,
+    u16be(filename.length), filename, u64be(h.body_len));
+  return cat(body, new Uint8Array(HEADER_SIZE - body.length));
+}
+
+function decodeHeader(b) {
+  if (b.length !== HEADER_SIZE) throw new Error('header has exactly one valid length');
+  let i = 0;
+  const take = (n) => {
+    if (b.length - i < n) throw new Error('length prefix exceeds the header');
+    return b.slice(i, i += n);
+  };
+  const view = (n) => new DataView(take(n).slice().buffer);
+  if (take(1)[0] !== 0x01) throw new Error('unsupported header version');
+  const contentType = new TextDecoder().decode(take(view(2).getUint16(0)));
+  if (contentType.length === 0) throw new Error('content_type is mandatory');
+  const filename = new TextDecoder().decode(take(view(2).getUint16(0)));
+  const bodyLen = view(8).getBigUint64(0);
+  if (b.slice(i).some((c) => c !== 0)) throw new Error('header padding is not zero');
+  return { content_type: contentType, filename, body_len: bodyLen };
+}
+
+const headerInfo = (epoch) => cat(ascii('tpp/v1/header'), epoch);
+const headerAAD = (epoch, entryID) => {
+  const id = utf8(entryID);
+  return cat(ascii('tpp/v1/header-aad'), Uint8Array.of(VERSION), epoch, u32be(id.length), id);
+};
+const headerKey = (groupKey, nonce, epoch) => hkdf(sha256, groupKey, nonce, headerInfo(epoch), 32);
+
+function sealHeader(groupKey, nonce, epoch, entryID, encoded) {
+  const ct = xchacha20poly1305(headerKey(groupKey, nonce, epoch), nonce, headerAAD(epoch, entryID)).encrypt(encoded);
+  return cat(Uint8Array.of(VERSION), nonce, ct);
+}
+
+function openHeader(groupKey, container, epoch, entryID) {
+  if (container.length !== 297) throw new Error('sealed header has exactly one valid length');
+  if (container[0] !== VERSION) throw new Error(`unsupported version ${container[0]}`);
+  const nonce = container.slice(1, 25);
+  return xchacha20poly1305(headerKey(groupKey, nonce, epoch), nonce, headerAAD(epoch, entryID))
+    .decrypt(container.slice(25));
+}
+
 // --- the checks ------------------------------------------------------------
 
 let passed = 0;
@@ -189,6 +244,21 @@ for (const v of load('entry.json').vectors) {
     hex(openEntry(unhex(v.group_key), unhex(v.container), epoch, v.entry_id)), v.encoded_frame);
 }
 
+for (const v of load('header.json').vectors) {
+  const epoch = epochBytes(v);
+  eq(`header/${v.name}: header key`, hex(headerKey(unhex(v.group_key), unhex(v.header_nonce), epoch)), v.header_key);
+  eq(`header/${v.name}: aad`, hex(headerAAD(epoch, v.entry_id)), v.aad);
+  eq(`header/${v.name}: encode`, hex(encodeHeader(v.input)), v.encoded_header);
+  const back = decodeHeader(unhex(v.encoded_header));
+  eq(`header/${v.name}: decode content_type`, back.content_type, v.decoded.content_type);
+  eq(`header/${v.name}: decode filename`, back.filename, v.decoded.filename);
+  eq(`header/${v.name}: decode body_len`, back.body_len, BigInt(v.decoded.body_len));
+  eq(`header/${v.name}: container`,
+    hex(sealHeader(unhex(v.group_key), unhex(v.header_nonce), epoch, v.entry_id, unhex(v.encoded_header))), v.container);
+  eq(`header/${v.name}: open`,
+    hex(openHeader(unhex(v.group_key), unhex(v.container), epoch, v.entry_id)), v.encoded_header);
+}
+
 for (const v of load('failure.json').vectors) {
   const name = `failure/${v.name}`;
   switch (v.operation) {
@@ -200,6 +270,12 @@ for (const v of load('failure.json').vectors) {
       break;
     case 'decode_frame':
       mustThrow(name, () => decodeFrame(unhex(v.encoded_frame)));
+      break;
+    case 'open_header':
+      mustThrow(name, () => openHeader(unhex(v.group_key), unhex(v.container), epochBytes(v), v.entry_id));
+      break;
+    case 'decode_header':
+      mustThrow(name, () => decodeHeader(unhex(v.encoded_header)));
       break;
     default:
       failures.push(`${name}\n  unknown operation ${v.operation}`);

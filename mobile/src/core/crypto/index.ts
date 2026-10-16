@@ -9,3 +9,4 @@ export * from './keys';
 export * from './wrap';
 export * from './entry';
 export * from './frame';
+export * from './header';

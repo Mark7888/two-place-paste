@@ -1,11 +1,13 @@
 package entries_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -197,7 +199,7 @@ func TestStoreBlobEntries(t *testing.T) {
 			}
 			if m.ID == stored.ID {
 				found = true
-				if m != stored {
+				if !reflect.DeepEqual(m, stored) {
 					t.Errorf("BlobEntries() = %+v, want %+v", m, stored)
 				}
 			}
@@ -421,6 +423,51 @@ func TestStoreGroupStats(t *testing.T) {
 		}
 		if got.Entries != 2 || !got.Oldest.Equal(first.CreatedAt) {
 			t.Errorf("GroupStats() = %+v, want 2 entries, oldest %v", got, first.CreatedAt)
+		}
+	})
+}
+
+// TestStoreKeepsHeader: the sealed header is stored as written and returned
+// by every read; an entry without one reads back without one.
+func TestStoreKeepsHeader(t *testing.T) {
+	t.Parallel()
+
+	forEachStore(t, func(t *testing.T, s entries.Store) {
+		ctx := context.Background()
+		gid := newGroupID(t)
+		now := time.Now().UTC().Truncate(time.Millisecond)
+
+		header := make([]byte, entries.HeaderSize)
+		header[0], header[100], header[entries.HeaderSize-1] = 1, 0, 0xff
+		with := meta(gid, gid+"-with", now)
+		with.Header = header
+		without := meta(gid, gid+"-without", now.Add(time.Millisecond))
+		if err := s.Put(ctx, with, []byte("abcd")); err != nil {
+			t.Fatalf("Put(with) error = %v", err)
+		}
+		if err := s.Put(ctx, without, []byte("abcd")); err != nil {
+			t.Fatalf("Put(without) error = %v", err)
+		}
+
+		got, err := s.Get(ctx, gid, with.ID)
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		if !bytes.Equal(got.Header, header) {
+			t.Errorf("Get().Header = %x, want %x", got.Header, header)
+		}
+		history, _, err := s.History(ctx, gid, 10, time.Time{})
+		if err != nil {
+			t.Fatalf("History() error = %v", err)
+		}
+		if len(history) != 2 {
+			t.Fatalf("History() = %d entries, want 2", len(history))
+		}
+		if history[0].Header != nil {
+			t.Errorf("History()[0].Header = %x, want none", history[0].Header)
+		}
+		if !bytes.Equal(history[1].Header, header) {
+			t.Errorf("History()[1].Header = %x, want %x", history[1].Header, header)
 		}
 	})
 }

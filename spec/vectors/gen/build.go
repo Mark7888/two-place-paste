@@ -77,6 +77,18 @@ func build() (map[string][]byte, error) {
 		body        []byte
 	}{"entry.json", "end-to-end entry encryption", en, "entry", e})
 
+	h, hn, err := buildHeader()
+	if err != nil {
+		return nil, err
+	}
+	suites = append(suites, struct {
+		file        string
+		description string
+		count       int
+		name        string
+		body        []byte
+	}{"header.json", "entry header encryption", hn, "header", h})
+
 	x2, xn2, err := buildFailure()
 	if err != nil {
 		return nil, err

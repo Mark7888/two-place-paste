@@ -608,7 +608,7 @@ func (c *Client) onEvent(env *tppv1.Envelope) {
 			return
 		}
 		if c.handlers.OnEntryAdded != nil {
-			c.handlers.OnEntryAdded(entryMeta(ev.GetMeta()))
+			c.handlers.OnEntryAdded(c.entryMeta(ev.GetMeta()))
 		}
 
 	case tppv1.MessageType_MESSAGE_TYPE_ENTRY_EVICTED:

@@ -40,6 +40,16 @@ export interface EntryView {
   size: number;
   created_at: string;
   expires_at: string;
+  /** From the entry's sealed header, read without fetching it. Absent when
+   *  the type is unknown: no header, or one this device cannot open. */
+  kind?: "text" | "image" | "file";
+  content_type?: string;
+  filename?: string;
+  /** The plaintext size, when the type is known. */
+  bytes?: number;
+  /** Text or an image within the auto-download limit; no_preview says why not. */
+  previewable: boolean;
+  no_preview?: string;
 }
 
 /** SkippedView is an automatic transfer the user's size limit held back. */

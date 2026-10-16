@@ -155,6 +155,16 @@ func (s *Service) FrameMaxBytes() int64 { return max(s.frameMax, s.chunkBytes) }
 // validated before it is used, because it becomes a Redis key and a blob
 // filename.
 func (s *Service) Put(ctx context.Context, groupID string, epoch uint64, entryID string, declaredSize int64, body io.Reader) (Meta, error) {
+	return s.PutWithHeader(ctx, groupID, epoch, entryID, nil, declaredSize, body)
+}
+
+// PutWithHeader is Put with the writer's sealed entry header (/spec/crypto.md
+// §5.5), which is stored with the entry and returned in its metadata. A nil
+// header is the same as Put.
+func (s *Service) PutWithHeader(ctx context.Context, groupID string, epoch uint64, entryID string, header []byte, declaredSize int64, body io.Reader) (Meta, error) {
+	if err := checkHeader(header); err != nil {
+		return Meta{}, fmt.Errorf("put entry: %w", err)
+	}
 	if declaredSize < 0 {
 		return Meta{}, fmt.Errorf("put entry: %w: negative declared size", ErrSizeMismatch)
 	}
@@ -195,6 +205,7 @@ func (s *Service) Put(ctx context.Context, groupID string, epoch uint64, entryID
 		Epoch:     epoch,
 		CreatedAt: now,
 		ExpiresAt: now.Add(s.ttl),
+		Header:    header,
 	}
 
 	var inline []byte
@@ -269,6 +280,15 @@ func (s *Service) Put(ctx context.Context, groupID string, epoch uint64, entryID
 		return Meta{}, fmt.Errorf("put entry %s: %w", meta.ID, err)
 	}
 	return meta, nil
+}
+
+// checkHeader accepts no header or a sealed one of the one size every header
+// has. The server cannot check anything more: the header is ciphertext.
+func checkHeader(header []byte) error {
+	if len(header) != 0 && len(header) != HeaderSize {
+		return fmt.Errorf("%w: header is %d bytes, want %d", ErrInvalidHeader, len(header), HeaderSize)
+	}
+	return nil
 }
 
 // reserve claims room for a blob-backed entry and evicts whatever the ledger

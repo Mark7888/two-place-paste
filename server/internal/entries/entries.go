@@ -38,6 +38,9 @@ var (
 	// filename, so it is validated before it reaches either (SPEC §4.2, §4.5).
 	ErrInvalidID = errors.New("entries: entry id is not usable")
 
+	// ErrInvalidHeader is a sealed entry header of the wrong size.
+	ErrInvalidHeader = errors.New("entries: entry header is not usable")
+
 	// ErrQuotaExceeded is returned when blob storage is full and evicting
 	// older entries cannot make room, because what remains is held by
 	// uploads still in progress.
@@ -51,6 +54,10 @@ var (
 
 // MaxIDLen bounds a client-chosen entry id.
 const MaxIDLen = 64
+
+// HeaderSize is the length of every sealed entry header (/spec/crypto.md
+// §5.5). It is fixed, so the server learns nothing from it.
+const HeaderSize = 297
 
 // ValidID reports whether an id may be used as an entry id.
 //
@@ -95,6 +102,11 @@ type Meta struct {
 
 	// StorageRef is the blob backend reference, empty for an inline entry.
 	StorageRef string
+
+	// Header is the sealed entry header the writer sent (/spec/crypto.md
+	// §5.5), stored and returned as is; nil when it sent none. The server
+	// cannot read it.
+	Header []byte
 }
 
 // GroupStats is what the admin dashboard knows about one group's entries.

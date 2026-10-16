@@ -99,6 +99,7 @@ func (f *fakeRelay) PutEntry(_ context.Context, item tppclient.Item) (tppclient.
 		Epoch:     3,
 		Size:      int64(len(item.Body)),
 		CreatedAt: item.CreatedAt,
+		Header:    &tppclient.EntryHeader{ContentType: item.ContentType, Filename: item.Filename, Size: int64(len(item.Body))},
 	}
 	f.entries = append(f.entries, item)
 	return item.Meta, nil

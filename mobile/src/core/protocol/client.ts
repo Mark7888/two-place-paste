@@ -87,8 +87,10 @@ import {
   generateNonce,
   newEntryID,
   openEntry,
+  openEntryHeader,
   publicKey as derivePublicKey,
   sealEntry,
+  sealEntryHeader,
   unwrap,
   wrap,
 } from '../crypto';
@@ -184,7 +186,7 @@ export interface Roster {
   epoch: bigint;
 }
 
-/** EntryMeta is everything the relay knows about an entry: no content type, no filename, no plaintext size. */
+/** EntryMeta is everything the relay knows about an entry, plus what this client read from its sealed header. */
 export interface EntryMeta {
   id: string;
   epoch: bigint;
@@ -192,6 +194,21 @@ export interface EntryMeta {
   createdAt: Date;
   expiresAt: Date;
   inline: boolean;
+  /**
+   * header is what the writer said the entry holds (spec/crypto.md §5.5),
+   * without fetching it; null when the entry has none or this client cannot
+   * open it (another epoch, or tampering). Advisory: the decrypted Item is the
+   * authority.
+   */
+  header: EntryHeaderView | null;
+}
+
+/** EntryHeaderView is an entry's type, name and plaintext size, as its writer sealed them. */
+export interface EntryHeaderView {
+  contentType: string;
+  filename: string;
+  /** size is the plaintext body length in bytes. */
+  size: number;
 }
 
 /** Item is one clipboard payload in plaintext. Nothing here reaches the relay in the clear. */
@@ -338,14 +355,31 @@ function toDevice(
   };
 }
 
-function toEntryMeta(m: WireEntryMeta): EntryMeta {
+/**
+ * toEntryMeta converts the wire metadata, opening the entry's sealed header
+ * with the key this client holds. A header that does not open is not an
+ * error: the entry's type is unknown until it is fetched, and the fetch
+ * applies the real checks.
+ */
+function toEntryMeta(m: WireEntryMeta, key: { epoch: bigint; groupKey: Uint8Array } | null): EntryMeta {
+  const epoch = asBigInt(m.epoch);
+  let header: EntryHeaderView | null = null;
+  if (key !== null && m.header.length > 0 && epoch === key.epoch) {
+    try {
+      const h = openEntryHeader(key.groupKey, m.header, epoch, m.entryId);
+      header = { contentType: h.contentType, filename: h.filename, size: Number(h.bodyLen) };
+    } catch {
+      header = null;
+    }
+  }
   return {
     id: m.entryId,
-    epoch: asBigInt(m.epoch),
+    epoch,
     size: Number(m.size),
     createdAt: msToDate(m.createdAtUnixMs) ?? new Date(0),
     expiresAt: msToDate(m.expiresAtUnixMs) ?? new Date(0),
     inline: m.inline,
+    header,
   };
 }
 
@@ -398,6 +432,11 @@ export class Client {
   /** epoch is the group key generation this client currently holds. */
   get epoch(): bigint {
     return this.state.epoch;
+  }
+
+  /** entryMeta converts wire metadata, reading its header with this client's key. */
+  private entryMeta(m: WireEntryMeta): EntryMeta {
+    return toEntryMeta(m, this.inGroup ? { epoch: this.state.epoch, groupKey: this.state.groupKey } : null);
   }
 
   /** inGroup reports whether this device belongs to a group yet. */
@@ -1105,6 +1144,11 @@ export class Client {
     const entryId = newEntryID();
     const epoch = this.state.epoch;
     const container = sealEntry(this.state.groupKey, generateNonce(), epoch, entryId, frame);
+    const header = sealEntryHeader(this.state.groupKey, epoch, entryId, {
+      contentType: item.contentType,
+      filename: item.filename ?? '',
+      bodyLen: BigInt(item.body.length),
+    });
 
     let response: EntryPutResponse;
     if (container.length > SINGLE_FRAME_MAX_BYTES) {
@@ -1118,7 +1162,7 @@ export class Client {
           `ciphertext is ${container.length} bytes, the relay accepts ${limits.maxEntryBytes}`,
         );
       }
-      response = await this.putChunked(entryId, epoch, container, limits);
+      response = await this.putChunked(entryId, epoch, container, header, limits);
     } else {
       const conn = await this.connection();
       response = await conn.call(
@@ -1129,13 +1173,14 @@ export class Client {
             entryId,
             epoch: epoch.toString(),
             size: container.length.toString(),
+            header,
             ciphertext: container,
           },
         },
         EntryPutResponse,
       );
     }
-    const meta = response.meta ? toEntryMeta(response.meta) : null;
+    const meta = response.meta ? this.entryMeta(response.meta) : null;
     if (meta === null || meta.id !== entryId) {
       // The relay filed the entry under an id this client did not bind, so
       // nothing — this client included — can decrypt it.
@@ -1167,7 +1212,7 @@ export class Client {
     if (!response.meta) {
       throw new TppError('no-entry', 'the group has no entry');
     }
-    let meta = toEntryMeta(response.meta);
+    let meta = this.entryMeta(response.meta);
     let ciphertext = response.ciphertext;
     if (!meta.inline) {
       // A large entry lives in the blob backend and is pulled by id.
@@ -1200,7 +1245,7 @@ export class Client {
       EntryHistoryResponse,
     );
     return {
-      entries: response.entries.map(toEntryMeta),
+      entries: response.entries.map((m) => this.entryMeta(m)),
       nextBefore: msToDate(response.nextBeforeUnixMs),
     };
   }
@@ -1255,6 +1300,7 @@ export class Client {
     entryId: string,
     epoch: bigint,
     container: Uint8Array,
+    header: Uint8Array,
     limits: Limits,
   ): Promise<EntryPutResponse> {
     const size = container.length;
@@ -1310,6 +1356,7 @@ export class Client {
             entryId,
             epoch: epoch.toString(),
             size: size.toString(),
+            header,
             uploadHandle: handle,
           },
         },
@@ -1340,7 +1387,7 @@ export class Client {
       if (!resp.meta) {
         throw new TppError('no-entry', `the relay returned no metadata for entry ${entryId}`);
       }
-      const m = toEntryMeta(resp.meta);
+      const m = this.entryMeta(resp.meta);
       const size = Number(m.size);
       if (meta === null) {
         if (!(size > 0 && size <= Math.max(limits.maxEntryBytes, SINGLE_FRAME_MAX_BYTES))) {
@@ -1385,7 +1432,7 @@ export class Client {
     if (!response.meta) {
       throw new TppError('no-entry', `the relay returned no metadata for entry ${entryId}`);
     }
-    return { meta: toEntryMeta(response.meta), ciphertext: response.ciphertext };
+    return { meta: this.entryMeta(response.meta), ciphertext: response.ciphertext };
   }
 
   /** open applies the epoch rules and decrypts. */

@@ -11,8 +11,12 @@ import { Icon } from "../components/Icon";
  * something changed. Opening the tab *is* the user asking — the button that
  * used to stand between the two was asking twice — but nothing is pulled while
  * the tab is closed, and no entry's body is fetched until the user opens that
- * row. The listing itself is metadata the relay already holds: a size, an
- * epoch and two timestamps, and never content (SPEC §2.3, §6).
+ * row. The listing is metadata the relay holds — a size, an epoch, two
+ * timestamps — plus each entry's sealed header, opened here, which says what
+ * the entry is without fetching it (SPEC §2.3, /spec/crypto.md §5.5). Only
+ * text and images within the auto-download limit offer a preview: anything
+ * else would be a download the user did not ask for, of something there is
+ * nothing useful to draw.
  */
 export function HistoryPanel({
   inGroup,
@@ -119,8 +123,8 @@ export function HistoryPanel({
     <>
       <h1>History</h1>
       <p className="lede">
-        Entries the group has written, newest first. They expire within 24 hours. The relay holds
-        only a size, an epoch and two timestamps — opening one decrypts it here.
+        Entries the group has written, newest first. They expire within 24 hours. The relay cannot
+        read them — their type is decrypted here, and so is a preview.
       </p>
 
       <div className="group-head">
@@ -159,12 +163,9 @@ export function HistoryPanel({
               // longer holds the key it was written under, so there is nothing
               // to preview and nothing to copy.
               const readable = e.epoch === epoch;
-              const expanded = open === e.id;
+              const previewable = readable && e.previewable;
+              const expanded = previewable && open === e.id;
               const preview = previews[e.id];
-              // The content type lives inside the ciphertext, so the relay's
-              // listing cannot carry it. It appears on the row once the entry
-              // has been opened, and stays there.
-              const type = preview && !("error" in preview) ? preview.content_type : null;
               return (
                 <div key={e.id}>
                   <div className="item">
@@ -172,14 +173,16 @@ export function HistoryPanel({
                       <div className="title" title={when(e.created_at)}>
                         {relative(e.created_at)}
                       </div>
-                      <div className="muted small">
-                        {bytes(e.size)} · epoch {e.epoch}
-                        {type ? ` · ${type}` : ""}
-                        {readable ? "" : " · predates the last re-key"}
+                      <div className="muted small row tight">
+                        <Icon name={e.kind ?? "file"} size={14} />
+                        <span>
+                          {describe(e)} · {bytes(e.bytes ?? e.size)}
+                          {readable ? "" : " · predates the last re-key"}
+                        </span>
                       </div>
                     </div>
                     <div className="actions">
-                      {readable ? (
+                      {previewable ? (
                         <button
                           className="action small quiet"
                           aria-expanded={expanded}
@@ -195,6 +198,10 @@ export function HistoryPanel({
                           />
                           {expanded ? "Hide" : "Preview"}
                         </button>
+                      ) : readable ? (
+                        <span className="muted small" title={e.no_preview}>
+                          No preview
+                        </span>
                       ) : null}
                       <button
                         className="action small"
@@ -241,6 +248,14 @@ export function HistoryPanel({
       )}
     </>
   );
+}
+
+/** describe names an entry from its header: the filename for a file, else
+ *  the content type, else that the type is unknown. */
+function describe(e: EntryView): string {
+  if (e.filename) return e.filename;
+  if (e.content_type) return e.content_type;
+  return "type unknown";
 }
 
 /** EntryBody renders what a preview turned out to be. A file gets no body: its

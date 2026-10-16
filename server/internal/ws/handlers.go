@@ -545,7 +545,7 @@ func (s *Server) handleEntryPut(ctx context.Context, env *tppv1.Envelope, device
 	}
 
 	if handle := req.GetUploadHandle(); handle != "" {
-		meta, err := s.entries.CommitUpload(ctx, groupID, deviceID, handle, req.GetEntryId(), req.GetEpoch(), int64(req.GetSize())) //nolint:gosec // a size beyond int64 fails the match
+		meta, err := s.entries.CommitUploadWithHeader(ctx, groupID, deviceID, handle, req.GetEntryId(), req.GetEpoch(), int64(req.GetSize()), req.GetHeader()) //nolint:gosec // a size beyond int64 fails the match
 		if err != nil {
 			return nil, s.uploadError(err)
 		}
@@ -566,11 +566,14 @@ func (s *Server) handleEntryPut(ctx context.Context, env *tppv1.Envelope, device
 	// server could not supply one in time. It is opaque here, but it is also a
 	// key and a blob filename, so entries validates it and refuses a duplicate
 	// rather than overwriting anything.
-	meta, err := s.entries.Put(ctx, groupID, req.GetEpoch(), req.GetEntryId(), declared, bytes.NewReader(ciphertext))
+	meta, err := s.entries.PutWithHeader(ctx, groupID, req.GetEpoch(), req.GetEntryId(), req.GetHeader(), declared, bytes.NewReader(ciphertext))
 	switch {
 	case errors.Is(err, entries.ErrInvalidID):
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
 			"entry_id must match [A-Za-z0-9_-]{1,%d}", entries.MaxIDLen)
+	case errors.Is(err, entries.ErrInvalidHeader):
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
+			"header must be empty or %d bytes", entries.HeaderSize)
 	case errors.Is(err, entries.ErrEntryExists):
 		// Not a collision a client should ever hit with 128 bits of
 		// randomness, and not something to paper over: retrying with a new id
@@ -830,6 +833,9 @@ func (s *Server) uploadError(err error) error {
 	case errors.Is(err, entries.ErrInvalidID):
 		return wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
 			"entry_id must match [A-Za-z0-9_-]{1,%d}", entries.MaxIDLen)
+	case errors.Is(err, entries.ErrInvalidHeader):
+		return wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
+			"header must be empty or %d bytes", entries.HeaderSize)
 	case errors.Is(err, entries.ErrEntryExists):
 		return wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "entry_id is already in use")
 	case errors.Is(err, entries.ErrTooLarge):
@@ -877,6 +883,7 @@ func entryMeta(m entries.Meta) *tppv1.EntryMeta {
 		CreatedAtUnixMs: m.CreatedAt.UnixMilli(),
 		ExpiresAtUnixMs: m.ExpiresAt.UnixMilli(),
 		Inline:          m.Inline(),
+		Header:          m.Header,
 	}
 }
 

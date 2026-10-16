@@ -112,7 +112,7 @@ func (c *Client) Limits(ctx context.Context) (Limits, error) {
 // putChunked uploads a sealed container larger than one frame. On any failure
 // the upload is aborted, so the room the relay reserved for it is given back
 // at once rather than at its timeout.
-func (c *Client) putChunked(ctx context.Context, entryID string, epoch uint64, container []byte, l Limits) (*tppv1.EntryPutResponse, error) {
+func (c *Client) putChunked(ctx context.Context, entryID string, epoch uint64, container, header []byte, l Limits) (*tppv1.EntryPutResponse, error) {
 	size := int64(len(container))
 	var begin tppv1.EntryUploadBeginResponse
 	err := c.call(ctx, tppv1.MessageType_MESSAGE_TYPE_ENTRY_UPLOAD_BEGIN_REQUEST, &tppv1.EntryUploadBeginRequest{
@@ -155,6 +155,7 @@ func (c *Client) putChunked(ctx context.Context, entryID string, epoch uint64, c
 		EntryId: entryID,
 		Epoch:   epoch,
 		Size:    uint64(size), //nolint:gosec // a length
+		Header:  header,
 		Body:    &tppv1.EntryPutRequest_UploadHandle{UploadHandle: handle},
 	}, &resp)
 	if err != nil {
@@ -182,7 +183,7 @@ func (c *Client) fetchRanges(ctx context.Context, entryID string, l Limits) (Ent
 		if err != nil {
 			return EntryMeta{}, nil, err
 		}
-		m := entryMeta(resp.GetMeta())
+		m := c.entryMeta(resp.GetMeta())
 		switch {
 		case buf == nil:
 			if m.Size <= 0 || m.Size > max(l.MaxEntryBytes, SingleFrameMaxBytes) {

@@ -1,4 +1,4 @@
-import { kindOf, previewOf, toBase64, PREVIEW_CHARS } from '../preview';
+import { describeHeader, headerPreviewable, kindOf, previewOf, toBase64, PREVIEW_CHARS } from '../preview';
 import { utf8, type Item } from '../../core';
 
 function item(contentType: string, body: Uint8Array, filename = ''): Item {
@@ -90,5 +90,28 @@ describe('toBase64', () => {
 
   it('uses + and / rather than the url alphabet', () => {
     expect(toBase64(Uint8Array.of(0xfb, 0xff, 0xfe))).toBe('+//+');
+  });
+});
+
+describe('headerPreviewable', () => {
+  // The same rule as the desktop history: only text and images, read from the
+  // entry's sealed header, are previewed; anything else is copy-only.
+  const h = (contentType: string, filename = '') => ({ contentType, filename, size: 10 });
+
+  it('previews unnamed text and images', () => {
+    expect(headerPreviewable(h('text/plain; charset=utf-8'))).toBe(true);
+    expect(headerPreviewable(h('image/png'))).toBe(true);
+  });
+
+  it('does not preview files, other types, or an unknown type', () => {
+    expect(headerPreviewable(h('image/png', 'shot.png'))).toBe(false);
+    expect(headerPreviewable(h('application/json'))).toBe(false);
+    expect(headerPreviewable(null)).toBe(false);
+  });
+
+  it('names an entry by filename, then type', () => {
+    expect(describeHeader(h('application/pdf', 'a.pdf'))).toBe('a.pdf');
+    expect(describeHeader(h('text/plain'))).toBe('text/plain');
+    expect(describeHeader(null)).toBe('type unknown');
   });
 });

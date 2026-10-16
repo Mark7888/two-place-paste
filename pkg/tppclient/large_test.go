@@ -106,6 +106,25 @@ func TestLargeEntries(t *testing.T) {
 		t.Errorf("GetEntry(small) = %q, %v", item.Body, err)
 	}
 
+	// Each entry's sealed header tells the other device what it is without
+	// fetching it, on both put paths.
+	history, err := phone.GetHistory(ctx, tppclient.HistoryQuery{})
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(history.Entries) != 2 {
+		t.Fatalf("GetHistory = %d entries, want 2", len(history.Entries))
+	}
+	wantHeaders := []tppclient.EntryHeader{
+		{ContentType: "text/plain; charset=utf-8", Size: 5},
+		{ContentType: "application/octet-stream", Filename: "big.bin", Size: 25 << 20},
+	}
+	for i, want := range wantHeaders {
+		if h := history.Entries[i].Header; h == nil || *h != want {
+			t.Errorf("history[%d].Header = %+v, want %+v", i, h, want)
+		}
+	}
+
 	// The group limit is 60 MiB: a second and third 25 MiB entry evict the
 	// first, and the phone is told.
 	for range 2 {

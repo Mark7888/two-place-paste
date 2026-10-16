@@ -69,6 +69,12 @@ Ciphertext, byte sizes, timestamps, device identifiers, wrapped key blobs, group
 membership. It does **not** see clipboard content, content type, or plaintext size
 (padding is not required for MVP but the format should not preclude it).
 
+Each entry may carry a **sealed header**: content type, filename and plaintext size,
+encrypted under the group key, so a history listing can say what an entry is without
+fetching it (`spec/crypto.md` §5.5). Every header is 297 bytes, whatever the entry, so
+the server learns nothing from it; it stores it and hands it back with the entry's
+metadata.
+
 ---
 
 ## 3. Group lifecycle

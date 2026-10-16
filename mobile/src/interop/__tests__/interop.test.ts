@@ -123,6 +123,31 @@ describeInterop('the phone and the Go client are one implementation of one contr
     expect(item.contentType).toBe('text/plain; charset=utf-8');
   });
 
+  test('each side reads the sealed entry header the other wrote (spec/crypto.md §5.5)', async () => {
+    // The phone reads what Go sealed...
+    const page = await phone.getHistory({ limit: 10 });
+    const fromGo = page.entries[page.entries.length - 1];
+    expect(fromGo.header).toEqual({
+      contentType: 'text/plain; charset=utf-8',
+      filename: '',
+      size: utf8('hello from the Go client — ünïcode, 日本語').length,
+    });
+
+    // ...and Go reads what the phone sealed.
+    const meta = await phone.putEntry({
+      contentType: 'application/pdf',
+      filename: 'Quarterly report – Q3 ✓.pdf',
+      body: utf8('%PDF-1.7'),
+    });
+    const listed = (await go.send('history')).entries as Record<string, unknown>[];
+    expect(listed[0]).toEqual({
+      entry_id: meta.id,
+      content_type: 'application/pdf',
+      filename: 'Quarterly report – Q3 ✓.pdf',
+      bytes: 8,
+    });
+  });
+
   test('an entry larger than one frame, written by Go, reads on the phone in ranges (SPEC §4.3)', async () => {
     const size = 20 << 20;
     const written = await go.send(`put-large ${size}`);

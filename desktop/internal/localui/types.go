@@ -87,6 +87,21 @@ type EntryView struct {
 	Size      int64     `json:"size"`
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
+
+	// What the entry's sealed header says it holds (/spec/crypto.md §5.5),
+	// read here without fetching the entry. Kind is "text", "image" or
+	// "file", and empty when the type is unknown: the writer sent no header,
+	// or this device cannot open it.
+	Kind        string `json:"kind,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	Filename    string `json:"filename,omitempty"`
+	// Bytes is the plaintext size; absent when the type is unknown.
+	Bytes *int64 `json:"bytes,omitempty"`
+
+	// Previewable says the history offers a preview: a text or an image no
+	// larger than the auto-download limit. NoPreview says why not, when not.
+	Previewable bool   `json:"previewable"`
+	NoPreview   string `json:"no_preview,omitempty"`
 }
 
 // Optional reports a timestamp that may not exist. A zero time.Time marshals

@@ -50,7 +50,8 @@ var _ Store = (*RedisStore)(nil)
 //	KEYS[2] entry blob key    ARGV[2] epoch         ARGV[7] "1" when inline
 //	KEYS[3] group index key   ARGV[3] size          ARGV[8] inline body
 //	                          ARGV[4] created_at    ARGV[9] index prune cutoff
-//	                          ARGV[5] expires_at
+//	                          ARGV[5] expires_at    ARGV[10] entry id
+//	                                                ARGV[11] sealed header, "" for none
 var putEntryScript = redis.NewScript(`
 if redis.call('EXISTS', KEYS[1]) == 1 then return 1 end
 
@@ -61,6 +62,9 @@ redis.call('HSET', KEYS[1],
   'created_at', ARGV[4],
   'expires_at', ARGV[5],
   'storage_ref', ARGV[6])
+if ARGV[11] ~= '' then
+  redis.call('HSET', KEYS[1], 'header', ARGV[11])
+end
 redis.call('PEXPIREAT', KEYS[1], ARGV[5])
 
 if ARGV[7] == '1' then
@@ -68,7 +72,7 @@ if ARGV[7] == '1' then
   redis.call('PEXPIREAT', KEYS[2], ARGV[5])
 end
 
-redis.call('ZADD', KEYS[3], ARGV[4], ARGV[1 + 9])
+redis.call('ZADD', KEYS[3], ARGV[4], ARGV[10])
 redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', ARGV[9])
 
 return 0
@@ -103,6 +107,7 @@ func (s *RedisStore) Put(ctx context.Context, m Meta, inline []byte) error {
 		inline,
 		prune,
 		m.ID,
+		m.Header,
 	).Int64()
 	if err != nil {
 		return fmt.Errorf("put entry %s: %w", m.ID, err)
@@ -331,6 +336,10 @@ func metaFromFields(entryID string, fields map[string]string) (Meta, error) {
 	if err != nil {
 		return Meta{}, fmt.Errorf("get entry %s: parse expires_at: %w", entryID, err)
 	}
+	var header []byte
+	if h := fields["header"]; h != "" {
+		header = []byte(h)
+	}
 	return Meta{
 		ID:         entryID,
 		GroupID:    fields["group_id"],
@@ -339,6 +348,7 @@ func metaFromFields(entryID string, fields map[string]string) (Meta, error) {
 		CreatedAt:  time.UnixMilli(createdAt).UTC(),
 		ExpiresAt:  time.UnixMilli(expiresAt).UTC(),
 		StorageRef: fields["storage_ref"],
+		Header:     header,
 	}, nil
 }
 

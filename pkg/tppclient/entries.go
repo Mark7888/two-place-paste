@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"math"
 	"time"
 
 	tppv1 "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1"
@@ -52,8 +53,9 @@ type Item struct {
 	Meta EntryMeta
 }
 
-// EntryMeta is everything the relay knows about an entry. Note what is absent:
-// content type, filename and plaintext size never leave the ciphertext.
+// EntryMeta is everything the relay knows about an entry, plus what this
+// client could read from the entry's sealed header. Content type, filename and
+// plaintext size never reach the relay in the clear.
 type EntryMeta struct {
 	ID        string
 	Epoch     uint64
@@ -65,6 +67,23 @@ type EntryMeta struct {
 	// metadata; false when it must be fetched separately. Callers of this
 	// package do not need to care — GetLatest fetches either way.
 	Inline bool
+
+	// Header is what the writer said the entry holds, from its sealed header
+	// (/spec/crypto.md §5.5), without fetching the entry. Nil when the entry
+	// has none — its writer predates headers — or when this client cannot
+	// open it: a different epoch, or a header that fails authentication. It
+	// is advisory; the decrypted Item is the authority.
+	Header *EntryHeader
+}
+
+// EntryHeader is an entry's type, name and plaintext size, as its writer
+// sealed them.
+type EntryHeader struct {
+	ContentType string
+	Filename    string
+
+	// Size is the plaintext body length in bytes.
+	Size int64
 }
 
 // History is a page of entry metadata, newest first (SPEC §6).
@@ -122,6 +141,14 @@ func (c *Client) PutEntry(ctx context.Context, item Item) (EntryMeta, error) {
 	if err != nil {
 		return EntryMeta{}, fmt.Errorf("tppclient: seal the entry: %w", err)
 	}
+	header, err := tppcrypto.SealEntryHeader(state.GroupKey, state.Epoch, entryID, tppcrypto.Header{
+		ContentType: item.ContentType,
+		Filename:    item.Filename,
+		BodyLen:     uint64(len(item.Body)),
+	})
+	if err != nil {
+		return EntryMeta{}, fmt.Errorf("tppclient: seal the entry header: %w", err)
+	}
 	resp := &tppv1.EntryPutResponse{}
 	if len(container) > SingleFrameMaxBytes {
 		// Larger than one frame: chunked, if the relay can. Refused here
@@ -136,12 +163,13 @@ func (c *Client) PutEntry(ctx context.Context, item Item) (EntryMeta, error) {
 			return EntryMeta{}, fmt.Errorf("tppclient: ciphertext is %d bytes, the relay accepts %d: %w",
 				len(container), l.MaxEntryBytes, ErrTooLarge)
 		}
-		resp, err = c.putChunked(ctx, entryID, state.Epoch, container, l)
+		resp, err = c.putChunked(ctx, entryID, state.Epoch, container, header, l)
 	} else {
 		err = c.call(ctx, tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST, &tppv1.EntryPutRequest{
 			EntryId: entryID,
 			Epoch:   state.Epoch,
 			Size:    uint64(len(container)),
+			Header:  header,
 			Body:    &tppv1.EntryPutRequest_Ciphertext{Ciphertext: container},
 		}, resp)
 	}
@@ -152,7 +180,7 @@ func (c *Client) PutEntry(ctx context.Context, item Item) (EntryMeta, error) {
 		// did not ask for twice is not this library's call.
 		return EntryMeta{}, err
 	}
-	meta := entryMeta(resp.GetMeta())
+	meta := c.entryMeta(resp.GetMeta())
 	if meta.ID != entryID {
 		// The relay filed the entry under an id this client did not bind, so
 		// nothing — this client included — can decrypt it. Reported rather
@@ -187,7 +215,7 @@ func (c *Client) GetLatest(ctx context.Context) (Item, error) {
 		return Item{}, ErrNoEntry
 	}
 
-	meta := entryMeta(resp.GetMeta())
+	meta := c.entryMeta(resp.GetMeta())
 	ciphertext := resp.GetCiphertext()
 	if !meta.Inline {
 		// A large entry lives in the blob backend and is pulled by id; whether
@@ -225,7 +253,7 @@ func (c *Client) GetHistory(ctx context.Context, q HistoryQuery) (History, error
 		NextBefore: msToTime(resp.GetNextBeforeUnixMs()),
 	}
 	for _, m := range resp.GetEntries() {
-		out.Entries = append(out.Entries, entryMeta(m))
+		out.Entries = append(out.Entries, c.entryMeta(m))
 	}
 	return out, nil
 }
@@ -262,7 +290,7 @@ func (c *Client) fetch(ctx context.Context, entryID string) (EntryMeta, []byte, 
 	if err != nil {
 		return EntryMeta{}, nil, err
 	}
-	return entryMeta(resp.GetMeta()), resp.GetCiphertext(), nil
+	return c.entryMeta(resp.GetMeta()), resp.GetCiphertext(), nil
 }
 
 // open applies the epoch rules and decrypts.
@@ -299,7 +327,7 @@ func (c *Client) open(meta EntryMeta, ciphertext []byte) (Item, error) {
 	}, nil
 }
 
-func entryMeta(m *tppv1.EntryMeta) EntryMeta {
+func (c *Client) entryMeta(m *tppv1.EntryMeta) EntryMeta {
 	return EntryMeta{
 		ID:        m.GetEntryId(),
 		Epoch:     m.GetEpoch(),
@@ -307,5 +335,24 @@ func entryMeta(m *tppv1.EntryMeta) EntryMeta {
 		CreatedAt: msToTime(m.GetCreatedAtUnixMs()),
 		ExpiresAt: msToTime(m.GetExpiresAtUnixMs()),
 		Inline:    m.GetInline(),
+		Header:    c.openHeader(m),
 	}
+}
+
+// openHeader reads an entry's sealed header, or returns nil. A header that
+// does not open is not an error: it only means the entry's type is unknown
+// until it is fetched, and the fetch applies the real checks.
+func (c *Client) openHeader(m *tppv1.EntryMeta) *EntryHeader {
+	if len(m.GetHeader()) == 0 {
+		return nil
+	}
+	state := c.State()
+	if !state.InGroup() || m.GetEpoch() != state.Epoch {
+		return nil
+	}
+	h, err := tppcrypto.OpenEntryHeader(state.GroupKey, m.GetHeader(), m.GetEpoch(), m.GetEntryId())
+	if err != nil || h.BodyLen > math.MaxInt64 {
+		return nil
+	}
+	return &EntryHeader{ContentType: h.ContentType, Filename: h.Filename, Size: int64(h.BodyLen)}
 }

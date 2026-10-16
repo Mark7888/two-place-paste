@@ -24,8 +24,8 @@ const (
 )
 
 // EntryMeta is everything the server knows about an entry. Note what is absent:
-// content type, filename and plaintext size are inside the ciphertext and are
-// never visible here (SPEC §2.3).
+// content type, filename and plaintext size are inside the ciphertext, and in
+// the sealed header, and are never visible here (SPEC §2.3).
 type EntryMeta struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The entry's identifier. It is the id the writing client chose and bound
@@ -45,7 +45,11 @@ type EntryMeta struct {
 	// True when the ciphertext is stored inline (<= 256 KB) and is therefore
 	// delivered with the metadata; false when it lives in the blob backend and
 	// must be pulled with EntryFetchRequest.
-	Inline        bool `protobuf:"varint,6,opt,name=inline,proto3" json:"inline,omitempty"`
+	Inline bool `protobuf:"varint,6,opt,name=inline,proto3" json:"inline,omitempty"`
+	// The sealed entry header the writer sent with the entry
+	// (EntryPutRequest.header), returned as stored. Empty when the writer sent
+	// none. Opaque to the server.
+	Header        []byte `protobuf:"bytes,7,opt,name=header,proto3" json:"header,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -122,6 +126,13 @@ func (x *EntryMeta) GetInline() bool {
 	return false
 }
 
+func (x *EntryMeta) GetHeader() []byte {
+	if x != nil {
+		return x.Header
+	}
+	return nil
+}
+
 // EntryPutRequest uploads one encrypted clipboard item. The group and the
 // author are taken from the connection's device identity.
 type EntryPutRequest struct {
@@ -155,7 +166,15 @@ type EntryPutRequest struct {
 	//
 	//	*EntryPutRequest_Ciphertext
 	//	*EntryPutRequest_UploadHandle
-	Body          isEntryPutRequest_Body `protobuf_oneof:"body"`
+	Body isEntryPutRequest_Body `protobuf_oneof:"body"`
+	// The sealed entry header (/spec/crypto.md §5.5): content type, filename
+	// and plaintext size, encrypted under the group key, so a reader can show
+	// what the entry is without fetching it. It is exactly 297 bytes for every
+	// entry, so its length tells the server nothing; any other non-empty length
+	// is refused with ERROR_CODE_INVALID_ARGUMENT. Optional: an entry without
+	// one is stored and delivered normally, and readers show it as of unknown
+	// type. On a chunked upload it is sent with the commit.
+	Header        []byte `protobuf:"bytes,6,opt,name=header,proto3" json:"header,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -234,6 +253,13 @@ func (x *EntryPutRequest) GetUploadHandle() string {
 		}
 	}
 	return ""
+}
+
+func (x *EntryPutRequest) GetHeader() []byte {
+	if x != nil {
+		return x.Header
+	}
+	return nil
 }
 
 type isEntryPutRequest_Body interface {
@@ -1188,14 +1214,15 @@ var File_tpp_v1_entry_proto protoreflect.FileDescriptor
 
 const file_tpp_v1_entry_proto_rawDesc = "" +
 	"\n" +
-	"\x12tpp/v1/entry.proto\x12\x06tpp.v1\"\xc2\x01\n" +
+	"\x12tpp/v1/entry.proto\x12\x06tpp.v1\"\xda\x01\n" +
 	"\tEntryMeta\x12\x19\n" +
 	"\bentry_id\x18\x01 \x01(\tR\aentryId\x12\x14\n" +
 	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\x12\x12\n" +
 	"\x04size\x18\x03 \x01(\x04R\x04size\x12+\n" +
 	"\x12created_at_unix_ms\x18\x04 \x01(\x03R\x0fcreatedAtUnixMs\x12+\n" +
 	"\x12expires_at_unix_ms\x18\x05 \x01(\x03R\x0fexpiresAtUnixMs\x12\x16\n" +
-	"\x06inline\x18\x06 \x01(\bR\x06inline\"\xa7\x01\n" +
+	"\x06inline\x18\x06 \x01(\bR\x06inline\x12\x16\n" +
+	"\x06header\x18\a \x01(\fR\x06header\"\xbf\x01\n" +
 	"\x0fEntryPutRequest\x12\x19\n" +
 	"\bentry_id\x18\x05 \x01(\tR\aentryId\x12\x14\n" +
 	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12\x12\n" +
@@ -1203,7 +1230,8 @@ const file_tpp_v1_entry_proto_rawDesc = "" +
 	"\n" +
 	"ciphertext\x18\x03 \x01(\fH\x00R\n" +
 	"ciphertext\x12%\n" +
-	"\rupload_handle\x18\x04 \x01(\tH\x00R\fuploadHandleB\x06\n" +
+	"\rupload_handle\x18\x04 \x01(\tH\x00R\fuploadHandle\x12\x16\n" +
+	"\x06header\x18\x06 \x01(\fR\x06headerB\x06\n" +
 	"\x04body\"9\n" +
 	"\x10EntryPutResponse\x12%\n" +
 	"\x04meta\x18\x01 \x01(\v2\x11.tpp.v1.EntryMetaR\x04meta\"\x14\n" +

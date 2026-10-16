@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tppv1 "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1"
+	"github.com/Mark7888/two-place-paste/server/internal/entries"
 	"github.com/Mark7888/two-place-paste/server/internal/quota"
 	"github.com/Mark7888/two-place-paste/server/internal/ws"
 )
@@ -204,5 +205,67 @@ func TestChunkedCommitAfterRekey(t *testing.T) {
 	sendChunk(laptop, begin.GetUploadHandle(), 2, payload(1))
 	if got := laptop.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_NOT_FOUND {
 		t.Errorf("chunk after the refused commit = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_NOT_FOUND)
+	}
+}
+
+// TestEntryHeaderTravelsWithTheEntry: the sealed header a writer sends is
+// stored as is and delivered with the entry's metadata everywhere it appears,
+// on both put paths; a header of the wrong size is refused.
+func TestEntryHeaderTravelsWithTheEntry(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	laptop, _ := h.createGroup(t, "laptop")
+	phone, _ := h.pair(t, laptop, "phone")
+
+	header := payload(entries.HeaderSize)
+	body := []byte("small ciphertext")
+	laptop.send("put", tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST, &tppv1.EntryPutRequest{
+		EntryId: "with-header", Epoch: 1, Size: uint64(len(body)), Header: header,
+		Body: &tppv1.EntryPutRequest_Ciphertext{Ciphertext: body},
+	})
+	var put tppv1.EntryPutResponse
+	laptop.await(tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_RESPONSE, &put)
+	if !bytes.Equal(put.GetMeta().GetHeader(), header) {
+		t.Errorf("EntryPutResponse header = %d bytes, want the one sent", len(put.GetMeta().GetHeader()))
+	}
+	var added tppv1.EntryAdded
+	phone.await(tppv1.MessageType_MESSAGE_TYPE_ENTRY_ADDED, &added)
+	if !bytes.Equal(added.GetMeta().GetHeader(), header) {
+		t.Errorf("EntryAdded header = %d bytes, want the one sent", len(added.GetMeta().GetHeader()))
+	}
+
+	data := payload(testFrameMax + 1)
+	begin := beginUpload(t, laptop, "large-with-header", 1, len(data))
+	for i := 0; i*testChunk < len(data); i++ {
+		sendChunk(laptop, begin.GetUploadHandle(), i, data[i*testChunk:min((i+1)*testChunk, len(data))])
+		var ack tppv1.EntryUploadChunkResponse
+		laptop.await(tppv1.MessageType_MESSAGE_TYPE_ENTRY_UPLOAD_CHUNK_RESPONSE, &ack)
+	}
+	large := payload(entries.HeaderSize)
+	large[0] ^= 0xff
+	laptop.send("commit", tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST, &tppv1.EntryPutRequest{
+		EntryId: "large-with-header", Epoch: 1, Size: uint64(len(data)), Header: large,
+		Body: &tppv1.EntryPutRequest_UploadHandle{UploadHandle: begin.GetUploadHandle()},
+	})
+	laptop.await(tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_RESPONSE, &put)
+	phone.await(tppv1.MessageType_MESSAGE_TYPE_ENTRY_ADDED, &added)
+
+	phone.send("history", tppv1.MessageType_MESSAGE_TYPE_ENTRY_HISTORY_REQUEST, &tppv1.EntryHistoryRequest{Limit: 10})
+	var page tppv1.EntryHistoryResponse
+	phone.await(tppv1.MessageType_MESSAGE_TYPE_ENTRY_HISTORY_RESPONSE, &page)
+	if len(page.GetEntries()) != 2 {
+		t.Fatalf("history has %d entries, want 2", len(page.GetEntries()))
+	}
+	if !bytes.Equal(page.GetEntries()[0].GetHeader(), large) || !bytes.Equal(page.GetEntries()[1].GetHeader(), header) {
+		t.Error("history does not return each entry's own header")
+	}
+
+	laptop.send("bad", tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST, &tppv1.EntryPutRequest{
+		Epoch: 1, Size: uint64(len(body)), Header: header[:100],
+		Body: &tppv1.EntryPutRequest_Ciphertext{Ciphertext: body},
+	})
+	if got := laptop.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT {
+		t.Errorf("short header = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT)
 	}
 }

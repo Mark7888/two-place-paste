@@ -327,6 +327,7 @@ export class FakeRelay {
           createdAtUnixMs: Date.now().toString(),
           expiresAtUnixMs: (Date.now() + 86_400_000).toString(),
           inline: true,
+          header: request.header,
         };
         this.entries.push({ meta, ciphertext: request.ciphertext ?? new Uint8Array(0) });
         reply(

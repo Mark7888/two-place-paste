@@ -189,6 +189,26 @@ func run() error {
 				"epoch":        item.Meta.Epoch,
 			})
 
+		case "history":
+			// Each entry's id and what its sealed header says, so the phone's
+			// headers are checked by an independent implementation.
+			page, err := client.GetHistory(ctx, tppclient.HistoryQuery{Limit: 50})
+			if err != nil {
+				reply(failure(err))
+				break
+			}
+			entries := make([]map[string]any, 0, len(page.Entries))
+			for _, m := range page.Entries {
+				e := map[string]any{"entry_id": m.ID}
+				if m.Header != nil {
+					e["content_type"] = m.Header.ContentType
+					e["filename"] = m.Header.Filename
+					e["bytes"] = m.Header.Size
+				}
+				entries = append(entries, e)
+			}
+			reply(map[string]any{"ok": true, "entries": entries})
+
 		case "put-large":
 			// A body of the given size in a pattern the phone can rebuild,
 			// so the test compares bytes without shipping them twice.

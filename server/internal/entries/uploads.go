@@ -215,6 +215,15 @@ func (s *Service) WriteChunk(ctx context.Context, groupID, deviceID, handle stri
 // group's latest now. entryID may be empty; epoch and size must match the
 // upload's.
 func (s *Service) CommitUpload(ctx context.Context, groupID, deviceID, handle, entryID string, epoch uint64, size int64) (Meta, error) {
+	return s.CommitUploadWithHeader(ctx, groupID, deviceID, handle, entryID, epoch, size, nil)
+}
+
+// CommitUploadWithHeader is CommitUpload with the writer's sealed entry
+// header, stored with the entry.
+func (s *Service) CommitUploadWithHeader(ctx context.Context, groupID, deviceID, handle, entryID string, epoch uint64, size int64, header []byte) (Meta, error) {
+	if err := checkHeader(header); err != nil {
+		return Meta{}, fmt.Errorf("commit upload: %w", err)
+	}
 	sess, err := s.session(ctx, groupID, deviceID, handle)
 	if err != nil {
 		return Meta{}, err
@@ -247,6 +256,7 @@ func (s *Service) CommitUpload(ctx context.Context, groupID, deviceID, handle, e
 		CreatedAt:  now,
 		ExpiresAt:  now.Add(s.ttl),
 		StorageRef: ref,
+		Header:     header,
 	}
 	if err := s.store.Put(ctx, meta, nil); err != nil {
 		_ = s.blobs.Delete(bg, ref)

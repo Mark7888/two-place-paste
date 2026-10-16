@@ -12,7 +12,7 @@
  * that copying the entry would.
  */
 
-import type { Item } from '../core';
+import type { EntryHeaderView, Item } from '../core';
 import { fromUTF8 } from '../core';
 
 /** PREVIEW_CHARS bounds a text preview. The desktop uses the same number. */
@@ -50,6 +50,27 @@ export function kindOf(contentType: string, filename: string): PreviewKind {
     return 'image';
   }
   return 'text';
+}
+
+/**
+ * headerPreviewable says whether the history offers a preview for an entry,
+ * from its sealed header and without fetching it — the same rule the desktop
+ * applies: only text/* and image/* without a filename. An entry whose header
+ * is missing or unreadable has an unknown type, and no preview.
+ */
+export function headerPreviewable(header: EntryHeaderView | null): boolean {
+  if (header === null || header.filename !== '') {
+    return false;
+  }
+  return header.contentType.startsWith('text/') || header.contentType.startsWith('image/');
+}
+
+/** describeHeader names an entry from its header: its filename, else its type. */
+export function describeHeader(header: EntryHeaderView | null): string {
+  if (header === null) {
+    return 'type unknown';
+  }
+  return header.filename !== '' ? header.filename : header.contentType;
 }
 
 /** previewOf renders one decrypted entry for display. */

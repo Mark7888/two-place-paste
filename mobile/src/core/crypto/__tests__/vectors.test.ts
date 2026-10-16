@@ -19,12 +19,19 @@ import { fromHex, toHex, view } from '../../bytes';
 import {
   contentKey,
   decodeFrame,
+  decodeHeader,
   encodeFrame,
+  encodeHeader,
   entryAAD,
   entryInfo,
+  headerAAD,
+  headerKey,
   openEntry,
+  openEntryHeader,
+  openHeader,
   publicKey,
   sealEntry,
+  sealHeader,
   sharedSecret,
   unwrap,
   wrap,
@@ -210,10 +217,55 @@ describe('entries end to end (spec/crypto.md §5)', () => {
   });
 });
 
+interface HeaderFields {
+  content_type: string;
+  filename: string;
+  body_len: number;
+}
+
+const headerOf = (h: HeaderFields) => ({
+  contentType: h.content_type,
+  filename: h.filename,
+  bodyLen: BigInt(h.body_len),
+});
+
+describe('entry headers (spec/crypto.md §5.5)', () => {
+  const suite = load<{
+    name: string;
+    epoch_hex: string;
+    entry_id: string;
+    group_key: string;
+    header_nonce: string;
+    header_key: string;
+    input: HeaderFields;
+    encoded_header: string;
+    decoded: HeaderFields;
+    aad: string;
+    container: string;
+  }>('header.json');
+
+  test.each(suite.vectors.map((v) => [v.name, v] as const))('%s', (_name, v) => {
+    const epoch = epochOf(v);
+    const groupKey = fromHex(v.group_key);
+    expect(toHex(headerKey(groupKey, fromHex(v.header_nonce), epoch))).toBe(v.header_key);
+    expect(toHex(headerAAD(epoch, v.entry_id))).toBe(v.aad);
+    expect(toHex(encodeHeader(headerOf(v.input)))).toBe(v.encoded_header);
+    expect(decodeHeader(fromHex(v.encoded_header))).toEqual(headerOf(v.decoded));
+    expect(
+      toHex(
+        sealHeader(groupKey, fromHex(v.header_nonce), epoch, v.entry_id, fromHex(v.encoded_header)),
+      ),
+    ).toBe(v.container);
+    expect(openEntryHeader(groupKey, fromHex(v.container), epoch, v.entry_id)).toEqual(
+      headerOf(v.decoded),
+    );
+  });
+});
+
 describe('inputs that must be rejected (spec/vectors/failure.json)', () => {
   const suite = load<{
     name: string;
-    operation: 'unwrap' | 'open_entry' | 'decode_frame';
+    operation: 'unwrap' | 'open_entry' | 'decode_frame' | 'open_header' | 'decode_header';
     expect: string;
     epoch_hex: string;
     recipient_private_key?: string;
@@ -222,6 +274,7 @@ describe('inputs that must be rejected (spec/vectors/failure.json)', () => {
     container?: string;
     entry_id?: string;
     encoded_frame?: string;
+    encoded_header?: string;
   }>('failure.json');
 
   test.each(suite.vectors.map((v) => [v.name, v] as const))('%s', (_name, v) => {
@@ -240,6 +293,14 @@ describe('inputs that must be rejected (spec/vectors/failure.json)', () => {
         break;
       case 'decode_frame':
         expect(() => decodeFrame(fromHex(v.encoded_frame!))).toThrow();
+        break;
+      case 'open_header':
+        expect(() =>
+          openHeader(fromHex(v.group_key!), fromHex(v.container!), epochOf(v), v.entry_id!),
+        ).toThrow();
+        break;
+      case 'decode_header':
+        expect(() => decodeHeader(fromHex(v.encoded_header!))).toThrow();
         break;
       default:
         throw new Error(`unknown operation ${v.operation as string}`);

@@ -109,6 +109,41 @@ func TestEpochRules(t *testing.T) {
 	})
 }
 
+// TestHeaderIsReadOnlyWhenItOpens: an entry's sealed header becomes
+// EntryMeta.Header at this client's epoch, and anything that does not open —
+// another epoch, another id, no header, tampering — is simply an unknown type.
+func TestHeaderIsReadOnlyWhenItOpens(t *testing.T) {
+	c := newOfflineClient(t, 3)
+	want := tppcrypto.Header{ContentType: "image/png", Filename: "shot.png", BodyLen: 1234}
+	seal := func(epoch uint64, id string) []byte {
+		t.Helper()
+		h, err := tppcrypto.SealEntryHeader(c.state.GroupKey, epoch, id, want)
+		if err != nil {
+			t.Fatalf("SealEntryHeader: %v", err)
+		}
+		return h
+	}
+
+	got := c.entryMeta(&tppv1.EntryMeta{EntryId: "e1", Epoch: 3, Header: seal(3, "e1")}).Header
+	if got == nil || *got != (EntryHeader{ContentType: "image/png", Filename: "shot.png", Size: 1234}) {
+		t.Errorf("Header = %+v, want the sealed one", got)
+	}
+
+	tampered := seal(3, "e1")
+	tampered[len(tampered)-1] ^= 0xFF
+	for name, m := range map[string]*tppv1.EntryMeta{
+		"no header":    {EntryId: "e1", Epoch: 3},
+		"older epoch":  {EntryId: "e1", Epoch: 2, Header: seal(2, "e1")},
+		"relabelled":   {EntryId: "e2", Epoch: 3, Header: seal(3, "e1")},
+		"tampered":     {EntryId: "e1", Epoch: 3, Header: tampered},
+		"wrong length": {EntryId: "e1", Epoch: 3, Header: seal(3, "e1")[:100]},
+	} {
+		if h := c.entryMeta(m).Header; h != nil {
+			t.Errorf("%s: Header = %+v, want none", name, h)
+		}
+	}
+}
+
 // TestInstallWrappedKeyOnlyMovesForward pins the other half of §7: a client
 // holds exactly one (epoch, group key) pair, and never goes back to an older
 // one.

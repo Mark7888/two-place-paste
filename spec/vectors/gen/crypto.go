@@ -40,13 +40,16 @@ const (
 // ASCII, is used verbatim with no terminator, and is never reused across two
 // distinct purposes.
 const (
-	infoEntry   = "tpp/v1/entry"     // HKDF info prefix, content key
-	infoWrap    = "tpp/v1/wrap"      // HKDF info prefix, key wrapping
-	aadEntry    = "tpp/v1/entry-aad" // AEAD AAD prefix, entry encryption
-	aadWrap     = "tpp/v1/wrap-aad"  // AEAD AAD prefix, key wrapping
-	vectorSeed  = "tpp/v1/vectors"   // deterministic material for the vectors
-	frameV1     = 0x01               // entry plaintext frame version
-	maxFrameStr = 0xFFFF             // u16 length prefix ceiling
+	infoEntry   = "tpp/v1/entry"      // HKDF info prefix, content key
+	infoWrap    = "tpp/v1/wrap"       // HKDF info prefix, key wrapping
+	aadEntry    = "tpp/v1/entry-aad"  // AEAD AAD prefix, entry encryption
+	aadWrap     = "tpp/v1/wrap-aad"   // AEAD AAD prefix, key wrapping
+	infoHeader  = "tpp/v1/header"     // HKDF info prefix, header key
+	aadHeader   = "tpp/v1/header-aad" // AEAD AAD prefix, entry header
+	headerV1    = 0x01                // entry header version
+	vectorSeed  = "tpp/v1/vectors"    // deterministic material for the vectors
+	frameV1     = 0x01                // entry plaintext frame version
+	maxFrameStr = 0xFFFF              // u16 length prefix ceiling
 )
 
 // Errors returned by the reference implementation. Client implementations are
@@ -273,6 +276,181 @@ func OpenEntry(groupKey, container []byte, epoch uint64, entryID string) ([]byte
 		return nil, fmt.Errorf("open entry: %w", ErrAuth)
 	}
 	return frame, nil
+}
+
+// ---------------------------------------------------------------------------
+// §5.5 Entry header
+// ---------------------------------------------------------------------------
+
+// HeaderSize is the fixed length of an encoded header, and HeaderContainerSize
+// that of its container: every header is the same size, so its length tells
+// the server nothing.
+const (
+	HeaderSize          = 256
+	HeaderContainerSize = 1 + NonceSize + HeaderSize + TagSize // 297
+
+	// headerMaxContentType is the longest content type a header carries; a
+	// longer one is written as fallbackContentType.
+	headerMaxContentType = 128
+	fallbackContentType  = "application/octet-stream"
+	headerFixed          = 1 + 2 + 2 + 8 // version, two length prefixes, body length
+)
+
+// Header is what a client may know about an entry before fetching it.
+type Header struct {
+	ContentType string
+	Filename    string
+	BodyLen     uint64
+}
+
+// EncodeHeader serializes a header into exactly HeaderSize bytes
+// (spec/crypto.md §5.5). A content type over 128 bytes is replaced by
+// application/octet-stream, and the filename is cut, at a UTF-8 boundary, to
+// what fits: the header is a summary, and the frame stays the authority.
+func EncodeHeader(h Header) ([]byte, error) {
+	ct := h.ContentType
+	if ct == "" {
+		return nil, fmt.Errorf("encode header content type: %w", ErrMalformed)
+	}
+	if len(ct) > headerMaxContentType {
+		ct = fallbackContentType
+	}
+	fn := truncateUTF8(h.Filename, HeaderSize-headerFixed-len(ct))
+	out := make([]byte, 0, HeaderSize)
+	out = append(out, headerV1)
+	out = binary.BigEndian.AppendUint16(out, uint16(len(ct)))
+	out = append(out, ct...)
+	out = binary.BigEndian.AppendUint16(out, uint16(len(fn)))
+	out = append(out, fn...)
+	out = binary.BigEndian.AppendUint64(out, h.BodyLen)
+	return append(out, make([]byte, HeaderSize-len(out))...), nil
+}
+
+// truncateUTF8 cuts s to at most n bytes without splitting a code point.
+func truncateUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && s[n]&0xC0 == 0x80 {
+		n--
+	}
+	return s[:n]
+}
+
+// DecodeHeader parses an encoded header. It is canonical: exactly HeaderSize
+// bytes, a known version, a non-empty content type, lengths that fit, and
+// zero padding.
+func DecodeHeader(b []byte) (Header, error) {
+	if len(b) != HeaderSize {
+		return Header{}, fmt.Errorf("decode header: %w", ErrMalformed)
+	}
+	r := &reader{b: b}
+	v, err := r.u8()
+	if err != nil {
+		return Header{}, err
+	}
+	if v != headerV1 {
+		return Header{}, fmt.Errorf("decode header: %w", ErrVersion)
+	}
+	ct, err := r.str16()
+	if err != nil {
+		return Header{}, err
+	}
+	if ct == "" {
+		return Header{}, fmt.Errorf("decode header content type: %w", ErrMalformed)
+	}
+	fn, err := r.str16()
+	if err != nil {
+		return Header{}, err
+	}
+	n, err := r.u64()
+	if err != nil {
+		return Header{}, err
+	}
+	for _, c := range b[r.i:] {
+		if c != 0 {
+			return Header{}, fmt.Errorf("decode header padding: %w", ErrMalformed)
+		}
+	}
+	return Header{ContentType: ct, Filename: fn, BodyLen: n}, nil
+}
+
+// HeaderInfo returns the HKDF info string for a header key:
+//
+//	"tpp/v1/header" || u64be(epoch)
+func HeaderInfo(epoch uint64) []byte {
+	out := make([]byte, 0, len(infoHeader)+8)
+	out = append(out, infoHeader...)
+	return binary.BigEndian.AppendUint64(out, epoch)
+}
+
+// HeaderAAD returns the AEAD associated data for a header:
+//
+//	"tpp/v1/header-aad" || u8(version) || u64be(epoch) || u32be(len(id)) || id
+func HeaderAAD(epoch uint64, entryID string) []byte {
+	out := make([]byte, 0, len(aadHeader)+1+8+4+len(entryID))
+	out = append(out, aadHeader...)
+	out = append(out, Version)
+	out = binary.BigEndian.AppendUint64(out, epoch)
+	out = binary.BigEndian.AppendUint32(out, uint32(len(entryID)))
+	return append(out, entryID...)
+}
+
+// HeaderKey derives the per-header key from its own nonce.
+func HeaderKey(groupKey, nonce []byte, epoch uint64) ([]byte, error) {
+	if len(groupKey) != GroupKeySize || len(nonce) != NonceSize {
+		return nil, fmt.Errorf("derive header key: %w", ErrMalformed)
+	}
+	key, err := hkdf.Key(sha256.New, groupKey, nonce, string(HeaderInfo(epoch)), ContentKeySize)
+	if err != nil {
+		return nil, fmt.Errorf("derive header key: %w", err)
+	}
+	return key, nil
+}
+
+// SealHeader encrypts an encoded header:
+//
+//	u8(version) || header_nonce[24] || ciphertext[256] || tag[16]
+func SealHeader(groupKey, nonce []byte, epoch uint64, entryID string, encoded []byte) ([]byte, error) {
+	if len(encoded) != HeaderSize {
+		return nil, fmt.Errorf("seal header: %w", ErrMalformed)
+	}
+	key, err := HeaderKey(groupKey, nonce, epoch)
+	if err != nil {
+		return nil, fmt.Errorf("seal header: %w", err)
+	}
+	aead, err := chacha20poly1305.NewX(key)
+	if err != nil {
+		return nil, fmt.Errorf("seal header: %w", err)
+	}
+	out := make([]byte, 0, HeaderContainerSize)
+	out = append(out, Version)
+	out = append(out, nonce...)
+	return aead.Seal(out, nonce, encoded, HeaderAAD(epoch, entryID)), nil
+}
+
+// OpenHeader reverses SealHeader, returning the encoded header.
+func OpenHeader(groupKey, container []byte, epoch uint64, entryID string) ([]byte, error) {
+	if len(container) != HeaderContainerSize {
+		return nil, fmt.Errorf("open header: %w", ErrMalformed)
+	}
+	if container[0] != Version {
+		return nil, fmt.Errorf("open header: %w", ErrVersion)
+	}
+	nonce := container[1 : 1+NonceSize]
+	key, err := HeaderKey(groupKey, nonce, epoch)
+	if err != nil {
+		return nil, fmt.Errorf("open header: %w", err)
+	}
+	aead, err := chacha20poly1305.NewX(key)
+	if err != nil {
+		return nil, fmt.Errorf("open header: %w", err)
+	}
+	encoded, err := aead.Open(nil, nonce, container[1+NonceSize:], HeaderAAD(epoch, entryID))
+	if err != nil {
+		return nil, fmt.Errorf("open header: %w", ErrAuth)
+	}
+	return encoded, nil
 }
 
 // ---------------------------------------------------------------------------

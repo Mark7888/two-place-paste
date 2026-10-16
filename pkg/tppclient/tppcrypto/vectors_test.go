@@ -80,6 +80,7 @@ func TestVectorCorpusIsFullyCovered(t *testing.T) {
 		"derive.json":  true,
 		"frame.json":   true,
 		"entry.json":   true,
+		"header.json":  true,
 		"failure.json": true,
 	}
 	total := 0
@@ -350,6 +351,84 @@ func TestEntryVectors(t *testing.T) {
 	}
 }
 
+type headerFieldsVector struct {
+	ContentType string `json:"content_type"`
+	Filename    string `json:"filename"`
+	BodyLen     uint64 `json:"body_len"`
+}
+
+func (h headerFieldsVector) header() Header {
+	return Header(h)
+}
+
+func TestHeaderVectors(t *testing.T) {
+	var suite struct {
+		Vectors []struct {
+			epochField
+			Name      string             `json:"name"`
+			GroupKey  hexString          `json:"group_key"`
+			EntryID   string             `json:"entry_id"`
+			Nonce     hexString          `json:"header_nonce"`
+			HeaderKey hexString          `json:"header_key"`
+			Input     headerFieldsVector `json:"input"`
+			Encoded   hexString          `json:"encoded_header"`
+			Decoded   headerFieldsVector `json:"decoded"`
+			AAD       hexString          `json:"aad"`
+			Container hexString          `json:"container"`
+		} `json:"vectors"`
+	}
+	loadSuite(t, "header.json", &suite)
+	if len(suite.Vectors) == 0 {
+		t.Fatal("header suite is empty")
+	}
+
+	for _, v := range suite.Vectors {
+		t.Run(v.Name, func(t *testing.T) {
+			epoch := v.value(t)
+			key, err := HeaderKey(v.GroupKey, v.Nonce, epoch)
+			if err != nil {
+				t.Fatalf("HeaderKey: %v", err)
+			}
+			if !bytes.Equal(key, v.HeaderKey) {
+				t.Errorf("header key = %x, want %x", key, v.HeaderKey)
+			}
+			if got := HeaderAAD(epoch, v.EntryID); !bytes.Equal(got, v.AAD) {
+				t.Errorf("header aad = %x, want %x", got, v.AAD)
+			}
+
+			encoded, err := EncodeHeader(v.Input.header())
+			if err != nil {
+				t.Fatalf("EncodeHeader: %v", err)
+			}
+			if !bytes.Equal(encoded, v.Encoded) {
+				t.Errorf("encoded header = %x, want %x", encoded, v.Encoded)
+			}
+			decoded, err := DecodeHeader(v.Encoded)
+			if err != nil {
+				t.Fatalf("DecodeHeader: %v", err)
+			}
+			if decoded != v.Decoded.header() {
+				t.Errorf("decoded header = %+v, want %+v", decoded, v.Decoded.header())
+			}
+
+			container, err := SealHeader(v.GroupKey, v.Nonce, epoch, v.EntryID, encoded)
+			if err != nil {
+				t.Fatalf("SealHeader: %v", err)
+			}
+			if !bytes.Equal(container, v.Container) {
+				t.Errorf("container = %x, want %x", container, v.Container)
+			}
+			opened, err := OpenEntryHeader(v.GroupKey, v.Container, epoch, v.EntryID)
+			if err != nil {
+				t.Fatalf("OpenEntryHeader: %v", err)
+			}
+			if opened != v.Decoded.header() {
+				t.Errorf("opened header = %+v, want %+v", opened, v.Decoded.header())
+			}
+		})
+	}
+}
+
 // TestFailureVectors is the important half of the corpus: for every input
 // here, returning plaintext is a bug, not leniency (spec §9.1).
 func TestFailureVectors(t *testing.T) {
@@ -366,6 +445,7 @@ func TestFailureVectors(t *testing.T) {
 			EntryID             string    `json:"entry_id"`
 			Container           hexString `json:"container"`
 			EncodedFrame        hexString `json:"encoded_frame"`
+			EncodedHeader       hexString `json:"encoded_header"`
 		} `json:"vectors"`
 	}
 	loadSuite(t, "failure.json", &suite)
@@ -386,6 +466,10 @@ func TestFailureVectors(t *testing.T) {
 				_, err = OpenEntry(v.GroupKey, v.Container, v.value(t), v.EntryID)
 			case "decode_frame":
 				_, err = DecodeFrame(v.EncodedFrame)
+			case "open_header":
+				_, err = OpenHeader(v.GroupKey, v.Container, v.value(t), v.EntryID)
+			case "decode_header":
+				_, err = DecodeHeader(v.EncodedHeader)
 			default:
 				t.Fatalf("unknown failure operation %q; this package must be taught to run it", v.Operation)
 			}

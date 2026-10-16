@@ -6,8 +6,8 @@ package tpp.v1;
 option go_package = "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1";
 
 // EntryMeta is everything the server knows about an entry. Note what is absent:
-// content type, filename and plaintext size are inside the ciphertext and are
-// never visible here (SPEC §2.3).
+// content type, filename and plaintext size are inside the ciphertext, and in
+// the sealed header, and are never visible here (SPEC §2.3).
 message EntryMeta {
   // The entry's identifier. It is the id the writing client chose and bound
   // into the ciphertext's associated data (see EntryPutRequest.entry_id), so a
@@ -32,6 +32,11 @@ message EntryMeta {
   // delivered with the metadata; false when it lives in the blob backend and
   // must be pulled with EntryFetchRequest.
   bool inline = 6;
+
+  // The sealed entry header the writer sent with the entry
+  // (EntryPutRequest.header), returned as stored. Empty when the writer sent
+  // none. Opaque to the server.
+  bytes header = 7;
 }
 
 // EntryPutRequest uploads one encrypted clipboard item. The group and the
@@ -77,6 +82,15 @@ message EntryPutRequest {
     // the group's latest, only now.
     string upload_handle = 4;
   }
+
+  // The sealed entry header (/spec/crypto.md §5.5): content type, filename
+  // and plaintext size, encrypted under the group key, so a reader can show
+  // what the entry is without fetching it. It is exactly 297 bytes for every
+  // entry, so its length tells the server nothing; any other non-empty length
+  // is refused with ERROR_CODE_INVALID_ARGUMENT. Optional: an entry without
+  // one is stored and delivered normally, and readers show it as of unknown
+  // type. On a chunked upload it is sent with the commit.
+  bytes header = 6;
 }
 
 // EntryPutResponse confirms the write. The entry is the group's latest from

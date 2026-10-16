@@ -468,7 +468,7 @@ func (s *Service) upload(ctx context.Context, relay Relay) (localui.SyncResult, 
 		Direction: localui.DirectionUpload,
 		Changed:   true,
 		Message:   "uploaded " + describe(c),
-		Entry:     entryView(meta),
+		Entry:     s.entryView(meta),
 	}, nil
 }
 
@@ -527,7 +527,7 @@ func (s *Service) applyToClipboard(ctx context.Context, d localui.Direction, ite
 		Direction: d,
 		Changed:   true,
 		Message:   "copied " + describe(c) + " to the clipboard",
-		Entry:     entryView(item.Meta),
+		Entry:     s.entryView(item.Meta),
 	}, nil
 }
 
@@ -579,6 +579,13 @@ func (s *Service) EntryPreview(ctx context.Context, entryID string) (localui.Ent
 	if item.Filename != "" {
 		c.Filename = clipboard.SafeName(item.Filename)
 	}
+	// The history offers no preview for anything but text and images, from
+	// the entry's header; this holds the line for an entry with no header, or
+	// one whose header disagreed with what it holds.
+	if headerKind(tppclient.EntryHeader{ContentType: item.ContentType, Filename: item.Filename}) == clipboard.KindFile {
+		return localui.EntryPreview{}, localui.Errorf(http.StatusUnprocessableEntity, nil,
+			"this entry has no preview; copy it instead")
+	}
 
 	view := localui.EntryPreview{
 		ID:          item.Meta.ID,
@@ -629,7 +636,7 @@ func (s *Service) History(ctx context.Context, q localui.HistoryQuery) (localui.
 		NextBefore: localui.Optional(page.NextBefore),
 	}
 	for _, m := range page.Entries {
-		out.Entries = append(out.Entries, *entryView(m))
+		out.Entries = append(out.Entries, *s.entryView(m))
 	}
 	return out, nil
 }
@@ -1410,7 +1417,7 @@ func (s *Service) latest(ctx context.Context, relay Relay) (*localui.EntryView, 
 	if len(page.Entries) == 0 {
 		return nil, nil
 	}
-	return entryView(page.Entries[0]), nil
+	return s.entryView(page.Entries[0]), nil
 }
 
 // ready returns the relay once the service has one and this device is in a
@@ -1475,13 +1482,62 @@ func planID() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b[:]), nil
 }
 
-func entryView(m tppclient.EntryMeta) *localui.EntryView {
-	return &localui.EntryView{
+func (s *Service) entryView(m tppclient.EntryMeta) *localui.EntryView {
+	s.mu.Lock()
+	limit := s.settings.AutoDownloadLimit()
+	s.mu.Unlock()
+	return entryView(m, limit)
+}
+
+// entryView describes an entry for the screen. Whether it can be previewed is
+// decided here, from its header, so the history never fetches an entry it
+// would not show: only text and images are previewed, and only within the
+// auto-download limit — a preview is a download, and one the user did not
+// ask for past that limit is the same download the limit holds back.
+func entryView(m tppclient.EntryMeta, downloadLimit int64) *localui.EntryView {
+	v := &localui.EntryView{
 		ID:        m.ID,
 		Epoch:     m.Epoch,
 		Size:      m.Size,
 		CreatedAt: m.CreatedAt,
 		ExpiresAt: m.ExpiresAt,
+	}
+	h := m.Header
+	if h == nil {
+		v.NoPreview = "type unknown"
+		return v
+	}
+	size := h.Size
+	v.ContentType = h.ContentType
+	v.Bytes = &size
+	if h.Filename != "" {
+		v.Filename = clipboard.SafeName(h.Filename)
+	}
+	v.Kind = string(headerKind(*h))
+	switch {
+	case v.Kind == string(clipboard.KindFile):
+		v.NoPreview = "no preview for this type"
+	case downloadLimit > 0 && size > downloadLimit:
+		v.NoPreview = "larger than the auto-download limit"
+	default:
+		v.Previewable = true
+	}
+	return v
+}
+
+// headerKind classifies an entry from its header. Stricter than
+// clipboard.Content.Kind, which calls anything unnamed text: here only a
+// text/* type is text, because a preview of it renders the bytes.
+func headerKind(h tppclient.EntryHeader) clipboard.Kind {
+	switch {
+	case h.Filename != "":
+		return clipboard.KindFile
+	case strings.HasPrefix(h.ContentType, "image/"):
+		return clipboard.KindImage
+	case strings.HasPrefix(h.ContentType, "text/"):
+		return clipboard.KindText
+	default:
+		return clipboard.KindFile
 	}
 }
 

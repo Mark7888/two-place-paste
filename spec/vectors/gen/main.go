@@ -164,6 +164,7 @@ type failureVector struct {
 	RecipientPrivate string `json:"recipient_private_key,omitempty"`
 	WrappedKey       string `json:"wrapped_key,omitempty"`
 	Encoded          string `json:"encoded_frame,omitempty"`
+	EncodedHeader    string `json:"encoded_header,omitempty"`
 }
 
 type manifestSuite struct {
