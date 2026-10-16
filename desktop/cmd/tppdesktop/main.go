@@ -118,6 +118,10 @@ func run(logger *slog.Logger) error {
 	}
 	logger.Info("key store opened", "backend", string(store.Backend()))
 
+	// The tray exists before the service, which tells it what to show from
+	// its first connection on; it is shown last, on the main goroutine.
+	tr := tray.New(logger)
+
 	// The updater exists before the service: the service hands it every
 	// settings change, and it tells the service's UI streams when its own
 	// state changes. svc is filled in below; nothing calls back before then.
@@ -151,6 +155,7 @@ func run(logger *slog.Logger) error {
 		KeystoreBackend: string(store.Backend()),
 		WatchPaused:     power.ScreenLocked,
 		Updates:         updater,
+		OnActivity:      func(a service.Activity) { tr.SetStatus(trayStatus(a)) },
 		Logger:          logger,
 	})
 	if err != nil {
@@ -181,11 +186,10 @@ func run(logger *slog.Logger) error {
 		// offers the settings file, which is where the port is overridden.
 		logger.Error("the localhost UI could not start",
 			"error", listenErr, "port", settings.ListenPort(), "settings", settingsPath)
-		tray.Run(ctx, tray.Options{
+		tr.Run(ctx, tray.Options{
 			Err:          fmt.Errorf("port %d: %w", settings.ListenPort(), listenErr),
 			SettingsPath: settingsPath,
 			Quit:         stop,
-			Logger:       logger,
 		})
 		return fmt.Errorf("start the localhost UI: %w", listenErr)
 	}
@@ -230,16 +234,18 @@ func run(logger *slog.Logger) error {
 
 	// The tray owns the main goroutine: the macOS menu bar is only addressable
 	// from the process's first thread.
-	tray.Run(runCtx, tray.Options{
+	tr.Run(runCtx, tray.Options{
 		URL:          srv.URL(),
 		SettingsPath: settingsPath,
 		SyncNow: func() {
-			res, err := svc.Sync(runCtx, localui.DirectionAuto)
-			if err != nil {
-				logger.Warn("sync from the tray failed", "error", err)
-				return
+			syncFromTray(runCtx, svc, tr, localui.DirectionAuto, logger)
+		},
+		SyncDirection: func(d tray.Direction) {
+			dir := localui.DirectionUpload
+			if d == tray.Download {
+				dir = localui.DirectionDownload
 			}
-			logger.Info("sync from the tray", "direction", string(res.Direction), "changed", res.Changed)
+			syncFromTray(runCtx, svc, tr, dir, logger)
 		},
 		// A check from the tray has nowhere to show its answer but the UI, so
 		// an update it finds opens the updates section; finding nothing, or
@@ -253,11 +259,80 @@ func run(logger *slog.Logger) error {
 				logger.Warn("could not open the browser", "error", err)
 			}
 		},
-		Quit:   cancel,
-		Logger: logger,
+		Quit: cancel,
 	})
 	cancel()
 	return nil
+}
+
+// syncFromTray runs a sync the user started from the tray, and answers it
+// there, since the tray has no screen of its own to answer on.
+//
+// A sync that cannot tell which side is newer asks (SPEC §6) with a
+// notification carrying both directions. One that fails, or that had nothing
+// to move, says so in a notification; one that moved something only flashes
+// the transfer icon, which is answer enough for a click that did what it said.
+func syncFromTray(ctx context.Context, svc *service.Service, tr *tray.Tray, d localui.Direction, logger *slog.Logger) {
+	res, err := svc.Sync(ctx, d)
+	switch {
+	case errors.Is(err, service.ErrDirectionUnknown):
+		logger.Info("sync from the tray needs a direction; asking the user")
+		tr.AskDirection()
+		return
+	case err != nil:
+		logger.Warn("sync from the tray failed", "error", err)
+		tr.Notify("Sync failed", userMessage(err))
+		return
+	}
+	logger.Info("sync from the tray", "direction", string(res.Direction), "changed", res.Changed)
+	if !res.Changed && res.Message != "" {
+		tr.Notify("Nothing to sync", sentence(res.Message))
+	}
+}
+
+// userMessage is the part of a sync failure written for a person: the
+// service's own words when it chose them, and a generic line otherwise.
+func userMessage(err error) string {
+	var se *localui.StatusError
+	if errors.As(err, &se) && se.Message != "" {
+		return sentence(se.Message)
+	}
+	return "The sync could not be completed. Open TwoPlacePaste for details."
+}
+
+// sentence capitalises the service's lower-case messages for a notification.
+func sentence(msg string) string {
+	if msg == "" {
+		return msg
+	}
+	return strings.ToUpper(msg[:1]) + msg[1:]
+}
+
+// trayStatus is the service's state as the one icon the tray shows.
+func trayStatus(a service.Activity) tray.Status {
+	switch {
+	case !a.InGroup:
+		return tray.StatusUnpaired
+	case a.Revoked:
+		return tray.StatusDisconnected
+	case a.Uploading && a.Downloading:
+		return tray.StatusSyncing
+	case a.Uploading:
+		return tray.StatusUploading
+	case a.Downloading:
+		return tray.StatusDownloading
+	case !a.Connected && a.EverConnected:
+		return tray.StatusDisconnected
+	case !a.Connected:
+		return tray.StatusConnecting
+	// A held-back transfer is the resting state's footnote: it shows only
+	// when nothing more pressing does.
+	case a.Skipped == "upload":
+		return tray.StatusSkippedUpload
+	case a.Skipped == "download":
+		return tray.StatusSkippedDownload
+	}
+	return tray.StatusConnected
 }
 
 // openUI opens the app in the browser. The URL carries the launch token and

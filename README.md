@@ -286,7 +286,15 @@ it is never stored in a cookie or in `localStorage`. The listener is
 the WebSocket upgrade.
 
 The tray menu has **Sync now**, **Open TwoPlacePaste**, **Check for updates…**
-and **Quit**. If the port
+and **Quit**. The tray icon shows the service's state: connecting (faded),
+connected, uploading (↑), downloading (↓), both at once (⇅), disconnected
+(struck through), or not paired yet (faded, empty). When an automatic upload
+or download was held back by your size limit, or failed, the icon carries a
+**!** badge until the next sync or until you dismiss the notice in the app. When **Sync now**
+cannot tell which side is newer, it asks with a quiet notification that has an
+**Upload this clipboard** and a **Download the latest** button. The same two
+items appear in the tray menu for a few minutes, in case notifications are
+turned off. On macOS the first notification asks for permission. If the port
 is already taken, the service does not fail silently: the tray shows the bind
 error instead and offers to open the settings file, which is where the port is
 overridden.
@@ -512,7 +520,7 @@ desktop/                Go module: tray service + embedded React UI
   internal/service      sync direction, revocation gate, settings
   internal/localui      localhost server: token, Origin check, JSON API, events
   internal/clipboard    per-OS clipboard, watcher, self-write suppression
-  internal/tray         tray icon, menu, visible bind failure
+  internal/tray         tray icon and status, menu, notifications, visible bind failure
   internal/autostart    launchd agent (macOS), HKCU Run key (Windows)
   ui/                   the React app; builds into internal/localui/dist
 mobile/                 React Native app (in development)

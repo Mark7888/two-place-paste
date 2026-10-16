@@ -10,6 +10,7 @@
 | `mobile/android/app/src/main/res/drawable/ic_tile.xml` | Android quick-settings tile |
 | `desktop/packaging/macos/AppIcon.icns` | macOS app bundle |
 | `desktop/packaging/windows/app.ico` | Windows exe (via `desktop/cmd/tppdesktop/winres`) and installer |
+| `desktop/internal/tray/notify_icon.png` | The app logo on Windows toast notifications |
 | `desktop/ui/public/favicon.*`, `apple-touch-icon.png` | Desktop settings UI |
 | `server/web/{admin,pair}/favicon.*`, `apple-touch-icon.png` | Relay admin UI and pairing hand-off page |
 | `icon-outlined.svg` | The outlined variant the desktop icons and favicons are made from |

@@ -2,6 +2,8 @@ package tray
 
 import (
 	"context"
+	"image/color"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/systray"
@@ -13,16 +15,32 @@ import (
 // registry value is the simplest way to follow it; the read is cheap.
 const themeCheckInterval = 2 * time.Second
 
-// showIcon sets the icon for the taskbar's current theme and keeps it in step
-// when the user switches. Windows has no template images: a black glyph stays
-// black on a dark taskbar, so this chooses the ink itself.
+// inkLight is the glyph's ink on a dark taskbar.
+var inkLight = color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+
+// darkTaskbar is the taskbar theme last read.
+var darkTaskbar atomic.Bool
+
+// setIcon sets the glyph for a status in the ink that contrasts with the
+// taskbar. Windows has no template images: a black glyph stays black on a
+// dark taskbar, so this chooses the ink itself.
 //
 // It uses the .ico container: the Windows notification area does not read a
 // bare PNG.
-func showIcon(ctx context.Context) {
-	dark := taskbarIsDark()
-	applyIcon(dark)
+func setIcon(s Status) {
+	ink := inkDark
+	if darkTaskbar.Load() {
+		ink = inkLight
+	}
+	if ico := icons(ink, s).ico; len(ico) > 0 {
+		systray.SetIcon(ico)
+	}
+}
 
+// watchTheme reads the taskbar theme now, and calls repaint whenever the user
+// switches it, until ctx is done.
+func watchTheme(ctx context.Context, repaint func()) {
+	darkTaskbar.Store(taskbarIsDark())
 	go func() {
 		ticker := time.NewTicker(themeCheckInterval)
 		defer ticker.Stop()
@@ -31,23 +49,13 @@ func showIcon(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if now := taskbarIsDark(); now != dark {
-					dark = now
-					applyIcon(dark)
+				if now := taskbarIsDark(); now != darkTaskbar.Load() {
+					darkTaskbar.Store(now)
+					repaint()
 				}
 			}
 		}
 	}()
-}
-
-func applyIcon(dark bool) {
-	ink := inkDark
-	if dark {
-		ink = inkLight
-	}
-	if ico := icons(ink).ico; len(ico) > 0 {
-		systray.SetIcon(ico)
-	}
 }
 
 // taskbarIsDark reports whether the taskbar uses the dark theme.

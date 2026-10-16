@@ -22,24 +22,69 @@ func reveal(ctx context.Context, path string) error {
 	return launch(ctx, path)
 }
 
-// run builds the menu and hands control to the platform's event loop.
-func run(ctx context.Context, opts Options) {
-	onReady := func() {
-		showIcon(ctx)
-		systray.SetTitle("")
-		systray.SetTooltip(title)
+// The words of the direction prompt, shared by the notification and the menu.
+const (
+	promptTitle   = "Which way should this sync go?"
+	promptBody    = "TwoPlacePaste has not seen this clipboard change, so it cannot tell which side is newer."
+	uploadLabel   = "Upload this clipboard"
+	downloadLabel = "Download the latest"
+)
 
+// repaint draws the current status again, for a platform whose glyph depends
+// on something other than the status — the Windows taskbar theme.
+func (t *Tray) repaint() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.paint != nil {
+		t.paint(t.shown)
+	}
+}
+
+// notifyFailed is a notification the platform accepted and then did not
+// show: on macOS, most often, because the user said no to notifications.
+func (t *Tray) notifyFailed(err error) {
+	t.logger.Warn("a notification was not shown; the tray menu offers the choice", "error", err)
+}
+
+// run builds the menu and hands control to the platform's event loop.
+func run(ctx context.Context, t *Tray, opts Options) {
+	onReady := func() {
+		systray.SetTitle("")
+		watchTheme(ctx, t.repaint)
 		if opts.Err != nil {
-			runErrorMenu(ctx, opts)
+			runErrorMenu(ctx, t, opts)
 			return
 		}
-		runMenu(ctx, opts)
+		if err := setupNotifications(ctx, t.chooseAction, t.notifyFailed); err != nil {
+			t.logger.Warn("notifications are unavailable; the tray menu will ask instead", "error", err)
+		}
+		runMenu(ctx, t, opts)
 	}
 	systray.Run(onReady, func() {})
 }
 
-func runMenu(ctx context.Context, opts Options) {
+// paintStatus is the icon, the tooltip and the menu's status line for one
+// status.
+func paintStatus(statusItem *systray.MenuItem) func(Status) {
+	return func(s Status) {
+		setIcon(s)
+		systray.SetTooltip(title + " — " + s.label())
+		if statusItem != nil {
+			statusItem.SetTitle(s.label())
+		}
+	}
+}
+
+func runMenu(ctx context.Context, t *Tray, opts Options) {
+	statusItem := systray.AddMenuItem("", "")
+	statusItem.Disable()
+	systray.AddSeparator()
 	syncItem := systray.AddMenuItem("Sync now", "Sync the clipboard with the group")
+	// The direction items stay hidden until a sync has had to ask.
+	uploadItem := systray.AddMenuItem(uploadLabel, "Send this machine's clipboard to the group")
+	downloadItem := systray.AddMenuItem(downloadLabel, "Put the group's latest entry on this clipboard")
+	uploadItem.Hide()
+	downloadItem.Hide()
 	openItem := systray.AddMenuItem("Open TwoPlacePaste", "Open the app in your browser")
 	updateItem := systray.AddMenuItem("Check for updates…", "Check the update channel for a newer build")
 	if opts.CheckUpdates == nil {
@@ -47,6 +92,17 @@ func runMenu(ctx context.Context, opts Options) {
 	}
 	systray.AddSeparator()
 	quitItem := systray.AddMenuItem("Quit", "Stop the service")
+
+	t.setChoiceItems(func(show bool) {
+		if show {
+			uploadItem.Show()
+			downloadItem.Show()
+			return
+		}
+		uploadItem.Hide()
+		downloadItem.Hide()
+	})
+	t.attach(paintStatus(statusItem))
 
 	go func() {
 		for {
@@ -58,6 +114,10 @@ func runMenu(ctx context.Context, opts Options) {
 				if opts.SyncNow != nil {
 					go opts.SyncNow()
 				}
+			case <-uploadItem.ClickedCh:
+				t.choose(Upload)
+			case <-downloadItem.ClickedCh:
+				t.choose(Download)
 			case <-updateItem.ClickedCh:
 				if opts.CheckUpdates != nil {
 					go opts.CheckUpdates()
@@ -66,7 +126,7 @@ func runMenu(ctx context.Context, opts Options) {
 				if err := OpenURL(ctx, opts.URL); err != nil {
 					// The URL carries the launch token, so the failure is
 					// logged without it.
-					opts.Logger.Error("could not open the browser", "error", err)
+					t.logger.Error("could not open the browser", "error", err)
 				}
 			case <-quitItem.ClickedCh:
 				if opts.Quit != nil {
@@ -81,8 +141,8 @@ func runMenu(ctx context.Context, opts Options) {
 
 // runErrorMenu is the SPEC §7.2 bind failure: visible, and with the one action
 // that fixes it.
-func runErrorMenu(ctx context.Context, opts Options) {
-	systray.SetTooltip(title + " — not running")
+func runErrorMenu(ctx context.Context, t *Tray, opts Options) {
+	t.attach(paintStatus(nil))
 	problem := systray.AddMenuItem("TwoPlacePaste could not start", opts.Err.Error())
 	problem.Disable()
 	reason := systray.AddMenuItem(opts.Err.Error(), opts.Err.Error())
@@ -99,7 +159,7 @@ func runErrorMenu(ctx context.Context, opts Options) {
 				return
 			case <-settingsItem.ClickedCh:
 				if err := reveal(ctx, opts.SettingsPath); err != nil {
-					opts.Logger.Error("could not open the settings file", "error", err)
+					t.logger.Error("could not open the settings file", "error", err)
 				}
 			case <-quitItem.ClickedCh:
 				if opts.Quit != nil {
