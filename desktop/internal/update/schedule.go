@@ -54,6 +54,8 @@ func (m *Manager) Run(ctx context.Context) {
 	stop := startSchedule(m.opts.CheckInterval, m.opts.CheckInterval/3, trigger)
 	defer stop()
 
+	go m.learnTokenExpiry(ctx)
+
 	start := time.NewTimer(m.opts.StartDelay)
 	defer start.Stop()
 	var retry <-chan time.Time

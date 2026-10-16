@@ -36,12 +36,21 @@ type tokenState struct {
 	set     bool
 	source  string
 	invalid bool
+
+	// checked is set once GitHub has answered a call made with the token,
+	// which is when its expiry is known: expires, or zero for a token made
+	// with no expiration.
+	checked bool
 	expires time.Time
 }
 
 func (t tokenState) view() localui.TokenView {
 	v := localui.TokenView{Set: t.set, Source: t.source, Invalid: t.invalid}
-	if !t.expires.IsZero() {
+	switch {
+	case !t.set || !t.checked:
+	case t.expires.IsZero():
+		v.NoExpiry = true
+	default:
 		e := t.expires
 		v.ExpiresAt = &e
 	}
@@ -50,7 +59,13 @@ func (t tokenState) view() localui.TokenView {
 
 // loadTokenState notes whether a token is available, so the UI can say so
 // without the keystore being read on every status request.
+//
+// The stored token's expiry, read from the state file into m.token before
+// this runs, is kept; the environment's token starts unchecked, since the
+// file's expiry belongs to the stored one.
 func (m *Manager) loadTokenState() {
+	saved := m.token
+	m.token = tokenState{}
 	if v, ok := m.opts.LookupEnv(EnvToken); ok && strings.TrimSpace(v) != "" {
 		m.token = tokenState{set: true, source: "environment"}
 		return
@@ -60,9 +75,52 @@ func (m *Manager) loadTokenState() {
 	}
 	b, err := m.opts.Secrets.Load(tokenSecret)
 	if err == nil && len(b) > 0 {
-		m.token = tokenState{set: true, source: "keystore"}
+		m.token = tokenState{set: true, source: "keystore", checked: saved.checked, expires: saved.expires}
 	}
 }
+
+// noteTokenExpiry records what GitHub said about the token's expiry, and
+// keeps it for the next launch when the token is the stored one.
+func (m *Manager) noteTokenExpiry(expires time.Time) {
+	m.mu.Lock()
+	changed := !m.token.checked || !m.token.expires.Equal(expires)
+	m.token.checked, m.token.expires = true, expires
+	if changed {
+		m.saveLocked()
+	}
+	m.mu.Unlock()
+	if changed {
+		m.changed()
+	}
+}
+
+// learnTokenExpiry asks GitHub about a token whose expiry is not known yet:
+// one saved by a build that did not record it, or one from the environment.
+// A Nightly check would learn it too, but a token kept for later, with the
+// channel on Stable, would otherwise never say when it runs out.
+func (m *Manager) learnTokenExpiry(ctx context.Context) {
+	m.mu.Lock()
+	need := m.token.set && !m.token.checked && !m.token.invalid
+	m.mu.Unlock()
+	if !need {
+		return
+	}
+	token, err := m.readToken()
+	if err != nil {
+		return
+	}
+	var probe struct {
+		TotalCount int `json:"total_count"`
+	}
+	if err := m.api(token).get(ctx, tokenProbe, &probe); err != nil {
+		m.noteTokenError(err)
+		m.opts.Logger.Debug("could not read the GitHub token's expiry", "error", err)
+	}
+}
+
+// tokenProbe is the cheapest call that proves a token can do what Nightly
+// needs: list this repository's workflow runs.
+const tokenProbe = "/repos/" + Repository + "/actions/runs?per_page=1"
 
 // readToken returns the token for one call. It is never logged and never
 // leaves this package except as an Authorization header to the API.
@@ -86,14 +144,10 @@ func (m *Manager) readToken() (string, error) {
 // api is the GitHub API client with the given token.
 func (m *Manager) api(token string) githubAPI {
 	return githubAPI{
-		client: m.opts.Client,
-		base:   m.opts.APIBase,
-		token:  token,
-		onExpiry: func(t time.Time) {
-			m.mu.Lock()
-			m.token.expires = t
-			m.mu.Unlock()
-		},
+		client:   m.opts.Client,
+		base:     m.opts.APIBase,
+		token:    token,
+		onExpiry: m.noteTokenExpiry,
 	}
 }
 
@@ -121,7 +175,13 @@ func (m *Manager) SetUpdateToken(ctx context.Context, token string) (localui.Upd
 	var probe struct {
 		TotalCount int `json:"total_count"`
 	}
-	err := m.api(token).get(ctx, "/repos/"+Repository+"/actions/runs?per_page=1", &probe)
+	// The probe's answer is about the candidate, not about the token in use
+	// until it is stored, so it is held aside rather than recorded.
+	probeAPI := m.api(token)
+	var probed bool
+	var expires time.Time
+	probeAPI.onExpiry = func(t time.Time) { probed, expires = true, t }
+	err := probeAPI.get(ctx, tokenProbe, &probe)
 	switch {
 	case errors.Is(err, ErrTokenRejected):
 		return localui.UpdateView{}, localui.Errorf(http.StatusBadRequest, err, "GitHub rejected that token")
@@ -136,9 +196,12 @@ func (m *Manager) SetUpdateToken(ctx context.Context, token string) (localui.Upd
 		return localui.UpdateView{}, localui.Errorf(http.StatusInternalServerError, err, "the token could not be stored")
 	}
 	m.mu.Lock()
-	expires := m.token.expires
+	m.token = tokenState{}
 	m.loadTokenState()
-	m.token.expires = expires
+	if m.token.source == "keystore" {
+		m.token.checked, m.token.expires = probed, expires
+	}
+	m.saveLocked()
 	v := m.viewLocked()
 	m.mu.Unlock()
 	m.opts.Logger.Info("GitHub token stored", "source", v.Token.Source)
@@ -156,6 +219,7 @@ func (m *Manager) DeleteUpdateToken(context.Context) (localui.UpdateView, error)
 	m.mu.Lock()
 	m.token = tokenState{}
 	m.loadTokenState() // the environment one, if any, still applies
+	m.saveLocked()
 	v := m.viewLocked()
 	m.mu.Unlock()
 	m.opts.Logger.Info("GitHub token removed")

@@ -47,7 +47,7 @@ environment.
 | `internal/service` | Sync direction (SPEC §6), the revocation gate (SPEC §3.3), settings. |
 | `internal/localui` | The localhost server: token, Origin check, embedded UI, JSON API, event stream. |
 | `internal/clipboard` | Per-OS clipboard plus the watcher and its self-write suppression. |
-| `internal/tray` | Tray icon and menu, and the visible bind failure. |
+| `internal/tray` | Tray icon, its status glyphs, the menu, notifications (the sync-direction prompt), and the visible bind failure. |
 | `internal/autostart` | launchd agent (macOS) and the HKCU Run key (Windows). |
 | `internal/config` | The settings file. Non-secret by design: the port must be editable by hand. |
 | `internal/update` | The auto-updater: Stable, Beta and Nightly sources, manifest signatures, the in-place swap. |

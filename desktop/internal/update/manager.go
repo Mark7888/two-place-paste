@@ -146,6 +146,11 @@ type candidate struct {
 type persisted struct {
 	LastChecked time.Time          `json:"last_checked"`
 	Previous    *localui.BuildView `json:"previous,omitempty"`
+
+	// The stored token's expiry, as GitHub last stated it: a date, or
+	// TokenNoExpiry for a token made without one. Neither is secret.
+	TokenExpiresAt *time.Time `json:"token_expires_at,omitempty"`
+	TokenNoExpiry  bool       `json:"token_no_expiry,omitempty"`
 }
 
 // New builds a Manager. It does no I/O beyond reading its state file.
@@ -575,6 +580,14 @@ func (m *Manager) load() {
 	if p.Previous != nil && m.opts.Applier.HasPrevious() {
 		m.previous = p.Previous
 	}
+	// Read before loadTokenState, which keeps it if the stored token is the
+	// one in use.
+	switch {
+	case p.TokenExpiresAt != nil:
+		m.token.checked, m.token.expires = true, p.TokenExpiresAt.UTC()
+	case p.TokenNoExpiry:
+		m.token.checked = true
+	}
 }
 
 func (m *Manager) saveLocked() {
@@ -583,7 +596,16 @@ func (m *Manager) saveLocked() {
 		m.opts.Logger.Warn("could not save the update state", "error", err)
 		return
 	}
-	b, err := json.MarshalIndent(persisted{LastChecked: m.lastChecked, Previous: m.previous}, "", "  ")
+	p := persisted{LastChecked: m.lastChecked, Previous: m.previous}
+	if m.token.source == "keystore" && m.token.checked {
+		if m.token.expires.IsZero() {
+			p.TokenNoExpiry = true
+		} else {
+			e := m.token.expires
+			p.TokenExpiresAt = &e
+		}
+	}
+	b, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		return
 	}

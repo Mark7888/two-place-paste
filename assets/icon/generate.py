@@ -196,6 +196,9 @@ def main() -> None:
     render(1024, 0.92, outlined=True).save(icns, format="ICNS")
     print("wrote", icns.relative_to(ROOT))
     save_ico(ROOT / "desktop/packaging/windows/app.ico", [16, 20, 24, 32, 40, 48, 64, 256], 1.0)
+    # The app logo of a Windows toast notification, which the tray writes out
+    # at runtime: Windows reads it from a file path, not from the exe.
+    save_png(render(96, 1.0, outlined=True), ROOT / "desktop/internal/tray/notify_icon.png")
 
     # --- Web favicons: the desktop settings UI and the relay's two pages.
     for web in (ROOT / "desktop/ui/public", ROOT / "server/web/admin", ROOT / "server/web/pair"):

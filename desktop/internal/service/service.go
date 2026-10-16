@@ -73,6 +73,11 @@ type Options struct {
 	// the channel the user picks. Optional.
 	Updates Preferences
 
+	// OnActivity hears every change to the service's Activity: connecting,
+	// disconnecting, a transfer starting or ending. It is called from the
+	// client's goroutines and must not block. Optional.
+	OnActivity func(Activity)
+
 	// Logger receives service-level logs. It never sees clipboard content.
 	Logger *slog.Logger
 
@@ -110,6 +115,11 @@ type Service struct {
 	// catchUps tracks catchUp goroutines, so a test can wait for one.
 	catchUps sync.WaitGroup
 
+	onActivity   func(Activity)
+	activityMu   sync.Mutex
+	lastActivity Activity
+	activitySent bool
+
 	mu          sync.Mutex
 	relay       Relay
 	settings    config.Settings
@@ -117,6 +127,14 @@ type Service struct {
 	revoked     bool
 	lastSync    time.Time
 	lastApplied time.Time
+
+	// downloads counts downloads in flight, manual and automatic, for the
+	// tray's icon; uploads, below, does the same for uploads.
+	downloads int
+
+	// everConnected is set by the first connection and cleared by leaving
+	// the group: it is what tells "connecting" from "disconnected".
+	everConnected bool
 
 	// skipped is the latest automatic transfer the user's size limit held
 	// back, or nil (localui.Status.Skipped).
@@ -179,6 +197,7 @@ func New(opts Options) (*Service, error) {
 		clip:       opts.Clipboard,
 		auto:       opts.Autostart,
 		updates:    opts.Updates,
+		onActivity: opts.OnActivity,
 		logger:     opts.Logger,
 		now:        opts.Now,
 		configDir:  opts.ConfigDir,
@@ -212,8 +231,9 @@ func New(opts Options) (*Service, error) {
 // been built with ClientHandlers.
 func (s *Service) Attach(r Relay) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.relay = r
+	s.mu.Unlock()
+	s.activityChanged()
 }
 
 // SetListenPort records the port the localhost server actually bound, which is
@@ -288,6 +308,7 @@ func (s *Service) ClientHandlers() tppclient.Handlers {
 			s.mu.Lock()
 			s.revoked, s.connected = true, false
 			s.mu.Unlock()
+			s.activityChanged()
 			s.hub.publish(localui.Event{
 				Kind:    localui.EventRevoked,
 				Message: "this device was revoked; pair it again to rejoin the group",
@@ -301,12 +322,14 @@ func (s *Service) Subscribe() (<-chan localui.Event, func()) { return s.hub.subs
 
 func (s *Service) setConnected(on bool, msg string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.connected = on
 	s.lastError = msg
 	if on {
 		s.revoked = false
+		s.everConnected = true
 	}
+	s.mu.Unlock()
+	s.activityChanged()
 }
 
 // Status implements localui.API.
@@ -438,7 +461,7 @@ func (s *Service) Sync(ctx context.Context, d localui.Direction) (localui.SyncRe
 		}
 		chosen, known := s.suggest(latest)
 		if !known {
-			return localui.SyncResult{}, localui.Errorf(http.StatusConflict, nil,
+			return localui.SyncResult{}, localui.Errorf(http.StatusConflict, ErrDirectionUnknown,
 				"this service cannot tell which side is newer: it has not seen the clipboard change. "+
 					"Choose upload or download.")
 		}
@@ -497,6 +520,7 @@ func (s *Service) upload(ctx context.Context, relay Relay) (localui.SyncResult, 
 }
 
 func (s *Service) download(ctx context.Context, relay Relay) (localui.SyncResult, error) {
+	defer s.beginDownload()()
 	item, err := relay.GetLatest(ctx)
 	switch {
 	case errors.Is(err, tppclient.ErrNoEntry):
@@ -561,6 +585,7 @@ func (s *Service) CopyEntry(ctx context.Context, entryID string) (localui.SyncRe
 	if err != nil {
 		return localui.SyncResult{}, err
 	}
+	defer s.beginDownload()()
 	item, err := relay.GetEntry(ctx, entryID)
 	switch {
 	case errors.Is(err, tppclient.ErrStaleEntry):
@@ -846,6 +871,7 @@ func (s *Service) awaitOffer(ctx context.Context, offer Offer) {
 		return
 	}
 	s.logger.InfoContext(ctx, "this device was admitted to a group from a pairing offer")
+	s.activityChanged()
 	s.hub.publish(localui.Event{Kind: localui.EventConnected, Message: "paired"})
 }
 
@@ -947,6 +973,7 @@ func (s *Service) JoinPairing(ctx context.Context, payload string) error {
 	if err := relay.JoinPairing(ctx, strings.TrimSpace(payload)); err != nil {
 		return s.relayError("join that pairing", err)
 	}
+	s.activityChanged()
 	s.hub.publish(localui.Event{Kind: localui.EventConnected, Message: "paired"})
 	return nil
 }
@@ -965,6 +992,7 @@ func (s *Service) CreateGroup(ctx context.Context, creationURL string) error {
 	if err := relay.CreateGroup(ctx, strings.TrimSpace(creationURL)); err != nil {
 		return s.relayError("create a group", err)
 	}
+	s.activityChanged()
 	s.hub.publish(localui.Event{Kind: localui.EventConnected, Message: "group created"})
 	return nil
 }
@@ -998,6 +1026,7 @@ func (s *Service) Forget(context.Context) error {
 	s.mu.Lock()
 	s.connected = false
 	s.revoked = false
+	s.everConnected = false
 	s.lastError = ""
 	s.lastSync = time.Time{}
 	s.latestID, s.latestKnown = "", false
@@ -1005,6 +1034,7 @@ func (s *Service) Forget(context.Context) error {
 	s.offerPlans = map[string]*offerPlan{}
 	s.mu.Unlock()
 
+	s.activityChanged()
 	s.logger.Info("this device left its group at the user's request")
 	s.hub.publish(localui.Event{
 		Kind:    localui.EventDisconnected,
@@ -1360,6 +1390,7 @@ func (s *Service) applyAnnounced(ctx context.Context, meta tppclient.EntryMeta) 
 	if err != nil {
 		return
 	}
+	defer s.beginDownload()()
 
 	before := s.watcher.LastChange()
 	ctx, done := s.startDownload(ctx, meta)
@@ -1413,6 +1444,7 @@ func (s *Service) beginUpload() {
 	s.mu.Lock()
 	s.uploads++
 	s.mu.Unlock()
+	s.activityChanged()
 }
 
 // endUpload marks an upload finished; meta is nil when it failed. When the
@@ -1433,6 +1465,7 @@ func (s *Service) endUpload(meta *tppclient.EntryMeta) {
 		s.deferred = nil
 	}
 	s.mu.Unlock()
+	s.activityChanged()
 	if again != nil {
 		s.enqueue(*again)
 	}
@@ -1489,6 +1522,7 @@ func (s *Service) noteSkipped(v localui.SkippedView) {
 	s.mu.Lock()
 	s.skipped = &v
 	s.mu.Unlock()
+	s.activityChanged()
 	s.hub.publish(localui.Event{
 		Kind: localui.EventSkipped, Direction: v.Direction, EntryID: v.EntryID, Total: v.Bytes, Message: v.Message,
 	})
@@ -1502,6 +1536,7 @@ func (s *Service) clearSkipped() {
 	s.mu.Lock()
 	s.skipped = nil
 	s.mu.Unlock()
+	s.activityChanged()
 }
 
 // DismissSkipped implements localui.API.
