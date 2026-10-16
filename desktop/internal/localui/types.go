@@ -44,6 +44,26 @@ type Status struct {
 	// explicit buttons instead of guessing, and this is that flag.
 	DirectionKnown bool      `json:"direction_known"`
 	Suggested      Direction `json:"suggested_direction"`
+
+	// Skipped is the latest automatic transfer held back by the user's size
+	// limit, or nil. It stays until the user dismisses it or a newer entry
+	// lands on either side — an upload from here, or an entry put on this
+	// clipboard — so a UI opened after the fact still shows it.
+	Skipped *SkippedView `json:"skipped,omitempty"`
+}
+
+// SkippedView is an automatic upload or download that was not made because it
+// is over the user's limit for it. It carries a size and an entry id, never
+// content.
+type SkippedView struct {
+	// Direction is "upload" or "download".
+	Direction string `json:"direction"`
+	// EntryID is the skipped entry, for a download; empty for an upload,
+	// which never reached the relay.
+	EntryID string    `json:"entry_id,omitempty"`
+	Bytes   int64     `json:"bytes"`
+	Message string    `json:"message"`
+	At      time.Time `json:"at"`
 }
 
 // ClipboardView is the local clipboard as the UI shows it. Preview is bounded

@@ -117,7 +117,11 @@ type Service struct {
 	revoked     bool
 	lastSync    time.Time
 	lastApplied time.Time
-	lastError   string
+
+	// skipped is the latest automatic transfer the user's size limit held
+	// back, or nil (localui.Status.Skipped).
+	skipped   *localui.SkippedView
+	lastError string
 
 	// latestID is the newest entry this service knows the group holds: the
 	// last one announced, uploaded, or found on connecting. latestKnown is
@@ -289,9 +293,15 @@ func (s *Service) setConnected(on bool, msg string) {
 func (s *Service) Status(ctx context.Context) localui.Status {
 	s.mu.Lock()
 	relay, connected, revoked, lastSync, lastErr := s.relay, s.connected, s.revoked, s.lastSync, s.lastError
+	var skipped *localui.SkippedView
+	if s.skipped != nil {
+		v := *s.skipped // a copy: the UI must not see it change under it
+		skipped = &v
+	}
 	s.mu.Unlock()
 
 	st := localui.Status{
+		Skipped:   skipped,
 		Connected: connected,
 		Revoked:   revoked,
 		LastSync:  localui.Optional(lastSync),
@@ -452,6 +462,7 @@ func (s *Service) upload(ctx context.Context, relay Relay) (localui.SyncResult, 
 	s.noteLatest(meta.ID)
 
 	s.logger.InfoContext(ctx, "clipboard uploaded", "entry_id", meta.ID, "epoch", meta.Epoch, "bytes", meta.Size)
+	s.clearSkipped()
 	s.hub.publish(localui.Event{Kind: localui.EventSync, Message: "uploaded"})
 	return localui.SyncResult{
 		Direction: localui.DirectionUpload,
@@ -510,6 +521,7 @@ func (s *Service) applyToClipboard(ctx context.Context, d localui.Direction, ite
 
 	s.logger.InfoContext(ctx, "entry written to the clipboard",
 		"entry_id", item.Meta.ID, "epoch", item.Meta.Epoch, "bytes", len(item.Body))
+	s.clearSkipped()
 	s.hub.publish(localui.Event{Kind: localui.EventSync, Message: "copied to the clipboard"})
 	return localui.SyncResult{
 		Direction: d,
@@ -1138,8 +1150,8 @@ func (s *Service) onClipboardChange(ctx context.Context, c clipboard.Content, at
 		// by hand, which nothing here limits. Said once, on the screen.
 		s.logger.InfoContext(ctx, "clipboard change not uploaded automatically: over the auto-upload limit",
 			"bytes", size, "limit", limit)
-		s.hub.publish(localui.Event{
-			Kind: localui.EventSkipped, Direction: "upload", Total: size,
+		s.noteSkipped(localui.SkippedView{
+			Direction: "upload", Bytes: size,
 			Message: fmt.Sprintf("Not uploaded automatically: %s is over your %s auto-upload limit. Use Upload to send it.",
 				formatBytes(size), formatBytes(limit)),
 		})
@@ -1161,6 +1173,7 @@ func (s *Service) onClipboardChange(ctx context.Context, c clipboard.Content, at
 	s.noteSync(at)
 	s.noteLatest(meta.ID)
 	s.logger.InfoContext(ctx, "clipboard change uploaded", "entry_id", meta.ID, "epoch", meta.Epoch, "bytes", meta.Size)
+	s.clearSkipped()
 	s.hub.publish(localui.Event{Kind: localui.EventSync, Message: "uploaded"})
 }
 
@@ -1286,8 +1299,8 @@ func (s *Service) applyAnnounced(ctx context.Context, meta tppclient.EntryMeta) 
 		// fetched: the point of the limit is not to download it.
 		s.logger.InfoContext(ctx, "announced entry not applied automatically: over the auto-download limit",
 			"entry_id", meta.ID, "bytes", meta.Size, "limit", limit)
-		s.hub.publish(localui.Event{
-			Kind: localui.EventSkipped, Direction: "download", EntryID: meta.ID, Total: meta.Size,
+		s.noteSkipped(localui.SkippedView{
+			Direction: "download", EntryID: meta.ID, Bytes: meta.Size,
 			Message: fmt.Sprintf("A %s entry arrived and was not copied here automatically: it is over your %s auto-download limit. Use Download or History to get it.",
 				formatBytes(meta.Size), formatBytes(limit)),
 		})
@@ -1320,6 +1333,35 @@ func (s *Service) applyAnnounced(ctx context.Context, meta tppclient.EntryMeta) 
 		s.lastApplied = item.Meta.CreatedAt
 	}
 	s.mu.Unlock()
+}
+
+// noteSkipped records an automatic transfer held back by a size limit as the
+// one notice the UI shows, replacing any older one: only the latest matters,
+// because a newer entry is what the user would sync next anyway.
+func (s *Service) noteSkipped(v localui.SkippedView) {
+	v.At = s.now()
+	s.mu.Lock()
+	s.skipped = &v
+	s.mu.Unlock()
+	s.hub.publish(localui.Event{
+		Kind: localui.EventSkipped, Direction: v.Direction, EntryID: v.EntryID, Total: v.Bytes, Message: v.Message,
+	})
+}
+
+// clearSkipped drops the notice. It is called when a newer entry lands on
+// either side — this device uploaded something, or put an entry on its
+// clipboard — at which point what was skipped is no longer the thing to act
+// on.
+func (s *Service) clearSkipped() {
+	s.mu.Lock()
+	s.skipped = nil
+	s.mu.Unlock()
+}
+
+// DismissSkipped implements localui.API.
+func (s *Service) DismissSkipped(context.Context) {
+	s.clearSkipped()
+	s.hub.publish(localui.Event{Kind: localui.EventSkipped})
 }
 
 // formatBytes renders a size the way the settings screen states limits: whole

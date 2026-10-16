@@ -398,6 +398,11 @@ expire within a day.
 | Watch the clipboard | off | Opt-in polling, as above. |
 | Upload automatically up to | 25 MB | What watching the clipboard uploads on its own. Anything larger is left for **Upload**; a notice says so. Empty is no limit. |
 | Download automatically up to | 25 MB | What taking other devices' uploads fetches on its own, decided before anything is downloaded. Anything larger is left for **Download** or History. Empty is no limit. |
+
+When a limit holds something back, a notice at the top of the app says what and
+how big — only the latest one, kept by the service, so it is there when you open
+the app later. It stays until you dismiss it or a newer entry lands on either
+side: something you copied is uploaded, or an entry is put on this clipboard.
 | Start at login | off | A per-user login item: a launchd agent on macOS, the `HKCU\...\Run` key on Windows. |
 | Localhost port | 47821 | Applies at the next launch. |
 | This device's name | hostname | What your other devices show in their revocation dialog. Applies at the next launch. |

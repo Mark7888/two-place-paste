@@ -179,6 +179,7 @@ func (s *Server) routes() http.Handler {
 	}
 	api("GET /api/status", s.handleStatus)
 	api("POST /api/sync", s.handleSync)
+	api("DELETE /api/skipped", s.handleDismissSkipped)
 	api("GET /api/history", s.handleHistory)
 	api("POST /api/entries/copy", s.handleCopyEntry)
 	api("POST /api/entries/preview", s.handleEntryPreview)

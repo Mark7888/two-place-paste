@@ -36,10 +36,6 @@ export function App() {
   // from History and an upload from Sync are the same wait.
   const [transfer, setTransfer] = useState<ServiceEvent | null>(null);
 
-  // skipped is the last automatic transfer the user's size limit held back.
-  // It stays until dismissed: the user has to act on it by hand.
-  const [skipped, setSkipped] = useState<ServiceEvent | null>(null);
-
   const refresh = useCallback(async () => {
     try {
       setStatus(await api.status());
@@ -62,9 +58,6 @@ export function App() {
           // One per chunk: a progress bar, not a reason to re-read the status.
           setTransfer(ev.total && ev.done !== undefined && ev.done < ev.total ? ev : null);
           return;
-        }
-        if (ev.kind === "skipped") {
-          setSkipped(ev);
         }
         setLastEvent(ev);
         void refresh();
@@ -132,11 +125,26 @@ export function App() {
 
       <main className="content">
         <div className="page">
-          {skipped ? (
+          {/*
+            The latest automatic transfer a size limit held back. It is the
+            service's to keep, not this tab's: it was most likely skipped while
+            no window was open, and it stays until dismissed or until a newer
+            entry lands on either side.
+          */}
+          {status?.skipped ? (
             <div className="notice info" role="status">
               <Icon name="alert" />
-              <span className="grow">{skipped.message}</span>
-              <button type="button" className="action quiet" onClick={() => setSkipped(null)}>
+              <span className="grow">{status.skipped.message}</span>
+              <button
+                type="button"
+                className="action quiet"
+                onClick={() => {
+                  void api
+                    .dismissSkipped()
+                    .then(setStatus)
+                    .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+                }}
+              >
                 Dismiss
               </button>
             </div>

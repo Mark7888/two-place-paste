@@ -42,7 +42,21 @@ export interface EntryView {
   expires_at: string;
 }
 
+/** SkippedView is an automatic transfer the user's size limit held back. */
+export interface SkippedView {
+  direction: "upload" | "download";
+  entry_id?: string;
+  bytes: number;
+  message: string;
+  at: string;
+}
+
 export interface Status {
+  /**
+   * The latest automatic transfer held back by a size limit. The service keeps
+   * it until it is dismissed or a newer entry lands on either side.
+   */
+  skipped?: SkippedView;
   in_group: boolean;
   connected: boolean;
   epoch: number;
@@ -291,6 +305,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 export const api = {
   status: () => request<Status>("GET", "/api/status"),
   sync: (direction: Direction) => request<SyncResult>("POST", "/api/sync", { direction }),
+  dismissSkipped: () => request<Status>("DELETE", "/api/skipped"),
   history: (before?: string) =>
     request<HistoryPage>(
       "GET",

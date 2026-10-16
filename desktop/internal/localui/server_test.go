@@ -64,6 +64,8 @@ func (s *stubAPI) Status(context.Context) Status {
 	return Status{InGroup: true, DeviceName: "laptop"}
 }
 
+func (s *stubAPI) DismissSkipped(context.Context) { s.record("dismiss-skipped") }
+
 func (s *stubAPI) Sync(context.Context, Direction) (SyncResult, error) {
 	s.record("sync")
 	return SyncResult{Direction: DirectionUpload, Changed: true, Message: "uploaded"}, s.nextErr
@@ -207,6 +209,7 @@ func TestOriginIsValidatedOnEveryRequest(t *testing.T) {
 	}{
 		{"GET", "/api/status", ""},
 		{"POST", "/api/sync", `{"direction":"upload"}`},
+		{"DELETE", "/api/skipped", ""},
 		{"GET", "/api/history", ""},
 		{"POST", "/api/entries/copy", `{"entry_id":"e1"}`},
 		{"GET", "/api/devices", ""},
