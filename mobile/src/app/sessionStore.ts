@@ -25,7 +25,7 @@
 
 import { AppState, Linking, type AppStateStatus } from 'react-native';
 
-import type { Client } from '../core';
+import type { Client, Progress } from '../core';
 import { tile } from '../platform';
 import { stripCodeEnvelope } from '../core';
 import { download, failureMessage, openSession, sync, upload } from './session';
@@ -73,6 +73,14 @@ export interface Snapshot {
    * may still have been starting when the link arrived.
    */
   pendingCode: string;
+  /** transfer is the chunked upload or download in flight — an entry larger than one frame — or null. */
+  transfer: Progress | null;
+  /**
+   * evicted is the last entry the relay removed early to stay within its
+   * storage limit; seq changes with each one, so a screen can act on every
+   * eviction, not just the first.
+   */
+  evicted: { id: string; seq: number } | null;
 }
 
 type Listener = () => void;
@@ -85,6 +93,8 @@ let syncing = false;
 let question: Question | null = null;
 let lastError = '';
 let pendingCode = '';
+let transfer: Progress | null = null;
+let evicted: { id: string; seq: number } | null = null;
 let answer: ((choice: DirectionChoice | null) => void) | null = null;
 let nextQuestionId = 1;
 
@@ -106,6 +116,8 @@ let snapshot: Snapshot = {
   question: null,
   error: '',
   pendingCode: '',
+  transfer: null,
+  evicted: null,
 };
 
 function emit(): void {
@@ -121,6 +133,8 @@ function emit(): void {
     question,
     error: lastError,
     pendingCode,
+    transfer,
+    evicted,
   };
   for (const listener of listeners) {
     listener();
@@ -246,6 +260,14 @@ export function init(): void {
         },
         onProbablyRevoked: () => {
           probablyRevoked = true;
+          emit();
+        },
+        onEntryEvicted: (id) => {
+          evicted = { id, seq: (evicted?.seq ?? 0) + 1 };
+          emit();
+        },
+        onProgress: (p) => {
+          transfer = p.done < p.total ? p : null;
           emit();
         },
       });

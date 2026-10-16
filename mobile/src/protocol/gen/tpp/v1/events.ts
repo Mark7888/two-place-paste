@@ -64,6 +64,19 @@ export interface EntryAdded {
   meta?: EntryMeta | undefined;
 }
 
+/**
+ * EntryEvicted tells every connected device of the group that an entry was
+ * removed before its expiry, because the relay's storage limit needed its room
+ * for a newer entry. A client drops it from any history it is showing; a fetch
+ * of it now answers ERROR_CODE_NOT_FOUND, exactly as for an expired entry.
+ *
+ * Eviction only ever shortens an entry's life; nothing lengthens one
+ * (SPEC §4.5).
+ */
+export interface EntryEvicted {
+  entryId: string;
+}
+
 function createBaseEpochChanged(): EpochChanged {
   return { epoch: "0", revokedDeviceId: "" };
 }
@@ -394,6 +407,79 @@ export const EntryAdded: MessageFns<EntryAdded> = {
   fromPartial<I extends Exact<DeepPartial<EntryAdded>, I>>(object: I): EntryAdded {
     const message = createBaseEntryAdded();
     message.meta = (object.meta !== undefined && object.meta !== null) ? EntryMeta.fromPartial(object.meta) : undefined;
+    return message;
+  },
+};
+
+function createBaseEntryEvicted(): EntryEvicted {
+  return { entryId: "" };
+}
+
+export const EntryEvicted: MessageFns<EntryEvicted> = {
+  encode(message: EntryEvicted, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.entryId !== "") {
+      writer.uint32(10).string(message.entryId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EntryEvicted {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseEntryEvicted();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.entryId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): EntryEvicted {
+    return {
+      entryId: isSet(object.entryId)
+        ? globalThis.String(object.entryId)
+        : isSet(object.entry_id)
+        ? globalThis.String(object.entry_id)
+        : "",
+    };
+  },
+
+  toJSON(message: EntryEvicted): unknown {
+    const obj: any = {};
+    if (message.entryId !== "") {
+      obj.entryId = message.entryId;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EntryEvicted>, I>>(base?: I): EntryEvicted {
+    return EntryEvicted.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EntryEvicted>, I>>(object: I): EntryEvicted {
+    const message = createBaseEntryEvicted();
+    message.entryId = object.entryId ?? "";
     return message;
   },
 };

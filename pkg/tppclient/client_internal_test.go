@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"strings"
 	"testing"
+	"time"
 
 	tppv1 "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1"
 	"github.com/Mark7888/two-place-paste/pkg/tppclient/tppcrypto"
@@ -107,6 +108,41 @@ func TestEpochRules(t *testing.T) {
 			t.Error("a tampered entry opened successfully")
 		}
 	})
+}
+
+// TestHeaderIsReadOnlyWhenItOpens: an entry's sealed header becomes
+// EntryMeta.Header at this client's epoch, and anything that does not open —
+// another epoch, another id, no header, tampering — is simply an unknown type.
+func TestHeaderIsReadOnlyWhenItOpens(t *testing.T) {
+	c := newOfflineClient(t, 3)
+	want := tppcrypto.Header{ContentType: "image/png", Filename: "shot.png", BodyLen: 1234}
+	seal := func(epoch uint64, id string) []byte {
+		t.Helper()
+		h, err := tppcrypto.SealEntryHeader(c.state.GroupKey, epoch, id, want)
+		if err != nil {
+			t.Fatalf("SealEntryHeader: %v", err)
+		}
+		return h
+	}
+
+	got := c.entryMeta(&tppv1.EntryMeta{EntryId: "e1", Epoch: 3, Header: seal(3, "e1")}).Header
+	if got == nil || *got != (EntryHeader{ContentType: "image/png", Filename: "shot.png", Size: 1234}) {
+		t.Errorf("Header = %+v, want the sealed one", got)
+	}
+
+	tampered := seal(3, "e1")
+	tampered[len(tampered)-1] ^= 0xFF
+	for name, m := range map[string]*tppv1.EntryMeta{
+		"no header":    {EntryId: "e1", Epoch: 3},
+		"older epoch":  {EntryId: "e1", Epoch: 2, Header: seal(2, "e1")},
+		"relabelled":   {EntryId: "e2", Epoch: 3, Header: seal(3, "e1")},
+		"tampered":     {EntryId: "e1", Epoch: 3, Header: tampered},
+		"wrong length": {EntryId: "e1", Epoch: 3, Header: seal(3, "e1")[:100]},
+	} {
+		if h := c.entryMeta(m).Header; h != nil {
+			t.Errorf("%s: Header = %+v, want none", name, h)
+		}
+	}
 }
 
 // TestInstallWrappedKeyOnlyMovesForward pins the other half of §7: a client
@@ -315,5 +351,25 @@ func TestNoClipboardAnywhere(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestEntryCallTimeoutScalesWithTheBytes: a request is given time for what it
+// moves, so a large transfer on a slow link is slow rather than failed, and a
+// request that is not an entry request keeps its caller's deadline.
+func TestEntryCallTimeoutScalesWithTheBytes(t *testing.T) {
+	small, ok := entryCallTimeout(&tppv1.EntryHistoryRequest{})
+	if !ok || small != CallTimeout {
+		t.Errorf("history request = %v, %v; want %v", small, ok, CallTimeout)
+	}
+	chunk, _ := entryCallTimeout(&tppv1.EntryUploadChunkRequest{Data: make([]byte, 8<<20)})
+	if want := CallTimeout + 64*time.Second; chunk != want {
+		t.Errorf("8 MiB chunk = %v, want %v", chunk, want)
+	}
+	if fetch, _ := entryCallTimeout(&tppv1.EntryFetchChunkRequest{Length: 1 << 40}); fetch != CallTimeout+80*time.Second {
+		t.Errorf("an oversized range request = %v, want it capped at one frame", fetch)
+	}
+	if _, ok := entryCallTimeout(&tppv1.PairingJoinRequest{}); ok {
+		t.Error("a pairing request was given an entry deadline")
 	}
 }

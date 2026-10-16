@@ -47,13 +47,23 @@ func (s *Server) serveAsset(w http.ResponseWriter, r *http.Request, name, conten
 	_, _ = w.Write(b)
 }
 
-// handleIndex renders the token screen (SPEC §4.4).
+// handleIndex renders the dashboard (SPEC §4.4).
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	// "GET /admin/" also matches every unregistered path below /admin/.
 	if r.URL.Path != "/admin/" {
 		http.NotFound(w, r)
 		return
 	}
+	sess, ok := s.session(r)
+	if !ok {
+		s.redirect(w, r, "/admin/login")
+		return
+	}
+	s.renderDashboard(w, r, sess)
+}
+
+// handleTokens renders the token screen (SPEC §4.4).
+func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.session(r)
 	if !ok {
 		s.redirect(w, r, "/admin/login")
@@ -190,7 +200,48 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	// redirect target ends up in the browser's history and in every access log
 	// between here and the operator.
 	s.sessions.flash(sess.id, tok.Value)
-	s.redirect(w, r, "/admin/")
+	s.redirect(w, r, "/admin/tokens")
+}
+
+// handleRevokeToken deletes an unused creation token, so the URL that was
+// handed out for it stops working. A used token is refused with a message
+// rather than deleted: its group already exists, and removing the record
+// would only hide which token created it.
+func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(r)
+	if !ok {
+		s.redirect(w, r, "/admin/login")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBodyBytes)
+	if err := r.ParseForm(); err != nil {
+		s.renderTokens(w, r, sess, http.StatusBadRequest, "That request could not be read.")
+		return
+	}
+	if !s.checkCSRF(w, r, sess) {
+		return
+	}
+
+	value := r.PathValue("token")
+	tok, err := s.store.GetToken(r.Context(), value)
+	if err == nil {
+		err = s.store.RevokeToken(r.Context(), value)
+	}
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		s.renderTokens(w, r, sess, http.StatusNotFound, "That token no longer exists.")
+		return
+	case errors.Is(err, store.ErrTokenConsumed):
+		s.renderTokens(w, r, sess, http.StatusConflict, "That token has already created a group, so there is nothing to revoke.")
+		return
+	case err != nil:
+		s.logger.ErrorContext(r.Context(), "revoke token", "error", err)
+		s.renderTokens(w, r, sess, http.StatusInternalServerError, "The token could not be revoked.")
+		return
+	}
+	// Logged by name only: the value is a credential (docs/conventions.md §2).
+	s.logger.InfoContext(r.Context(), "creation token revoked", slog.String("token_name", tok.Name))
+	s.redirect(w, r, "/admin/tokens")
 }
 
 // handleTokenQR renders a token's creation URL as a QR code, so first-device
@@ -307,7 +358,7 @@ func (s *Server) handleTokenPost(w http.ResponseWriter, r *http.Request) {
 
 // renderTokens renders the token screen for an authenticated session.
 func (s *Server) renderTokens(w http.ResponseWriter, r *http.Request, sess session, status int, msg string) {
-	data := pageData{Title: "Creation tokens", Authenticated: true, CSRF: sess.csrf, Error: msg}
+	data := pageData{Title: "Creation tokens", Authenticated: true, CSRF: sess.csrf, Error: msg, Nav: "tokens"}
 
 	tokens, err := s.store.ListTokens(r.Context())
 	if err != nil {
@@ -333,6 +384,7 @@ func (s *Server) renderTokens(w http.ResponseWriter, r *http.Request, sess sessi
 		if !t.Used {
 			v.URL = s.creationURL(t.Value)
 			v.QRPath = "/admin/tokens/" + url.PathEscape(t.Value) + "/qr.png"
+			v.RevokePath = "/admin/tokens/" + url.PathEscape(t.Value) + "/revoke"
 			v.Fresh = fresh != "" && subtle.ConstantTimeCompare([]byte(fresh), []byte(t.Value)) == 1
 		}
 		data.Tokens = append(data.Tokens, v)

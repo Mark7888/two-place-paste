@@ -139,7 +139,7 @@ Android is the one platform in this system where that comparison is possible:
 `ClipDescription.getTimestamp()` (API 26+) records when the clipboard was last
 set, which neither macOS nor Windows exposes. `sync()` uses it, against the
 newest entry's *metadata* rather than the entry — deciding a direction should
-not cost a 10 MB download.
+not cost a 50 MB download.
 
 Where the platform will not say (it answers 0), the app does not guess: it says
 so and leaves the choice to the two directional buttons, because guessing here

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -57,6 +58,11 @@ type fixture struct {
 
 func newFixture(t *testing.T, baseURL string) *fixture {
 	t.Helper()
+	return newFixtureWithDashboard(t, baseURL, admin.Dashboard{})
+}
+
+func newFixtureWithDashboard(t *testing.T, baseURL string, dash admin.Dashboard) *fixture {
+	t.Helper()
 
 	st := store.NewMemoryStore()
 	clk := newClock()
@@ -66,6 +72,7 @@ func newFixture(t *testing.T, baseURL string) *fixture {
 		Password:      testPassword,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           clk.now,
+		Dashboard:     dash,
 	})
 	if err != nil {
 		t.Fatalf("admin.New() error = %v", err)
@@ -300,6 +307,9 @@ func TestUnauthenticatedAccess(t *testing.T) {
 		t.Errorf("GET /admin/ = %d %q, want %d %q",
 			resp.StatusCode, resp.Header.Get("Location"), http.StatusSeeOther, "/admin/login")
 	}
+	if resp := f.get(c, "/admin/tokens"); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/admin/login" {
+		t.Errorf("GET /admin/tokens = %d %q, want a redirect to the login page", resp.StatusCode, resp.Header.Get("Location"))
+	}
 	if resp := f.postForm(c, "/admin/tokens", url.Values{"name": {"sneaky"}}); resp.StatusCode != http.StatusSeeOther {
 		t.Errorf("POST /admin/tokens = %d, want a redirect to the login page", resp.StatusCode)
 	}
@@ -345,7 +355,7 @@ func TestTokenScreen(t *testing.T) {
 	}
 	tok := tokens[0]
 
-	body := readBody(t, f.get(c, "/admin/"))
+	body := readBody(t, f.get(c, "/admin/tokens"))
 	for _, want := range []string{"Anna — laptop", "https://tpp.example.com/" + tok.Value, "/admin/tokens/" + tok.Value + "/qr.png"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("token screen does not contain %q", want)
@@ -371,6 +381,69 @@ func TestTokenScreen(t *testing.T) {
 	}
 	if got := f.get(c, "/admin/tokens/"+tok.Value+"/qr.png").StatusCode; got != http.StatusNotFound {
 		t.Errorf("GET qr.png for a used token = %d, want %d", got, http.StatusNotFound)
+	}
+}
+
+// TestRevokeToken: revoking an unused token removes it and its creation URL
+// stops working; a used token is refused and left alone.
+func TestRevokeToken(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	f := newFixture(t, "https://tpp.example.com")
+	c := f.client()
+	csrf := f.login(c)
+
+	unused, err := f.store.CreateToken(ctx, "spare")
+	if err != nil {
+		t.Fatalf("CreateToken() error = %v", err)
+	}
+	revokePath := "/admin/tokens/" + unused.Value + "/revoke"
+
+	if body := readBody(t, f.get(c, "/admin/tokens")); !strings.Contains(body, revokePath) {
+		t.Errorf("token screen has no revoke form for an unused token")
+	}
+
+	if got := f.postForm(c, revokePath, url.Values{}).StatusCode; got != http.StatusBadRequest {
+		t.Errorf("revoke without csrf = %d, want %d", got, http.StatusBadRequest)
+	}
+	if _, err := f.store.GetToken(ctx, unused.Value); err != nil {
+		t.Fatalf("token revoked without csrf: GetToken() error = %v", err)
+	}
+
+	if got := f.postForm(f.client(), revokePath, url.Values{"csrf": {csrf}}).StatusCode; got != http.StatusSeeOther {
+		t.Errorf("revoke without a session = %d, want a redirect to login", got)
+	}
+
+	if got := f.postForm(c, revokePath, url.Values{"csrf": {csrf}}).StatusCode; got != http.StatusSeeOther {
+		t.Fatalf("revoke = %d, want %d", got, http.StatusSeeOther)
+	}
+	if _, err := f.store.GetToken(ctx, unused.Value); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetToken(revoked) error = %v, want %v", err, store.ErrNotFound)
+	}
+	resp := f.postJSON(f.client(), "/"+unused.Value, `{"device_public_key":"cGs=","wrapped_group_key":"d2s="}`)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("POST of a revoked creation URL = %d, want %d", resp.StatusCode, http.StatusNotFound)
+	}
+	if got := f.postForm(c, revokePath, url.Values{"csrf": {csrf}}).StatusCode; got != http.StatusNotFound {
+		t.Errorf("second revoke = %d, want %d", got, http.StatusNotFound)
+	}
+
+	used, err := f.store.CreateToken(ctx, "spent")
+	if err != nil {
+		t.Fatalf("CreateToken() error = %v", err)
+	}
+	if _, err := f.store.ConsumeToken(ctx, used.Value); err != nil {
+		t.Fatalf("ConsumeToken() error = %v", err)
+	}
+	if body := readBody(t, f.get(c, "/admin/tokens")); strings.Contains(body, "/admin/tokens/"+used.Value+"/revoke") {
+		t.Errorf("token screen offers to revoke a used token")
+	}
+	if got := f.postForm(c, "/admin/tokens/"+used.Value+"/revoke", url.Values{"csrf": {csrf}}).StatusCode; got != http.StatusConflict {
+		t.Errorf("revoke of a used token = %d, want %d", got, http.StatusConflict)
+	}
+	if got, err := f.store.GetToken(ctx, used.Value); err != nil || !got.Used {
+		t.Errorf("used token after a refused revoke = {Used:%v}, %v; want it untouched", got.Used, err)
 	}
 }
 
@@ -508,12 +581,12 @@ func TestTokenScreenShowsANewCodeOnce(t *testing.T) {
 
 	f.postForm(c, "/admin/tokens", url.Values{"name": {"Anna — laptop"}, "csrf": {csrf}})
 
-	first := readBody(t, f.get(c, "/admin/"))
+	first := readBody(t, f.get(c, "/admin/tokens"))
 	if !strings.Contains(first, "data-autoshow") {
 		t.Error("the render after minting a token does not mark it to be shown")
 	}
 
-	second := readBody(t, f.get(c, "/admin/"))
+	second := readBody(t, f.get(c, "/admin/tokens"))
 	if strings.Contains(second, "data-autoshow") {
 		t.Error("a reload shows the code again; the flash is not one-shot")
 	}

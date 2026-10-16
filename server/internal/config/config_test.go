@@ -60,6 +60,10 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Entry.MaxBytes != DefaultEntryMax {
 		t.Errorf("Entry.MaxBytes = %d, want %d", cfg.Entry.MaxBytes, DefaultEntryMax)
 	}
+	if cfg.Blob.MaxTotalBytes != 0 || cfg.Blob.MaxGroupBytes != DefaultGroupMax || cfg.Blob.MinFreeBytes != 0 {
+		t.Errorf("Blob limits = total %d, group %d, min free %d; want 0, %d, 0",
+			cfg.Blob.MaxTotalBytes, cfg.Blob.MaxGroupBytes, cfg.Blob.MinFreeBytes, DefaultGroupMax)
+	}
 	if cfg.LogLevel != slog.LevelInfo {
 		t.Errorf("LogLevel = %s, want info", cfg.LogLevel)
 	}
@@ -213,6 +217,26 @@ func TestLoadValidationErrors(t *testing.T) {
 			wantErr: "is not a log level",
 		},
 		{
+			name:    "bad byte size",
+			env:     map[string]string{"ADMIN_PASSWORD": "pw", "TPP_PUBLIC_BASE_URL": "https://x.example", "TPP_BLOB_MAX_TOTAL_BYTES": "5 gallons"},
+			wantErr: `TPP_BLOB_MAX_TOTAL_BYTES: "5 gallons" is not a size`,
+		},
+		{
+			name:    "negative limit",
+			env:     map[string]string{"ADMIN_PASSWORD": "pw", "TPP_PUBLIC_BASE_URL": "https://x.example", "TPP_BLOB_MIN_FREE_BYTES": "-1"},
+			wantErr: "TPP_BLOB_MIN_FREE_BYTES must not be negative",
+		},
+		{
+			name:    "total limit below one entry",
+			env:     map[string]string{"ADMIN_PASSWORD": "pw", "TPP_PUBLIC_BASE_URL": "https://x.example", "TPP_BLOB_MAX_TOTAL_BYTES": "1MiB"},
+			wantErr: "TPP_BLOB_MAX_TOTAL_BYTES (1048576) must be 0 (unlimited) or at least TPP_ENTRY_MAX_BYTES",
+		},
+		{
+			name:    "group limit below one entry",
+			env:     map[string]string{"ADMIN_PASSWORD": "pw", "TPP_PUBLIC_BASE_URL": "https://x.example", "TPP_BLOB_MAX_GROUP_BYTES": "5MB"},
+			wantErr: "TPP_BLOB_MAX_GROUP_BYTES (5000000) must be 0 (unlimited) or at least TPP_ENTRY_MAX_BYTES",
+		},
+		{
 			name:    "negative sweep interval",
 			env:     map[string]string{"ADMIN_PASSWORD": "pw", "TPP_PUBLIC_BASE_URL": "https://x.example", "TPP_BLOB_SWEEP_INTERVAL": "-5m"},
 			wantErr: "TPP_BLOB_SWEEP_INTERVAL must be positive",
@@ -277,5 +301,165 @@ func TestSpecConstants(t *testing.T) {
 	}
 	if PairingTokenTTL != 5*time.Minute {
 		t.Errorf("PairingTokenTTL = %s, want 5m (SPEC §3.2)", PairingTokenTTL)
+	}
+}
+
+func TestLoadChunkSettings(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(Options{DotenvPath: filepath.Join(t.TempDir(), "absent.env"), Lookup: lookupFrom(minimalEnv())})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Entry.MaxBytes != 50<<20 || cfg.Entry.ChunkBytes != 8<<20 || cfg.Entry.UploadTTL != 10*time.Minute {
+		t.Errorf("Entry = %+v, want 50 MiB cap, 8 MiB chunks, 10m upload TTL", cfg.Entry)
+	}
+
+	for _, tt := range []struct {
+		set     map[string]string
+		wantErr string
+	}{
+		{map[string]string{"TPP_ENTRY_CHUNK_BYTES": "11MiB"}, "TPP_ENTRY_CHUNK_BYTES must be between"},
+		{map[string]string{"TPP_ENTRY_CHUNK_BYTES": "1KiB"}, "TPP_ENTRY_CHUNK_BYTES must be between"},
+		{map[string]string{"TPP_BLOB_BACKEND": "s3", "TPP_S3_BUCKET": "b", "TPP_ENTRY_CHUNK_BYTES": "4MiB"}, "between 5242880 and 10485760 bytes for the s3 backend"},
+		{map[string]string{"TPP_UPLOAD_SESSION_TTL": "3h"}, "TPP_UPLOAD_SESSION_TTL must be between 1m and 1h"},
+		{map[string]string{"TPP_ENTRY_INLINE_MAX_BYTES": "11MiB"}, "must not exceed the single-frame cap"},
+	} {
+		env := minimalEnv()
+		for k, v := range tt.set {
+			env[k] = v
+		}
+		_, err := Load(Options{DotenvPath: filepath.Join(t.TempDir(), "absent.env"), Lookup: lookupFrom(env)})
+		if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+			t.Errorf("Load(%v) error = %v, want it to contain %q", tt.set, err, tt.wantErr)
+		}
+	}
+}
+
+func TestLoadByteSizes(t *testing.T) {
+	t.Parallel()
+
+	env := minimalEnv()
+	env["TPP_BLOB_MAX_TOTAL_BYTES"] = "5GiB"
+	env["TPP_BLOB_MAX_GROUP_BYTES"] = "0"
+	env["TPP_ENTRY_MAX_BYTES"] = "10485760"
+	env["TPP_ENTRY_INLINE_MAX_BYTES"] = "256 KiB"
+	cfg, err := Load(Options{DotenvPath: filepath.Join(t.TempDir(), "absent.env"), Lookup: lookupFrom(env)})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Blob.MaxTotalBytes != 5<<30 || cfg.Blob.MaxGroupBytes != 0 {
+		t.Errorf("Blob limits = %d / %d, want %d / 0", cfg.Blob.MaxTotalBytes, cfg.Blob.MaxGroupBytes, int64(5<<30))
+	}
+	if cfg.Entry.MaxBytes != 10<<20 || cfg.Entry.InlineMaxBytes != 256<<10 {
+		t.Errorf("Entry limits = %d / %d, want %d / %d", cfg.Entry.MaxBytes, cfg.Entry.InlineMaxBytes, 10<<20, 256<<10)
+	}
+}
+
+func TestParseByteSize(t *testing.T) {
+	t.Parallel()
+
+	good := map[string]int64{
+		"0":        0,
+		"1048576":  1 << 20,
+		"512B":     512,
+		"500MB":    500e6,
+		"500mb":    500e6,
+		"5GiB":     5 << 30,
+		"5 GiB":    5 << 30,
+		"1.5GiB":   3 << 29,
+		"64k":      64 << 10,
+		"2T":       2 << 40,
+		" 10MiB  ": 10 << 20,
+	}
+	for in, want := range good {
+		got, err := ParseByteSize(in)
+		if err != nil || got != want {
+			t.Errorf("ParseByteSize(%q) = %d, %v; want %d, nil", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "GiB", "5 gallons", "1..5MB", "9999999999999TiB", "1e3"} {
+		if got, err := ParseByteSize(in); err == nil {
+			t.Errorf("ParseByteSize(%q) = %d, nil; want an error", in, got)
+		}
+	}
+}
+
+func TestLoadS3(t *testing.T) {
+	t.Parallel()
+
+	secretFile := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(secretFile, []byte("from-a-file\n"), 0o600); err != nil {
+		t.Fatalf("write secret: %v", err)
+	}
+	env := minimalEnv()
+	env["TPP_BLOB_BACKEND"] = "s3"
+	env["TPP_S3_ENDPOINT"] = "http://minio:9000/"
+	env["TPP_S3_BUCKET"] = "tpp"
+	env["TPP_S3_ACCESS_KEY_ID"] = "tpp-relay"
+	env["TPP_S3_SECRET_ACCESS_KEY_FILE"] = secretFile
+	env["TPP_S3_CREATE_BUCKET"] = "yes"
+
+	cfg, err := Load(Options{DotenvPath: filepath.Join(t.TempDir(), "absent.env"), Lookup: lookupFrom(env)})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := S3Config{
+		Endpoint: "minio:9000", UseSSL: false, Region: "us-east-1", Bucket: "tpp",
+		AccessKeyID: "tpp-relay", SecretAccessKey: "from-a-file", PathStyle: "auto", CreateBucket: true,
+	}
+	if cfg.Blob.S3 != want {
+		t.Errorf("Blob.S3 = %+v, want %+v", cfg.Blob.S3, want)
+	}
+
+	// An endpoint without a scheme is https unless told otherwise, and an
+	// explicit TPP_S3_USE_SSL wins over the scheme.
+	env["TPP_S3_ENDPOINT"] = "s3.example.com"
+	cfg, err = Load(Options{DotenvPath: filepath.Join(t.TempDir(), "absent.env"), Lookup: lookupFrom(env)})
+	if err != nil || !cfg.Blob.S3.UseSSL {
+		t.Errorf("bare endpoint: UseSSL = %v, %v; want true", cfg.Blob.S3.UseSSL, err)
+	}
+	env["TPP_S3_ENDPOINT"] = "http://minio:9000"
+	env["TPP_S3_USE_SSL"] = "true"
+	cfg, err = Load(Options{DotenvPath: filepath.Join(t.TempDir(), "absent.env"), Lookup: lookupFrom(env)})
+	if err != nil || !cfg.Blob.S3.UseSSL {
+		t.Errorf("explicit TPP_S3_USE_SSL: UseSSL = %v, %v; want true", cfg.Blob.S3.UseSSL, err)
+	}
+}
+
+func TestLoadS3Errors(t *testing.T) {
+	t.Parallel()
+
+	base := func() map[string]string {
+		env := minimalEnv()
+		env["TPP_BLOB_BACKEND"] = "s3"
+		env["TPP_S3_BUCKET"] = "tpp"
+		return env
+	}
+	tests := []struct {
+		name    string
+		set     map[string]string
+		wantErr string
+	}{
+		{"no bucket", map[string]string{"TPP_S3_BUCKET": ""}, "TPP_S3_BUCKET is required"},
+		{"half the credentials", map[string]string{"TPP_S3_ACCESS_KEY_ID": "id"}, "set both TPP_S3_ACCESS_KEY_ID and TPP_S3_SECRET_ACCESS_KEY"},
+		{"endpoint with a path", map[string]string{"TPP_S3_ENDPOINT": "https://s3.example.com/tpp"}, "TPP_S3_ENDPOINT must be host[:port]"},
+		{"bad path style", map[string]string{"TPP_S3_PATH_STYLE": "sideways"}, "TPP_S3_PATH_STYLE must be auto, path or virtual"},
+		{"bad boolean", map[string]string{"TPP_S3_CREATE_BUCKET": "perhaps"}, `TPP_S3_CREATE_BUCKET: "perhaps" is not a boolean`},
+		{"secret and file", map[string]string{"TPP_S3_ACCESS_KEY_ID": "id", "TPP_S3_SECRET_ACCESS_KEY": "s", "TPP_S3_SECRET_ACCESS_KEY_FILE": "/x"}, "not both"},
+		{"missing secret file", map[string]string{"TPP_S3_ACCESS_KEY_ID": "id", "TPP_S3_SECRET_ACCESS_KEY_FILE": "/no/such/file"}, "TPP_S3_SECRET_ACCESS_KEY_FILE"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			env := base()
+			for k, v := range tt.set {
+				env[k] = v
+			}
+			_, err := Load(Options{DotenvPath: filepath.Join(t.TempDir(), "absent.env"), Lookup: lookupFrom(env)})
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("Load() error = %v, want it to contain %q", err, tt.wantErr)
+			}
+		})
 	}
 }

@@ -43,7 +43,10 @@ export enum ErrorCode {
    * (SPEC §3.3 step 4).
    */
   ERROR_CODE_EPOCH_CONFLICT = 7,
-  /** ERROR_CODE_TOO_LARGE - The ciphertext exceeds the 10 MB per-entry cap (SPEC §4.3). */
+  /**
+   * ERROR_CODE_TOO_LARGE - The ciphertext exceeds the per-entry cap or a storage limit, or is too
+   * large for the single-frame path it was sent or requested on (SPEC §4.3).
+   */
   ERROR_CODE_TOO_LARGE = 8,
   /** ERROR_CODE_RATE_LIMITED - Rate limited. The caller backs off and retries. */
   ERROR_CODE_RATE_LIMITED = 9,
@@ -54,6 +57,13 @@ export enum ErrorCode {
    * disclosed beyond this code.
    */
   ERROR_CODE_INTERNAL = 11,
+  /**
+   * ERROR_CODE_QUOTA_EXCEEDED - The relay's blob storage is full and evicting older entries cannot make
+   * room, because what remains is held by uploads still in progress. The
+   * caller may retry later. An entry larger than a storage limit on its own
+   * gets ERROR_CODE_TOO_LARGE instead (SPEC §4.3).
+   */
+  ERROR_CODE_QUOTA_EXCEEDED = 12,
   UNRECOGNIZED = -1,
 }
 
@@ -95,6 +105,9 @@ export function errorCodeFromJSON(object: any): ErrorCode {
     case 11:
     case "ERROR_CODE_INTERNAL":
       return ErrorCode.ERROR_CODE_INTERNAL;
+    case 12:
+    case "ERROR_CODE_QUOTA_EXCEEDED":
+      return ErrorCode.ERROR_CODE_QUOTA_EXCEEDED;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -128,6 +141,8 @@ export function errorCodeToJSON(object: ErrorCode): string {
       return "ERROR_CODE_UNSUPPORTED_MESSAGE";
     case ErrorCode.ERROR_CODE_INTERNAL:
       return "ERROR_CODE_INTERNAL";
+    case ErrorCode.ERROR_CODE_QUOTA_EXCEEDED:
+      return "ERROR_CODE_QUOTA_EXCEEDED";
     case ErrorCode.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";

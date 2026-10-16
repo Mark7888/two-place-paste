@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -28,6 +29,12 @@ const (
 
 	// PairingTokenTTL is the lifetime of a single-use pairing token (SPEC §3.2).
 	PairingTokenTTL = 5 * time.Minute
+
+	// SingleFrameMaxBytes is the most ciphertext one WebSocket frame may
+	// carry, in either direction (SPEC §4.3). It is the cap clients released
+	// before chunked transfer shipped were built against, so it is a protocol
+	// constant, not a setting: an entry above it travels in chunks.
+	SingleFrameMaxBytes = 10 << 20
 )
 
 // Defaults for values that are configurable.
@@ -38,7 +45,14 @@ const (
 	DefaultSweepInterval = 10 * time.Minute
 	DefaultSessionTTL    = 12 * time.Hour
 	DefaultInlineMax     = 256 << 10 // 256 KiB, SPEC §4.3
-	DefaultEntryMax      = 10 << 20  // 10 MiB ciphertext, SPEC §4.3
+	DefaultEntryMax      = 50 << 20  // 50 MiB ciphertext, SPEC §4.3
+	DefaultChunk         = 8 << 20   // 8 MiB: under the frame cap, over S3's 5 MiB part floor
+	DefaultUploadTTL     = 10 * time.Minute
+
+	// DefaultGroupMax is the per-group blob storage limit. The total limit
+	// defaults to unlimited: only the operator knows how big the volume or
+	// bucket is.
+	DefaultGroupMax = 1 << 30 // 1 GiB
 )
 
 // Config is the fully resolved server configuration.
@@ -99,9 +113,8 @@ const (
 	// BlobBackendDisk stores blobs on the local filesystem (MVP, SPEC §4.3).
 	BlobBackendDisk BlobBackend = "disk"
 
-	// BlobBackendS3 is the deferred object-storage backend. Its Sweep() is a
-	// documented no-op because object stores expire objects via lifecycle
-	// rules (SPEC §4.5).
+	// BlobBackendS3 stores blobs in an S3-compatible object store: MinIO,
+	// AWS S3 or any other (SPEC §4.3).
 	BlobBackendS3 BlobBackend = "s3"
 )
 
@@ -116,6 +129,56 @@ type BlobConfig struct {
 
 	// SweepInterval is how often the bucket sweep runs after the startup pass.
 	SweepInterval time.Duration
+
+	// MaxTotalBytes caps the ciphertext held in the blob backend across every
+	// group. When a new entry would not fit, the oldest entries are evicted,
+	// even inside their 24 hours. Zero is unlimited.
+	MaxTotalBytes int64
+
+	// MaxGroupBytes caps one group's blob storage, evicting that group's
+	// oldest entries first, so one busy group cannot push out everyone
+	// else's. Zero is unlimited.
+	MaxGroupBytes int64
+
+	// S3 configures the s3 backend; it is ignored by the disk backend.
+	S3 S3Config
+
+	// MinFreeBytes is the disk backend's floor: a write is refused while the
+	// volume has less than this free, whatever the limits above allow. Zero
+	// disables the check.
+	MinFreeBytes int64
+}
+
+// S3Config addresses an S3-compatible object store.
+type S3Config struct {
+	// Endpoint is host[:port] of the S3 API, e.g. "minio:9000". Empty means
+	// AWS. A scheme may be given ("http://minio:9000"), and then decides
+	// UseSSL on its own.
+	Endpoint string
+
+	// UseSSL selects https. It defaults to true, and to false when the
+	// endpoint is written with http://.
+	UseSSL bool
+
+	Region string
+	Bucket string
+
+	// Prefix is prepended to every key, so one bucket can be shared.
+	Prefix string
+
+	// AccessKeyID and SecretAccessKey are static credentials. Both empty
+	// means the standard AWS credential chain (environment, then an
+	// instance or task role).
+	AccessKeyID     string
+	SecretAccessKey string
+
+	// PathStyle is "auto", "path" or "virtual". Auto means path-style for a
+	// custom endpoint and virtual-host style for AWS.
+	PathStyle string
+
+	// CreateBucket creates a missing bucket at startup instead of refusing
+	// to start.
+	CreateBucket bool
 }
 
 // EntryConfig bounds entry sizes. Both limits are measured on the ciphertext:
@@ -125,8 +188,17 @@ type EntryConfig struct {
 	InlineMaxBytes int64
 
 	// MaxBytes is the hard per-entry cap, enforced at the reader rather than
-	// after buffering.
+	// after buffering. An entry above SingleFrameMaxBytes is uploaded and
+	// fetched in chunks.
 	MaxBytes int64
+
+	// ChunkBytes is the chunk size of the chunked path: every chunk but the
+	// last is exactly this long.
+	ChunkBytes int64
+
+	// UploadTTL is how long a chunked upload may sit idle before the server
+	// abandons it and releases the room it reserved.
+	UploadTTL time.Duration
 }
 
 // Options controls Load.
@@ -177,10 +249,16 @@ func Load(opts Options) (*Config, error) {
 			Backend:       BlobBackend(r.str("TPP_BLOB_BACKEND", string(BlobBackendDisk))),
 			Root:          r.str("TPP_BLOB_ROOT", DefaultBlobRoot),
 			SweepInterval: r.duration("TPP_BLOB_SWEEP_INTERVAL", DefaultSweepInterval),
+			MaxTotalBytes: r.byteSize("TPP_BLOB_MAX_TOTAL_BYTES", 0),
+			MaxGroupBytes: r.byteSize("TPP_BLOB_MAX_GROUP_BYTES", DefaultGroupMax),
+			MinFreeBytes:  r.byteSize("TPP_BLOB_MIN_FREE_BYTES", 0),
+			S3:            r.s3(),
 		},
 		Entry: EntryConfig{
-			InlineMaxBytes: r.int64Val("TPP_ENTRY_INLINE_MAX_BYTES", DefaultInlineMax),
-			MaxBytes:       r.int64Val("TPP_ENTRY_MAX_BYTES", DefaultEntryMax),
+			InlineMaxBytes: r.byteSize("TPP_ENTRY_INLINE_MAX_BYTES", DefaultInlineMax),
+			MaxBytes:       r.byteSize("TPP_ENTRY_MAX_BYTES", DefaultEntryMax),
+			ChunkBytes:     r.byteSize("TPP_ENTRY_CHUNK_BYTES", DefaultChunk),
+			UploadTTL:      r.duration("TPP_UPLOAD_SESSION_TTL", DefaultUploadTTL),
 		},
 	}
 
@@ -225,13 +303,46 @@ func (c *Config) Validate() error {
 			errs = append(errs, errors.New("TPP_BLOB_ROOT must not be empty for the disk backend"))
 		}
 	case BlobBackendS3:
-		// Credentials and bucket configuration land with the deferred S3
-		// implementation (SPEC §4.3); nothing to validate yet.
+		s3 := c.Blob.S3
+		if s3.Bucket == "" {
+			errs = append(errs, errors.New("TPP_S3_BUCKET is required for the s3 backend"))
+		}
+		if (s3.AccessKeyID == "") != (s3.SecretAccessKey == "") {
+			errs = append(errs, errors.New("set both TPP_S3_ACCESS_KEY_ID and TPP_S3_SECRET_ACCESS_KEY, or neither (to use the AWS credential chain)"))
+		}
+		if strings.Contains(s3.Endpoint, "/") {
+			errs = append(errs, fmt.Errorf("TPP_S3_ENDPOINT must be host[:port] with an optional http:// or https://, and no path; got %q", s3.Endpoint))
+		}
+		switch s3.PathStyle {
+		case "auto", "path", "virtual":
+		default:
+			errs = append(errs, fmt.Errorf("TPP_S3_PATH_STYLE must be auto, path or virtual, got %q", s3.PathStyle))
+		}
 	default:
 		errs = append(errs, fmt.Errorf("TPP_BLOB_BACKEND must be %q or %q, got %q", BlobBackendDisk, BlobBackendS3, c.Blob.Backend))
 	}
 	if c.Blob.SweepInterval <= 0 {
 		errs = append(errs, fmt.Errorf("TPP_BLOB_SWEEP_INTERVAL must be positive, got %s", c.Blob.SweepInterval))
+	}
+	for _, lim := range []struct {
+		key string
+		v   int64
+	}{
+		{"TPP_BLOB_MAX_TOTAL_BYTES", c.Blob.MaxTotalBytes},
+		{"TPP_BLOB_MAX_GROUP_BYTES", c.Blob.MaxGroupBytes},
+		{"TPP_BLOB_MIN_FREE_BYTES", c.Blob.MinFreeBytes},
+	} {
+		if lim.v < 0 {
+			errs = append(errs, fmt.Errorf("%s must not be negative, got %d", lim.key, lim.v))
+		}
+	}
+	// A limit smaller than one entry would refuse every large entry outright,
+	// which is a misconfiguration rather than a policy.
+	if c.Blob.MaxTotalBytes > 0 && c.Blob.MaxTotalBytes < c.Entry.MaxBytes {
+		errs = append(errs, fmt.Errorf("TPP_BLOB_MAX_TOTAL_BYTES (%d) must be 0 (unlimited) or at least TPP_ENTRY_MAX_BYTES (%d)", c.Blob.MaxTotalBytes, c.Entry.MaxBytes))
+	}
+	if c.Blob.MaxGroupBytes > 0 && c.Blob.MaxGroupBytes < c.Entry.MaxBytes {
+		errs = append(errs, fmt.Errorf("TPP_BLOB_MAX_GROUP_BYTES (%d) must be 0 (unlimited) or at least TPP_ENTRY_MAX_BYTES (%d)", c.Blob.MaxGroupBytes, c.Entry.MaxBytes))
 	}
 
 	if c.Entry.MaxBytes <= 0 {
@@ -243,8 +354,52 @@ func (c *Config) Validate() error {
 	if c.Entry.InlineMaxBytes > c.Entry.MaxBytes {
 		errs = append(errs, fmt.Errorf("TPP_ENTRY_INLINE_MAX_BYTES (%d) must not exceed TPP_ENTRY_MAX_BYTES (%d)", c.Entry.InlineMaxBytes, c.Entry.MaxBytes))
 	}
+	if c.Entry.InlineMaxBytes > SingleFrameMaxBytes {
+		errs = append(errs, fmt.Errorf("TPP_ENTRY_INLINE_MAX_BYTES (%d) must not exceed the single-frame cap of %d", c.Entry.InlineMaxBytes, SingleFrameMaxBytes))
+	}
+	// The chunk must fit in a frame, and on S3 every chunk but the last is a
+	// multipart part, which S3 refuses below 5 MiB.
+	minChunk := int64(64 << 10)
+	if c.Blob.Backend == BlobBackendS3 {
+		minChunk = 5 << 20
+	}
+	if c.Entry.ChunkBytes < minChunk || c.Entry.ChunkBytes > SingleFrameMaxBytes {
+		errs = append(errs, fmt.Errorf("TPP_ENTRY_CHUNK_BYTES must be between %d and %d bytes for the %s backend, got %d",
+			minChunk, int64(SingleFrameMaxBytes), c.Blob.Backend, c.Entry.ChunkBytes))
+	}
+	// An idle upload is abandoned after this; the blob sweep then cleans up
+	// after crashed ones at blob.StaleUploadAge (2 h), which must stay longer.
+	if c.Entry.UploadTTL < time.Minute || c.Entry.UploadTTL > time.Hour {
+		errs = append(errs, fmt.Errorf("TPP_UPLOAD_SESSION_TTL must be between 1m and 1h, got %s", c.Entry.UploadTTL))
+	}
 
 	return errors.Join(errs...)
+}
+
+// s3 reads the S3 settings. The endpoint's scheme, when there is one, decides
+// TLS unless TPP_S3_USE_SSL says otherwise, so that "http://minio:9000" works
+// on its own.
+func (r *resolver) s3() S3Config {
+	endpoint := r.str("TPP_S3_ENDPOINT", "")
+	useSSL := true
+	switch {
+	case strings.HasPrefix(endpoint, "http://"):
+		endpoint, useSSL = strings.TrimPrefix(endpoint, "http://"), false
+	case strings.HasPrefix(endpoint, "https://"):
+		endpoint = strings.TrimPrefix(endpoint, "https://")
+	}
+	endpoint = strings.TrimRight(endpoint, "/")
+	return S3Config{
+		Endpoint:        endpoint,
+		UseSSL:          r.boolean("TPP_S3_USE_SSL", useSSL),
+		Region:          r.str("TPP_S3_REGION", "us-east-1"),
+		Bucket:          r.str("TPP_S3_BUCKET", ""),
+		Prefix:          r.str("TPP_S3_PREFIX", ""),
+		AccessKeyID:     r.secret("TPP_S3_ACCESS_KEY_ID"),
+		SecretAccessKey: r.secret("TPP_S3_SECRET_ACCESS_KEY"),
+		PathStyle:       strings.ToLower(r.str("TPP_S3_PATH_STYLE", "auto")),
+		CreateBucket:    r.boolean("TPP_S3_CREATE_BUCKET", false),
+	}
 }
 
 // resolver reads values with process-environment-over-file precedence and
@@ -270,6 +425,43 @@ func (r *resolver) str(key, def string) string {
 	return def
 }
 
+// secret reads key, or the file named by key_FILE — the Docker secrets
+// convention, so a credential need not sit in the environment. Setting both is
+// an error rather than a guess.
+func (r *resolver) secret(key string) string {
+	v := r.str(key, "")
+	path := r.str(key+"_FILE", "")
+	if path == "" {
+		return v
+	}
+	if v != "" {
+		r.errs = append(r.errs, fmt.Errorf("set %s or %s_FILE, not both", key, key))
+		return v
+	}
+	b, err := os.ReadFile(path) //nolint:gosec // the operator names the file
+	if err != nil {
+		r.errs = append(r.errs, fmt.Errorf("%s_FILE: %w", key, err))
+		return ""
+	}
+	return strings.TrimRight(string(b), "\r\n")
+}
+
+// boolean reads true/false, yes/no, on/off or 1/0.
+func (r *resolver) boolean(key string, def bool) bool {
+	v, ok := r.raw(key)
+	if !ok || v == "" {
+		return def
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
+	r.errs = append(r.errs, fmt.Errorf("%s: %q is not a boolean (want true or false)", key, v))
+	return def
+}
+
 func (r *resolver) intVal(key string, def int) int {
 	v, ok := r.raw(key)
 	if !ok || v == "" {
@@ -283,17 +475,59 @@ func (r *resolver) intVal(key string, def int) int {
 	return n
 }
 
-func (r *resolver) int64Val(key string, def int64) int64 {
+// byteSize reads a size in bytes: a plain integer, or a number with a unit —
+// "256KiB", "10MB", "5 GiB". Units are case-insensitive; KB/MB/GB/TB are
+// decimal and KiB/MiB/GiB/TiB binary, as everywhere else.
+func (r *resolver) byteSize(key string, def int64) int64 {
 	v, ok := r.raw(key)
 	if !ok || v == "" {
 		return def
 	}
-	n, err := strconv.ParseInt(v, 10, 64)
+	n, err := ParseByteSize(v)
 	if err != nil {
-		r.errs = append(r.errs, fmt.Errorf("%s: %q is not an integer", key, v))
+		r.errs = append(r.errs, fmt.Errorf("%s: %w", key, err))
 		return def
 	}
 	return n
+}
+
+// byteUnits maps a lower-cased unit suffix to its multiplier.
+var byteUnits = map[string]int64{
+	"": 1, "b": 1,
+	"kb": 1e3, "mb": 1e6, "gb": 1e9, "tb": 1e12,
+	"k": 1 << 10, "m": 1 << 20, "g": 1 << 30, "t": 1 << 40,
+	"kib": 1 << 10, "mib": 1 << 20, "gib": 1 << 30, "tib": 1 << 40,
+}
+
+// ParseByteSize parses a byte count such as "5GiB", "500MB" or "1048576".
+// Fractions are allowed with a unit ("1.5GiB"); the result is truncated to a
+// whole byte.
+func ParseByteSize(s string) (int64, error) {
+	t := strings.TrimSpace(s)
+	i := 0
+	for i < len(t) && (t[i] >= '0' && t[i] <= '9' || t[i] == '.' || t[i] == '-') {
+		i++
+	}
+	num, unit := t[:i], strings.ToLower(strings.TrimSpace(t[i:]))
+	mult, ok := byteUnits[unit]
+	if num == "" || !ok {
+		return 0, fmt.Errorf("%q is not a size (want e.g. \"1048576\", \"500MB\", \"5GiB\")", s)
+	}
+	if n, err := strconv.ParseInt(num, 10, 64); err == nil {
+		if n != 0 && (n > math.MaxInt64/mult || n < math.MinInt64/mult) {
+			return 0, fmt.Errorf("%q is too large", s)
+		}
+		return n * mult, nil
+	}
+	f, err := strconv.ParseFloat(num, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a size (want e.g. \"1048576\", \"500MB\", \"5GiB\")", s)
+	}
+	f *= float64(mult)
+	if f >= math.MaxInt64 || f <= math.MinInt64 {
+		return 0, fmt.Errorf("%q is too large", s)
+	}
+	return int64(f), nil
 }
 
 func (r *resolver) duration(key string, def time.Duration) time.Duration {

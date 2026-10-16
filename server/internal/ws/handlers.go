@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -59,6 +60,16 @@ func (s *Server) dispatch(ctx context.Context, c *conn, env *tppv1.Envelope) ([]
 		return s.handleEntryHistory(ctx, env, groupID)
 	case tppv1.MessageType_MESSAGE_TYPE_ENTRY_FETCH_REQUEST:
 		return s.handleEntryFetch(ctx, env, groupID)
+	case tppv1.MessageType_MESSAGE_TYPE_ENTRY_LIMITS_REQUEST:
+		return s.handleEntryLimits(env)
+	case tppv1.MessageType_MESSAGE_TYPE_ENTRY_UPLOAD_BEGIN_REQUEST:
+		return s.handleUploadBegin(ctx, env, deviceID, groupID)
+	case tppv1.MessageType_MESSAGE_TYPE_ENTRY_UPLOAD_CHUNK_REQUEST:
+		return s.handleUploadChunk(ctx, env, deviceID, groupID)
+	case tppv1.MessageType_MESSAGE_TYPE_ENTRY_UPLOAD_ABORT_REQUEST:
+		return s.handleUploadAbort(ctx, env, deviceID, groupID)
+	case tppv1.MessageType_MESSAGE_TYPE_ENTRY_FETCH_CHUNK_REQUEST:
+		return s.handleEntryFetchChunk(ctx, env, groupID)
 	default:
 		// An unknown type is answered, never met with a closed socket
 		// (SPEC §5.1).
@@ -523,22 +534,25 @@ func (s *Server) handleEntryPut(ctx context.Context, env *tppv1.Envelope, device
 	if err := decode(env, &req); err != nil {
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "payload could not be decoded")
 	}
-	if req.GetUploadHandle() != "" {
-		// The handle is reserved in the wire contract for an out-of-band
-		// upload path that the MVP does not need: a 10 MB ciphertext fits in
-		// one binary frame, and a second path would be a second place to get
-		// the size cap wrong.
-		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_UNSUPPORTED_MESSAGE,
-			"upload_handle is reserved; send the ciphertext inline")
+	if err := s.checkEpoch(ctx, groupID, req.GetEpoch()); err != nil {
+		if handle := req.GetUploadHandle(); handle != "" {
+			// The group was re-keyed mid-upload. The client must seal the
+			// entry again under the new key, so this upload is dead; give its
+			// room back now rather than at the timeout.
+			_ = s.entries.AbortUpload(ctx, groupID, deviceID, handle)
+		}
+		return nil, err
 	}
 
-	group, err := s.store.GetGroup(ctx, groupID)
-	if err != nil {
-		return nil, fmt.Errorf("read group: %w", err)
-	}
-	if req.GetEpoch() != group.Epoch {
-		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_EPOCH_CONFLICT,
-			"entry is encrypted under epoch %d but the group runs at %d", req.GetEpoch(), group.Epoch)
+	if handle := req.GetUploadHandle(); handle != "" {
+		meta, err := s.entries.CommitUploadWithHeader(ctx, groupID, deviceID, handle, req.GetEntryId(), req.GetEpoch(), int64(req.GetSize()), req.GetHeader()) //nolint:gosec // a size beyond int64 fails the match
+		if err != nil {
+			return nil, s.uploadError(err)
+		}
+		s.announceEntry(ctx, groupID, deviceID, meta)
+		return encode(env.GetId(), tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_RESPONSE, &tppv1.EntryPutResponse{
+			Meta: entryMeta(meta),
+		})
 	}
 
 	ciphertext := req.GetCiphertext()
@@ -552,11 +566,14 @@ func (s *Server) handleEntryPut(ctx context.Context, env *tppv1.Envelope, device
 	// server could not supply one in time. It is opaque here, but it is also a
 	// key and a blob filename, so entries validates it and refuses a duplicate
 	// rather than overwriting anything.
-	meta, err := s.entries.Put(ctx, groupID, req.GetEpoch(), req.GetEntryId(), declared, bytes.NewReader(ciphertext))
+	meta, err := s.entries.PutWithHeader(ctx, groupID, req.GetEpoch(), req.GetEntryId(), req.GetHeader(), declared, bytes.NewReader(ciphertext))
 	switch {
 	case errors.Is(err, entries.ErrInvalidID):
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
 			"entry_id must match [A-Za-z0-9_-]{1,%d}", entries.MaxIDLen)
+	case errors.Is(err, entries.ErrInvalidHeader):
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
+			"header must be empty or %d bytes", entries.HeaderSize)
 	case errors.Is(err, entries.ErrEntryExists):
 		// Not a collision a client should ever hit with 128 bits of
 		// randomness, and not something to paper over: retrying with a new id
@@ -564,8 +581,20 @@ func (s *Server) handleEntryPut(ctx context.Context, env *tppv1.Envelope, device
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
 			"entry_id is already in use")
 	case errors.Is(err, entries.ErrTooLarge):
+		limits := s.entries.Limits()
+		switch {
+		case declared > limits.MaxEntryBytes:
+			return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_TOO_LARGE,
+				"ciphertext of %d bytes exceeds the per-entry cap of %d", declared, limits.MaxEntryBytes)
+		case declared > limits.SingleFrameMaxBytes:
+			return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_TOO_LARGE,
+				"ciphertext of %d bytes does not fit one frame (%d); upload it in chunks", declared, limits.SingleFrameMaxBytes)
+		}
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_TOO_LARGE,
-			"ciphertext of %d bytes exceeds the per-entry cap of %d", declared, s.entries.MaxBytes())
+			"ciphertext of %d bytes is larger than the relay's storage limit", declared)
+	case errors.Is(err, entries.ErrQuotaExceeded):
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_QUOTA_EXCEEDED,
+			"the relay's storage is full; try again shortly")
 	case errors.Is(err, entries.ErrSizeMismatch):
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
 			"declared size %d does not match the %d bytes received", declared, len(ciphertext))
@@ -591,6 +620,22 @@ func (s *Server) announceEntry(ctx context.Context, groupID, authorID string, me
 		return
 	}
 	s.hub.broadcast(groupID, frame, authorID)
+}
+
+// AnnounceEviction tells every connected device of a group — the author of
+// the entry that needed the room included — that an entry was evicted to stay
+// within the storage limit. It is the entries service's OnEvict hook.
+//
+// Like EntryAdded it is a courtesy to whoever is online: a device that misses
+// it finds the entry gone when it next lists or fetches.
+func (s *Server) AnnounceEviction(ctx context.Context, groupID, entryID string) {
+	frame, err := encode(newCorrelationID(), tppv1.MessageType_MESSAGE_TYPE_ENTRY_EVICTED,
+		&tppv1.EntryEvicted{EntryId: entryID})
+	if err != nil {
+		s.logger.ErrorContext(ctx, "encoding entry evicted event failed", slog.Any("error", err))
+		return
+	}
+	s.hub.broadcast(groupID, frame)
 }
 
 // handleEntryLatest returns the group's newest entry. The ciphertext travels
@@ -657,6 +702,10 @@ func (s *Server) handleEntryFetch(ctx context.Context, env *tppv1.Envelope, grou
 	if errors.Is(err, entries.ErrNotFound) {
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_NOT_FOUND, "no such entry")
 	}
+	if errors.Is(err, entries.ErrTooLarge) {
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_TOO_LARGE,
+			"the entry does not fit one frame; fetch it with EntryFetchChunkRequest")
+	}
 	if err != nil {
 		return nil, fmt.Errorf("fetch entry: %w", err)
 	}
@@ -664,6 +713,152 @@ func (s *Server) handleEntryFetch(ctx context.Context, env *tppv1.Envelope, grou
 		Meta:       entryMeta(meta),
 		Ciphertext: ciphertext,
 	})
+}
+
+// checkEpoch refuses a write sealed under an epoch other than the group's
+// current one (SPEC §3.3).
+func (s *Server) checkEpoch(ctx context.Context, groupID string, epoch uint64) error {
+	group, err := s.store.GetGroup(ctx, groupID)
+	if err != nil {
+		return fmt.Errorf("read group: %w", err)
+	}
+	if epoch != group.Epoch {
+		return wireErrf(tppv1.ErrorCode_ERROR_CODE_EPOCH_CONFLICT,
+			"entry is encrypted under epoch %d but the group runs at %d", epoch, group.Epoch)
+	}
+	return nil
+}
+
+// handleEntryLimits states the relay's entry limits (SPEC §4.3).
+func (s *Server) handleEntryLimits(env *tppv1.Envelope) ([]byte, error) {
+	l := s.entries.Limits()
+	return encode(env.GetId(), tppv1.MessageType_MESSAGE_TYPE_ENTRY_LIMITS_RESPONSE, &tppv1.EntryLimitsResponse{
+		MaxEntryBytes:       uint64(l.MaxEntryBytes),       //nolint:gosec // configured, positive
+		SingleFrameMaxBytes: uint64(l.SingleFrameMaxBytes), //nolint:gosec // configured, positive
+		ChunkBytes:          uint64(l.ChunkBytes),          //nolint:gosec // configured, positive
+		InlineMaxBytes:      uint64(l.InlineMaxBytes),      //nolint:gosec // configured, positive
+	})
+}
+
+// handleUploadBegin starts a chunked upload. Room is reserved here, so a full
+// relay refuses before any chunk is sent.
+func (s *Server) handleUploadBegin(ctx context.Context, env *tppv1.Envelope, deviceID, groupID string) ([]byte, error) {
+	var req tppv1.EntryUploadBeginRequest
+	if err := decode(env, &req); err != nil {
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "payload could not be decoded")
+	}
+	if err := s.checkEpoch(ctx, groupID, req.GetEpoch()); err != nil {
+		return nil, err
+	}
+	if req.GetSize() > uint64(s.entries.MaxBytes()) { //nolint:gosec // configured, positive
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_TOO_LARGE,
+			"ciphertext of %d bytes exceeds the per-entry cap of %d", req.GetSize(), s.entries.MaxBytes())
+	}
+	info, err := s.entries.BeginUpload(ctx, groupID, deviceID, req.GetEpoch(), req.GetEntryId(), int64(req.GetSize())) //nolint:gosec // bounded above
+	if err != nil {
+		return nil, s.uploadError(err)
+	}
+	return encode(env.GetId(), tppv1.MessageType_MESSAGE_TYPE_ENTRY_UPLOAD_BEGIN_RESPONSE, &tppv1.EntryUploadBeginResponse{
+		UploadHandle: info.Handle,
+		EntryId:      info.EntryID,
+		ChunkBytes:   uint64(info.ChunkBytes), //nolint:gosec // configured, positive
+	})
+}
+
+// handleUploadChunk stores one chunk and acknowledges it.
+func (s *Server) handleUploadChunk(ctx context.Context, env *tppv1.Envelope, deviceID, groupID string) ([]byte, error) {
+	var req tppv1.EntryUploadChunkRequest
+	if err := decode(env, &req); err != nil {
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "payload could not be decoded")
+	}
+	received, err := s.entries.WriteChunk(ctx, groupID, deviceID, req.GetUploadHandle(), req.GetIndex(), req.GetData())
+	if err != nil {
+		return nil, s.uploadError(err)
+	}
+	return encode(env.GetId(), tppv1.MessageType_MESSAGE_TYPE_ENTRY_UPLOAD_CHUNK_RESPONSE, &tppv1.EntryUploadChunkResponse{
+		ReceivedBytes: uint64(received), //nolint:gosec // non-negative
+	})
+}
+
+// handleUploadAbort abandons an upload. An unknown handle is not an error.
+func (s *Server) handleUploadAbort(ctx context.Context, env *tppv1.Envelope, deviceID, groupID string) ([]byte, error) {
+	var req tppv1.EntryUploadAbortRequest
+	if err := decode(env, &req); err != nil {
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "payload could not be decoded")
+	}
+	if err := s.entries.AbortUpload(ctx, groupID, deviceID, req.GetUploadHandle()); err != nil {
+		return nil, fmt.Errorf("abort upload: %w", err)
+	}
+	return encode(env.GetId(), tppv1.MessageType_MESSAGE_TYPE_ENTRY_UPLOAD_ABORT_RESPONSE, &tppv1.EntryUploadAbortResponse{})
+}
+
+// handleEntryFetchChunk returns one range of an entry's ciphertext.
+func (s *Server) handleEntryFetchChunk(ctx context.Context, env *tppv1.Envelope, groupID string) ([]byte, error) {
+	var req tppv1.EntryFetchChunkRequest
+	if err := decode(env, &req); err != nil {
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "payload could not be decoded")
+	}
+	if req.GetOffset() > uint64(s.entries.MaxBytes()) { //nolint:gosec // configured, positive
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "offset is past the end of the entry")
+	}
+	length := int64(min(req.GetLength(), uint64(s.entries.FrameMaxBytes())))                                //nolint:gosec // bounded by the frame cap
+	meta, data, err := s.entries.FetchRange(ctx, groupID, req.GetEntryId(), int64(req.GetOffset()), length) //nolint:gosec // bounded above
+	switch {
+	case errors.Is(err, entries.ErrNotFound):
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_NOT_FOUND, "no such entry")
+	case errors.Is(err, entries.ErrInvalidRange):
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "offset is past the end of the entry")
+	case err != nil:
+		return nil, fmt.Errorf("fetch entry range: %w", err)
+	}
+	return encode(env.GetId(), tppv1.MessageType_MESSAGE_TYPE_ENTRY_FETCH_CHUNK_RESPONSE, &tppv1.EntryFetchChunkResponse{
+		Meta:   entryMeta(meta),
+		Offset: req.GetOffset(),
+		Data:   data,
+	})
+}
+
+// uploadError maps the chunked path's errors to wire errors.
+func (s *Server) uploadError(err error) error {
+	switch {
+	case errors.Is(err, entries.ErrUploadNotFound):
+		return wireErrf(tppv1.ErrorCode_ERROR_CODE_NOT_FOUND,
+			"no such upload: it finished, timed out, or belongs to another device")
+	case errors.Is(err, entries.ErrInvalidChunk),
+		errors.Is(err, entries.ErrUploadMismatch),
+		errors.Is(err, entries.ErrNotChunked):
+		// The message names the expected index, size or id, which is
+		// the client's own data and nothing of anyone else's.
+		return wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "%s", unwrapMessage(err))
+	case errors.Is(err, entries.ErrInvalidID):
+		return wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
+			"entry_id must match [A-Za-z0-9_-]{1,%d}", entries.MaxIDLen)
+	case errors.Is(err, entries.ErrInvalidHeader):
+		return wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
+			"header must be empty or %d bytes", entries.HeaderSize)
+	case errors.Is(err, entries.ErrEntryExists):
+		return wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "entry_id is already in use")
+	case errors.Is(err, entries.ErrTooLarge):
+		return wireErrf(tppv1.ErrorCode_ERROR_CODE_TOO_LARGE,
+			"the entry is larger than the relay's storage limit")
+	case errors.Is(err, entries.ErrQuotaExceeded):
+		return wireErrf(tppv1.ErrorCode_ERROR_CODE_QUOTA_EXCEEDED,
+			"the relay's storage is full; try again shortly")
+	case errors.Is(err, entries.ErrTooManyUploads):
+		return wireErrf(tppv1.ErrorCode_ERROR_CODE_RATE_LIMITED,
+			"this device has too many uploads in progress; finish or abort one")
+	}
+	return fmt.Errorf("upload: %w", err)
+}
+
+// unwrapMessage is an error's text without the operation prefixes that wrap
+// it on the way up: the part after the last "entries: ".
+func unwrapMessage(err error) string {
+	msg := err.Error()
+	if i := strings.LastIndex(msg, "entries: "); i >= 0 {
+		return msg[i+len("entries: "):]
+	}
+	return msg
 }
 
 // removeDevice undoes a half-finished pairing. A failure is logged and not
@@ -688,6 +883,7 @@ func entryMeta(m entries.Meta) *tppv1.EntryMeta {
 		CreatedAtUnixMs: m.CreatedAt.UnixMilli(),
 		ExpiresAtUnixMs: m.ExpiresAt.UnixMilli(),
 		Inline:          m.Inline(),
+		Header:          m.Header,
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	tppv1 "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1"
 	"github.com/Mark7888/two-place-paste/server/internal/blob"
 	"github.com/Mark7888/two-place-paste/server/internal/entries"
+	"github.com/Mark7888/two-place-paste/server/internal/quota"
 	"github.com/Mark7888/two-place-paste/server/internal/store"
 	"github.com/Mark7888/two-place-paste/server/internal/ws"
 )
@@ -25,6 +26,8 @@ import (
 // ratio is what matters, not the absolute size.
 const (
 	testInlineMax = 64
+	testFrameMax  = 1024
+	testChunk     = 512
 	testMaxBytes  = 4096
 )
 
@@ -42,13 +45,28 @@ func newHarness(t *testing.T) *harness {
 
 func newHarnessWithOptions(t *testing.T, opts ws.Options) *harness {
 	t.Helper()
+	return newHarnessWithQuota(t, opts, nil)
+}
+
+// newHarnessWithQuota wires a storage ledger in and routes its evictions to
+// the transport, the way cmd/tpp does.
+func newHarnessWithQuota(t *testing.T, opts ws.Options, ledger quota.Ledger) *harness {
+	t.Helper()
 
 	st := store.NewMemoryStore()
+	var server *ws.Server
 	svc := entries.NewService(entries.NewMemoryStore(), blob.NewDisk(t.TempDir(), testMaxBytes), entries.Options{
-		InlineMaxBytes: testInlineMax,
-		MaxBytes:       testMaxBytes,
+		InlineMaxBytes:      testInlineMax,
+		MaxBytes:            testMaxBytes,
+		SingleFrameMaxBytes: testFrameMax,
+		ChunkBytes:          testChunk,
+		Quota:               ledger,
+		OnEvict: func(ctx context.Context, groupID, entryID string) {
+			server.AnnounceEviction(ctx, groupID, entryID)
+		},
+		Logger: slog.New(slog.DiscardHandler),
 	})
-	server := ws.New(st, svc, opts)
+	server = ws.New(st, svc, opts)
 
 	mux := http.NewServeMux()
 	server.Register(mux)
@@ -503,7 +521,7 @@ func TestEntrySizePaths(t *testing.T) {
 	}{
 		{name: "inline", size: testInlineMax, wantInline: true},
 		{name: "blob backend", size: testInlineMax + 1, wantInline: false},
-		{name: "at the cap", size: testMaxBytes, wantInline: false},
+		{name: "at the frame cap", size: testFrameMax, wantInline: false},
 	}
 
 	for _, tt := range tests {
@@ -546,12 +564,91 @@ func TestEntrySizePaths(t *testing.T) {
 		t.Errorf("oversize put = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_TOO_LARGE)
 	}
 
+	// Above one frame but under the entry cap: the chunked path's job.
+	laptop.send("put-over-frame", tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST, &tppv1.EntryPutRequest{
+		Epoch: 1, Size: testFrameMax + 1,
+		Body: &tppv1.EntryPutRequest_Ciphertext{Ciphertext: bytes.Repeat([]byte("c"), testFrameMax+1)},
+	})
+	if got := laptop.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_TOO_LARGE || !strings.Contains(got.GetMessage(), "in chunks") {
+		t.Errorf("put over one frame = %s %q, want %s naming the chunked path", got.GetCode(), got.GetMessage(), tppv1.ErrorCode_ERROR_CODE_TOO_LARGE)
+	}
+
 	laptop.send("put-handle", tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST, &tppv1.EntryPutRequest{
 		Epoch: 1, Size: 10,
-		Body: &tppv1.EntryPutRequest_UploadHandle{UploadHandle: "reserved"},
+		Body: &tppv1.EntryPutRequest_UploadHandle{UploadHandle: "no-such-upload"},
 	})
-	if got := laptop.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_UNSUPPORTED_MESSAGE {
-		t.Errorf("put with an upload handle = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_UNSUPPORTED_MESSAGE)
+	if got := laptop.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_NOT_FOUND {
+		t.Errorf("put with an unknown upload handle = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_NOT_FOUND)
+	}
+}
+
+// TestEntryEviction: when the storage limit needs room, the oldest entry goes,
+// every device of the group — the writer too — hears about it, and a fetch of
+// it answers NOT_FOUND.
+func TestEntryEviction(t *testing.T) {
+	t.Parallel()
+
+	const size = testInlineMax + 100
+	h := newHarnessWithQuota(t, ws.Options{Logger: slog.New(slog.DiscardHandler)},
+		quota.NewMemory(quota.Options{Limits: quota.Limits{GroupBytes: 2 * size}}))
+	laptop, _ := h.createGroup(t, "laptop")
+	phone, _ := h.pair(t, laptop, "phone")
+
+	put := func(id string) {
+		t.Helper()
+		laptop.send("put-"+id, tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST, &tppv1.EntryPutRequest{
+			EntryId: id, Epoch: 1, Size: size,
+			Body: &tppv1.EntryPutRequest_Ciphertext{Ciphertext: bytes.Repeat([]byte("c"), size)},
+		})
+		laptop.await(tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_RESPONSE, &tppv1.EntryPutResponse{})
+	}
+	put("first")
+	put("second")
+	put("third")
+
+	for name, c := range map[string]*client{"writer": laptop, "peer": phone} {
+		var ev tppv1.EntryEvicted
+		c.await(tppv1.MessageType_MESSAGE_TYPE_ENTRY_EVICTED, &ev)
+		if ev.GetEntryId() != "first" {
+			t.Errorf("%s: EntryEvicted.EntryId = %q, want %q", name, ev.GetEntryId(), "first")
+		}
+	}
+
+	phone.send("fetch", tppv1.MessageType_MESSAGE_TYPE_ENTRY_FETCH_REQUEST, &tppv1.EntryFetchRequest{EntryId: "first"})
+	if got := phone.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_NOT_FOUND {
+		t.Errorf("fetch of an evicted entry = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_NOT_FOUND)
+	}
+}
+
+// TestEntryQuotaErrors: an entry bigger than the storage limit is TOO_LARGE;
+// one that would fit but cannot, because uploads in flight hold the room, is
+// QUOTA_EXCEEDED.
+func TestEntryQuotaErrors(t *testing.T) {
+	t.Parallel()
+
+	ledger := quota.NewMemory(quota.Options{Limits: quota.Limits{TotalBytes: 3 * testInlineMax}})
+	h := newHarnessWithQuota(t, ws.Options{Logger: slog.New(slog.DiscardHandler)}, ledger)
+	laptop, _ := h.createGroup(t, "laptop")
+
+	put := func(size int) *tppv1.Error {
+		laptop.send("put", tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST, &tppv1.EntryPutRequest{
+			Epoch: 1, Size: uint64(size),
+			Body: &tppv1.EntryPutRequest_Ciphertext{Ciphertext: bytes.Repeat([]byte("c"), size)},
+		})
+		return laptop.awaitError()
+	}
+
+	if got := put(3*testInlineMax + 1); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_TOO_LARGE {
+		t.Errorf("put over the storage limit = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_TOO_LARGE)
+	}
+
+	if _, err := ledger.Reserve(context.Background(), quota.Reservation{
+		EntryID: "inflight", GroupID: "elsewhere", Size: 2 * testInlineMax, ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("Reserve() error = %v", err)
+	}
+	if got := put(testInlineMax + 2); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_QUOTA_EXCEEDED {
+		t.Errorf("put with the room held = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_QUOTA_EXCEEDED)
 	}
 }
 

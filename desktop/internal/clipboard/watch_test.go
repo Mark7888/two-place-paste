@@ -412,3 +412,49 @@ func TestWatcherPausedDoesNotRead(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// TestWatcherPending: a user copy the next poll would report is pending until
+// that poll, and the poll still reports it; the service's own write is not.
+func TestWatcherPending(t *testing.T) {
+	t.Parallel()
+
+	for _, withSeq := range []bool{false, true} {
+		ctx := context.Background()
+		fake := &fakeClipboard{hasSeq: withSeq}
+		fake.set(text("baseline"))
+		w := NewWatcher(WatchOptions{Clipboard: fake})
+		if w.Pending(ctx) {
+			t.Errorf("seq %v: a disabled watcher reports a pending change", withSeq)
+		}
+		w.SetEnabled(true)
+		if _, _, err := w.Poll(ctx); err != nil {
+			t.Fatalf("Poll() error = %v", err)
+		}
+		if w.Pending(ctx) {
+			t.Errorf("seq %v: Pending() on an unchanged clipboard", withSeq)
+		}
+
+		own := text("written by the service")
+		w.Suppress(own)
+		if err := fake.Write(ctx, own); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		if w.Pending(ctx) {
+			t.Errorf("seq %v: the service's own write is pending", withSeq)
+		}
+		if _, _, err := w.Poll(ctx); err != nil {
+			t.Fatalf("Poll() error = %v", err)
+		}
+
+		fake.set(text("the user's copy"))
+		if !w.Pending(ctx) {
+			t.Errorf("seq %v: a user copy is not pending", withSeq)
+		}
+		if _, changed, _ := w.Poll(ctx); !changed {
+			t.Errorf("seq %v: Pending() consumed the change; Poll() did not report it", withSeq)
+		}
+		if w.Pending(ctx) {
+			t.Errorf("seq %v: still pending after the poll reported it", withSeq)
+		}
+	}
+}

@@ -10,7 +10,7 @@
 
 import React, { createContext, useContext, useMemo, useSyncExternalStore } from 'react';
 
-import type { Client } from '../core';
+import type { Client, Progress } from '../core';
 import {
   answerDirection,
   claimPendingCode,
@@ -46,6 +46,10 @@ export interface SessionState {
   error: string;
   /** pendingCode is a pairing code that arrived through a scanned link. */
   pendingCode: string;
+  /** transfer is a large entry moving in chunks right now, or null. */
+  transfer: Progress | null;
+  /** evicted is the last entry the relay removed early; seq changes with each one. */
+  evicted: { id: string; seq: number } | null;
   setError(message: string): void;
   clearError(): void;
   /** claimPendingCode hands the deep-linked code to exactly one screen. */
@@ -93,6 +97,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
       question: snapshot.question,
       error: snapshot.error,
       pendingCode: snapshot.pendingCode,
+      transfer: snapshot.transfer,
+      evicted: snapshot.evicted,
       answer: answerDirection,
       setError,
       clearError,

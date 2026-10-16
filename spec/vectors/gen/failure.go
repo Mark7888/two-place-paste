@@ -201,6 +201,12 @@ func buildFailure() ([]byte, int, error) {
 		},
 	}
 
+	hf, err := headerFailures()
+	if err != nil {
+		return nil, 0, err
+	}
+	vs = append(vs, hf...)
+
 	for i := range vs {
 		vs[i].Expect = "error"
 		if vs[i].Epoch != 0 {
@@ -273,6 +279,10 @@ func assertFails(v failureVector) error {
 		_, err = OpenEntry(unhex(v.GroupKey), unhex(v.Container), v.Epoch, v.EntryID)
 	case "decode_frame":
 		_, err = DecodeFrame(unhex(v.Encoded))
+	case "open_header":
+		_, err = OpenHeader(unhex(v.GroupKey), unhex(v.Container), v.Epoch, v.EntryID)
+	case "decode_header":
+		_, err = DecodeHeader(unhex(v.EncodedHeader))
 	default:
 		return fmt.Errorf("vector %s: unknown operation %q", v.Name, v.Operation)
 	}

@@ -19,6 +19,7 @@ request. Phases run in numeric order; only one pair of phases may overlap.
 | **P6** | Desktop app — Windows + macOS | ✅ **Done** | P5 |
 | **P7** | Android app | ✅ **Done** | P5 (server from P4 for tests) |
 | **P8** | Release — E2E, hardening, docs, artefacts | ▶ **Next** | P6, P7 |
+| **P9** | Storage — S3/MinIO blobs, storage limits, chunked transfer, admin dashboard | 🔍 **In review** (#26) | P3–P7 |
 
 **Only P6 and P7 may run at the same time** (different languages, disjoint directories,
 no shared file). Both are done, so P8 now runs on its own. Everything else is strictly
@@ -26,6 +27,12 @@ sequential. Running a single agent through P3 → P4 → P5 → P6 → P7 → P8
 schedule; nothing in this roadmap requires parallelism.
 
 When a phase merges, update its row here to ✅ and flip the next row to ▶.
+
+P9 is a cross-cutting change rather than a phase in the sequence above: it touches
+`/proto`, `/server`, `/pkg/tppclient`, `/desktop`, `/mobile` and `/deploy` together,
+because a wire change has to land in every client at once. Its plan, decisions and
+work items are in [`docs/plans/s3-blob-storage.md`](plans/s3-blob-storage.md), in the
+same way `docs/plans/joiner-emitted-pairing.md` carried the last such change.
 
 ---
 
@@ -945,7 +952,6 @@ moving the risk onto the member, and the work split are in
 | Push delivery for Android (FCM gateway / UnifiedPush / WS-only) | §9 |
 | Plaintext padding | §9 |
 | Admin password hashing (the P0 config loader already accommodates it) | §4.4, §9 |
-| S3 blob backend implementation | §4.3 |
 | iOS client + share-sheet extension | §7.3 |
 | Linux desktop (tray, X11/Wayland clipboard, packaging) | §7.4 |
 | Auto-sync on Android | §7.1 |

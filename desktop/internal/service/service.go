@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -27,7 +28,7 @@ import (
 const planTTL = 10 * time.Minute
 
 // previewRunes bounds the clipboard preview the UI renders. The preview never
-// leaves this machine; it is bounded because a 10 MB paste in a status
+// leaves this machine; it is bounded because a 50 MB paste in a status
 // response helps nobody.
 const previewRunes = 240
 
@@ -116,7 +117,11 @@ type Service struct {
 	revoked     bool
 	lastSync    time.Time
 	lastApplied time.Time
-	lastError   string
+
+	// skipped is the latest automatic transfer the user's size limit held
+	// back, or nil (localui.Status.Skipped).
+	skipped   *localui.SkippedView
+	lastError string
 
 	// latestID is the newest entry this service knows the group holds: the
 	// last one announced, uploaded, or found on connecting. latestKnown is
@@ -124,10 +129,30 @@ type Service struct {
 	latestID    string
 	latestKnown bool
 
+	// uploads counts this device's own uploads in flight. While one is, an
+	// announced entry is not applied but held in deferred: the upload will
+	// reach the relay after it and win, so applying it would only leave this
+	// clipboard and the group's latest disagreeing. lastUploaded is the
+	// relay's timestamp on the newest entry this device uploaded, which is
+	// what a held entry is judged against when the uploads end.
+	uploads      int
+	deferred     *tppclient.EntryMeta
+	lastUploaded time.Time
+
+	// fetching is the automatic download in flight, or nil. A newer
+	// announcement or a local copy cancels it: either makes it stale.
+	fetching *inflight
+
 	plans       map[string]*plan
 	offerPlans  map[string]*offerPlan
 	offer       Offer
 	offerCancel context.CancelFunc
+}
+
+// inflight is one automatic download, cancellable.
+type inflight struct {
+	createdAt time.Time
+	cancel    context.CancelFunc
 }
 
 type plan struct {
@@ -246,6 +271,19 @@ func (s *Service) ClientHandlers() tppclient.Handlers {
 			s.hub.publish(localui.Event{Kind: localui.EventDeviceRevoked, DeviceID: deviceID, Epoch: epoch})
 		},
 		OnEntryAdded: s.announce,
+		OnEntryEvicted: func(entryID string) {
+			s.hub.publish(localui.Event{Kind: localui.EventEvicted, EntryID: entryID})
+		},
+		OnProgress: func(p tppclient.Progress) {
+			dir := "upload"
+			if p.Direction == tppclient.Download {
+				dir = "download"
+			}
+			s.hub.publish(localui.Event{
+				Kind: localui.EventProgress, EntryID: p.EntryID,
+				Direction: dir, Done: p.Done, Total: p.Total,
+			})
+		},
 		OnRevoked: func() {
 			s.mu.Lock()
 			s.revoked, s.connected = true, false
@@ -275,9 +313,15 @@ func (s *Service) setConnected(on bool, msg string) {
 func (s *Service) Status(ctx context.Context) localui.Status {
 	s.mu.Lock()
 	relay, connected, revoked, lastSync, lastErr := s.relay, s.connected, s.revoked, s.lastSync, s.lastError
+	var skipped *localui.SkippedView
+	if s.skipped != nil {
+		v := *s.skipped // a copy: the UI must not see it change under it
+		skipped = &v
+	}
 	s.mu.Unlock()
 
 	st := localui.Status{
+		Skipped:   skipped,
 		Connected: connected,
 		Revoked:   revoked,
 		LastSync:  localui.Optional(lastSync),
@@ -378,13 +422,14 @@ func preview(c clipboard.Content) string {
 }
 
 // Sync implements localui.API: it moves the latest entry in one direction.
+//
+// It sets no overall deadline: a transfer takes as long as its size needs,
+// and the client bounds each request in it instead (tppclient.CallTimeout).
 func (s *Service) Sync(ctx context.Context, d localui.Direction) (localui.SyncResult, error) {
 	relay, err := s.ready()
 	if err != nil {
 		return localui.SyncResult{}, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
-	defer cancel()
 
 	if d == localui.DirectionAuto {
 		latest, err := s.latest(ctx, relay)
@@ -424,6 +469,7 @@ func (s *Service) upload(ctx context.Context, relay Relay) (localui.SyncResult, 
 	}
 
 	now := s.now()
+	s.beginUpload()
 	meta, err := relay.PutEntry(ctx, tppclient.Item{
 		ContentType: c.ContentType,
 		Filename:    c.Filename,
@@ -431,19 +477,22 @@ func (s *Service) upload(ctx context.Context, relay Relay) (localui.SyncResult, 
 		CreatedAt:   now,
 	})
 	if err != nil {
+		s.endUpload(nil)
 		return localui.SyncResult{}, s.relayError("upload the clipboard", err)
 	}
+	s.endUpload(&meta)
 	s.watcher.MarkLocal(c, now)
 	s.noteSync(now)
 	s.noteLatest(meta.ID)
 
 	s.logger.InfoContext(ctx, "clipboard uploaded", "entry_id", meta.ID, "epoch", meta.Epoch, "bytes", meta.Size)
+	s.clearSkipped()
 	s.hub.publish(localui.Event{Kind: localui.EventSync, Message: "uploaded"})
 	return localui.SyncResult{
 		Direction: localui.DirectionUpload,
 		Changed:   true,
 		Message:   "uploaded " + describe(c),
-		Entry:     entryView(meta),
+		Entry:     s.entryView(meta),
 	}, nil
 }
 
@@ -496,12 +545,13 @@ func (s *Service) applyToClipboard(ctx context.Context, d localui.Direction, ite
 
 	s.logger.InfoContext(ctx, "entry written to the clipboard",
 		"entry_id", item.Meta.ID, "epoch", item.Meta.Epoch, "bytes", len(item.Body))
+	s.clearSkipped()
 	s.hub.publish(localui.Event{Kind: localui.EventSync, Message: "copied to the clipboard"})
 	return localui.SyncResult{
 		Direction: d,
 		Changed:   true,
 		Message:   "copied " + describe(c) + " to the clipboard",
-		Entry:     entryView(item.Meta),
+		Entry:     s.entryView(item.Meta),
 	}, nil
 }
 
@@ -511,9 +561,6 @@ func (s *Service) CopyEntry(ctx context.Context, entryID string) (localui.SyncRe
 	if err != nil {
 		return localui.SyncResult{}, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
-	defer cancel()
-
 	item, err := relay.GetEntry(ctx, entryID)
 	switch {
 	case errors.Is(err, tppclient.ErrStaleEntry):
@@ -537,9 +584,6 @@ func (s *Service) EntryPreview(ctx context.Context, entryID string) (localui.Ent
 	if err != nil {
 		return localui.EntryPreview{}, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
-	defer cancel()
-
 	item, err := relay.GetEntry(ctx, entryID)
 	switch {
 	case errors.Is(err, tppclient.ErrStaleEntry):
@@ -552,6 +596,13 @@ func (s *Service) EntryPreview(ctx context.Context, entryID string) (localui.Ent
 	c := clipboard.Content{ContentType: item.ContentType, Body: item.Body}
 	if item.Filename != "" {
 		c.Filename = clipboard.SafeName(item.Filename)
+	}
+	// The history offers no preview for anything but text and images, from
+	// the entry's header; this holds the line for an entry with no header, or
+	// one whose header disagreed with what it holds.
+	if headerKind(tppclient.EntryHeader{ContentType: item.ContentType, Filename: item.Filename}) == clipboard.KindFile {
+		return localui.EntryPreview{}, localui.Errorf(http.StatusUnprocessableEntity, nil,
+			"this entry has no preview; copy it instead")
 	}
 
 	view := localui.EntryPreview{
@@ -603,7 +654,7 @@ func (s *Service) History(ctx context.Context, q localui.HistoryQuery) (localui.
 		NextBefore: localui.Optional(page.NextBefore),
 	}
 	for _, m := range page.Entries {
-		out.Entries = append(out.Entries, *entryView(m))
+		out.Entries = append(out.Entries, *s.entryView(m))
 	}
 	return out, nil
 }
@@ -983,18 +1034,20 @@ func (s *Service) settingsView(set config.Settings) localui.SettingsView {
 		on = set.Autostart
 	}
 	return localui.SettingsView{
-		Port:               set.Port,
-		ListenPort:         s.listenPort(),
-		AutoWatch:          s.watcher.Enabled(),
-		AutoApply:          set.AutoApply && s.clip.Available(),
-		Autostart:          on,
-		AutostartSupported: s.auto.Available(),
-		ClipboardSupported: s.clip.Available(),
-		DeviceName:         set.DeviceName,
-		UpdateChannel:      set.Channel(),
-		AutoUpdate:         set.AutoUpdate,
-		NightlyCommit:      set.NightlyCommit,
-		RestartRequired:    set.ListenPort() != s.listenPort(),
+		Port:                 set.Port,
+		ListenPort:           s.listenPort(),
+		AutoWatch:            s.watcher.Enabled(),
+		AutoApply:            set.AutoApply && s.clip.Available(),
+		AutoUploadMaxBytes:   set.AutoUploadLimit(),
+		AutoDownloadMaxBytes: set.AutoDownloadLimit(),
+		Autostart:            on,
+		AutostartSupported:   s.auto.Available(),
+		ClipboardSupported:   s.clip.Available(),
+		DeviceName:           set.DeviceName,
+		UpdateChannel:        set.Channel(),
+		AutoUpdate:           set.AutoUpdate,
+		NightlyCommit:        set.NightlyCommit,
+		RestartRequired:      set.ListenPort() != s.listenPort(),
 	}
 }
 
@@ -1030,6 +1083,20 @@ func (s *Service) UpdateSettings(ctx context.Context, p localui.SettingsPatch) (
 				"this build cannot reach a clipboard, so it cannot write one")
 		}
 		next.AutoApply = *p.AutoApply
+	}
+	if p.AutoUploadMaxBytes != nil {
+		v := *p.AutoUploadMaxBytes
+		next.AutoUploadMaxBytes = &v
+	}
+	if p.AutoDownloadMaxBytes != nil {
+		v := *p.AutoDownloadMaxBytes
+		next.AutoDownloadMaxBytes = &v
+	}
+	if p.AutoUploadMaxBytes != nil || p.AutoDownloadMaxBytes != nil {
+		if err := next.Validate(); err != nil {
+			return localui.SettingsView{}, localui.Errorf(http.StatusBadRequest, err,
+				"a limit must be between 0 (no limit) and 1 TB")
+		}
 	}
 	if p.UpdateChannel != nil {
 		next.UpdateChannel = *p.UpdateChannel
@@ -1085,6 +1152,7 @@ func (s *Service) UpdateSettings(ctx context.Context, p localui.SettingsPatch) (
 
 	s.logger.Info("settings updated",
 		"auto_watch", next.AutoWatch, "auto_apply", next.AutoApply, "autostart", next.Autostart, "port", next.Port,
+		"auto_upload_max_bytes", next.AutoUploadLimit(), "auto_download_max_bytes", next.AutoDownloadLimit(),
 		"update_channel", next.Channel(), "auto_update", next.AutoUpdate)
 	s.hub.publish(localui.Event{Kind: localui.EventSettings})
 	return s.settingsView(next), nil
@@ -1098,9 +1166,29 @@ func (s *Service) onClipboardChange(ctx context.Context, c clipboard.Content, at
 		return
 	}
 	s.hub.publish(localui.Event{Kind: localui.EventClipboard, Message: string(c.Kind())})
+	// The user's copy is newer than anything still downloading: let that go
+	// rather than have it land on top of this.
+	s.cancelDownload(time.Time{})
 
-	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
-	defer cancel()
+	s.mu.Lock()
+	limit := s.settings.AutoUploadLimit()
+	s.mu.Unlock()
+	if size := int64(len(c.Body)); limit > 0 && size > limit {
+		// Over the user's limit for automatic uploads: left for them to send
+		// by hand, which nothing here limits. Said once, on the screen.
+		s.logger.InfoContext(ctx, "clipboard change not uploaded automatically: over the auto-upload limit",
+			"bytes", size, "limit", limit)
+		s.noteSkipped(localui.SkippedView{
+			Direction: "upload", Bytes: size,
+			Message: fmt.Sprintf("Not uploaded automatically: %s is over your %s auto-upload limit. Use Upload to send it.",
+				formatBytes(size), formatBytes(limit)),
+		})
+		return
+	}
+
+	// No overall deadline: the client bounds each request by what it moves,
+	// so a large copy on a slow link is slow rather than failed.
+	s.beginUpload()
 	meta, err := relay.PutEntry(ctx, tppclient.Item{
 		ContentType: c.ContentType,
 		Filename:    c.Filename,
@@ -1108,12 +1196,23 @@ func (s *Service) onClipboardChange(ctx context.Context, c clipboard.Content, at
 		CreatedAt:   at,
 	})
 	if err != nil {
+		s.endUpload(nil)
+		if ctx.Err() != nil {
+			return // shutting down
+		}
 		s.logger.WarnContext(ctx, "auto-upload of a clipboard change failed", "error", err)
+		s.noteSkipped(localui.SkippedView{
+			Direction: "upload", Bytes: int64(len(c.Body)),
+			Message: fmt.Sprintf("Automatic upload of %s failed: %s. Use Upload to try again.",
+				formatBytes(int64(len(c.Body))), s.failureText(err)),
+		})
 		return
 	}
+	s.endUpload(&meta)
 	s.noteSync(at)
 	s.noteLatest(meta.ID)
 	s.logger.InfoContext(ctx, "clipboard change uploaded", "entry_id", meta.ID, "epoch", meta.Epoch, "bytes", meta.Size)
+	s.clearSkipped()
 	s.hub.publish(localui.Event{Kind: localui.EventSync, Message: "uploaded"})
 }
 
@@ -1122,6 +1221,13 @@ func (s *Service) onClipboardChange(ctx context.Context, c clipboard.Content, at
 // syncs the latest entry only), and one still waiting is replaced.
 func (s *Service) announce(meta tppclient.EntryMeta) {
 	s.noteLatest(meta.ID)
+	// A download still running for an older entry is wasted work now.
+	s.cancelDownload(meta.CreatedAt)
+	s.enqueue(meta)
+}
+
+// enqueue hands an entry to applyIncoming, replacing one still waiting.
+func (s *Service) enqueue(meta tppclient.EntryMeta) {
 	for {
 		select {
 		case s.incoming <- meta:
@@ -1226,12 +1332,28 @@ func (s *Service) applyIncoming(ctx context.Context) {
 // same comparison a manual sync would make (SPEC §6).
 func (s *Service) applyAnnounced(ctx context.Context, meta tppclient.EntryMeta) {
 	s.mu.Lock()
-	on, applied := s.settings.AutoApply, s.lastApplied
+	on, applied, limit := s.settings.AutoApply, s.lastApplied, s.settings.AutoDownloadLimit()
+	held := on && s.holdLocked(meta)
 	s.mu.Unlock()
+	if held {
+		return
+	}
 	if !on || !s.clip.Available() {
 		return
 	}
 	if meta.CreatedAt.Before(applied) || meta.CreatedAt.Before(s.watcher.LastChange()) {
+		return
+	}
+	if limit > 0 && meta.Size > limit {
+		// Decided from the announcement's metadata, before a byte is
+		// fetched: the point of the limit is not to download it.
+		s.logger.InfoContext(ctx, "announced entry not applied automatically: over the auto-download limit",
+			"entry_id", meta.ID, "bytes", meta.Size, "limit", limit)
+		s.noteSkipped(localui.SkippedView{
+			Direction: "download", EntryID: meta.ID, Bytes: meta.Size,
+			Message: fmt.Sprintf("A %s entry arrived and was not copied here automatically: it is over your %s auto-download limit. Use Download or History to get it.",
+				formatBytes(meta.Size), formatBytes(limit)),
+		})
 		return
 	}
 	relay, err := s.ready()
@@ -1239,10 +1361,15 @@ func (s *Service) applyAnnounced(ctx context.Context, meta tppclient.EntryMeta) 
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
-	defer cancel()
+	before := s.watcher.LastChange()
+	ctx, done := s.startDownload(ctx, meta)
+	defer done()
 	item, err := relay.GetEntry(ctx, meta.ID)
 	switch {
+	case ctx.Err() != nil:
+		// Superseded by a newer entry or a local copy, or shutting down.
+		s.logger.DebugContext(ctx, "announced entry download cancelled", "entry_id", meta.ID)
+		return
 	case errors.Is(err, tppclient.ErrStaleEntry), errors.Is(err, tppclient.ErrEpochAhead):
 		// Written under a key this device does not hold: skipped silently,
 		// as a manual download would skip it (SPEC §3.3).
@@ -1250,6 +1377,22 @@ func (s *Service) applyAnnounced(ctx context.Context, meta tppclient.EntryMeta) 
 		return
 	case err != nil:
 		s.logger.WarnContext(ctx, "fetching an announced entry failed", "entry_id", meta.ID, "error", err)
+		return
+	}
+	// The download took time, and the world may have moved meanwhile. An
+	// upload of this device's own that started since will win at the relay,
+	// so the entry waits for it; a copy the user made since — reported, or
+	// still waiting for the next poll — is newer than this entry, so the
+	// entry stands down rather than overwrite it.
+	s.mu.Lock()
+	held = s.holdLocked(meta)
+	s.mu.Unlock()
+	if held {
+		return
+	}
+	if !s.watcher.LastChange().Equal(before) || s.watcher.Pending(ctx) {
+		s.logger.InfoContext(ctx, "announced entry not applied: the clipboard changed here while it downloaded",
+			"entry_id", meta.ID)
 		return
 	}
 	if _, err := s.applyToClipboard(ctx, localui.DirectionDownload, item); err != nil {
@@ -1261,6 +1404,124 @@ func (s *Service) applyAnnounced(ctx context.Context, meta tppclient.EntryMeta) 
 		s.lastApplied = item.Meta.CreatedAt
 	}
 	s.mu.Unlock()
+}
+
+// beginUpload marks one of this device's own uploads as in flight. It
+// cancels an automatic download: the upload will be the group's latest.
+func (s *Service) beginUpload() {
+	s.cancelDownload(time.Time{})
+	s.mu.Lock()
+	s.uploads++
+	s.mu.Unlock()
+}
+
+// endUpload marks an upload finished; meta is nil when it failed. When the
+// last one ends, an entry held while they ran is applied after all if it is
+// newer than what this device uploaded — that is, if it reached the relay
+// later, or this device's upload never did.
+func (s *Service) endUpload(meta *tppclient.EntryMeta) {
+	s.mu.Lock()
+	s.uploads--
+	if meta != nil && meta.CreatedAt.After(s.lastUploaded) {
+		s.lastUploaded = meta.CreatedAt
+	}
+	var again *tppclient.EntryMeta
+	if s.uploads == 0 && s.deferred != nil {
+		if s.deferred.CreatedAt.After(s.lastUploaded) {
+			again = s.deferred
+		}
+		s.deferred = nil
+	}
+	s.mu.Unlock()
+	if again != nil {
+		s.enqueue(*again)
+	}
+}
+
+// holdLocked holds an announced entry while an upload of this device's own is
+// in flight, keeping only the newest, and reports whether it did. s.mu is
+// held.
+func (s *Service) holdLocked(meta tppclient.EntryMeta) bool {
+	if s.uploads == 0 {
+		return false
+	}
+	if s.deferred == nil || meta.CreatedAt.After(s.deferred.CreatedAt) {
+		m := meta
+		s.deferred = &m
+	}
+	s.logger.Debug("announced entry held: an upload from this device is in flight", "entry_id", meta.ID)
+	return true
+}
+
+// startDownload registers an automatic download and returns its context and
+// the function that unregisters it.
+func (s *Service) startDownload(ctx context.Context, meta tppclient.EntryMeta) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	d := &inflight{createdAt: meta.CreatedAt, cancel: cancel}
+	s.mu.Lock()
+	s.fetching = d
+	s.mu.Unlock()
+	return ctx, func() {
+		cancel()
+		s.mu.Lock()
+		if s.fetching == d {
+			s.fetching = nil
+		}
+		s.mu.Unlock()
+	}
+}
+
+// cancelDownload cancels the automatic download in flight when it is for an
+// entry older than newer; a zero newer cancels it whatever it is.
+func (s *Service) cancelDownload(newer time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fetching != nil && (newer.IsZero() || newer.After(s.fetching.createdAt)) {
+		s.fetching.cancel()
+	}
+}
+
+// noteSkipped records an automatic transfer held back by a size limit as the
+// one notice the UI shows, replacing any older one: only the latest matters,
+// because a newer entry is what the user would sync next anyway.
+func (s *Service) noteSkipped(v localui.SkippedView) {
+	v.At = s.now()
+	s.mu.Lock()
+	s.skipped = &v
+	s.mu.Unlock()
+	s.hub.publish(localui.Event{
+		Kind: localui.EventSkipped, Direction: v.Direction, EntryID: v.EntryID, Total: v.Bytes, Message: v.Message,
+	})
+}
+
+// clearSkipped drops the notice. It is called when a newer entry lands on
+// either side — this device uploaded something, or put an entry on its
+// clipboard — at which point what was skipped is no longer the thing to act
+// on.
+func (s *Service) clearSkipped() {
+	s.mu.Lock()
+	s.skipped = nil
+	s.mu.Unlock()
+}
+
+// DismissSkipped implements localui.API.
+func (s *Service) DismissSkipped(context.Context) {
+	s.clearSkipped()
+	s.hub.publish(localui.Event{Kind: localui.EventSkipped})
+}
+
+// formatBytes renders a size the way the settings screen states limits: whole
+// or one-decimal megabytes (MiB), kilobytes below one.
+func formatBytes(n int64) string {
+	const mb = 1 << 20
+	switch {
+	case n >= mb && n%mb == 0:
+		return fmt.Sprintf("%d MB", n/mb)
+	case n >= mb:
+		return fmt.Sprintf("%.1f MB", float64(n)/mb)
+	default:
+		return fmt.Sprintf("%.0f KB", math.Ceil(float64(n)/1024))
+	}
 }
 
 // NotifyUpdate tells every open UI the update state changed.
@@ -1286,8 +1547,10 @@ func (s *Service) noteSync(at time.Time) {
 // latest returns the relay's newest entry as metadata only.
 //
 // Metadata, not content: deciding a direction needs a timestamp, and pulling a
-// 10 MB ciphertext to read one would be a download the user never asked for.
+// 50 MB ciphertext to read one would be a download the user never asked for.
 func (s *Service) latest(ctx context.Context, relay Relay) (*localui.EntryView, error) {
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
 	page, err := relay.GetHistory(ctx, tppclient.HistoryQuery{Limit: 1})
 	if err != nil {
 		return nil, s.relayError("read the group's latest entry", err)
@@ -1295,7 +1558,7 @@ func (s *Service) latest(ctx context.Context, relay Relay) (*localui.EntryView, 
 	if len(page.Entries) == 0 {
 		return nil, nil
 	}
-	return entryView(page.Entries[0]), nil
+	return s.entryView(page.Entries[0]), nil
 }
 
 // ready returns the relay once the service has one and this device is in a
@@ -1334,7 +1597,10 @@ func (s *Service) relayError(op string, err error) error {
 			"this device is waiting for its copy of the new group key")
 	case errors.Is(err, tppclient.ErrTooLarge):
 		return localui.Errorf(http.StatusRequestEntityTooLarge, err,
-			"that is larger than the 10 MB the relay accepts")
+			"that is larger than the relay accepts")
+	case errors.Is(err, tppclient.ErrQuotaExceeded):
+		return localui.Errorf(http.StatusInsufficientStorage, err,
+			"the relay's storage is full right now; try again shortly")
 	case errors.Is(err, tppclient.ErrTokenConsumed):
 		return localui.Errorf(http.StatusConflict, err, "that token has already been used")
 	case errors.Is(err, tppclient.ErrTokenExpired):
@@ -1349,6 +1615,15 @@ func (s *Service) relayError(op string, err error) error {
 	return localui.Errorf(http.StatusBadGateway, err, "the service could not %s", op)
 }
 
+// failureText is the short, content-free reason relayError would give.
+func (s *Service) failureText(err error) string {
+	var se *localui.StatusError
+	if errors.As(s.relayError("reach the relay", err), &se) {
+		return se.Message
+	}
+	return "the relay could not be reached"
+}
+
 func planID() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -1357,13 +1632,62 @@ func planID() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b[:]), nil
 }
 
-func entryView(m tppclient.EntryMeta) *localui.EntryView {
-	return &localui.EntryView{
+func (s *Service) entryView(m tppclient.EntryMeta) *localui.EntryView {
+	s.mu.Lock()
+	limit := s.settings.AutoDownloadLimit()
+	s.mu.Unlock()
+	return entryView(m, limit)
+}
+
+// entryView describes an entry for the screen. Whether it can be previewed is
+// decided here, from its header, so the history never fetches an entry it
+// would not show: only text and images are previewed, and only within the
+// auto-download limit — a preview is a download, and one the user did not
+// ask for past that limit is the same download the limit holds back.
+func entryView(m tppclient.EntryMeta, downloadLimit int64) *localui.EntryView {
+	v := &localui.EntryView{
 		ID:        m.ID,
 		Epoch:     m.Epoch,
 		Size:      m.Size,
 		CreatedAt: m.CreatedAt,
 		ExpiresAt: m.ExpiresAt,
+	}
+	h := m.Header
+	if h == nil {
+		v.NoPreview = "type unknown"
+		return v
+	}
+	size := h.Size
+	v.ContentType = h.ContentType
+	v.Bytes = &size
+	if h.Filename != "" {
+		v.Filename = clipboard.SafeName(h.Filename)
+	}
+	v.Kind = string(headerKind(*h))
+	switch {
+	case v.Kind == string(clipboard.KindFile):
+		v.NoPreview = "no preview for this type"
+	case downloadLimit > 0 && size > downloadLimit:
+		v.NoPreview = "larger than the auto-download limit"
+	default:
+		v.Previewable = true
+	}
+	return v
+}
+
+// headerKind classifies an entry from its header. Stricter than
+// clipboard.Content.Kind, which calls anything unnamed text: here only a
+// text/* type is text, because a preview of it renders the bytes.
+func headerKind(h tppclient.EntryHeader) clipboard.Kind {
+	switch {
+	case h.Filename != "":
+		return clipboard.KindFile
+	case strings.HasPrefix(h.ContentType, "image/"):
+		return clipboard.KindImage
+	case strings.HasPrefix(h.ContentType, "text/"):
+		return clipboard.KindText
+	default:
+		return clipboard.KindFile
 	}
 }
 

@@ -5,12 +5,13 @@
  * Opening this tab is the user asking — that is the whole of the rule, and the
  * fetch button that used to stand in front of it was asking twice. Nothing
  * here runs while the tab is closed, nothing runs on reconnect, and what is
- * listed is what the relay itself holds: a size, an epoch and two timestamps,
- * never content.
+ * listed is what the relay holds — a size, an epoch, two timestamps — plus
+ * each entry's sealed header, opened here, which says what the entry is
+ * without fetching it (spec/crypto.md §5.5).
  *
- * Tapping a row opens a preview, which is the one thing that decrypts an
- * entry — the same operation copying it would do, on that entry alone and only
- * when asked. An entry from an older epoch has no preview and no copy: this
+ * Tapping a text or image row opens a preview, which is the one thing that
+ * decrypts an entry — the same operation copying it would do, on that entry
+ * alone and only when asked. Any other row opens to its Copy button only. An entry from an older epoch has no preview and no copy: this
  * device no longer holds the key it was written under (SPEC §3.3).
  */
 
@@ -21,8 +22,8 @@ import type { EntryMeta } from '../../core';
 import { clipboard } from '../../platform';
 import { useSession } from '../SessionContext';
 import { describeItem, failureMessage, toClipboardItem } from '../session';
-import { previewOf, type Preview } from '../preview';
-import { Button, Notice } from '../ui';
+import { describeHeader, headerPreviewable, previewOf, type Preview } from '../preview';
+import { Button, Notice, TransferBar } from '../ui';
 import { colors, styles } from '../theme';
 
 /** Loaded is a preview that arrived, or the reason one could not. */
@@ -69,6 +70,17 @@ export function HistoryScreen(): React.JSX.Element {
     void load();
   }, [load]);
 
+  // The relay removed an entry early to stay within its storage limit: it is
+  // gone, so it leaves the list now rather than failing when tapped.
+  const evicted = session.evicted;
+  useEffect(() => {
+    if (evicted === null) {
+      return;
+    }
+    setEntries((prev) => prev?.filter((e) => e.id !== evicted.id) ?? prev);
+    setOpen((cur) => (cur === evicted.id ? null : cur));
+  }, [evicted]);
+
   const toggle = (meta: EntryMeta) => {
     const id = meta.id;
     if (open === id) {
@@ -76,6 +88,9 @@ export function HistoryScreen(): React.JSX.Element {
       return;
     }
     setOpen(id);
+    if (!headerPreviewable(meta.header)) {
+      return;
+    }
     if (previews[id] !== undefined || fetching.current.has(id) || client === null) {
       return;
     }
@@ -123,6 +138,7 @@ export function HistoryScreen(): React.JSX.Element {
         <Text style={styles.lede}>
           Newest first. Entries expire within 24 hours. Tap one to see what is in it.
         </Text>
+        <TransferBar transfer={session.transfer} />
         {message !== '' && <Notice message={message} tone={ok ? 'ok' : 'error'} />}
       </View>
 
@@ -153,9 +169,7 @@ export function HistoryScreen(): React.JSX.Element {
           const canOpen = readable(item);
           const expanded = open === item.id;
           const loaded = previews[item.id];
-          // The content type is inside the ciphertext, so the listing cannot
-          // know it — it appears once this entry has been opened, and stays.
-          const type = loaded?.ok === true ? loaded.preview.contentType : null;
+          const previewable = headerPreviewable(item.header);
           return (
             <View style={[styles.card, !canOpen && { opacity: 0.6 }]}>
               <Pressable
@@ -169,21 +183,22 @@ export function HistoryScreen(): React.JSX.Element {
               >
                 <Text style={styles.text}>{item.createdAt.toLocaleString()}</Text>
                 <Text style={styles.small}>
-                  {item.size} bytes · epoch {item.epoch.toString()}
-                  {type === null ? '' : ` · ${type}`}
+                  {describeHeader(item.header)} · {item.header?.size ?? item.size} bytes
                 </Text>
                 <Text style={{ color: canOpen ? colors.accent : colors.faint, fontSize: 13 }}>
                   {!canOpen
                     ? 'Predates the last re-key — cannot be opened'
                     : expanded
                       ? 'Hide'
-                      : 'Tap to preview'}
+                      : previewable
+                        ? 'Tap to preview'
+                        : 'No preview — tap to copy'}
                 </Text>
               </Pressable>
 
               {expanded && (
                 <View style={{ gap: 10, paddingTop: 2 }}>
-                  {loaded === undefined ? (
+                  {!previewable ? null : loaded === undefined ? (
                     <Text style={styles.small}>Decrypting…</Text>
                   ) : !loaded.ok ? (
                     <Notice message={loaded.error} tone="error" />

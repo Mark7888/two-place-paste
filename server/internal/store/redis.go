@@ -107,6 +107,24 @@ func (s *RedisStore) GetToken(ctx context.Context, value string) (Token, error) 
 	}, nil
 }
 
+// RevokeToken implements Store.
+func (s *RedisStore) RevokeToken(ctx context.Context, value string) error {
+	code, err := revokeTokenScript.Run(ctx, s.rdb, []string{tokenKey(value), tokenIndexKey}, value).Int64()
+	if err != nil {
+		return fmt.Errorf("revoke token: %w", err)
+	}
+	switch code {
+	case 0:
+		return nil
+	case 1:
+		return ErrNotFound
+	case 2:
+		return ErrTokenConsumed
+	default:
+		return fmt.Errorf("revoke token: unexpected script result %d", code)
+	}
+}
+
 // ConsumeToken implements Store.
 func (s *RedisStore) ConsumeToken(ctx context.Context, token string) (Group, error) {
 	created, err := s.createGroup(ctx, token, nil)

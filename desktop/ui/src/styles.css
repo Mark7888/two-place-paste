@@ -365,6 +365,7 @@ button.action.small { height: 1.9rem; padding: 0 0.6rem; font-size: 0.82rem; }
 button.action:disabled { opacity: 0.45; cursor: not-allowed; }
 
 input[type="text"],
+input[type="number"],
 input[type="password"],
 select,
 textarea {
@@ -381,7 +382,11 @@ textarea {
 }
 
 input[type="text"],
+input[type="number"],
 select { height: 2.25rem; padding-top: 0; padding-bottom: 0; }
+
+/* A unit after a field ("MB") sits on the field's line, not on its label's. */
+.inline-form > .muted { line-height: 2.25rem; }
 
 textarea { min-height: 5rem; resize: vertical; }
 
@@ -646,3 +651,38 @@ button.action.choice .choice-why {
   padding: 0.2rem 0.55rem;
   border-radius: 999px;
 }
+
+/* --- chunked transfer ---------------------------------------------------- */
+
+/* The strip shown while an entry larger than one frame is moving. It sits at
+   the top of whichever page is open, because the wait is the same wherever
+   the transfer was started. */
+.transfer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem 0.8rem;
+  margin-bottom: 0.9rem;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  font-size: 0.92rem;
+}
+
+.transfer progress {
+  width: 100%;
+  height: 0.45rem;
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--line-soft);
+  accent-color: var(--accent);
+}
+
+.transfer progress::-webkit-progress-bar { background: var(--line-soft); border-radius: 999px; }
+.transfer progress::-webkit-progress-value { background: var(--accent); border-radius: 999px; }
+.transfer progress::-moz-progress-bar { background: var(--accent); border-radius: 999px; }
+
+/* A notice with an action at its end, e.g. Dismiss. */
+.notice .grow { flex: 1; }
+.notice > button { flex: none; align-self: center; }

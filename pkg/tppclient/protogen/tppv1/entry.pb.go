@@ -24,8 +24,8 @@ const (
 )
 
 // EntryMeta is everything the server knows about an entry. Note what is absent:
-// content type, filename and plaintext size are inside the ciphertext and are
-// never visible here (SPEC §2.3).
+// content type, filename and plaintext size are inside the ciphertext, and in
+// the sealed header, and are never visible here (SPEC §2.3).
 type EntryMeta struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The entry's identifier. It is the id the writing client chose and bound
@@ -45,7 +45,11 @@ type EntryMeta struct {
 	// True when the ciphertext is stored inline (<= 256 KB) and is therefore
 	// delivered with the metadata; false when it lives in the blob backend and
 	// must be pulled with EntryFetchRequest.
-	Inline        bool `protobuf:"varint,6,opt,name=inline,proto3" json:"inline,omitempty"`
+	Inline bool `protobuf:"varint,6,opt,name=inline,proto3" json:"inline,omitempty"`
+	// The sealed entry header the writer sent with the entry
+	// (EntryPutRequest.header), returned as stored. Empty when the writer sent
+	// none. Opaque to the server.
+	Header        []byte `protobuf:"bytes,7,opt,name=header,proto3" json:"header,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -122,6 +126,13 @@ func (x *EntryMeta) GetInline() bool {
 	return false
 }
 
+func (x *EntryMeta) GetHeader() []byte {
+	if x != nil {
+		return x.Header
+	}
+	return nil
+}
+
 // EntryPutRequest uploads one encrypted clipboard item. The group and the
 // author are taken from the connection's device identity.
 type EntryPutRequest struct {
@@ -155,7 +166,15 @@ type EntryPutRequest struct {
 	//
 	//	*EntryPutRequest_Ciphertext
 	//	*EntryPutRequest_UploadHandle
-	Body          isEntryPutRequest_Body `protobuf_oneof:"body"`
+	Body isEntryPutRequest_Body `protobuf_oneof:"body"`
+	// The sealed entry header (/spec/crypto.md §5.5): content type, filename
+	// and plaintext size, encrypted under the group key, so a reader can show
+	// what the entry is without fetching it. It is exactly 297 bytes for every
+	// entry, so its length tells the server nothing; any other non-empty length
+	// is refused with ERROR_CODE_INVALID_ARGUMENT. Optional: an entry without
+	// one is stored and delivered normally, and readers show it as of unknown
+	// type. On a chunked upload it is sent with the commit.
+	Header        []byte `protobuf:"bytes,6,opt,name=header,proto3" json:"header,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -236,20 +255,29 @@ func (x *EntryPutRequest) GetUploadHandle() string {
 	return ""
 }
 
+func (x *EntryPutRequest) GetHeader() []byte {
+	if x != nil {
+		return x.Header
+	}
+	return nil
+}
+
 type isEntryPutRequest_Body interface {
 	isEntryPutRequest_Body()
 }
 
 type EntryPutRequest_Ciphertext struct {
-	// Inline ciphertext, for entries up to 256 KB (SPEC §4.3).
+	// The whole ciphertext in this frame. Allowed up to
+	// EntryLimitsResponse.single_frame_max_bytes (10 MiB); anything larger is
+	// uploaded in chunks.
 	Ciphertext []byte `protobuf:"bytes,3,opt,name=ciphertext,proto3,oneof"`
 }
 
 type EntryPutRequest_UploadHandle struct {
-	// Handle for ciphertext already streamed to the blob backend out of band.
-	// Reserved for the large-entry upload path; how a handle is obtained is
-	// ROADMAP P3c's to define. Clients that only send inline entries never set
-	// this field.
+	// Commits a chunked upload: the handle from EntryUploadBeginResponse,
+	// after every chunk has been acknowledged. entry_id, epoch and size must
+	// match what the upload was begun with. The entry becomes visible, and
+	// the group's latest, only now.
 	UploadHandle string `protobuf:"bytes,4,opt,name=upload_handle,json=uploadHandle,proto3,oneof"`
 }
 
@@ -306,6 +334,572 @@ func (x *EntryPutResponse) GetMeta() *EntryMeta {
 	return nil
 }
 
+// EntryLimitsRequest asks the relay for its entry limits. A client asks once
+// per connection, before its first large upload.
+type EntryLimitsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EntryLimitsRequest) Reset() {
+	*x = EntryLimitsRequest{}
+	mi := &file_tpp_v1_entry_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EntryLimitsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EntryLimitsRequest) ProtoMessage() {}
+
+func (x *EntryLimitsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_entry_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EntryLimitsRequest.ProtoReflect.Descriptor instead.
+func (*EntryLimitsRequest) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{3}
+}
+
+// EntryLimitsResponse states the relay's limits, all in ciphertext bytes.
+type EntryLimitsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The largest entry the relay accepts at all.
+	MaxEntryBytes uint64 `protobuf:"varint,1,opt,name=max_entry_bytes,json=maxEntryBytes,proto3" json:"max_entry_bytes,omitempty"`
+	// The largest ciphertext that may travel in one frame: an EntryPutRequest
+	// body or an EntryFetchResponse. Anything larger uses the chunked path.
+	SingleFrameMaxBytes uint64 `protobuf:"varint,2,opt,name=single_frame_max_bytes,json=singleFrameMaxBytes,proto3" json:"single_frame_max_bytes,omitempty"`
+	// The chunk size of the chunked path. Every chunk but the last must be
+	// exactly this size.
+	ChunkBytes uint64 `protobuf:"varint,3,opt,name=chunk_bytes,json=chunkBytes,proto3" json:"chunk_bytes,omitempty"`
+	// Entries at or below this size are stored inline and delivered with
+	// their metadata; the chunked path is for entries above it.
+	InlineMaxBytes uint64 `protobuf:"varint,4,opt,name=inline_max_bytes,json=inlineMaxBytes,proto3" json:"inline_max_bytes,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *EntryLimitsResponse) Reset() {
+	*x = EntryLimitsResponse{}
+	mi := &file_tpp_v1_entry_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EntryLimitsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EntryLimitsResponse) ProtoMessage() {}
+
+func (x *EntryLimitsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_entry_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EntryLimitsResponse.ProtoReflect.Descriptor instead.
+func (*EntryLimitsResponse) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *EntryLimitsResponse) GetMaxEntryBytes() uint64 {
+	if x != nil {
+		return x.MaxEntryBytes
+	}
+	return 0
+}
+
+func (x *EntryLimitsResponse) GetSingleFrameMaxBytes() uint64 {
+	if x != nil {
+		return x.SingleFrameMaxBytes
+	}
+	return 0
+}
+
+func (x *EntryLimitsResponse) GetChunkBytes() uint64 {
+	if x != nil {
+		return x.ChunkBytes
+	}
+	return 0
+}
+
+func (x *EntryLimitsResponse) GetInlineMaxBytes() uint64 {
+	if x != nil {
+		return x.InlineMaxBytes
+	}
+	return 0
+}
+
+// EntryUploadBeginRequest starts a chunked upload. The relay reserves room for
+// size bytes here, evicting older entries if it must, so a full relay refuses
+// before any chunk is sent.
+type EntryUploadBeginRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// As in EntryPutRequest: chosen by the client and bound into the
+	// ciphertext. Empty means the relay assigns one.
+	EntryId string `protobuf:"bytes,1,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
+	// The epoch the ciphertext is encrypted under. Checked again at commit.
+	Epoch uint64 `protobuf:"varint,2,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	// The exact ciphertext length. It must be above inline_max_bytes and at
+	// most max_entry_bytes.
+	Size          uint64 `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EntryUploadBeginRequest) Reset() {
+	*x = EntryUploadBeginRequest{}
+	mi := &file_tpp_v1_entry_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EntryUploadBeginRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EntryUploadBeginRequest) ProtoMessage() {}
+
+func (x *EntryUploadBeginRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_entry_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EntryUploadBeginRequest.ProtoReflect.Descriptor instead.
+func (*EntryUploadBeginRequest) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *EntryUploadBeginRequest) GetEntryId() string {
+	if x != nil {
+		return x.EntryId
+	}
+	return ""
+}
+
+func (x *EntryUploadBeginRequest) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *EntryUploadBeginRequest) GetSize() uint64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+// EntryUploadBeginResponse returns the handle for the chunks and the commit.
+type EntryUploadBeginResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Opaque. Valid only for the device that began the upload, and only until
+	// it has been idle for the relay's upload timeout.
+	UploadHandle string `protobuf:"bytes,1,opt,name=upload_handle,json=uploadHandle,proto3" json:"upload_handle,omitempty"`
+	// The entry id, echoed or assigned.
+	EntryId string `protobuf:"bytes,2,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
+	// The size every chunk but the last must have.
+	ChunkBytes    uint64 `protobuf:"varint,3,opt,name=chunk_bytes,json=chunkBytes,proto3" json:"chunk_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EntryUploadBeginResponse) Reset() {
+	*x = EntryUploadBeginResponse{}
+	mi := &file_tpp_v1_entry_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EntryUploadBeginResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EntryUploadBeginResponse) ProtoMessage() {}
+
+func (x *EntryUploadBeginResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_entry_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EntryUploadBeginResponse.ProtoReflect.Descriptor instead.
+func (*EntryUploadBeginResponse) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *EntryUploadBeginResponse) GetUploadHandle() string {
+	if x != nil {
+		return x.UploadHandle
+	}
+	return ""
+}
+
+func (x *EntryUploadBeginResponse) GetEntryId() string {
+	if x != nil {
+		return x.EntryId
+	}
+	return ""
+}
+
+func (x *EntryUploadBeginResponse) GetChunkBytes() uint64 {
+	if x != nil {
+		return x.ChunkBytes
+	}
+	return 0
+}
+
+// EntryUploadChunkRequest carries one chunk.
+type EntryUploadChunkRequest struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	UploadHandle string                 `protobuf:"bytes,1,opt,name=upload_handle,json=uploadHandle,proto3" json:"upload_handle,omitempty"`
+	// Zero-based, consecutive. A chunk out of order is refused with
+	// ERROR_CODE_INVALID_ARGUMENT and changes nothing.
+	Index         uint32 `protobuf:"varint,2,opt,name=index,proto3" json:"index,omitempty"`
+	Data          []byte `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EntryUploadChunkRequest) Reset() {
+	*x = EntryUploadChunkRequest{}
+	mi := &file_tpp_v1_entry_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EntryUploadChunkRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EntryUploadChunkRequest) ProtoMessage() {}
+
+func (x *EntryUploadChunkRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_entry_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EntryUploadChunkRequest.ProtoReflect.Descriptor instead.
+func (*EntryUploadChunkRequest) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *EntryUploadChunkRequest) GetUploadHandle() string {
+	if x != nil {
+		return x.UploadHandle
+	}
+	return ""
+}
+
+func (x *EntryUploadChunkRequest) GetIndex() uint32 {
+	if x != nil {
+		return x.Index
+	}
+	return 0
+}
+
+func (x *EntryUploadChunkRequest) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+// EntryUploadChunkResponse acknowledges a chunk once it is stored.
+type EntryUploadChunkResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Total bytes received so far.
+	ReceivedBytes uint64 `protobuf:"varint,1,opt,name=received_bytes,json=receivedBytes,proto3" json:"received_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EntryUploadChunkResponse) Reset() {
+	*x = EntryUploadChunkResponse{}
+	mi := &file_tpp_v1_entry_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EntryUploadChunkResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EntryUploadChunkResponse) ProtoMessage() {}
+
+func (x *EntryUploadChunkResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_entry_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EntryUploadChunkResponse.ProtoReflect.Descriptor instead.
+func (*EntryUploadChunkResponse) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *EntryUploadChunkResponse) GetReceivedBytes() uint64 {
+	if x != nil {
+		return x.ReceivedBytes
+	}
+	return 0
+}
+
+// EntryUploadAbortRequest abandons an upload and releases its reserved room.
+// Aborting an unknown or finished upload is not an error.
+type EntryUploadAbortRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UploadHandle  string                 `protobuf:"bytes,1,opt,name=upload_handle,json=uploadHandle,proto3" json:"upload_handle,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EntryUploadAbortRequest) Reset() {
+	*x = EntryUploadAbortRequest{}
+	mi := &file_tpp_v1_entry_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EntryUploadAbortRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EntryUploadAbortRequest) ProtoMessage() {}
+
+func (x *EntryUploadAbortRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_entry_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EntryUploadAbortRequest.ProtoReflect.Descriptor instead.
+func (*EntryUploadAbortRequest) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *EntryUploadAbortRequest) GetUploadHandle() string {
+	if x != nil {
+		return x.UploadHandle
+	}
+	return ""
+}
+
+// EntryUploadAbortResponse confirms the abort.
+type EntryUploadAbortResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EntryUploadAbortResponse) Reset() {
+	*x = EntryUploadAbortResponse{}
+	mi := &file_tpp_v1_entry_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EntryUploadAbortResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EntryUploadAbortResponse) ProtoMessage() {}
+
+func (x *EntryUploadAbortResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_entry_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EntryUploadAbortResponse.ProtoReflect.Descriptor instead.
+func (*EntryUploadAbortResponse) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{10}
+}
+
+// EntryFetchChunkRequest reads a range of an entry's ciphertext. It works for
+// every entry, inline or not, but exists for those larger than one frame.
+type EntryFetchChunkRequest struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	EntryId string                 `protobuf:"bytes,1,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
+	// Where to start, in bytes; less than the entry's size.
+	Offset uint64 `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
+	// How much to read. Zero, or more than chunk_bytes, means chunk_bytes. The
+	// range is cut at the end of the entry.
+	Length        uint64 `protobuf:"varint,3,opt,name=length,proto3" json:"length,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EntryFetchChunkRequest) Reset() {
+	*x = EntryFetchChunkRequest{}
+	mi := &file_tpp_v1_entry_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EntryFetchChunkRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EntryFetchChunkRequest) ProtoMessage() {}
+
+func (x *EntryFetchChunkRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_entry_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EntryFetchChunkRequest.ProtoReflect.Descriptor instead.
+func (*EntryFetchChunkRequest) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *EntryFetchChunkRequest) GetEntryId() string {
+	if x != nil {
+		return x.EntryId
+	}
+	return ""
+}
+
+func (x *EntryFetchChunkRequest) GetOffset() uint64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *EntryFetchChunkRequest) GetLength() uint64 {
+	if x != nil {
+		return x.Length
+	}
+	return 0
+}
+
+// EntryFetchChunkResponse returns the range.
+type EntryFetchChunkResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The entry's metadata, so the first range also says how many follow.
+	Meta          *EntryMeta `protobuf:"bytes,1,opt,name=meta,proto3" json:"meta,omitempty"`
+	Offset        uint64     `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
+	Data          []byte     `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EntryFetchChunkResponse) Reset() {
+	*x = EntryFetchChunkResponse{}
+	mi := &file_tpp_v1_entry_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EntryFetchChunkResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EntryFetchChunkResponse) ProtoMessage() {}
+
+func (x *EntryFetchChunkResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_entry_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EntryFetchChunkResponse.ProtoReflect.Descriptor instead.
+func (*EntryFetchChunkResponse) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *EntryFetchChunkResponse) GetMeta() *EntryMeta {
+	if x != nil {
+		return x.Meta
+	}
+	return nil
+}
+
+func (x *EntryFetchChunkResponse) GetOffset() uint64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *EntryFetchChunkResponse) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
 // EntryLatestRequest asks for the group's most recent entry. Sync operates on
 // the latest entry only (SPEC §6).
 type EntryLatestRequest struct {
@@ -316,7 +910,7 @@ type EntryLatestRequest struct {
 
 func (x *EntryLatestRequest) Reset() {
 	*x = EntryLatestRequest{}
-	mi := &file_tpp_v1_entry_proto_msgTypes[3]
+	mi := &file_tpp_v1_entry_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -328,7 +922,7 @@ func (x *EntryLatestRequest) String() string {
 func (*EntryLatestRequest) ProtoMessage() {}
 
 func (x *EntryLatestRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tpp_v1_entry_proto_msgTypes[3]
+	mi := &file_tpp_v1_entry_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -341,7 +935,7 @@ func (x *EntryLatestRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EntryLatestRequest.ProtoReflect.Descriptor instead.
 func (*EntryLatestRequest) Descriptor() ([]byte, []int) {
-	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{3}
+	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{13}
 }
 
 // EntryLatestResponse carries the latest entry, if there is one.
@@ -358,7 +952,7 @@ type EntryLatestResponse struct {
 
 func (x *EntryLatestResponse) Reset() {
 	*x = EntryLatestResponse{}
-	mi := &file_tpp_v1_entry_proto_msgTypes[4]
+	mi := &file_tpp_v1_entry_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -370,7 +964,7 @@ func (x *EntryLatestResponse) String() string {
 func (*EntryLatestResponse) ProtoMessage() {}
 
 func (x *EntryLatestResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tpp_v1_entry_proto_msgTypes[4]
+	mi := &file_tpp_v1_entry_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -383,7 +977,7 @@ func (x *EntryLatestResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EntryLatestResponse.ProtoReflect.Descriptor instead.
 func (*EntryLatestResponse) Descriptor() ([]byte, []int) {
-	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{4}
+	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *EntryLatestResponse) GetMeta() *EntryMeta {
@@ -416,7 +1010,7 @@ type EntryHistoryRequest struct {
 
 func (x *EntryHistoryRequest) Reset() {
 	*x = EntryHistoryRequest{}
-	mi := &file_tpp_v1_entry_proto_msgTypes[5]
+	mi := &file_tpp_v1_entry_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -428,7 +1022,7 @@ func (x *EntryHistoryRequest) String() string {
 func (*EntryHistoryRequest) ProtoMessage() {}
 
 func (x *EntryHistoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tpp_v1_entry_proto_msgTypes[5]
+	mi := &file_tpp_v1_entry_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -441,7 +1035,7 @@ func (x *EntryHistoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EntryHistoryRequest.ProtoReflect.Descriptor instead.
 func (*EntryHistoryRequest) Descriptor() ([]byte, []int) {
-	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{5}
+	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *EntryHistoryRequest) GetLimit() uint32 {
@@ -473,7 +1067,7 @@ type EntryHistoryResponse struct {
 
 func (x *EntryHistoryResponse) Reset() {
 	*x = EntryHistoryResponse{}
-	mi := &file_tpp_v1_entry_proto_msgTypes[6]
+	mi := &file_tpp_v1_entry_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -485,7 +1079,7 @@ func (x *EntryHistoryResponse) String() string {
 func (*EntryHistoryResponse) ProtoMessage() {}
 
 func (x *EntryHistoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tpp_v1_entry_proto_msgTypes[6]
+	mi := &file_tpp_v1_entry_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -498,7 +1092,7 @@ func (x *EntryHistoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EntryHistoryResponse.ProtoReflect.Descriptor instead.
 func (*EntryHistoryResponse) Descriptor() ([]byte, []int) {
-	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{6}
+	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *EntryHistoryResponse) GetEntries() []*EntryMeta {
@@ -525,7 +1119,7 @@ type EntryFetchRequest struct {
 
 func (x *EntryFetchRequest) Reset() {
 	*x = EntryFetchRequest{}
-	mi := &file_tpp_v1_entry_proto_msgTypes[7]
+	mi := &file_tpp_v1_entry_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -537,7 +1131,7 @@ func (x *EntryFetchRequest) String() string {
 func (*EntryFetchRequest) ProtoMessage() {}
 
 func (x *EntryFetchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tpp_v1_entry_proto_msgTypes[7]
+	mi := &file_tpp_v1_entry_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -550,7 +1144,7 @@ func (x *EntryFetchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EntryFetchRequest.ProtoReflect.Descriptor instead.
 func (*EntryFetchRequest) Descriptor() ([]byte, []int) {
-	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{7}
+	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *EntryFetchRequest) GetEntryId() string {
@@ -562,6 +1156,8 @@ func (x *EntryFetchRequest) GetEntryId() string {
 
 // EntryFetchResponse returns the ciphertext, whether it was stored inline or in
 // the blob backend; that distinction is the server's problem, not the client's.
+// An entry larger than one frame is refused with ERROR_CODE_TOO_LARGE; it is
+// read with EntryFetchChunkRequest instead.
 type EntryFetchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Meta          *EntryMeta             `protobuf:"bytes,1,opt,name=meta,proto3" json:"meta,omitempty"`
@@ -572,7 +1168,7 @@ type EntryFetchResponse struct {
 
 func (x *EntryFetchResponse) Reset() {
 	*x = EntryFetchResponse{}
-	mi := &file_tpp_v1_entry_proto_msgTypes[8]
+	mi := &file_tpp_v1_entry_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -584,7 +1180,7 @@ func (x *EntryFetchResponse) String() string {
 func (*EntryFetchResponse) ProtoMessage() {}
 
 func (x *EntryFetchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tpp_v1_entry_proto_msgTypes[8]
+	mi := &file_tpp_v1_entry_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -597,7 +1193,7 @@ func (x *EntryFetchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EntryFetchResponse.ProtoReflect.Descriptor instead.
 func (*EntryFetchResponse) Descriptor() ([]byte, []int) {
-	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{8}
+	return file_tpp_v1_entry_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *EntryFetchResponse) GetMeta() *EntryMeta {
@@ -618,14 +1214,15 @@ var File_tpp_v1_entry_proto protoreflect.FileDescriptor
 
 const file_tpp_v1_entry_proto_rawDesc = "" +
 	"\n" +
-	"\x12tpp/v1/entry.proto\x12\x06tpp.v1\"\xc2\x01\n" +
+	"\x12tpp/v1/entry.proto\x12\x06tpp.v1\"\xda\x01\n" +
 	"\tEntryMeta\x12\x19\n" +
 	"\bentry_id\x18\x01 \x01(\tR\aentryId\x12\x14\n" +
 	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\x12\x12\n" +
 	"\x04size\x18\x03 \x01(\x04R\x04size\x12+\n" +
 	"\x12created_at_unix_ms\x18\x04 \x01(\x03R\x0fcreatedAtUnixMs\x12+\n" +
 	"\x12expires_at_unix_ms\x18\x05 \x01(\x03R\x0fexpiresAtUnixMs\x12\x16\n" +
-	"\x06inline\x18\x06 \x01(\bR\x06inline\"\xa7\x01\n" +
+	"\x06inline\x18\x06 \x01(\bR\x06inline\x12\x16\n" +
+	"\x06header\x18\a \x01(\fR\x06header\"\xbf\x01\n" +
 	"\x0fEntryPutRequest\x12\x19\n" +
 	"\bentry_id\x18\x05 \x01(\tR\aentryId\x12\x14\n" +
 	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12\x12\n" +
@@ -633,10 +1230,44 @@ const file_tpp_v1_entry_proto_rawDesc = "" +
 	"\n" +
 	"ciphertext\x18\x03 \x01(\fH\x00R\n" +
 	"ciphertext\x12%\n" +
-	"\rupload_handle\x18\x04 \x01(\tH\x00R\fuploadHandleB\x06\n" +
+	"\rupload_handle\x18\x04 \x01(\tH\x00R\fuploadHandle\x12\x16\n" +
+	"\x06header\x18\x06 \x01(\fR\x06headerB\x06\n" +
 	"\x04body\"9\n" +
 	"\x10EntryPutResponse\x12%\n" +
 	"\x04meta\x18\x01 \x01(\v2\x11.tpp.v1.EntryMetaR\x04meta\"\x14\n" +
+	"\x12EntryLimitsRequest\"\xbd\x01\n" +
+	"\x13EntryLimitsResponse\x12&\n" +
+	"\x0fmax_entry_bytes\x18\x01 \x01(\x04R\rmaxEntryBytes\x123\n" +
+	"\x16single_frame_max_bytes\x18\x02 \x01(\x04R\x13singleFrameMaxBytes\x12\x1f\n" +
+	"\vchunk_bytes\x18\x03 \x01(\x04R\n" +
+	"chunkBytes\x12(\n" +
+	"\x10inline_max_bytes\x18\x04 \x01(\x04R\x0einlineMaxBytes\"^\n" +
+	"\x17EntryUploadBeginRequest\x12\x19\n" +
+	"\bentry_id\x18\x01 \x01(\tR\aentryId\x12\x14\n" +
+	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\x12\x12\n" +
+	"\x04size\x18\x03 \x01(\x04R\x04size\"{\n" +
+	"\x18EntryUploadBeginResponse\x12#\n" +
+	"\rupload_handle\x18\x01 \x01(\tR\fuploadHandle\x12\x19\n" +
+	"\bentry_id\x18\x02 \x01(\tR\aentryId\x12\x1f\n" +
+	"\vchunk_bytes\x18\x03 \x01(\x04R\n" +
+	"chunkBytes\"h\n" +
+	"\x17EntryUploadChunkRequest\x12#\n" +
+	"\rupload_handle\x18\x01 \x01(\tR\fuploadHandle\x12\x14\n" +
+	"\x05index\x18\x02 \x01(\rR\x05index\x12\x12\n" +
+	"\x04data\x18\x03 \x01(\fR\x04data\"A\n" +
+	"\x18EntryUploadChunkResponse\x12%\n" +
+	"\x0ereceived_bytes\x18\x01 \x01(\x04R\rreceivedBytes\">\n" +
+	"\x17EntryUploadAbortRequest\x12#\n" +
+	"\rupload_handle\x18\x01 \x01(\tR\fuploadHandle\"\x1a\n" +
+	"\x18EntryUploadAbortResponse\"c\n" +
+	"\x16EntryFetchChunkRequest\x12\x19\n" +
+	"\bentry_id\x18\x01 \x01(\tR\aentryId\x12\x16\n" +
+	"\x06offset\x18\x02 \x01(\x04R\x06offset\x12\x16\n" +
+	"\x06length\x18\x03 \x01(\x04R\x06length\"l\n" +
+	"\x17EntryFetchChunkResponse\x12%\n" +
+	"\x04meta\x18\x01 \x01(\v2\x11.tpp.v1.EntryMetaR\x04meta\x12\x16\n" +
+	"\x06offset\x18\x02 \x01(\x04R\x06offset\x12\x12\n" +
+	"\x04data\x18\x03 \x01(\fR\x04data\"\x14\n" +
 	"\x12EntryLatestRequest\"j\n" +
 	"\x13EntryLatestResponse\x12*\n" +
 	"\x04meta\x18\x01 \x01(\v2\x11.tpp.v1.EntryMetaH\x00R\x04meta\x88\x01\x01\x12\x1e\n" +
@@ -670,28 +1301,39 @@ func file_tpp_v1_entry_proto_rawDescGZIP() []byte {
 	return file_tpp_v1_entry_proto_rawDescData
 }
 
-var file_tpp_v1_entry_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_tpp_v1_entry_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_tpp_v1_entry_proto_goTypes = []any{
-	(*EntryMeta)(nil),            // 0: tpp.v1.EntryMeta
-	(*EntryPutRequest)(nil),      // 1: tpp.v1.EntryPutRequest
-	(*EntryPutResponse)(nil),     // 2: tpp.v1.EntryPutResponse
-	(*EntryLatestRequest)(nil),   // 3: tpp.v1.EntryLatestRequest
-	(*EntryLatestResponse)(nil),  // 4: tpp.v1.EntryLatestResponse
-	(*EntryHistoryRequest)(nil),  // 5: tpp.v1.EntryHistoryRequest
-	(*EntryHistoryResponse)(nil), // 6: tpp.v1.EntryHistoryResponse
-	(*EntryFetchRequest)(nil),    // 7: tpp.v1.EntryFetchRequest
-	(*EntryFetchResponse)(nil),   // 8: tpp.v1.EntryFetchResponse
+	(*EntryMeta)(nil),                // 0: tpp.v1.EntryMeta
+	(*EntryPutRequest)(nil),          // 1: tpp.v1.EntryPutRequest
+	(*EntryPutResponse)(nil),         // 2: tpp.v1.EntryPutResponse
+	(*EntryLimitsRequest)(nil),       // 3: tpp.v1.EntryLimitsRequest
+	(*EntryLimitsResponse)(nil),      // 4: tpp.v1.EntryLimitsResponse
+	(*EntryUploadBeginRequest)(nil),  // 5: tpp.v1.EntryUploadBeginRequest
+	(*EntryUploadBeginResponse)(nil), // 6: tpp.v1.EntryUploadBeginResponse
+	(*EntryUploadChunkRequest)(nil),  // 7: tpp.v1.EntryUploadChunkRequest
+	(*EntryUploadChunkResponse)(nil), // 8: tpp.v1.EntryUploadChunkResponse
+	(*EntryUploadAbortRequest)(nil),  // 9: tpp.v1.EntryUploadAbortRequest
+	(*EntryUploadAbortResponse)(nil), // 10: tpp.v1.EntryUploadAbortResponse
+	(*EntryFetchChunkRequest)(nil),   // 11: tpp.v1.EntryFetchChunkRequest
+	(*EntryFetchChunkResponse)(nil),  // 12: tpp.v1.EntryFetchChunkResponse
+	(*EntryLatestRequest)(nil),       // 13: tpp.v1.EntryLatestRequest
+	(*EntryLatestResponse)(nil),      // 14: tpp.v1.EntryLatestResponse
+	(*EntryHistoryRequest)(nil),      // 15: tpp.v1.EntryHistoryRequest
+	(*EntryHistoryResponse)(nil),     // 16: tpp.v1.EntryHistoryResponse
+	(*EntryFetchRequest)(nil),        // 17: tpp.v1.EntryFetchRequest
+	(*EntryFetchResponse)(nil),       // 18: tpp.v1.EntryFetchResponse
 }
 var file_tpp_v1_entry_proto_depIdxs = []int32{
 	0, // 0: tpp.v1.EntryPutResponse.meta:type_name -> tpp.v1.EntryMeta
-	0, // 1: tpp.v1.EntryLatestResponse.meta:type_name -> tpp.v1.EntryMeta
-	0, // 2: tpp.v1.EntryHistoryResponse.entries:type_name -> tpp.v1.EntryMeta
-	0, // 3: tpp.v1.EntryFetchResponse.meta:type_name -> tpp.v1.EntryMeta
-	4, // [4:4] is the sub-list for method output_type
-	4, // [4:4] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	0, // 1: tpp.v1.EntryFetchChunkResponse.meta:type_name -> tpp.v1.EntryMeta
+	0, // 2: tpp.v1.EntryLatestResponse.meta:type_name -> tpp.v1.EntryMeta
+	0, // 3: tpp.v1.EntryHistoryResponse.entries:type_name -> tpp.v1.EntryMeta
+	0, // 4: tpp.v1.EntryFetchResponse.meta:type_name -> tpp.v1.EntryMeta
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_tpp_v1_entry_proto_init() }
@@ -703,14 +1345,14 @@ func file_tpp_v1_entry_proto_init() {
 		(*EntryPutRequest_Ciphertext)(nil),
 		(*EntryPutRequest_UploadHandle)(nil),
 	}
-	file_tpp_v1_entry_proto_msgTypes[4].OneofWrappers = []any{}
+	file_tpp_v1_entry_proto_msgTypes[14].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_tpp_v1_entry_proto_rawDesc), len(file_tpp_v1_entry_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

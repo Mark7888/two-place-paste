@@ -79,9 +79,13 @@ var (
 	// wait for the wrapped key) and retry (SPEC §3.3 step 4).
 	ErrEpochConflict error = codeError(tppv1.ErrorCode_ERROR_CODE_EPOCH_CONFLICT)
 
-	// ErrTooLarge means the ciphertext exceeded the 10 MB per-entry cap
-	// (SPEC §4.3).
+	// ErrTooLarge means the ciphertext exceeded the per-entry cap, or is
+	// larger than the relay's storage limit on its own (SPEC §4.3).
 	ErrTooLarge error = codeError(tppv1.ErrorCode_ERROR_CODE_TOO_LARGE)
+
+	// ErrQuotaExceeded means the relay's storage is full and evicting older
+	// entries could not make room. Retry later.
+	ErrQuotaExceeded error = codeError(tppv1.ErrorCode_ERROR_CODE_QUOTA_EXCEEDED)
 
 	// ErrTokenConsumed means a creation or pairing token had already been
 	// used. One token creates exactly one group (SPEC §3.1).

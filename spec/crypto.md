@@ -72,7 +72,7 @@ to this document (§12).
 
 ### 2.3 Domain separation
 
-Five ASCII strings, each used for exactly one purpose. No string is a prefix of
+Seven ASCII strings, each used for exactly one purpose. No string is a prefix of
 another **in a position where it could be confused**, and every variable-length
 value that follows one carries an explicit length prefix.
 
@@ -82,6 +82,8 @@ value that follows one carries an explicit length prefix.
 | `tpp/v1/wrap-aad` | AEAD associated data prefix, key wrapping | §4.2 |
 | `tpp/v1/entry` | HKDF `info` prefix, content key | §5.1 |
 | `tpp/v1/entry-aad` | AEAD associated data prefix, entries | §5.3 |
+| `tpp/v1/header` | HKDF `info` prefix, header key | §5.5 |
+| `tpp/v1/header-aad` | AEAD associated data prefix, entry headers | §5.5 |
 | `tpp/v1/vectors` | HKDF `ikm` for deterministic test material only | §9.2 |
 
 ### 2.4 Version byte
@@ -312,6 +314,66 @@ or other ids, to make an entry decrypt; see §7 and §5.3.
 Vectors: [`entry.json`](vectors/entry.json), and the `entry-*` cases in
 [`failure.json`](vectors/failure.json).
 
+### 5.5 Entry header
+
+The frame (§6) is the only authority on what an entry is, but reading it means
+fetching the whole entry — up to the relay's per-entry cap. So a writer also
+seals a **header**: a short summary a reader can open from the history listing
+alone, to show what each entry is and to decide whether it is worth fetching.
+It carries nothing the frame does not.
+
+```
+encoded_header =                                 exactly 256 bytes
+    u8(0x01)                                     header version
+ || u16be(len(content_type)) || content_type     UTF-8, MUST be non-empty
+ || u16be(len(filename))     || filename         UTF-8, length 0 means absent
+ || u64be(body_len)                              length of the frame's body
+ || zero[...]                                    padding to 256 bytes
+
+header_nonce = 24 random bytes from the CSPRNG, fresh for every header, and
+               independent of entry_nonce
+header_info  = "tpp/v1/header" || u64be(epoch)
+header_key   = HKDF-SHA256(ikm = group_key, salt = header_nonce, info = header_info, L = 32)
+
+header_aad =
+    "tpp/v1/header-aad"
+ || u8(0x01)                     version
+ || u64be(epoch)
+ || u32be(len(entry_id))
+ || entry_id
+
+header_container =                               exactly 297 bytes
+    u8(0x01) || header_nonce[24] || XChaCha20-Poly1305(header_key, header_nonce,
+                                                       header_aad, encoded_header)
+```
+
+Rules:
+
+- **Fixed size.** Every encoded header is 256 bytes and every container 297, so
+  the server learns nothing from a header's length — not even how long a
+  filename is. A content type longer than 128 bytes is written as
+  `application/octet-stream`, and a filename is cut to what fits, never inside
+  a UTF-8 sequence. A reader shows what it got; the frame keeps the full values.
+- **Canonical.** A decoder MUST reject anything but exactly 256 bytes, an unknown
+  version, an empty content type, a length prefix that runs past the end, and
+  any non-zero padding byte.
+- **Its own key and nonce.** The header is a second message per entry, so it MUST
+  NOT reuse `entry_nonce`: under the same key and nonce two messages would share
+  a keystream. A separate HKDF `info` gives it a separate key as well.
+- **Bound to its entry.** The AAD carries the epoch and the entry id, so the
+  server cannot move a header onto another entry or into another epoch. The
+  same §7 rule applies: a reader uses the epoch and id the server reports, and
+  opens a header only at its own epoch.
+- **Advisory.** The header decides what a listing shows and whether a preview is
+  offered. What is put on a clipboard always comes from the frame, and where
+  the two disagree, the frame wins. Any member of the group can write either,
+  so the header earns no trust the frame does not.
+- **Optional on the wire.** An entry from a client that predates headers has
+  none; a reader shows its type as unknown until it is fetched.
+
+Vectors: [`header.json`](vectors/header.json), and the `header-*` cases in
+[`failure.json`](vectors/failure.json).
+
 ---
 
 ## 6. Plaintext frame
@@ -430,7 +492,7 @@ is the user reading a name and a fingerprint that catches that, exactly as
 
 ### 9.1 Corpus
 
-[`spec/vectors/`](vectors/) holds 42 vectors in 6 suites, indexed by
+[`spec/vectors/`](vectors/) holds 56 vectors in 7 suites, indexed by
 [`index.json`](vectors/index.json). Every byte string is lowercase hex. A client
 that cannot reproduce every vector does not ship (`docs/conventions.md` §11).
 
@@ -441,7 +503,8 @@ that cannot reproduce every vector does not ship (`docs/conventions.md` §11).
 | `derive.json` | 5 | §5.1 content keys, including epoch `2^64-1` to pin the big-endian encoding |
 | `frame.json` | 5 | §6 encoding, including Unicode, binary, filename and empty body |
 | `entry.json` | 5 | §5 end to end |
-| `failure.json` | 18 | inputs every implementation MUST reject |
+| `header.json` | 4 | §5.5 encode and seal end to end, including the content-type fallback and a cut filename |
+| `failure.json` | 28 | inputs every implementation MUST reject |
 
 The failure suite is the important half. Wrong recipient, wrong epoch, wrong
 entry id, wrong group key, tampered ciphertext, tampered nonce, tampered

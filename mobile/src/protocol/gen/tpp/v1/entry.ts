@@ -13,8 +13,8 @@ export const protobufPackage = "tpp.v1";
 
 /**
  * EntryMeta is everything the server knows about an entry. Note what is absent:
- * content type, filename and plaintext size are inside the ciphertext and are
- * never visible here (SPEC §2.3).
+ * content type, filename and plaintext size are inside the ciphertext, and in
+ * the sealed header, and are never visible here (SPEC §2.3).
  */
 export interface EntryMeta {
   /**
@@ -43,6 +43,12 @@ export interface EntryMeta {
    * must be pulled with EntryFetchRequest.
    */
   inline: boolean;
+  /**
+   * The sealed entry header the writer sent with the entry
+   * (EntryPutRequest.header), returned as stored. Empty when the writer sent
+   * none. Opaque to the server.
+   */
+  header: Uint8Array;
 }
 
 /**
@@ -81,17 +87,33 @@ export interface EntryPutRequest {
    * (SPEC §4.3).
    */
   size: string;
-  /** Inline ciphertext, for entries up to 256 KB (SPEC §4.3). */
+  /**
+   * The whole ciphertext in this frame. Allowed up to
+   * EntryLimitsResponse.single_frame_max_bytes (10 MiB); anything larger is
+   * uploaded in chunks.
+   */
   ciphertext?:
     | Uint8Array
     | undefined;
   /**
-   * Handle for ciphertext already streamed to the blob backend out of band.
-   * Reserved for the large-entry upload path; how a handle is obtained is
-   * ROADMAP P3c's to define. Clients that only send inline entries never set
-   * this field.
+   * Commits a chunked upload: the handle from EntryUploadBeginResponse,
+   * after every chunk has been acknowledged. entry_id, epoch and size must
+   * match what the upload was begun with. The entry becomes visible, and
+   * the group's latest, only now.
    */
-  uploadHandle?: string | undefined;
+  uploadHandle?:
+    | string
+    | undefined;
+  /**
+   * The sealed entry header (/spec/crypto.md §5.5): content type, filename
+   * and plaintext size, encrypted under the group key, so a reader can show
+   * what the entry is without fetching it. It is exactly 297 bytes for every
+   * entry, so its length tells the server nothing; any other non-empty length
+   * is refused with ERROR_CODE_INVALID_ARGUMENT. Optional: an entry without
+   * one is stored and delivered normally, and readers show it as of unknown
+   * type. On a chunked upload it is sent with the commit.
+   */
+  header: Uint8Array;
 }
 
 /**
@@ -105,6 +127,119 @@ export interface EntryPutResponse {
    * than trusting it: the id it bound is not the id the entry now carries.
    */
   meta?: EntryMeta | undefined;
+}
+
+/**
+ * EntryLimitsRequest asks the relay for its entry limits. A client asks once
+ * per connection, before its first large upload.
+ */
+export interface EntryLimitsRequest {
+}
+
+/** EntryLimitsResponse states the relay's limits, all in ciphertext bytes. */
+export interface EntryLimitsResponse {
+  /** The largest entry the relay accepts at all. */
+  maxEntryBytes: string;
+  /**
+   * The largest ciphertext that may travel in one frame: an EntryPutRequest
+   * body or an EntryFetchResponse. Anything larger uses the chunked path.
+   */
+  singleFrameMaxBytes: string;
+  /**
+   * The chunk size of the chunked path. Every chunk but the last must be
+   * exactly this size.
+   */
+  chunkBytes: string;
+  /**
+   * Entries at or below this size are stored inline and delivered with
+   * their metadata; the chunked path is for entries above it.
+   */
+  inlineMaxBytes: string;
+}
+
+/**
+ * EntryUploadBeginRequest starts a chunked upload. The relay reserves room for
+ * size bytes here, evicting older entries if it must, so a full relay refuses
+ * before any chunk is sent.
+ */
+export interface EntryUploadBeginRequest {
+  /**
+   * As in EntryPutRequest: chosen by the client and bound into the
+   * ciphertext. Empty means the relay assigns one.
+   */
+  entryId: string;
+  /** The epoch the ciphertext is encrypted under. Checked again at commit. */
+  epoch: string;
+  /**
+   * The exact ciphertext length. It must be above inline_max_bytes and at
+   * most max_entry_bytes.
+   */
+  size: string;
+}
+
+/** EntryUploadBeginResponse returns the handle for the chunks and the commit. */
+export interface EntryUploadBeginResponse {
+  /**
+   * Opaque. Valid only for the device that began the upload, and only until
+   * it has been idle for the relay's upload timeout.
+   */
+  uploadHandle: string;
+  /** The entry id, echoed or assigned. */
+  entryId: string;
+  /** The size every chunk but the last must have. */
+  chunkBytes: string;
+}
+
+/** EntryUploadChunkRequest carries one chunk. */
+export interface EntryUploadChunkRequest {
+  uploadHandle: string;
+  /**
+   * Zero-based, consecutive. A chunk out of order is refused with
+   * ERROR_CODE_INVALID_ARGUMENT and changes nothing.
+   */
+  index: number;
+  data: Uint8Array;
+}
+
+/** EntryUploadChunkResponse acknowledges a chunk once it is stored. */
+export interface EntryUploadChunkResponse {
+  /** Total bytes received so far. */
+  receivedBytes: string;
+}
+
+/**
+ * EntryUploadAbortRequest abandons an upload and releases its reserved room.
+ * Aborting an unknown or finished upload is not an error.
+ */
+export interface EntryUploadAbortRequest {
+  uploadHandle: string;
+}
+
+/** EntryUploadAbortResponse confirms the abort. */
+export interface EntryUploadAbortResponse {
+}
+
+/**
+ * EntryFetchChunkRequest reads a range of an entry's ciphertext. It works for
+ * every entry, inline or not, but exists for those larger than one frame.
+ */
+export interface EntryFetchChunkRequest {
+  entryId: string;
+  /** Where to start, in bytes; less than the entry's size. */
+  offset: string;
+  /**
+   * How much to read. Zero, or more than chunk_bytes, means chunk_bytes. The
+   * range is cut at the end of the entry.
+   */
+  length: string;
+}
+
+/** EntryFetchChunkResponse returns the range. */
+export interface EntryFetchChunkResponse {
+  /** The entry's metadata, so the first range also says how many follow. */
+  meta?: EntryMeta | undefined;
+  offset: string;
+  data: Uint8Array;
 }
 
 /**
@@ -164,6 +299,8 @@ export interface EntryFetchRequest {
 /**
  * EntryFetchResponse returns the ciphertext, whether it was stored inline or in
  * the blob backend; that distinction is the server's problem, not the client's.
+ * An entry larger than one frame is refused with ERROR_CODE_TOO_LARGE; it is
+ * read with EntryFetchChunkRequest instead.
  */
 export interface EntryFetchResponse {
   meta?: EntryMeta | undefined;
@@ -171,7 +308,15 @@ export interface EntryFetchResponse {
 }
 
 function createBaseEntryMeta(): EntryMeta {
-  return { entryId: "", epoch: "0", size: "0", createdAtUnixMs: "0", expiresAtUnixMs: "0", inline: false };
+  return {
+    entryId: "",
+    epoch: "0",
+    size: "0",
+    createdAtUnixMs: "0",
+    expiresAtUnixMs: "0",
+    inline: false,
+    header: new Uint8Array(0),
+  };
 }
 
 export const EntryMeta: MessageFns<EntryMeta> = {
@@ -193,6 +338,9 @@ export const EntryMeta: MessageFns<EntryMeta> = {
     }
     if (message.inline !== false) {
       writer.uint32(48).bool(message.inline);
+    }
+    if (message.header.length !== 0) {
+      writer.uint32(58).bytes(message.header);
     }
     return writer;
   },
@@ -258,6 +406,14 @@ export const EntryMeta: MessageFns<EntryMeta> = {
             message.inline = reader.bool();
             continue;
           }
+          case 7: {
+            if (tag !== 58) {
+              break;
+            }
+
+            message.header = reader.bytes();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -290,6 +446,7 @@ export const EntryMeta: MessageFns<EntryMeta> = {
         ? globalThis.String(object.expires_at_unix_ms)
         : "0",
       inline: isSet(object.inline) ? globalThis.Boolean(object.inline) : false,
+      header: isSet(object.header) ? bytesFromBase64(object.header) : new Uint8Array(0),
     };
   },
 
@@ -313,6 +470,9 @@ export const EntryMeta: MessageFns<EntryMeta> = {
     if (message.inline !== false) {
       obj.inline = message.inline;
     }
+    if (message.header.length !== 0) {
+      obj.header = base64FromBytes(message.header);
+    }
     return obj;
   },
 
@@ -327,12 +487,20 @@ export const EntryMeta: MessageFns<EntryMeta> = {
     message.createdAtUnixMs = object.createdAtUnixMs ?? "0";
     message.expiresAtUnixMs = object.expiresAtUnixMs ?? "0";
     message.inline = object.inline ?? false;
+    message.header = object.header ?? new Uint8Array(0);
     return message;
   },
 };
 
 function createBaseEntryPutRequest(): EntryPutRequest {
-  return { entryId: "", epoch: "0", size: "0", ciphertext: undefined, uploadHandle: undefined };
+  return {
+    entryId: "",
+    epoch: "0",
+    size: "0",
+    ciphertext: undefined,
+    uploadHandle: undefined,
+    header: new Uint8Array(0),
+  };
 }
 
 export const EntryPutRequest: MessageFns<EntryPutRequest> = {
@@ -351,6 +519,9 @@ export const EntryPutRequest: MessageFns<EntryPutRequest> = {
     }
     if (message.uploadHandle !== undefined) {
       writer.uint32(34).string(message.uploadHandle);
+    }
+    if (message.header.length !== 0) {
+      writer.uint32(50).bytes(message.header);
     }
     return writer;
   },
@@ -408,6 +579,14 @@ export const EntryPutRequest: MessageFns<EntryPutRequest> = {
             message.uploadHandle = reader.string();
             continue;
           }
+          case 6: {
+            if (tag !== 50) {
+              break;
+            }
+
+            message.header = reader.bytes();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -435,6 +614,7 @@ export const EntryPutRequest: MessageFns<EntryPutRequest> = {
         : isSet(object.upload_handle)
         ? globalThis.String(object.upload_handle)
         : undefined,
+      header: isSet(object.header) ? bytesFromBase64(object.header) : new Uint8Array(0),
     };
   },
 
@@ -455,6 +635,9 @@ export const EntryPutRequest: MessageFns<EntryPutRequest> = {
     if (message.uploadHandle !== undefined) {
       obj.uploadHandle = message.uploadHandle;
     }
+    if (message.header.length !== 0) {
+      obj.header = base64FromBytes(message.header);
+    }
     return obj;
   },
 
@@ -468,6 +651,7 @@ export const EntryPutRequest: MessageFns<EntryPutRequest> = {
     message.size = object.size ?? "0";
     message.ciphertext = object.ciphertext ?? undefined;
     message.uploadHandle = object.uploadHandle ?? undefined;
+    message.header = object.header ?? new Uint8Array(0);
     return message;
   },
 };
@@ -535,6 +719,918 @@ export const EntryPutResponse: MessageFns<EntryPutResponse> = {
   fromPartial<I extends Exact<DeepPartial<EntryPutResponse>, I>>(object: I): EntryPutResponse {
     const message = createBaseEntryPutResponse();
     message.meta = (object.meta !== undefined && object.meta !== null) ? EntryMeta.fromPartial(object.meta) : undefined;
+    return message;
+  },
+};
+
+function createBaseEntryLimitsRequest(): EntryLimitsRequest {
+  return {};
+}
+
+export const EntryLimitsRequest: MessageFns<EntryLimitsRequest> = {
+  encode(_: EntryLimitsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EntryLimitsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseEntryLimitsRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(_: any): EntryLimitsRequest {
+    return {};
+  },
+
+  toJSON(_: EntryLimitsRequest): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EntryLimitsRequest>, I>>(base?: I): EntryLimitsRequest {
+    return EntryLimitsRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EntryLimitsRequest>, I>>(_: I): EntryLimitsRequest {
+    const message = createBaseEntryLimitsRequest();
+    return message;
+  },
+};
+
+function createBaseEntryLimitsResponse(): EntryLimitsResponse {
+  return { maxEntryBytes: "0", singleFrameMaxBytes: "0", chunkBytes: "0", inlineMaxBytes: "0" };
+}
+
+export const EntryLimitsResponse: MessageFns<EntryLimitsResponse> = {
+  encode(message: EntryLimitsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.maxEntryBytes !== "0") {
+      writer.uint32(8).uint64(message.maxEntryBytes);
+    }
+    if (message.singleFrameMaxBytes !== "0") {
+      writer.uint32(16).uint64(message.singleFrameMaxBytes);
+    }
+    if (message.chunkBytes !== "0") {
+      writer.uint32(24).uint64(message.chunkBytes);
+    }
+    if (message.inlineMaxBytes !== "0") {
+      writer.uint32(32).uint64(message.inlineMaxBytes);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EntryLimitsResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseEntryLimitsResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.maxEntryBytes = reader.uint64().toString();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.singleFrameMaxBytes = reader.uint64().toString();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.chunkBytes = reader.uint64().toString();
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.inlineMaxBytes = reader.uint64().toString();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): EntryLimitsResponse {
+    return {
+      maxEntryBytes: isSet(object.maxEntryBytes)
+        ? globalThis.String(object.maxEntryBytes)
+        : isSet(object.max_entry_bytes)
+        ? globalThis.String(object.max_entry_bytes)
+        : "0",
+      singleFrameMaxBytes: isSet(object.singleFrameMaxBytes)
+        ? globalThis.String(object.singleFrameMaxBytes)
+        : isSet(object.single_frame_max_bytes)
+        ? globalThis.String(object.single_frame_max_bytes)
+        : "0",
+      chunkBytes: isSet(object.chunkBytes)
+        ? globalThis.String(object.chunkBytes)
+        : isSet(object.chunk_bytes)
+        ? globalThis.String(object.chunk_bytes)
+        : "0",
+      inlineMaxBytes: isSet(object.inlineMaxBytes)
+        ? globalThis.String(object.inlineMaxBytes)
+        : isSet(object.inline_max_bytes)
+        ? globalThis.String(object.inline_max_bytes)
+        : "0",
+    };
+  },
+
+  toJSON(message: EntryLimitsResponse): unknown {
+    const obj: any = {};
+    if (message.maxEntryBytes !== "0") {
+      obj.maxEntryBytes = message.maxEntryBytes;
+    }
+    if (message.singleFrameMaxBytes !== "0") {
+      obj.singleFrameMaxBytes = message.singleFrameMaxBytes;
+    }
+    if (message.chunkBytes !== "0") {
+      obj.chunkBytes = message.chunkBytes;
+    }
+    if (message.inlineMaxBytes !== "0") {
+      obj.inlineMaxBytes = message.inlineMaxBytes;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EntryLimitsResponse>, I>>(base?: I): EntryLimitsResponse {
+    return EntryLimitsResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EntryLimitsResponse>, I>>(object: I): EntryLimitsResponse {
+    const message = createBaseEntryLimitsResponse();
+    message.maxEntryBytes = object.maxEntryBytes ?? "0";
+    message.singleFrameMaxBytes = object.singleFrameMaxBytes ?? "0";
+    message.chunkBytes = object.chunkBytes ?? "0";
+    message.inlineMaxBytes = object.inlineMaxBytes ?? "0";
+    return message;
+  },
+};
+
+function createBaseEntryUploadBeginRequest(): EntryUploadBeginRequest {
+  return { entryId: "", epoch: "0", size: "0" };
+}
+
+export const EntryUploadBeginRequest: MessageFns<EntryUploadBeginRequest> = {
+  encode(message: EntryUploadBeginRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.entryId !== "") {
+      writer.uint32(10).string(message.entryId);
+    }
+    if (message.epoch !== "0") {
+      writer.uint32(16).uint64(message.epoch);
+    }
+    if (message.size !== "0") {
+      writer.uint32(24).uint64(message.size);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EntryUploadBeginRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseEntryUploadBeginRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.entryId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.epoch = reader.uint64().toString();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.size = reader.uint64().toString();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): EntryUploadBeginRequest {
+    return {
+      entryId: isSet(object.entryId)
+        ? globalThis.String(object.entryId)
+        : isSet(object.entry_id)
+        ? globalThis.String(object.entry_id)
+        : "",
+      epoch: isSet(object.epoch) ? globalThis.String(object.epoch) : "0",
+      size: isSet(object.size) ? globalThis.String(object.size) : "0",
+    };
+  },
+
+  toJSON(message: EntryUploadBeginRequest): unknown {
+    const obj: any = {};
+    if (message.entryId !== "") {
+      obj.entryId = message.entryId;
+    }
+    if (message.epoch !== "0") {
+      obj.epoch = message.epoch;
+    }
+    if (message.size !== "0") {
+      obj.size = message.size;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EntryUploadBeginRequest>, I>>(base?: I): EntryUploadBeginRequest {
+    return EntryUploadBeginRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EntryUploadBeginRequest>, I>>(object: I): EntryUploadBeginRequest {
+    const message = createBaseEntryUploadBeginRequest();
+    message.entryId = object.entryId ?? "";
+    message.epoch = object.epoch ?? "0";
+    message.size = object.size ?? "0";
+    return message;
+  },
+};
+
+function createBaseEntryUploadBeginResponse(): EntryUploadBeginResponse {
+  return { uploadHandle: "", entryId: "", chunkBytes: "0" };
+}
+
+export const EntryUploadBeginResponse: MessageFns<EntryUploadBeginResponse> = {
+  encode(message: EntryUploadBeginResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.uploadHandle !== "") {
+      writer.uint32(10).string(message.uploadHandle);
+    }
+    if (message.entryId !== "") {
+      writer.uint32(18).string(message.entryId);
+    }
+    if (message.chunkBytes !== "0") {
+      writer.uint32(24).uint64(message.chunkBytes);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EntryUploadBeginResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseEntryUploadBeginResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.uploadHandle = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.entryId = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.chunkBytes = reader.uint64().toString();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): EntryUploadBeginResponse {
+    return {
+      uploadHandle: isSet(object.uploadHandle)
+        ? globalThis.String(object.uploadHandle)
+        : isSet(object.upload_handle)
+        ? globalThis.String(object.upload_handle)
+        : "",
+      entryId: isSet(object.entryId)
+        ? globalThis.String(object.entryId)
+        : isSet(object.entry_id)
+        ? globalThis.String(object.entry_id)
+        : "",
+      chunkBytes: isSet(object.chunkBytes)
+        ? globalThis.String(object.chunkBytes)
+        : isSet(object.chunk_bytes)
+        ? globalThis.String(object.chunk_bytes)
+        : "0",
+    };
+  },
+
+  toJSON(message: EntryUploadBeginResponse): unknown {
+    const obj: any = {};
+    if (message.uploadHandle !== "") {
+      obj.uploadHandle = message.uploadHandle;
+    }
+    if (message.entryId !== "") {
+      obj.entryId = message.entryId;
+    }
+    if (message.chunkBytes !== "0") {
+      obj.chunkBytes = message.chunkBytes;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EntryUploadBeginResponse>, I>>(base?: I): EntryUploadBeginResponse {
+    return EntryUploadBeginResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EntryUploadBeginResponse>, I>>(object: I): EntryUploadBeginResponse {
+    const message = createBaseEntryUploadBeginResponse();
+    message.uploadHandle = object.uploadHandle ?? "";
+    message.entryId = object.entryId ?? "";
+    message.chunkBytes = object.chunkBytes ?? "0";
+    return message;
+  },
+};
+
+function createBaseEntryUploadChunkRequest(): EntryUploadChunkRequest {
+  return { uploadHandle: "", index: 0, data: new Uint8Array(0) };
+}
+
+export const EntryUploadChunkRequest: MessageFns<EntryUploadChunkRequest> = {
+  encode(message: EntryUploadChunkRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.uploadHandle !== "") {
+      writer.uint32(10).string(message.uploadHandle);
+    }
+    if (message.index !== 0) {
+      writer.uint32(16).uint32(message.index);
+    }
+    if (message.data.length !== 0) {
+      writer.uint32(26).bytes(message.data);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EntryUploadChunkRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseEntryUploadChunkRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.uploadHandle = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.index = reader.uint32();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.data = reader.bytes();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): EntryUploadChunkRequest {
+    return {
+      uploadHandle: isSet(object.uploadHandle)
+        ? globalThis.String(object.uploadHandle)
+        : isSet(object.upload_handle)
+        ? globalThis.String(object.upload_handle)
+        : "",
+      index: isSet(object.index) ? globalThis.Number(object.index) : 0,
+      data: isSet(object.data) ? bytesFromBase64(object.data) : new Uint8Array(0),
+    };
+  },
+
+  toJSON(message: EntryUploadChunkRequest): unknown {
+    const obj: any = {};
+    if (message.uploadHandle !== "") {
+      obj.uploadHandle = message.uploadHandle;
+    }
+    if (message.index !== 0) {
+      obj.index = Math.round(message.index);
+    }
+    if (message.data.length !== 0) {
+      obj.data = base64FromBytes(message.data);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EntryUploadChunkRequest>, I>>(base?: I): EntryUploadChunkRequest {
+    return EntryUploadChunkRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EntryUploadChunkRequest>, I>>(object: I): EntryUploadChunkRequest {
+    const message = createBaseEntryUploadChunkRequest();
+    message.uploadHandle = object.uploadHandle ?? "";
+    message.index = object.index ?? 0;
+    message.data = object.data ?? new Uint8Array(0);
+    return message;
+  },
+};
+
+function createBaseEntryUploadChunkResponse(): EntryUploadChunkResponse {
+  return { receivedBytes: "0" };
+}
+
+export const EntryUploadChunkResponse: MessageFns<EntryUploadChunkResponse> = {
+  encode(message: EntryUploadChunkResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.receivedBytes !== "0") {
+      writer.uint32(8).uint64(message.receivedBytes);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EntryUploadChunkResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseEntryUploadChunkResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.receivedBytes = reader.uint64().toString();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): EntryUploadChunkResponse {
+    return {
+      receivedBytes: isSet(object.receivedBytes)
+        ? globalThis.String(object.receivedBytes)
+        : isSet(object.received_bytes)
+        ? globalThis.String(object.received_bytes)
+        : "0",
+    };
+  },
+
+  toJSON(message: EntryUploadChunkResponse): unknown {
+    const obj: any = {};
+    if (message.receivedBytes !== "0") {
+      obj.receivedBytes = message.receivedBytes;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EntryUploadChunkResponse>, I>>(base?: I): EntryUploadChunkResponse {
+    return EntryUploadChunkResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EntryUploadChunkResponse>, I>>(object: I): EntryUploadChunkResponse {
+    const message = createBaseEntryUploadChunkResponse();
+    message.receivedBytes = object.receivedBytes ?? "0";
+    return message;
+  },
+};
+
+function createBaseEntryUploadAbortRequest(): EntryUploadAbortRequest {
+  return { uploadHandle: "" };
+}
+
+export const EntryUploadAbortRequest: MessageFns<EntryUploadAbortRequest> = {
+  encode(message: EntryUploadAbortRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.uploadHandle !== "") {
+      writer.uint32(10).string(message.uploadHandle);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EntryUploadAbortRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseEntryUploadAbortRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.uploadHandle = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): EntryUploadAbortRequest {
+    return {
+      uploadHandle: isSet(object.uploadHandle)
+        ? globalThis.String(object.uploadHandle)
+        : isSet(object.upload_handle)
+        ? globalThis.String(object.upload_handle)
+        : "",
+    };
+  },
+
+  toJSON(message: EntryUploadAbortRequest): unknown {
+    const obj: any = {};
+    if (message.uploadHandle !== "") {
+      obj.uploadHandle = message.uploadHandle;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EntryUploadAbortRequest>, I>>(base?: I): EntryUploadAbortRequest {
+    return EntryUploadAbortRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EntryUploadAbortRequest>, I>>(object: I): EntryUploadAbortRequest {
+    const message = createBaseEntryUploadAbortRequest();
+    message.uploadHandle = object.uploadHandle ?? "";
+    return message;
+  },
+};
+
+function createBaseEntryUploadAbortResponse(): EntryUploadAbortResponse {
+  return {};
+}
+
+export const EntryUploadAbortResponse: MessageFns<EntryUploadAbortResponse> = {
+  encode(_: EntryUploadAbortResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EntryUploadAbortResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseEntryUploadAbortResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(_: any): EntryUploadAbortResponse {
+    return {};
+  },
+
+  toJSON(_: EntryUploadAbortResponse): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EntryUploadAbortResponse>, I>>(base?: I): EntryUploadAbortResponse {
+    return EntryUploadAbortResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EntryUploadAbortResponse>, I>>(_: I): EntryUploadAbortResponse {
+    const message = createBaseEntryUploadAbortResponse();
+    return message;
+  },
+};
+
+function createBaseEntryFetchChunkRequest(): EntryFetchChunkRequest {
+  return { entryId: "", offset: "0", length: "0" };
+}
+
+export const EntryFetchChunkRequest: MessageFns<EntryFetchChunkRequest> = {
+  encode(message: EntryFetchChunkRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.entryId !== "") {
+      writer.uint32(10).string(message.entryId);
+    }
+    if (message.offset !== "0") {
+      writer.uint32(16).uint64(message.offset);
+    }
+    if (message.length !== "0") {
+      writer.uint32(24).uint64(message.length);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EntryFetchChunkRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseEntryFetchChunkRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.entryId = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.offset = reader.uint64().toString();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.length = reader.uint64().toString();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): EntryFetchChunkRequest {
+    return {
+      entryId: isSet(object.entryId)
+        ? globalThis.String(object.entryId)
+        : isSet(object.entry_id)
+        ? globalThis.String(object.entry_id)
+        : "",
+      offset: isSet(object.offset) ? globalThis.String(object.offset) : "0",
+      length: isSet(object.length) ? globalThis.String(object.length) : "0",
+    };
+  },
+
+  toJSON(message: EntryFetchChunkRequest): unknown {
+    const obj: any = {};
+    if (message.entryId !== "") {
+      obj.entryId = message.entryId;
+    }
+    if (message.offset !== "0") {
+      obj.offset = message.offset;
+    }
+    if (message.length !== "0") {
+      obj.length = message.length;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EntryFetchChunkRequest>, I>>(base?: I): EntryFetchChunkRequest {
+    return EntryFetchChunkRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EntryFetchChunkRequest>, I>>(object: I): EntryFetchChunkRequest {
+    const message = createBaseEntryFetchChunkRequest();
+    message.entryId = object.entryId ?? "";
+    message.offset = object.offset ?? "0";
+    message.length = object.length ?? "0";
+    return message;
+  },
+};
+
+function createBaseEntryFetchChunkResponse(): EntryFetchChunkResponse {
+  return { meta: undefined, offset: "0", data: new Uint8Array(0) };
+}
+
+export const EntryFetchChunkResponse: MessageFns<EntryFetchChunkResponse> = {
+  encode(message: EntryFetchChunkResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.meta !== undefined) {
+      EntryMeta.encode(message.meta, writer.uint32(10).fork()).join();
+    }
+    if (message.offset !== "0") {
+      writer.uint32(16).uint64(message.offset);
+    }
+    if (message.data.length !== 0) {
+      writer.uint32(26).bytes(message.data);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EntryFetchChunkResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseEntryFetchChunkResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.meta = EntryMeta.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.offset = reader.uint64().toString();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.data = reader.bytes();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): EntryFetchChunkResponse {
+    return {
+      meta: isSet(object.meta) ? EntryMeta.fromJSON(object.meta) : undefined,
+      offset: isSet(object.offset) ? globalThis.String(object.offset) : "0",
+      data: isSet(object.data) ? bytesFromBase64(object.data) : new Uint8Array(0),
+    };
+  },
+
+  toJSON(message: EntryFetchChunkResponse): unknown {
+    const obj: any = {};
+    if (message.meta !== undefined) {
+      obj.meta = EntryMeta.toJSON(message.meta);
+    }
+    if (message.offset !== "0") {
+      obj.offset = message.offset;
+    }
+    if (message.data.length !== 0) {
+      obj.data = base64FromBytes(message.data);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EntryFetchChunkResponse>, I>>(base?: I): EntryFetchChunkResponse {
+    return EntryFetchChunkResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EntryFetchChunkResponse>, I>>(object: I): EntryFetchChunkResponse {
+    const message = createBaseEntryFetchChunkResponse();
+    message.meta = (object.meta !== undefined && object.meta !== null) ? EntryMeta.fromPartial(object.meta) : undefined;
+    message.offset = object.offset ?? "0";
+    message.data = object.data ?? new Uint8Array(0);
     return message;
   },
 };

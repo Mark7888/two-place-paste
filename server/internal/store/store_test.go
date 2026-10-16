@@ -88,6 +88,53 @@ func TestTokenLifecycle(t *testing.T) {
 	})
 }
 
+// TestRevokeToken: an unused token can be revoked and then creates nothing; a
+// used one cannot be, because its group already exists.
+func TestRevokeToken(t *testing.T) {
+	t.Parallel()
+
+	forEachStore(t, func(t *testing.T, s store.Store) {
+		ctx := context.Background()
+
+		unused := mustToken(ctx, t, s)
+		if err := s.RevokeToken(ctx, unused.Value); err != nil {
+			t.Fatalf("RevokeToken(unused) error = %v", err)
+		}
+		if _, err := s.GetToken(ctx, unused.Value); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetToken(revoked) error = %v, want %v", err, store.ErrNotFound)
+		}
+		if _, err := s.ConsumeToken(ctx, unused.Value); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("ConsumeToken(revoked) error = %v, want %v", err, store.ErrNotFound)
+		}
+		tokens, err := s.ListTokens(ctx)
+		if err != nil {
+			t.Fatalf("ListTokens() error = %v", err)
+		}
+		for _, tok := range tokens {
+			if tok.Value == unused.Value {
+				t.Errorf("ListTokens() still lists the revoked token")
+			}
+		}
+		if err := s.RevokeToken(ctx, unused.Value); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("second RevokeToken() error = %v, want %v", err, store.ErrNotFound)
+		}
+
+		used := mustToken(ctx, t, s)
+		if _, err := s.ConsumeToken(ctx, used.Value); err != nil {
+			t.Fatalf("ConsumeToken() error = %v", err)
+		}
+		if err := s.RevokeToken(ctx, used.Value); !errors.Is(err, store.ErrTokenConsumed) {
+			t.Errorf("RevokeToken(used) error = %v, want %v", err, store.ErrTokenConsumed)
+		}
+		if got, err := s.GetToken(ctx, used.Value); err != nil || !got.Used {
+			t.Errorf("GetToken(used) after a refused revoke = {Used:%v}, %v; want it untouched", got.Used, err)
+		}
+		if _, err := s.GetGroup(ctx, used.Value); err != nil {
+			t.Errorf("GetGroup() after a refused revoke error = %v, want the group intact", err)
+		}
+	})
+}
+
 func TestCreateGroupWithDevice(t *testing.T) {
 	t.Parallel()
 

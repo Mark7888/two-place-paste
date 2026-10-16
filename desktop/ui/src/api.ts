@@ -40,9 +40,33 @@ export interface EntryView {
   size: number;
   created_at: string;
   expires_at: string;
+  /** From the entry's sealed header, read without fetching it. Absent when
+   *  the type is unknown: no header, or one this device cannot open. */
+  kind?: "text" | "image" | "file";
+  content_type?: string;
+  filename?: string;
+  /** The plaintext size, when the type is known. */
+  bytes?: number;
+  /** Text or an image within the auto-download limit; no_preview says why not. */
+  previewable: boolean;
+  no_preview?: string;
+}
+
+/** SkippedView is an automatic transfer the user's size limit held back. */
+export interface SkippedView {
+  direction: "upload" | "download";
+  entry_id?: string;
+  bytes: number;
+  message: string;
+  at: string;
 }
 
 export interface Status {
+  /**
+   * The latest automatic transfer held back by a size limit. The service keeps
+   * it until it is dismissed or a newer entry lands on either side.
+   */
+  skipped?: SkippedView;
   in_group: boolean;
   connected: boolean;
   epoch: number;
@@ -140,6 +164,9 @@ export interface SettingsView {
   listen_port: number;
   auto_watch: boolean;
   auto_apply: boolean;
+  /** Bytes; 0 is no limit. Manual transfers are never limited. */
+  auto_upload_max_bytes: number;
+  auto_download_max_bytes: number;
   autostart: boolean;
   autostart_supported: boolean;
   clipboard_supported: boolean;
@@ -154,6 +181,8 @@ export interface SettingsPatch {
   port?: number;
   auto_watch?: boolean;
   auto_apply?: boolean;
+  auto_upload_max_bytes?: number;
+  auto_download_max_bytes?: number;
   autostart?: boolean;
   device_name?: string;
   update_channel?: UpdateChannel;
@@ -242,6 +271,12 @@ export interface ServiceEvent {
   epoch?: number;
   device_id?: string;
   name?: string;
+  /** The entry an "evicted" or "progress" event is about. */
+  entry_id?: string;
+  /** "progress" only: which way, and ciphertext bytes so far and in all. */
+  direction?: "upload" | "download";
+  done?: number;
+  total?: number;
 }
 
 export class ApiError extends Error {
@@ -280,6 +315,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 export const api = {
   status: () => request<Status>("GET", "/api/status"),
   sync: (direction: Direction) => request<SyncResult>("POST", "/api/sync", { direction }),
+  dismissSkipped: () => request<Status>("DELETE", "/api/skipped"),
   history: (before?: string) =>
     request<HistoryPage>(
       "GET",

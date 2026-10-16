@@ -13,7 +13,7 @@ import { Text, View } from 'react-native';
 
 import { useSession } from '../SessionContext';
 import { download, failureMessage, sync, upload } from '../session';
-import { Button, Choice, Notice, Screen, Section, Sheet, Status } from '../ui';
+import { Button, Choice, Notice, Screen, Section, Sheet, Status, TransferBar } from '../ui';
 import { colors, styles } from '../theme';
 
 export function SyncScreen(): React.JSX.Element {
@@ -98,6 +98,7 @@ export function SyncScreen(): React.JSX.Element {
           has since closed — which would otherwise have existed only as a toast
           nobody was looking at; `session.notice` is what merely happened.
         */}
+        <TransferBar transfer={session.transfer} />
         {message !== '' && <Notice message={message} tone={ok ? 'ok' : 'error'} />}
         {session.error !== '' && (
           <View style={{ gap: 8 }}>

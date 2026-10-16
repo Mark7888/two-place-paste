@@ -45,6 +45,25 @@ end
 return 0
 `)
 
+// revokeTokenScript deletes an unused creation token. It is a script rather
+// than a check followed by a DEL so that it serialises with createGroupScript:
+// a token presented by a client at the same instant it is revoked either
+// creates its group (and the revoke reports it consumed) or is gone (and the
+// client gets 404). Never a group created from a token the admin was told is
+// revoked.
+//
+// Return codes: 0 revoked, 1 no such token, 2 token already consumed.
+//
+//	KEYS[1] token key            ARGV[1] token value
+//	KEYS[2] token index set
+var revokeTokenScript = redis.NewScript(`
+if redis.call('EXISTS', KEYS[1]) == 0 then return 1 end
+if redis.call('HGET', KEYS[1], 'used') == '1' then return 2 end
+redis.call('DEL', KEYS[1])
+redis.call('SREM', KEYS[2], ARGV[1])
+return 0
+`)
+
 // applyRekeyScript is SPEC §3.3 step 4: write every wrapped key, delete the
 // revoked device, increment the epoch — or change nothing at all.
 //

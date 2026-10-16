@@ -58,6 +58,11 @@
                     data-name="{{.Name}}"
                     data-url="{{.URL}}"
                     data-qr="{{.QRPath}}">Show code</button>
+            <form method="post" action="{{.RevokePath}}" class="inline-form"
+                  data-confirm="Revoke “{{.Name}}”? Its link and QR code stop working, and this cannot be undone.">
+              <input type="hidden" name="csrf" value="{{$.CSRF}}">
+              <button type="submit" class="danger small">Revoke</button>
+            </form>
             <noscript>
               <div class="noscript-reveal" data-js-hide>
                 <img class="qr" width="200" height="200" alt="QR code for the creation URL" src="{{.QRPath}}">

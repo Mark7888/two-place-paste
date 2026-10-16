@@ -159,10 +159,36 @@ have no default:
 
 The rest have defaults: `TPP_HTTP_ADDR` (`:8080`), `TPP_LOG_LEVEL` (`info`),
 `TPP_ADMIN_SESSION_TTL` (`12h`), `TPP_REDIS_ADDR` / `TPP_REDIS_PASSWORD` /
-`TPP_REDIS_DB`, `TPP_BLOB_BACKEND` (`disk`; `s3` is not implemented),
+`TPP_REDIS_DB`, `TPP_BLOB_BACKEND` (`disk` or `s3`, below),
 `TPP_BLOB_ROOT`, `TPP_BLOB_SWEEP_INTERVAL` (`10m`),
 `TPP_ENTRY_INLINE_MAX_BYTES` (256 KiB — larger ciphertext goes to the blob
-store) and `TPP_ENTRY_MAX_BYTES` (10 MiB hard cap).
+store), `TPP_ENTRY_MAX_BYTES` (50 MiB hard cap; anything over 10 MiB travels in
+chunks of `TPP_ENTRY_CHUNK_BYTES`, 8 MiB) and `TPP_UPLOAD_SESSION_TTL` (`10m`, how
+long an unfinished chunked upload may sit idle).
+
+**Storage limits.** `TPP_BLOB_MAX_TOTAL_BYTES` (unlimited by default, e.g.
+`5GiB`) and `TPP_BLOB_MAX_GROUP_BYTES` (`1GiB`) cap the blob store. When a new
+entry would not fit, the oldest entries are evicted to make room — the writing
+group's own first, then the oldest anywhere — even inside their 24 hours.
+`TPP_BLOB_MIN_FREE_BYTES` additionally refuses writes when the disk itself runs
+low. Sizes accept units (`500MB`, `5GiB`) or plain byte counts.
+
+**S3 / MinIO.** Large entries can live in S3-compatible object storage instead of
+on disk. To use the MinIO service that `deploy/docker-compose.yml` ships behind a
+profile, set this in `.env` and start with `docker compose --profile minio up -d`:
+
+```sh
+TPP_BLOB_BACKEND=s3
+TPP_S3_ENDPOINT=http://minio:9000
+TPP_S3_BUCKET=tpp
+TPP_S3_ACCESS_KEY_ID=tpp
+TPP_S3_SECRET_ACCESS_KEY=change-me-to-at-least-8-chars   # also MinIO's root password
+TPP_S3_CREATE_BUCKET=true
+```
+
+For AWS S3, leave `TPP_S3_ENDPOINT` empty and set `TPP_S3_REGION`. Every S3
+setting is documented in `deploy/.env.example`; the server checks the bucket and
+credentials at startup and refuses to start, with the reason, if either is wrong.
 
 Configuration comes from `.env` **and** the process environment, and the
 process environment wins. The loader validates eagerly and reports every
@@ -191,7 +217,7 @@ server.
 |---|---|
 | `/healthz` | Liveness. Returns `ok`. |
 | `/ws` | The client WebSocket. |
-| `/admin/` | Admin UI (login, creation tokens). |
+| `/admin/` | Admin UI: a dashboard of storage and group usage, and creation tokens (generate and revoke). |
 | `/<token>` | Group creation. `GET` returns 404 by design; only a client's `POST` spends the token. |
 
 ### Operating it
@@ -200,6 +226,7 @@ server.
 docker compose logs -f server                       # JSON, one object per line
 docker compose pull && docker compose up -d         # upgrade (add --build from source)
 docker compose exec server tpp gc --verify          # cross-check blobs; deletes nothing
+docker compose exec server tpp gc --rebuild-accounting  # after a Redis restore
 ```
 
 Back up the `redis-data` volume: it holds the groups, devices and wrapped keys,
@@ -276,13 +303,19 @@ backend is in use.
 ### Create a group
 
 1. Sign in at `https://tpp.example.com/admin/` with `ADMIN_PASSWORD`.
-2. Generate a named creation token. The screen shows its URL and a QR code.
+2. Open **Tokens** and generate a named creation token. The screen shows its URL
+   and a QR code.
 3. On your first device, open the desktop app → **Pairing** → *Create a group*,
    paste the creation URL and press **Create**.
 
 The device generates the group key locally and wraps it to itself; the relay
 only ever receives the wrapped form. One token creates exactly one group — a
-second attempt gets `409`.
+second attempt gets `409`. An unused token can be revoked from the admin screen,
+after which its URL no longer works.
+
+The admin **Dashboard** shows blob storage against its limits, evictions in the
+last day, and per group the devices, last activity, entry count and storage
+used — sizes and counts only, never content.
 
 ### Add a device
 
@@ -329,7 +362,11 @@ The **Sync** tab gives you three actions:
 - **Copy the latest entry here** — pull the group's newest entry onto this
   clipboard.
 
-Text, images and files are supported. Ciphertext is capped at 10 MB per entry.
+Text, images and files are supported. The relay accepts up to 50 MB of ciphertext
+per entry. Anything over 10 MB travels in 8 MB chunks — the desktop and Android
+apps do this on their own and show a progress bar while a large entry moves.
+Against a relay that predates chunked transfer they fall back to its 10 MB cap
+and say so before uploading.
 
 **Watch the clipboard** (Settings) turns on polling: anything you copy is
 encrypted and uploaded as the group's latest entry. It is off by default and
@@ -359,6 +396,13 @@ expire within a day.
 | Setting | Default | Notes |
 |---|---|---|
 | Watch the clipboard | off | Opt-in polling, as above. |
+| Upload automatically up to | 25 MB | What watching the clipboard uploads on its own. Anything larger is left for **Upload**; a notice says so. Empty is no limit. |
+| Download automatically up to | 25 MB | What taking other devices' uploads fetches on its own, decided before anything is downloaded. Anything larger is left for **Download** or History. Empty is no limit. |
+
+When a limit holds something back, a notice at the top of the app says what and
+how big — only the latest one, kept by the service, so it is there when you open
+the app later. It stays until you dismiss it or a newer entry lands on either
+side: something you copied is uploaded, or an entry is put on this clipboard.
 | Start at login | off | A per-user login item: a launchd agent on macOS, the `HKCU\...\Run` key on Windows. |
 | Localhost port | 47821 | Applies at the next launch. |
 | This device's name | hostname | What your other devices show in their revocation dialog. Applies at the next launch. |

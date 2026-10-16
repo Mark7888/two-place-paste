@@ -94,7 +94,8 @@ server {
     ssl_certificate     /etc/letsencrypt/live/tpp.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/tpp.example.com/privkey.pem;
 
-    # 10 MB ciphertext cap (SPEC §4.3), plus room for framing.
+    # A WebSocket frame carries at most 10 MiB of ciphertext (SPEC §4.3); larger
+    # entries are chunked. This bounds plain HTTP bodies, plus framing room.
     client_max_body_size 12m;
 
     location / {
@@ -125,7 +126,8 @@ live credential.
 ## 4. Handing out a group
 
 1. Sign in at `https://tpp.example.com/admin/`.
-2. Generate a named creation token. The screen shows its URL and a QR code.
+2. Open **Tokens** and generate a named creation token. The screen shows its URL
+   and a QR code.
 3. Send the URL — or let the user scan the code — and they select **New
    Group** in a client.
 
@@ -134,8 +136,20 @@ crawler, a link preview or a mail scanner following the link cannot burn the
 token, because only the client's `POST` consumes it. One token creates exactly
 one group; a second attempt gets `409`.
 
-The admin screen lists tokens and nothing else. There is no content access to
-add later — the server holds only ciphertext (SPEC §2.3).
+A token handed out by mistake, or one that was never used, can be **revoked**
+from the same screen. Its URL then returns 404 like any unknown token. A used
+token cannot be revoked — its group already exists; remove that group's devices
+by revoking them from a client.
+
+The **Dashboard** is the admin landing page. It shows blob storage used against
+`TPP_BLOB_MAX_TOTAL_BYTES`, evictions in the last 24 hours, the last sweep and
+whether it failed, and one row per group — devices, last activity, live
+entries, the oldest entry's age and blob storage against the group limit,
+heaviest first. If a part cannot be read (Redis down, say) it says which, and
+renders the rest.
+
+The admin screens show tokens, sizes and counts, and nothing else. There is no
+content access to add later — the server holds only ciphertext (SPEC §2.3).
 
 ## 5. Redis settings that are not tuning
 
@@ -149,9 +163,9 @@ add later — the server holds only ciphertext (SPEC §2.3).
   records, device records and wrapped keys**, destroying groups and pairings
   under memory pressure with no error anywhere (SPEC §4.2).
 
-Size `maxmemory` for the ephemeral zone. Entries are capped at 10 MB of
-ciphertext and only those at or below 256 KB are stored in Redis at all
-(SPEC §4.3).
+Size `maxmemory` for the ephemeral zone. Only entries at or below 256 KB of
+ciphertext are stored in Redis at all (SPEC §4.3); larger ones live in the blob
+backend.
 
 ## 6. Blob storage and garbage collection
 
@@ -179,6 +193,124 @@ Two kinds of finding:
 - *dangling entries* — entries whose blob is missing. These are the ones that
   matter: the entry is listed and unreadable.
 
+A blob deleted from the bucket or the volume by hand — or by a lifecycle rule
+shorter than a day — is handled as it is found. The first device to read the
+entry gets "not found", and the server removes the entry there and then: it
+leaves history and stops being the group's latest, its storage is released,
+and online devices are told as for an eviction. The log records it at `warn`
+("its blob is missing from the store"). Only a definite not-found from the
+store does this; an unreachable or erroring store changes nothing.
+
+It also compares the storage accounting with the entry records (below). A
+small difference while uploads are in progress is normal.
+
+### S3 and MinIO
+
+`TPP_BLOB_BACKEND=s3` stores blobs in an S3-compatible object store instead of
+the `blob-data` volume, under the same `<YYYYMMDDHH>/<entry_id>.bin` layout
+(after `TPP_S3_PREFIX`, if set). The sweep, the storage limits and
+`tpp gc --verify` work the same on both backends. Every byte goes through the
+relay: the object store is never exposed to clients, so it belongs on a private
+network.
+
+At startup the server checks that the bucket exists — or creates it, with
+`TPP_S3_CREATE_BUCKET=true` — and writes, reads and deletes a probe object under
+`.tpp-probe/`. Any failure stops the start with the reason. There is no
+fallback to disk.
+
+**MinIO with compose.** `deploy/docker-compose.yml` has a `minio` service behind
+the `minio` profile. Its root credentials are `TPP_S3_ACCESS_KEY_ID` and
+`TPP_S3_SECRET_ACCESS_KEY` from `.env` (MinIO needs the secret to be at least 8
+characters), so one pair configures both sides:
+
+```sh
+TPP_BLOB_BACKEND=s3
+TPP_S3_ENDPOINT=http://minio:9000
+TPP_S3_BUCKET=tpp
+TPP_S3_ACCESS_KEY_ID=tpp
+TPP_S3_SECRET_ACCESS_KEY=change-me-to-at-least-8-chars
+TPP_S3_CREATE_BUCKET=true
+```
+
+```sh
+docker compose --profile minio up -d --build
+```
+
+Its data is the `minio-data` volume, which holds at most a day of ciphertext,
+like `blob-data`. MinIO no longer publishes new community images, so the
+service uses `minio/minio:latest` by default; set `TPP_MINIO_IMAGE` in `.env` to
+pin a release or to use an image you build or mirror yourself.
+
+To give the relay a key scoped to its bucket rather than the root pair, create a
+user and policy in MinIO, set `TPP_S3_ACCESS_KEY_ID` / `TPP_S3_SECRET_ACCESS_KEY`
+to that user, and set `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` for the `minio`
+service separately in an override file.
+
+**AWS S3.** Leave `TPP_S3_ENDPOINT` empty and set `TPP_S3_REGION` and
+`TPP_S3_BUCKET`. With both key variables empty the server uses the AWS
+credential chain (`AWS_*` environment variables, then an instance or task
+role). The relay needs this policy on its bucket and nothing else:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "arn:aws:s3:::my-tpp-blobs"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::my-tpp-blobs/*"
+    }
+  ]
+}
+```
+
+Add `s3:CreateBucket` only if you use `TPP_S3_CREATE_BUCKET=true`. A lifecycle
+rule that expires objects after 2 days is a good backstop for a relay that stays
+down; the server's own sweep deletes expired objects hourly.
+
+**Switching backends.** Change `TPP_BLOB_BACKEND` and restart. Entries already
+written keep pointing at the old backend and read as gone within a day; nothing
+needs migrating, because nothing lives longer than that.
+
+### Storage limits and eviction
+
+`TPP_BLOB_MAX_TOTAL_BYTES` caps all blob storage and `TPP_BLOB_MAX_GROUP_BYTES`
+(1 GiB by default) caps each group. Only blobs count; inline entries live in
+Redis and are bounded by its `maxmemory`.
+
+When a new entry would not fit, the server evicts the **oldest** entries to
+make room, even ones inside their 24 hours: first the writing group's own,
+down to its group limit, then the oldest anywhere, down to the total limit. An
+evicted entry is deleted — record, then blob — and every online device of its
+group is told, so its history updates; to anyone else it reads as gone, like
+an expired entry. Each eviction is logged at `info` with the group, entry id
+and size. If evictions are frequent, the limits are too tight for how the
+relay is used.
+
+A write is refused with `QUOTA_EXCEEDED` only when the room it needs is held by
+uploads still in progress, and with `TOO_LARGE` when the entry alone is larger
+than a limit. The disk backend also refuses writes while its volume has less
+than `TPP_BLOB_MIN_FREE_BYTES` free, which protects the host from something
+else filling the disk.
+
+The accounting lives in Redis under `quota:*` keys with no TTL. Every
+accounted entry carries its expiry and is forgotten at the next sweep after
+it, so the accounting corrects itself within a day of any crash. After
+restoring Redis from a backup, recompute it at once instead:
+
+```sh
+docker compose exec server tpp gc --rebuild-accounting
+```
+
+It reads the entry records and replaces the accounting; it deletes no blob.
+Uploads in flight while it runs are not counted until they expire, so run it
+when the relay is quiet.
+
 ## 7. Backup and restore
 
 Back up both volumes. Redis is the one that cannot be rebuilt.
@@ -196,7 +328,9 @@ docker run --rm -v tpp_blob-data:/blobs -v "$PWD":/backup alpine \
 
 Restore is the same in reverse, into a stopped stack. After restoring Redis
 without its blobs, run `tpp gc --verify` and expect dangling entries for
-anything larger than 256 KB; they expire within a day.
+anything larger than 256 KB; they expire within a day. Then run
+`tpp gc --rebuild-accounting` so the storage limits count what is really
+stored.
 
 ## 8. Upgrades and operations
 

@@ -12,6 +12,9 @@ type API interface {
 	// Sync moves the latest entry in one direction (SPEC §6).
 	Sync(ctx context.Context, d Direction) (SyncResult, error)
 
+	// DismissSkipped clears the skipped-transfer notice (Status.Skipped).
+	DismissSkipped(ctx context.Context)
+
 	// History lists entry metadata. It is only ever pulled, never pushed.
 	History(ctx context.Context, q HistoryQuery) (HistoryPage, error)
 

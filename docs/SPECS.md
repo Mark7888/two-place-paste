@@ -69,6 +69,12 @@ Ciphertext, byte sizes, timestamps, device identifiers, wrapped key blobs, group
 membership. It does **not** see clipboard content, content type, or plaintext size
 (padding is not required for MVP but the format should not preclude it).
 
+Each entry may carry a **sealed header**: content type, filename and plaintext size,
+encrypted under the group key, so a history listing can say what an entry is without
+fetching it (`spec/crypto.md` §5.5). Every header is 297 bytes, whatever the entry, so
+the server learns nothing from it; it stores it and hands it back with the entry's
+metadata.
+
 ---
 
 ## 3. Group lifecycle
@@ -233,25 +239,76 @@ pairing:<pairing_token>             hash    group_id, inviter_device_id         
 - Larger payloads go to a **blob backend** behind a Go interface — roughly
   `Put(entryID, expiresAt, r) (ref, error)`, `Get(ref)`, `Delete(ref)`, `Sweep(now)`.
   `expiresAt` is passed in at write time because reclamation depends on it (§4.5).
-  - MVP implementation: local disk.
-  - Planned: S3-compatible object storage. The interface exists from day one so this
-    is a new implementation, not a refactor.
+  - Local disk (the default).
+  - S3-compatible object storage — MinIO, AWS S3 or any other — chosen explicitly in
+    configuration. The server verifies the bucket and its credentials at startup and
+    refuses to start if either is wrong; it never falls back to disk. All bytes pass
+    through the relay, so the object store can stay on a private network.
 - The Redis entry holds only a reference.
 
-**Hard cap: 10 MB per entry, measured on the ciphertext** — the size the server
-actually receives. The server has no knowledge of plaintext size.
+**Per-entry cap: 50 MB by default, configurable, measured on the ciphertext** — the
+size the server actually receives. The server has no knowledge of plaintext size.
+
+**No frame carries more than 10 MB of ciphertext.** An entry up to that size travels
+in one frame (`EntryPutRequest`, `EntryFetchResponse`). A larger one is **chunked**:
+
+1. `EntryLimitsRequest` reports the entry cap, the single-frame cap, the chunk size
+   (8 MiB by default) and the inline threshold.
+2. `EntryUploadBeginRequest` declares the entry id, epoch and exact size. Room is
+   reserved against the storage limits here — evicting older entries if needed — so a
+   full relay refuses before any chunk is sent.
+3. `EntryUploadChunkRequest` carries chunk 0, 1, 2, … in order, each acknowledged
+   before the next; every chunk but the last is exactly the chunk size.
+4. `EntryPutRequest` with the `upload_handle` commits. The entry is created — and
+   becomes the group's latest — only now; the epoch is checked again, and a re-key in
+   between ends the upload.
+
+`EntryUploadAbortRequest` abandons an upload. An upload idle for 10 minutes, or older
+than an hour, is abandoned by the server; either way its reserved room is released.
+Upload handles are bound to the device that began them. A large entry is read back with
+`EntryFetchChunkRequest`, one range at a time.
+
+Chunking is transport only: the client seals the whole entry as one container
+(`/spec/crypto.md` §5) and opens it once all ranges are back.
+
+Upload sessions live in the server's memory (§4.1: one instance). The blob being
+written is staged in the backend — a file under `.uploads/` on disk, a multipart upload
+on S3 — and the sweep removes what a crash abandoned. At startup the server releases
+every storage reservation still pending, since no upload can have survived the
+restart.
 
 Redis expiry removes the entry record but does not touch the stored blob. Blob
 reclamation is specified in §4.5.
+
+**Storage limits.** Blob storage is capped in total and per group (configurable;
+the per-group default is 1 GiB). Only blobs are counted. When a new entry would not
+fit, the oldest committed entries are evicted — the writing group's own first, down
+to the group limit, then the oldest anywhere, down to the total limit — and every
+online device of each affected group receives `EntryEvicted`. Uploads still in
+progress are never evicted; when only they hold the room, the write is refused with
+`QUOTA_EXCEEDED`. An entry larger than a limit on its own is `TOO_LARGE`.
+
+The accounting is kept in Redis, outside the ephemeral zone's TTLs. Every accounted
+entry carries its expiry and is forgotten by the sweep after it, so a crash between
+reserving room and storing the entry costs that room for at most one lifetime.
 
 ### 4.4 Admin UI
 
 Served on the public domain. Credentials from `.env`.
 
-**Scope:** a single screen listing creation tokens — name, created date, whether used,
-and the resulting group if used. Token generation. Nothing else.
+**Scope:** two screens.
 
-No content access, by construction. No usage statistics in MVP.
+- **Dashboard** — what the relay can know without knowing any content: blob storage
+  used against its limits, entries evicted in the last day, per group the device
+  count, last activity, live entry count, age of the oldest entry and blob storage
+  used, and the storage backend's configuration and last sweep. Sizes and counts
+  only: no entry id, content type or filename is shown, and none is available to show.
+- **Tokens** — creation tokens with name, created date, whether used, and the
+  resulting group if used. Token generation, and revocation of a token that has not
+  been used yet (its URL then returns 404, like any unknown token). A used token
+  cannot be revoked: its group already exists, and is removed by revoking its devices.
+
+No content access, by construction.
 
 **Requirements:**
 - Session cookie: `HttpOnly`, `SameSite=Strict`.
@@ -306,23 +363,38 @@ bucket that expired while the server was down is removed in a single pass.
 
 **Write ordering**
 
+A chunked upload fixes its blob's expiry when it begins and its entry's when it
+commits. The blob is filed one hour (the longest an upload may take) later than the
+entry could expire, so its bucket always outlives the entry.
+
 Write the blob **before** writing the Redis entry. If the server crashes in between,
 the resulting orphan sits in a bucket that will be deleted within 24 hours regardless.
 No crash-recovery logic is required.
 
 **Explicitly deleted entries**
 
+An entry may be deleted before its expiry: by a storage-limit eviction (§4.3), or when
+a read finds its blob missing from the store — deleted outside the relay — in which
+case the reader gets not-found and the entry is retired at once, its group told as for
+an eviction, rather than failing every later reader for the rest of its lifetime. That shortens a lifetime and never lengthens one, so the invariant above
+holds. Its record is deleted first and then its blob; a blob whose delete fails stays
+on disk until its bucket expires.
+
 A blob whose entry is deleted early remains on disk until its bucket expires. This is
-bounded by the 24-hour TTL and the 10 MB per-entry cap, so the waste is small. An
+bounded by the 24-hour TTL and the per-entry cap, so the waste is small. An
 optional fast-path unlink on explicit delete may be added; because the bucket sweep is
 the backstop, that fast path is permitted to fail silently.
 
 **S3 backend**
 
-Object stores handle this natively via lifecycle expiration rules configured on the
-bucket. The S3 implementation of `Sweep()` is a **no-op**. Lifecycle granularity is one
-day rather than one hour, so objects may persist somewhat past their TTL; this is
-harmless, as Redis is the sole authority on entry visibility.
+The S3 backend uses the same layout under an optional key prefix,
+`<prefix>/<YYYYMMDDHH>/<entry_id>.bin`, and the same sweep: list the hour prefixes and
+delete everything under the ones that have fully passed. It deletes actively rather
+than relying on a bucket lifecycle rule, because lifecycle rules work in whole days and
+the storage limits (§4.3) would count dead objects for up to a day. A lifecycle rule
+expiring objects after two days remains a sensible backstop for a relay that is down.
+Writes carry `If-None-Match: *`, so the store itself refuses to replace an existing
+blob, as `O_EXCL` does on disk.
 
 **Manual verification**
 
@@ -365,7 +437,16 @@ remains an open design question — see §9.
 - Sync operates on the **latest entry only**.
 - History is browsable in-app, and any historical entry can be explicitly copied to
   the local clipboard on demand.
-- **Conflict resolution:** last write to reach the server wins.
+- **Conflict resolution:** last write to reach the server wins. An entry's time is when
+  its upload completed, not when it was copied. A client applying entries automatically
+  follows that rule while transfers overlap:
+  - an entry announced while one of its own uploads is in flight is held, not applied:
+    the upload will reach the server later and win. It is applied after all only if the
+    upload fails, or if it reached the server after the upload did;
+  - an automatic download is abandoned when a newer entry is announced, or when the user
+    copies something locally, and it never overwrites a local copy made while it ran;
+  - transfers have no overall deadline. Each request is bounded by the bytes it moves,
+    so a large entry on a slow link is slow rather than failed.
 - **Direction:** if the local clipboard is newer than the server's latest entry,
   upload; otherwise download. Where timestamp comparison isn't reliable on a platform,
   clients expose two explicit directional buttons instead.

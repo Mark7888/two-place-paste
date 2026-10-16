@@ -44,6 +44,26 @@ type Status struct {
 	// explicit buttons instead of guessing, and this is that flag.
 	DirectionKnown bool      `json:"direction_known"`
 	Suggested      Direction `json:"suggested_direction"`
+
+	// Skipped is the latest automatic transfer held back by the user's size
+	// limit, or nil. It stays until the user dismisses it or a newer entry
+	// lands on either side — an upload from here, or an entry put on this
+	// clipboard — so a UI opened after the fact still shows it.
+	Skipped *SkippedView `json:"skipped,omitempty"`
+}
+
+// SkippedView is an automatic upload or download that was not made: over the
+// user's limit for it, or an automatic upload that failed. It carries a size
+// and an entry id, never content.
+type SkippedView struct {
+	// Direction is "upload" or "download".
+	Direction string `json:"direction"`
+	// EntryID is the skipped entry, for a download; empty for an upload,
+	// which never reached the relay.
+	EntryID string    `json:"entry_id,omitempty"`
+	Bytes   int64     `json:"bytes"`
+	Message string    `json:"message"`
+	At      time.Time `json:"at"`
 }
 
 // ClipboardView is the local clipboard as the UI shows it. Preview is bounded
@@ -67,6 +87,21 @@ type EntryView struct {
 	Size      int64     `json:"size"`
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
+
+	// What the entry's sealed header says it holds (/spec/crypto.md §5.5),
+	// read here without fetching the entry. Kind is "text", "image" or
+	// "file", and empty when the type is unknown: the writer sent no header,
+	// or this device cannot open it.
+	Kind        string `json:"kind,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	Filename    string `json:"filename,omitempty"`
+	// Bytes is the plaintext size; absent when the type is unknown.
+	Bytes *int64 `json:"bytes,omitempty"`
+
+	// Previewable says the history offers a preview: a text or an image no
+	// larger than the auto-download limit. NoPreview says why not, when not.
+	Previewable bool   `json:"previewable"`
+	NoPreview   string `json:"no_preview,omitempty"`
 }
 
 // Optional reports a timestamp that may not exist. A zero time.Time marshals
@@ -224,10 +259,16 @@ type OfferPlan struct {
 
 // SettingsView is the settings screen's model.
 type SettingsView struct {
-	Port               int    `json:"port"`
-	ListenPort         int    `json:"listen_port"`
-	AutoWatch          bool   `json:"auto_watch"`
-	AutoApply          bool   `json:"auto_apply"`
+	Port       int  `json:"port"`
+	ListenPort int  `json:"listen_port"`
+	AutoWatch  bool `json:"auto_watch"`
+	AutoApply  bool `json:"auto_apply"`
+
+	// The automatic transfer limits in bytes, as they apply now; zero is no
+	// limit. Manual transfers are never limited by them.
+	AutoUploadMaxBytes   int64 `json:"auto_upload_max_bytes"`
+	AutoDownloadMaxBytes int64 `json:"auto_download_max_bytes"`
+
 	Autostart          bool   `json:"autostart"`
 	AutostartSupported bool   `json:"autostart_supported"`
 	ClipboardSupported bool   `json:"clipboard_supported"`
@@ -246,11 +287,16 @@ type SettingsView struct {
 // SettingsPatch is a partial settings update. A nil field is left alone, which
 // is what lets the UI toggle one switch without echoing the rest.
 type SettingsPatch struct {
-	Port       *int    `json:"port"`
-	AutoWatch  *bool   `json:"auto_watch"`
-	AutoApply  *bool   `json:"auto_apply"`
-	Autostart  *bool   `json:"autostart"`
-	DeviceName *string `json:"device_name"`
+	Port      *int  `json:"port"`
+	AutoWatch *bool `json:"auto_watch"`
+	AutoApply *bool `json:"auto_apply"`
+	Autostart *bool `json:"autostart"`
+
+	// AutoUploadMaxBytes and AutoDownloadMaxBytes set the automatic transfer
+	// limits; zero is no limit.
+	AutoUploadMaxBytes   *int64  `json:"auto_upload_max_bytes"`
+	AutoDownloadMaxBytes *int64  `json:"auto_download_max_bytes"`
+	DeviceName           *string `json:"device_name"`
 
 	UpdateChannel *string `json:"update_channel"`
 	AutoUpdate    *bool   `json:"auto_update"`
@@ -267,6 +313,16 @@ type Event struct {
 	Epoch    uint64    `json:"epoch,omitempty"`
 	DeviceID string    `json:"device_id,omitempty"`
 	Name     string    `json:"name,omitempty"`
+
+	// EntryID names the entry an evicted or progress event is about. An id
+	// is metadata the relay already holds, not content.
+	EntryID string `json:"entry_id,omitempty"`
+
+	// Direction, Done and Total describe a chunked transfer: "upload" or
+	// "download", and ciphertext bytes so far and in all.
+	Direction string `json:"direction,omitempty"`
+	Done      int64  `json:"done,omitempty"`
+	Total     int64  `json:"total,omitempty"`
 }
 
 // Event kinds. A UI refreshes on any of them; none of them carries clipboard
@@ -282,6 +338,19 @@ const (
 	EventClipboard     = "clipboard"
 	EventSync          = "sync"
 	EventSettings      = "settings"
+
+	// EventEvicted says the relay removed an entry before its expiry, to stay
+	// within its storage limit. A history view drops it.
+	EventEvicted = "evicted"
+
+	// EventSkipped says an automatic upload or download was not made because
+	// the entry is over the user's limit for it; Direction and Total say
+	// which and how big. The user can still send or fetch it by hand.
+	EventSkipped = "skipped"
+
+	// EventProgress reports a chunked transfer of an entry larger than one
+	// frame, once per chunk.
+	EventProgress = "progress"
 )
 
 // UpdateView is the updates section's model

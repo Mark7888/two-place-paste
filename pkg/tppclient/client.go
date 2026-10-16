@@ -64,6 +64,16 @@ type Handlers struct {
 	// handler that wants the content fetches it on a goroutine of its own.
 	// Nothing about it touches the clipboard unless the handler does.
 	OnEntryAdded func(EntryMeta)
+
+	// OnEntryEvicted fires when the relay removed an entry before its expiry
+	// to stay within its storage limit. A history view drops the entry; a
+	// fetch of it now fails with ErrNotFound.
+	OnEntryEvicted func(entryID string)
+
+	// OnProgress reports a chunked upload or download — an entry larger than
+	// one frame — as each chunk completes. It runs on the goroutine doing
+	// the transfer and must not block.
+	OnProgress func(Progress)
 }
 
 // Options configures a Client.
@@ -116,9 +126,14 @@ type Client struct {
 	maxBackoff time.Duration
 	now        func() time.Time
 
-	mu          sync.Mutex
-	state       State
-	conn        *conn
+	mu    sync.Mutex
+	state State
+	conn  *conn
+
+	// limits are the relay's entry limits, as stated on limitsConn. A new
+	// connection asks again: the relay it reaches may have been reconfigured.
+	limits      Limits
+	limitsConn  *conn
 	ready       chan struct{} // closed while a connection is live
 	invitations []*Invitation
 
@@ -540,6 +555,11 @@ func (c *Client) connection(ctx context.Context) (*conn, error) {
 
 // call runs one request over the supervised connection.
 func (c *Client) call(ctx context.Context, typ tppv1.MessageType, msg, out proto.Message) error {
+	if d, ok := entryCallTimeout(msg); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, d)
+		defer cancel()
+	}
 	conn, err := c.connection(ctx)
 	if err != nil {
 		return err
@@ -593,7 +613,16 @@ func (c *Client) onEvent(env *tppv1.Envelope) {
 			return
 		}
 		if c.handlers.OnEntryAdded != nil {
-			c.handlers.OnEntryAdded(entryMeta(ev.GetMeta()))
+			c.handlers.OnEntryAdded(c.entryMeta(ev.GetMeta()))
+		}
+
+	case tppv1.MessageType_MESSAGE_TYPE_ENTRY_EVICTED:
+		var ev tppv1.EntryEvicted
+		if err := proto.Unmarshal(env.GetPayload(), &ev); err != nil {
+			return
+		}
+		if c.handlers.OnEntryEvicted != nil {
+			c.handlers.OnEntryEvicted(ev.GetEntryId())
 		}
 
 	case tppv1.MessageType_MESSAGE_TYPE_PAIRING_JOIN_NOTICE:

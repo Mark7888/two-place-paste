@@ -1,11 +1,13 @@
 package entries_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -169,6 +171,98 @@ func TestStoreEntryRefs(t *testing.T) {
 	})
 }
 
+func TestStoreBlobEntries(t *testing.T) {
+	t.Parallel()
+
+	forEachStore(t, func(t *testing.T, s entries.Store) {
+		ctx := context.Background()
+		gid := newGroupID(t)
+		now := time.Now().UTC().Truncate(time.Millisecond)
+
+		if err := s.Put(ctx, meta(gid, gid+"-inline", now), []byte("body")); err != nil {
+			t.Fatalf("Put() error = %v", err)
+		}
+		stored := meta(gid, gid+"-stored", now)
+		stored.StorageRef = "2099010100/" + stored.ID + ".bin"
+		if err := s.Put(ctx, stored, nil); err != nil {
+			t.Fatalf("Put() error = %v", err)
+		}
+
+		all, err := s.BlobEntries(ctx)
+		if err != nil {
+			t.Fatalf("BlobEntries() error = %v", err)
+		}
+		var found bool
+		for _, m := range all {
+			if m.ID == gid+"-inline" {
+				t.Errorf("BlobEntries() listed an inline entry")
+			}
+			if m.ID == stored.ID {
+				found = true
+				if !reflect.DeepEqual(m, stored) {
+					t.Errorf("BlobEntries() = %+v, want %+v", m, stored)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("BlobEntries() did not list %s", stored.ID)
+		}
+	})
+}
+
+// TestStoreDelete: an evicted entry is gone from every read path, and a
+// delete addressed to the wrong group removes nothing.
+func TestStoreDelete(t *testing.T) {
+	t.Parallel()
+
+	forEachStore(t, func(t *testing.T, s entries.Store) {
+		ctx := context.Background()
+		gid := newGroupID(t)
+		now := time.Now().UTC()
+
+		older := meta(gid, gid+"-older", now.Add(-time.Minute))
+		if err := s.Put(ctx, older, []byte("old!")); err != nil {
+			t.Fatalf("Put() error = %v", err)
+		}
+		victim := meta(gid, gid+"-victim", now)
+		if err := s.Put(ctx, victim, []byte("body")); err != nil {
+			t.Fatalf("Put() error = %v", err)
+		}
+
+		if err := s.Delete(ctx, newGroupID(t), victim.ID); err != nil {
+			t.Fatalf("Delete(wrong group) error = %v", err)
+		}
+		if _, err := s.Get(ctx, gid, victim.ID); err != nil {
+			t.Fatalf("Get() after a wrong-group delete error = %v, want the entry intact", err)
+		}
+
+		if err := s.Delete(ctx, gid, victim.ID); err != nil {
+			t.Fatalf("Delete() error = %v", err)
+		}
+		if _, err := s.Get(ctx, gid, victim.ID); !errors.Is(err, entries.ErrNotFound) {
+			t.Errorf("Get(deleted) error = %v, want %v", err, entries.ErrNotFound)
+		}
+		if _, err := s.InlineBody(ctx, victim.ID); !errors.Is(err, entries.ErrNotFound) {
+			t.Errorf("InlineBody(deleted) error = %v, want %v", err, entries.ErrNotFound)
+		}
+		if ok, _ := s.Exists(ctx, victim.ID); ok {
+			t.Errorf("Exists(deleted) = true, want false")
+		}
+		latest, err := s.Latest(ctx, gid)
+		if err != nil || latest.ID != older.ID {
+			t.Errorf("Latest() = %q, %v; want the older entry %q", latest.ID, err, older.ID)
+		}
+		page, _, err := s.History(ctx, gid, 10, time.Time{})
+		if err != nil || len(page) != 1 || page[0].ID != older.ID {
+			t.Errorf("History() = %v, %v; want only %q", ids(page), err, older.ID)
+		}
+
+		if err := s.Delete(ctx, gid, victim.ID); err != nil {
+			t.Errorf("Delete(already gone) error = %v, want nil", err)
+		}
+	})
+}
+
 func ids(metas []entries.Meta) []string {
 	out := make([]string, len(metas))
 	for i, m := range metas {
@@ -296,6 +390,84 @@ func TestStoreExistsIgnoresExpiredEntries(t *testing.T) {
 		}
 		if exists {
 			t.Error("an id that was never written reports as taken")
+		}
+	})
+}
+
+func TestStoreGroupStats(t *testing.T) {
+	t.Parallel()
+
+	forEachStore(t, func(t *testing.T, s entries.Store) {
+		ctx := context.Background()
+		gid := newGroupID(t)
+
+		empty, err := s.GroupStats(ctx, gid)
+		if err != nil || empty.Entries != 0 || !empty.Oldest.IsZero() {
+			t.Fatalf("GroupStats(empty) = %+v, %v; want zero", empty, err)
+		}
+
+		now := time.Now().UTC().Truncate(time.Millisecond)
+		first := meta(gid, gid+"-1", now.Add(-2*time.Hour))
+		if err := s.Put(ctx, first, []byte("body")); err != nil {
+			t.Fatalf("Put() error = %v", err)
+		}
+		second := meta(gid, gid+"-2", now)
+		second.StorageRef = "2099010100/" + second.ID + ".bin"
+		if err := s.Put(ctx, second, nil); err != nil {
+			t.Fatalf("Put() error = %v", err)
+		}
+
+		got, err := s.GroupStats(ctx, gid)
+		if err != nil {
+			t.Fatalf("GroupStats() error = %v", err)
+		}
+		if got.Entries != 2 || !got.Oldest.Equal(first.CreatedAt) {
+			t.Errorf("GroupStats() = %+v, want 2 entries, oldest %v", got, first.CreatedAt)
+		}
+	})
+}
+
+// TestStoreKeepsHeader: the sealed header is stored as written and returned
+// by every read; an entry without one reads back without one.
+func TestStoreKeepsHeader(t *testing.T) {
+	t.Parallel()
+
+	forEachStore(t, func(t *testing.T, s entries.Store) {
+		ctx := context.Background()
+		gid := newGroupID(t)
+		now := time.Now().UTC().Truncate(time.Millisecond)
+
+		header := make([]byte, entries.HeaderSize)
+		header[0], header[100], header[entries.HeaderSize-1] = 1, 0, 0xff
+		with := meta(gid, gid+"-with", now)
+		with.Header = header
+		without := meta(gid, gid+"-without", now.Add(time.Millisecond))
+		if err := s.Put(ctx, with, []byte("abcd")); err != nil {
+			t.Fatalf("Put(with) error = %v", err)
+		}
+		if err := s.Put(ctx, without, []byte("abcd")); err != nil {
+			t.Fatalf("Put(without) error = %v", err)
+		}
+
+		got, err := s.Get(ctx, gid, with.ID)
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		if !bytes.Equal(got.Header, header) {
+			t.Errorf("Get().Header = %x, want %x", got.Header, header)
+		}
+		history, _, err := s.History(ctx, gid, 10, time.Time{})
+		if err != nil {
+			t.Fatalf("History() error = %v", err)
+		}
+		if len(history) != 2 {
+			t.Fatalf("History() = %d entries, want 2", len(history))
+		}
+		if history[0].Header != nil {
+			t.Errorf("History()[0].Header = %x, want none", history[0].Header)
+		}
+		if !bytes.Equal(history[1].Header, header) {
+			t.Errorf("History()[1].Header = %x, want %x", history[1].Header, header)
 		}
 	})
 }

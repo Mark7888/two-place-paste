@@ -20,3 +20,8 @@ func CountOps(d *Disk) (readDirs, removeAlls *int) {
 	}
 	return readDirs, removeAlls
 }
+
+// SetFreeBytes replaces the disk backend's free-space probe.
+func SetFreeBytes(d *Disk, free int64) {
+	d.freeBytes = func(string) (int64, bool) { return free, true }
+}

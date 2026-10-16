@@ -41,12 +41,23 @@ import {
 } from '../../protocol/gen/tpp/v1/group';
 import {
   DeviceRevoked,
+  EntryEvicted,
   EpochChanged,
   WrappedKeyAvailable,
 } from '../../protocol/gen/tpp/v1/events';
 import {
+  EntryFetchChunkRequest,
+  EntryFetchChunkResponse,
   EntryFetchRequest,
   EntryFetchResponse,
+  EntryLimitsRequest,
+  EntryLimitsResponse,
+  EntryUploadAbortRequest,
+  EntryUploadAbortResponse,
+  EntryUploadBeginRequest,
+  EntryUploadBeginResponse,
+  EntryUploadChunkRequest,
+  EntryUploadChunkResponse,
   EntryHistoryRequest,
   EntryHistoryResponse,
   EntryLatestRequest,
@@ -67,7 +78,7 @@ import {
   PairingStartResponse,
   PairingWrappedKeyUpload,
 } from '../../protocol/gen/tpp/v1/pairing';
-import { Error as ErrorFrame } from '../../protocol/gen/tpp/v1/error';
+import { Error as ErrorFrame, ErrorCode } from '../../protocol/gen/tpp/v1/error';
 import {
   encodeFrame,
   decodeFrame,
@@ -76,13 +87,15 @@ import {
   generateNonce,
   newEntryID,
   openEntry,
+  openEntryHeader,
   publicKey as derivePublicKey,
   sealEntry,
+  sealEntryHeader,
   unwrap,
   wrap,
 } from '../crypto';
 import { Connection, SocketFactory, webSocketFactory } from './connection';
-import { ProtocolError, TppError } from './errors';
+import { ProtocolError, TppError, isCode } from './errors';
 import {
   decodePairingOffer,
   decodePairingPayload,
@@ -101,8 +114,45 @@ import {
 } from './state';
 import { splitCreationURL, normalizeServerURL, websocketURL } from './urls';
 
-/** MAX_CIPHERTEXT_BYTES is the relay's per-entry cap, measured on the ciphertext (SPEC §4.3). */
-export const MAX_CIPHERTEXT_BYTES = 10 << 20;
+/**
+ * SINGLE_FRAME_MAX_BYTES is the most ciphertext one frame carries, in either
+ * direction (SPEC §4.3). A larger entry is uploaded in chunks and read back in
+ * ranges; the crypto is unchanged — the entry is sealed and opened whole.
+ */
+export const SINGLE_FRAME_MAX_BYTES = 10 << 20;
+
+/**
+ * MAX_CIPHERTEXT_BYTES is the per-entry cap of a relay that predates chunked
+ * transfer.
+ *
+ * @deprecated The cap is the relay's to state: use `Client.limits()`.
+ */
+export const MAX_CIPHERTEXT_BYTES = SINGLE_FRAME_MAX_BYTES;
+
+/** Limits are a relay's entry limits, in ciphertext bytes. */
+export interface Limits {
+  maxEntryBytes: number;
+  singleFrameMaxBytes: number;
+  /** chunkBytes is zero when the relay predates chunked transfer. */
+  chunkBytes: number;
+  inlineMaxBytes: number;
+}
+
+/** LEGACY_LIMITS are what a relay that predates chunked transfer allows. */
+const LEGACY_LIMITS: Limits = {
+  maxEntryBytes: SINGLE_FRAME_MAX_BYTES,
+  singleFrameMaxBytes: SINGLE_FRAME_MAX_BYTES,
+  chunkBytes: 0,
+  inlineMaxBytes: 0,
+};
+
+/** Progress reports a chunked transfer of an entry larger than one frame, in ciphertext bytes. */
+export interface Progress {
+  entryId: string;
+  direction: 'upload' | 'download';
+  done: number;
+  total: number;
+}
 
 /** Reconnect bounds. A relay that is down comes back; a phone that hammers it while it does is a second problem. */
 const MIN_BACKOFF_MS = 500;
@@ -136,7 +186,7 @@ export interface Roster {
   epoch: bigint;
 }
 
-/** EntryMeta is everything the relay knows about an entry: no content type, no filename, no plaintext size. */
+/** EntryMeta is everything the relay knows about an entry, plus what this client read from its sealed header. */
 export interface EntryMeta {
   id: string;
   epoch: bigint;
@@ -144,6 +194,21 @@ export interface EntryMeta {
   createdAt: Date;
   expiresAt: Date;
   inline: boolean;
+  /**
+   * header is what the writer said the entry holds (spec/crypto.md §5.5),
+   * without fetching it; null when the entry has none or this client cannot
+   * open it (another epoch, or tampering). Advisory: the decrypted Item is the
+   * authority.
+   */
+  header: EntryHeaderView | null;
+}
+
+/** EntryHeaderView is an entry's type, name and plaintext size, as its writer sealed them. */
+export interface EntryHeaderView {
+  contentType: string;
+  filename: string;
+  /** size is the plaintext body length in bytes. */
+  size: number;
 }
 
 /** Item is one clipboard payload in plaintext. Nothing here reaches the relay in the clear. */
@@ -179,6 +244,13 @@ export interface Handlers {
    * than read from a status code.
    */
   onProbablyRevoked?: () => void;
+  /**
+   * onEntryEvicted fires when the relay removed an entry before its expiry to
+   * stay within its storage limit. A history view drops it.
+   */
+  onEntryEvicted?: (entryId: string) => void;
+  /** onProgress reports a chunked upload or download, once per chunk. */
+  onProgress?: (progress: Progress) => void;
 }
 
 /** ClientOptions configures a Client. */
@@ -283,14 +355,31 @@ function toDevice(
   };
 }
 
-function toEntryMeta(m: WireEntryMeta): EntryMeta {
+/**
+ * toEntryMeta converts the wire metadata, opening the entry's sealed header
+ * with the key this client holds. A header that does not open is not an
+ * error: the entry's type is unknown until it is fetched, and the fetch
+ * applies the real checks.
+ */
+function toEntryMeta(m: WireEntryMeta, key: { epoch: bigint; groupKey: Uint8Array } | null): EntryMeta {
+  const epoch = asBigInt(m.epoch);
+  let header: EntryHeaderView | null = null;
+  if (key !== null && m.header.length > 0 && epoch === key.epoch) {
+    try {
+      const h = openEntryHeader(key.groupKey, m.header, epoch, m.entryId);
+      header = { contentType: h.contentType, filename: h.filename, size: Number(h.bodyLen) };
+    } catch {
+      header = null;
+    }
+  }
   return {
     id: m.entryId,
-    epoch: asBigInt(m.epoch),
+    epoch,
     size: Number(m.size),
     createdAt: msToDate(m.createdAtUnixMs) ?? new Date(0),
     expiresAt: msToDate(m.expiresAtUnixMs) ?? new Date(0),
     inline: m.inline,
+    header,
   };
 }
 
@@ -301,6 +390,8 @@ export class Client {
   private readonly socketFactory: SocketFactory;
   private readonly now: () => Date;
   private readonly handlers: Handlers;
+  /** limitsCache is the relay's entry limits as stated on one connection; a new connection asks again. */
+  private limitsCache: { conn: Connection; limits: Limits } | null = null;
   private readonly healthCheck: (baseUrl: string) => Promise<boolean>;
 
   private conn: Connection | null = null;
@@ -341,6 +432,11 @@ export class Client {
   /** epoch is the group key generation this client currently holds. */
   get epoch(): bigint {
     return this.state.epoch;
+  }
+
+  /** entryMeta converts wire metadata, reading its header with this client's key. */
+  private entryMeta(m: WireEntryMeta): EntryMeta {
+    return toEntryMeta(m, this.inGroup ? { epoch: this.state.epoch, groupKey: this.state.groupKey } : null);
   }
 
   /** inGroup reports whether this device belongs to a group yet. */
@@ -516,6 +612,11 @@ export class Client {
       case MessageType.MESSAGE_TYPE_DEVICE_REVOKED: {
         const event = DeviceRevoked.decode(env.payload);
         this.handlers.onDeviceRevoked?.(event.deviceId, asBigInt(event.epoch));
+        break;
+      }
+      case MessageType.MESSAGE_TYPE_ENTRY_EVICTED: {
+        const event = EntryEvicted.decode(env.payload);
+        this.handlers.onEntryEvicted?.(event.entryId);
         break;
       }
       case MessageType.MESSAGE_TYPE_PAIRING_JOIN_NOTICE: {
@@ -1043,30 +1144,43 @@ export class Client {
     const entryId = newEntryID();
     const epoch = this.state.epoch;
     const container = sealEntry(this.state.groupKey, generateNonce(), epoch, entryId, frame);
-    if (container.length > MAX_CIPHERTEXT_BYTES) {
-      // Refused here rather than by the relay: the cap is on the ciphertext,
-      // and the caller deserves the answer before a 10 MB upload.
-      throw new TppError(
-        'invalid',
-        `ciphertext is ${container.length} bytes, the cap is ${MAX_CIPHERTEXT_BYTES}`,
+    const header = sealEntryHeader(this.state.groupKey, epoch, entryId, {
+      contentType: item.contentType,
+      filename: item.filename ?? '',
+      bodyLen: BigInt(item.body.length),
+    });
+
+    let response: EntryPutResponse;
+    if (container.length > SINGLE_FRAME_MAX_BYTES) {
+      // Larger than one frame: chunked, if the relay can. Refused here rather
+      // than by the relay when it cannot, or when the entry is over its cap:
+      // the caller deserves the answer before the upload, not after it.
+      const limits = await this.limits();
+      if (limits.chunkBytes === 0 || container.length > limits.maxEntryBytes) {
+        throw new TppError(
+          'too-large',
+          `ciphertext is ${container.length} bytes, the relay accepts ${limits.maxEntryBytes}`,
+        );
+      }
+      response = await this.putChunked(entryId, epoch, container, header, limits);
+    } else {
+      const conn = await this.connection();
+      response = await conn.call(
+        MessageType.MESSAGE_TYPE_ENTRY_PUT_REQUEST,
+        {
+          codec: EntryPutRequest,
+          message: {
+            entryId,
+            epoch: epoch.toString(),
+            size: container.length.toString(),
+            header,
+            ciphertext: container,
+          },
+        },
+        EntryPutResponse,
       );
     }
-
-    const conn = await this.connection();
-    const response = await conn.call(
-      MessageType.MESSAGE_TYPE_ENTRY_PUT_REQUEST,
-      {
-        codec: EntryPutRequest,
-        message: {
-          entryId,
-          epoch: epoch.toString(),
-          size: container.length.toString(),
-          ciphertext: container,
-        },
-      },
-      EntryPutResponse,
-    );
-    const meta = response.meta ? toEntryMeta(response.meta) : null;
+    const meta = response.meta ? this.entryMeta(response.meta) : null;
     if (meta === null || meta.id !== entryId) {
       // The relay filed the entry under an id this client did not bind, so
       // nothing — this client included — can decrypt it.
@@ -1098,7 +1212,7 @@ export class Client {
     if (!response.meta) {
       throw new TppError('no-entry', 'the group has no entry');
     }
-    let meta = toEntryMeta(response.meta);
+    let meta = this.entryMeta(response.meta);
     let ciphertext = response.ciphertext;
     if (!meta.inline) {
       // A large entry lives in the blob backend and is pulled by id.
@@ -1131,7 +1245,7 @@ export class Client {
       EntryHistoryResponse,
     );
     return {
-      entries: response.entries.map(toEntryMeta),
+      entries: response.entries.map((m) => this.entryMeta(m)),
       nextBefore: msToDate(response.nextBeforeUnixMs),
     };
   }
@@ -1143,7 +1257,172 @@ export class Client {
     return this.open(meta, ciphertext);
   }
 
+  /**
+   * limits returns the relay's entry limits, asking once per connection. A
+   * relay that predates chunked transfer answers that it does not know the
+   * question, and gets the limits it has always had.
+   */
+  async limits(): Promise<Limits> {
+    const conn = await this.connection();
+    if (this.limitsCache?.conn === conn) {
+      return this.limitsCache.limits;
+    }
+    let limits = LEGACY_LIMITS;
+    try {
+      const resp = await conn.call(
+        MessageType.MESSAGE_TYPE_ENTRY_LIMITS_REQUEST,
+        { codec: EntryLimitsRequest, message: {} },
+        EntryLimitsResponse,
+      );
+      // Never trust a relay to raise the frame cap: nothing here would read
+      // a larger frame.
+      limits = {
+        maxEntryBytes: Number(resp.maxEntryBytes),
+        singleFrameMaxBytes: Math.min(Math.max(Number(resp.singleFrameMaxBytes), 1), SINGLE_FRAME_MAX_BYTES),
+        chunkBytes: Math.min(Number(resp.chunkBytes), SINGLE_FRAME_MAX_BYTES),
+        inlineMaxBytes: Number(resp.inlineMaxBytes),
+      };
+    } catch (err) {
+      if (!isCode(err, ErrorCode.ERROR_CODE_UNSUPPORTED_MESSAGE)) {
+        throw err;
+      }
+    }
+    this.limitsCache = { conn, limits };
+    return limits;
+  }
+
+  /**
+   * putChunked uploads a sealed container larger than one frame. On any
+   * failure the upload is aborted, so the room the relay reserved for it is
+   * given back at once rather than at its timeout.
+   */
+  private async putChunked(
+    entryId: string,
+    epoch: bigint,
+    container: Uint8Array,
+    header: Uint8Array,
+    limits: Limits,
+  ): Promise<EntryPutResponse> {
+    const size = container.length;
+    const begin = await (await this.connection()).call(
+      MessageType.MESSAGE_TYPE_ENTRY_UPLOAD_BEGIN_REQUEST,
+      {
+        codec: EntryUploadBeginRequest,
+        message: { entryId, epoch: epoch.toString(), size: size.toString() },
+      },
+      EntryUploadBeginResponse,
+    );
+    const handle = begin.uploadHandle;
+    let chunk = Number(begin.chunkBytes);
+    if (!(chunk > 0 && chunk <= SINGLE_FRAME_MAX_BYTES)) {
+      chunk = limits.chunkBytes;
+    }
+    const abort = async (cause: unknown): Promise<never> => {
+      try {
+        await (await this.connection()).call(
+          MessageType.MESSAGE_TYPE_ENTRY_UPLOAD_ABORT_REQUEST,
+          { codec: EntryUploadAbortRequest, message: { uploadHandle: handle } },
+          EntryUploadAbortResponse,
+        );
+      } catch {
+        // The relay abandons it at its timeout regardless.
+      }
+      throw cause;
+    };
+
+    const progress = (done: number) =>
+      this.handlers.onProgress?.({ entryId, direction: 'upload', done, total: size });
+    progress(0);
+    try {
+      for (let index = 0, off = 0; off < size; index++, off += chunk) {
+        const end = Math.min(off + chunk, size);
+        // The connection is looked up per chunk: an upload belongs to the
+        // device, not the socket, so a reconnect mid-upload carries on.
+        await (await this.connection()).call(
+          MessageType.MESSAGE_TYPE_ENTRY_UPLOAD_CHUNK_REQUEST,
+          {
+            codec: EntryUploadChunkRequest,
+            message: { uploadHandle: handle, index, data: container.subarray(off, end) },
+          },
+          EntryUploadChunkResponse,
+        );
+        progress(end);
+      }
+      return await (await this.connection()).call(
+        MessageType.MESSAGE_TYPE_ENTRY_PUT_REQUEST,
+        {
+          codec: EntryPutRequest,
+          message: {
+            entryId,
+            epoch: epoch.toString(),
+            size: size.toString(),
+            header,
+            uploadHandle: handle,
+          },
+        },
+        EntryPutResponse,
+      );
+    } catch (err) {
+      return abort(err);
+    }
+  }
+
+  /** fetchRanges reads an entry one range at a time; the first range brings the metadata. */
+  private async fetchRanges(
+    entryId: string,
+    limits: Limits,
+  ): Promise<{ meta: EntryMeta; ciphertext: Uint8Array }> {
+    let meta: EntryMeta | null = null;
+    let buf = new Uint8Array(0);
+    let filled = 0;
+    for (;;) {
+      const resp = await (await this.connection()).call(
+        MessageType.MESSAGE_TYPE_ENTRY_FETCH_CHUNK_REQUEST,
+        {
+          codec: EntryFetchChunkRequest,
+          message: { entryId, offset: filled.toString(), length: limits.chunkBytes.toString() },
+        },
+        EntryFetchChunkResponse,
+      );
+      if (!resp.meta) {
+        throw new TppError('no-entry', `the relay returned no metadata for entry ${entryId}`);
+      }
+      const m = this.entryMeta(resp.meta);
+      const size = Number(m.size);
+      if (meta === null) {
+        if (!(size > 0 && size <= Math.max(limits.maxEntryBytes, SINGLE_FRAME_MAX_BYTES))) {
+          throw new TppError('invalid', `entry ${entryId} reports ${size} bytes, outside the relay's limits`);
+        }
+        meta = m;
+        buf = new Uint8Array(size);
+      } else if (m.id !== meta.id || m.size !== meta.size) {
+        throw new TppError('invalid', `entry ${entryId} changed while it was being read`);
+      }
+      const data = resp.data;
+      if (Number(resp.offset) !== filled || data.length === 0 || filled + data.length > size) {
+        throw new TppError('invalid', `entry ${entryId}: the relay returned a range that does not continue the entry`);
+      }
+      buf.set(data, filled);
+      filled += data.length;
+      if (size > SINGLE_FRAME_MAX_BYTES) {
+        this.handlers.onProgress?.({ entryId, direction: 'download', done: filled, total: size });
+      }
+      if (filled === size) {
+        return { meta, ciphertext: buf };
+      }
+    }
+  }
+
+  /**
+   * fetch pulls one entry's ciphertext: in ranges from a relay that can serve
+   * them, which is the only way to read an entry larger than one frame, and in
+   * one frame from a relay that predates them.
+   */
   private async fetch(entryId: string): Promise<{ meta: EntryMeta; ciphertext: Uint8Array }> {
+    const limits = await this.limits();
+    if (limits.chunkBytes > 0) {
+      return this.fetchRanges(entryId, limits);
+    }
     const conn = await this.connection();
     const response = await conn.call(
       MessageType.MESSAGE_TYPE_ENTRY_FETCH_REQUEST,
@@ -1153,7 +1432,7 @@ export class Client {
     if (!response.meta) {
       throw new TppError('no-entry', `the relay returned no metadata for entry ${entryId}`);
     }
-    return { meta: toEntryMeta(response.meta), ciphertext: response.ciphertext };
+    return { meta: this.entryMeta(response.meta), ciphertext: response.ciphertext };
   }
 
   /** open applies the epoch rules and decrypts. */

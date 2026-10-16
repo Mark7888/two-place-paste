@@ -38,6 +38,14 @@ var (
 	// filename, so it is validated before it reaches either (SPEC §4.2, §4.5).
 	ErrInvalidID = errors.New("entries: entry id is not usable")
 
+	// ErrInvalidHeader is a sealed entry header of the wrong size.
+	ErrInvalidHeader = errors.New("entries: entry header is not usable")
+
+	// ErrQuotaExceeded is returned when blob storage is full and evicting
+	// older entries cannot make room, because what remains is held by
+	// uploads still in progress.
+	ErrQuotaExceeded = errors.New("entries: blob storage is full")
+
 	// ErrEntryExists is returned when a client-chosen entry id is already
 	// taken. Entry keys are global, so accepting a duplicate would let one
 	// group overwrite another group's entry; the write is refused instead.
@@ -46,6 +54,10 @@ var (
 
 // MaxIDLen bounds a client-chosen entry id.
 const MaxIDLen = 64
+
+// HeaderSize is the length of every sealed entry header (/spec/crypto.md
+// §5.5). It is fixed, so the server learns nothing from it.
+const HeaderSize = 297
 
 // ValidID reports whether an id may be used as an entry id.
 //
@@ -90,6 +102,21 @@ type Meta struct {
 
 	// StorageRef is the blob backend reference, empty for an inline entry.
 	StorageRef string
+
+	// Header is the sealed entry header the writer sent (/spec/crypto.md
+	// §5.5), stored and returned as is; nil when it sent none. The server
+	// cannot read it.
+	Header []byte
+}
+
+// GroupStats is what the admin dashboard knows about one group's entries.
+type GroupStats struct {
+	// Entries is the number of live entries.
+	Entries int64
+
+	// Oldest is when the oldest live entry was written; zero when there is
+	// none.
+	Oldest time.Time
 }
 
 // Inline reports whether the ciphertext is stored in Redis rather than in the
@@ -134,4 +161,21 @@ type Store interface {
 	// valued by entry id. It backs `tpp gc --verify` only; normal reclamation
 	// never queries Redis (SPEC §4.5).
 	EntryRefs(ctx context.Context) (map[string]string, error)
+
+	// BlobEntries returns the metadata of every live blob-backed entry. It
+	// backs `tpp gc --rebuild-accounting` only, and scans the whole zone.
+	BlobEntries(ctx context.Context) ([]Meta, error)
+
+	// GroupStats counts a group's live entries, inline and blob alike, and
+	// reports when the oldest of them was written. It backs the admin
+	// dashboard, which shows counts and never content.
+	GroupStats(ctx context.Context, groupID string) (GroupStats, error)
+
+	// Delete removes an entry before its expiry: its record, its inline body
+	// and its place in the group's history. It does not touch the blob, which
+	// is the caller's to delete. Deleting an unknown entry is not an error.
+	//
+	// It is how a storage eviction takes an entry away. That shortens an
+	// entry's life, which SPEC §4.5 permits; nothing may lengthen one.
+	Delete(ctx context.Context, groupID, entryID string) error
 }

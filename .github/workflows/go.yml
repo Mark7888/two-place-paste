@@ -88,6 +88,25 @@ jobs:
         working-directory: ${{ matrix.module }}
         run: go vet ./...
 
+      # The server's integration tests run against a real Redis and a real
+      # S3-compatible store. Started as plain containers rather than job
+      # services because services exist only on Linux runners and this job's
+      # matrix also runs on macOS and Windows. A test whose store is missing
+      # skips with a reason (docs/conventions.md §5), so a failed pull costs
+      # coverage, not the build.
+      - name: Start Redis and MinIO
+        if: matrix.module == 'server' && runner.os == 'Linux'
+        continue-on-error: true
+        run: |
+          docker run -d --name redis -p 6379:6379 redis:7-alpine
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio:latest server /data
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:9000/minio/health/live && break
+            sleep 1
+          done
+
       - name: Test
         working-directory: ${{ matrix.module }}
         run: go test -race -count=1 ./...

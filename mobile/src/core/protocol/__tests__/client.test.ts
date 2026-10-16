@@ -243,6 +243,28 @@ describe('entries (SPEC §6)', () => {
     expect(fromUTF8(item.body)).toBe('%PDF-1.7 pretend');
   });
 
+  test('a relay that predates chunked transfer gets its old limits, and nothing above one frame is sent to it', async () => {
+    const relay = new FakeRelay();
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+
+    // The fake relay answers EntryLimitsRequest as an old relay does: it
+    // does not know the message.
+    const limits = await laptop.limits();
+    expect(limits.chunkBytes).toBe(0);
+    expect(limits.maxEntryBytes).toBe(10 << 20);
+
+    const err: unknown = await laptop
+      .putEntry({ contentType: 'application/octet-stream', body: new Uint8Array((10 << 20) + 1) })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TppError);
+    expect((err as TppError).kind).toBe('too-large');
+
+    // Entries that fit one frame are unaffected.
+    await laptop.putEntry({ contentType: 'text/plain', body: utf8('small') });
+    expect(fromUTF8((await laptop.getLatest()).body)).toBe('small');
+  });
+
   test('an entry the relay filed under another id is refused, not decrypted', async () => {
     const relay = new FakeRelay();
     const laptop = await open(relay, new MemoryStore(), 'laptop');
@@ -268,6 +290,25 @@ describe('entries (SPEC §6)', () => {
 
     const item = await laptop.getEntry(page.entries[0].id);
     expect(fromUTF8(item.body)).toBe('one');
+  });
+
+  test('each entry carries a sealed header the history reads without a fetch', async () => {
+    const relay = new FakeRelay();
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const put = await laptop.putEntry({
+      contentType: 'image/png',
+      filename: 'shot.png',
+      body: new Uint8Array(1234),
+    });
+    expect(put.header).toEqual({ contentType: 'image/png', filename: 'shot.png', size: 1234 });
+
+    const page = await laptop.getHistory({ limit: 10 });
+    expect(page.entries[0].header).toEqual({
+      contentType: 'image/png',
+      filename: 'shot.png',
+      size: 1234,
+    });
   });
 });
 

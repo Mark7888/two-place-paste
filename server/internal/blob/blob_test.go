@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -365,5 +366,36 @@ func TestDiskPutDoesNotReplaceAnExistingBlob(t *testing.T) {
 	}
 	if string(got) != "original" {
 		t.Errorf("stored blob = %q, want %q", got, "original")
+	}
+}
+
+// TestDiskMinFreeBytes: below the floor (plus room for one more blob) a write
+// is refused before anything is created; above it, writes go through.
+func TestDiskMinFreeBytes(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	d := blob.NewDisk(root, 1024).WithMinFreeBytes(4096)
+	expires := time.Date(2026, 9, 8, 14, 30, 0, 0, time.UTC)
+
+	blob.SetFreeBytes(d, 4096+1023)
+	if _, err := d.Put(ctx, "tight", expires, strings.NewReader("x")); !errors.Is(err, blob.ErrStorageFull) {
+		t.Fatalf("Put() under the floor error = %v, want %v", err, blob.ErrStorageFull)
+	}
+	if _, err := os.Stat(filepath.Join(root, "2026090815", "tight.bin")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a refused Put() left a file behind: %v", err)
+	}
+
+	blob.SetFreeBytes(d, 4096+1024)
+	if _, err := d.Put(ctx, "fits", expires, strings.NewReader("x")); err != nil {
+		t.Errorf("Put() at the floor error = %v, want nil", err)
+	}
+
+	// Without a floor the probe is never consulted.
+	open := blob.NewDisk(t.TempDir(), 1024)
+	blob.SetFreeBytes(open, 0)
+	if _, err := open.Put(ctx, "free", expires, strings.NewReader("x")); err != nil {
+		t.Errorf("Put() with no floor error = %v, want nil", err)
 	}
 }

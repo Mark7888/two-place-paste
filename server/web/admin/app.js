@@ -1,9 +1,10 @@
 // The admin screen's behaviour. One file, no build step, no framework — the
 // same rule the stylesheet follows (ROADMAP P4).
 //
-// It does three things, and every one of them is something HTML alone cannot:
-// reveal a password field, copy a string to the clipboard, and show a
-// creation code in a modal instead of on the page. Everything it needs is
+// It does four things, and every one of them is something HTML alone cannot:
+// reveal a password field, copy a string to the clipboard, show a creation
+// code in a modal instead of on the page, and ask before a destructive form
+// (revoking a token) is submitted. Everything it needs is
 // already in the document — no request is made from here, and no token is put
 // anywhere that outlives the tab.
 //
@@ -149,6 +150,17 @@
     if (autoshow) open(autoshow);
   }
 
+  /** wireConfirm asks before submitting any form marked [data-confirm]. With
+   *  scripting off the form submits straight away: the confirmation is a
+   *  guard against a slip of the mouse, not a security control. */
+  function wireConfirm(root) {
+    root.querySelectorAll("form[data-confirm]").forEach(function (form) {
+      form.addEventListener("submit", function (event) {
+        if (!window.confirm(form.getAttribute("data-confirm"))) event.preventDefault();
+      });
+    });
+  }
+
   function ready(fn) {
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", fn);
@@ -161,6 +173,7 @@
     wireCopyButtons(document);
     wireReveal(document);
     wireTokenDialog(document);
+    wireConfirm(document);
     // With scripting on, the inline fallback is redundant and its QR requests
     // are not. <noscript> already hides it; this is belt and braces for a
     // browser that renders noscript content anyway.

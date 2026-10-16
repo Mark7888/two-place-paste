@@ -49,7 +49,8 @@ const (
 	// another device rekeyed first. The caller refetches the roster and retries
 	// (SPEC §3.3 step 4).
 	ErrorCode_ERROR_CODE_EPOCH_CONFLICT ErrorCode = 7
-	// The ciphertext exceeds the 10 MB per-entry cap (SPEC §4.3).
+	// The ciphertext exceeds the per-entry cap or a storage limit, or is too
+	// large for the single-frame path it was sent or requested on (SPEC §4.3).
 	ErrorCode_ERROR_CODE_TOO_LARGE ErrorCode = 8
 	// Rate limited. The caller backs off and retries.
 	ErrorCode_ERROR_CODE_RATE_LIMITED ErrorCode = 9
@@ -58,6 +59,11 @@ const (
 	// Server-side failure. The caller may retry; nothing about the cause is
 	// disclosed beyond this code.
 	ErrorCode_ERROR_CODE_INTERNAL ErrorCode = 11
+	// The relay's blob storage is full and evicting older entries cannot make
+	// room, because what remains is held by uploads still in progress. The
+	// caller may retry later. An entry larger than a storage limit on its own
+	// gets ERROR_CODE_TOO_LARGE instead (SPEC §4.3).
+	ErrorCode_ERROR_CODE_QUOTA_EXCEEDED ErrorCode = 12
 )
 
 // Enum value maps for ErrorCode.
@@ -75,6 +81,7 @@ var (
 		9:  "ERROR_CODE_RATE_LIMITED",
 		10: "ERROR_CODE_UNSUPPORTED_MESSAGE",
 		11: "ERROR_CODE_INTERNAL",
+		12: "ERROR_CODE_QUOTA_EXCEEDED",
 	}
 	ErrorCode_value = map[string]int32{
 		"ERROR_CODE_UNSPECIFIED":         0,
@@ -89,6 +96,7 @@ var (
 		"ERROR_CODE_RATE_LIMITED":        9,
 		"ERROR_CODE_UNSUPPORTED_MESSAGE": 10,
 		"ERROR_CODE_INTERNAL":            11,
+		"ERROR_CODE_QUOTA_EXCEEDED":      12,
 	}
 )
 
@@ -187,7 +195,7 @@ const file_tpp_v1_error_proto_rawDesc = "" +
 	"\x12tpp/v1/error.proto\x12\x06tpp.v1\"H\n" +
 	"\x05Error\x12%\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x11.tpp.v1.ErrorCodeR\x04code\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage*\xf4\x02\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage*\x93\x03\n" +
 	"\tErrorCode\x12\x1a\n" +
 	"\x16ERROR_CODE_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bERROR_CODE_INVALID_ARGUMENT\x10\x01\x12\x1e\n" +
@@ -201,7 +209,8 @@ const file_tpp_v1_error_proto_rawDesc = "" +
 	"\x17ERROR_CODE_RATE_LIMITED\x10\t\x12\"\n" +
 	"\x1eERROR_CODE_UNSUPPORTED_MESSAGE\x10\n" +
 	"\x12\x17\n" +
-	"\x13ERROR_CODE_INTERNAL\x10\vBHZFgithub.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1b\x06proto3"
+	"\x13ERROR_CODE_INTERNAL\x10\v\x12\x1d\n" +
+	"\x19ERROR_CODE_QUOTA_EXCEEDED\x10\fBHZFgithub.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1b\x06proto3"
 
 var (
 	file_tpp_v1_error_proto_rawDescOnce sync.Once

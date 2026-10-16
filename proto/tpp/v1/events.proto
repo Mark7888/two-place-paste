@@ -51,3 +51,14 @@ message DeviceRevoked {
 message EntryAdded {
   EntryMeta meta = 1;
 }
+
+// EntryEvicted tells every connected device of the group that an entry was
+// removed before its expiry, because the relay's storage limit needed its room
+// for a newer entry. A client drops it from any history it is showing; a fetch
+// of it now answers ERROR_CODE_NOT_FOUND, exactly as for an expired entry.
+//
+// Eviction only ever shortens an entry's life; nothing lengthens one
+// (SPEC §4.5).
+message EntryEvicted {
+  string entry_id = 1;
+}

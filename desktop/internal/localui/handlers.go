@@ -40,6 +40,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.api.Status(r.Context()))
 }
 
+func (s *Server) handleDismissSkipped(w http.ResponseWriter, r *http.Request) {
+	s.api.DismissSkipped(r.Context())
+	writeJSON(w, http.StatusOK, s.api.Status(r.Context()))
+}
+
 func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Direction Direction `json:"direction"`

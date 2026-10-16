@@ -34,6 +34,27 @@ type fakeRelay struct {
 	forgot  bool
 
 	reconnects int
+
+	// putGate and getGate, when set, hold PutEntry and GetEntry until they
+	// are closed or the call's context ends: a transfer still in flight.
+	putGate chan struct{}
+	getGate chan struct{}
+}
+
+// wait blocks on a gate, if there is one.
+func (f *fakeRelay) wait(ctx context.Context, gate func(*fakeRelay) chan struct{}) error {
+	f.mu.Lock()
+	g := gate(f)
+	f.mu.Unlock()
+	if g == nil {
+		return nil
+	}
+	select {
+	case <-g:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func newFakeRelay(now func() time.Time) *fakeRelay {
@@ -88,7 +109,10 @@ func (f *fakeRelay) Revoke(_ context.Context, deviceID string) (Revocation, erro
 	return f.rev, nil
 }
 
-func (f *fakeRelay) PutEntry(_ context.Context, item tppclient.Item) (tppclient.EntryMeta, error) {
+func (f *fakeRelay) PutEntry(ctx context.Context, item tppclient.Item) (tppclient.EntryMeta, error) {
+	if err := f.wait(ctx, func(f *fakeRelay) chan struct{} { return f.putGate }); err != nil {
+		return tppclient.EntryMeta{}, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.putErr != nil {
@@ -99,6 +123,7 @@ func (f *fakeRelay) PutEntry(_ context.Context, item tppclient.Item) (tppclient.
 		Epoch:     3,
 		Size:      int64(len(item.Body)),
 		CreatedAt: item.CreatedAt,
+		Header:    &tppclient.EntryHeader{ContentType: item.ContentType, Filename: item.Filename, Size: int64(len(item.Body))},
 	}
 	f.entries = append(f.entries, item)
 	return item.Meta, nil
@@ -132,7 +157,10 @@ func (f *fakeRelay) GetHistory(_ context.Context, q tppclient.HistoryQuery) (tpp
 	return out, nil
 }
 
-func (f *fakeRelay) GetEntry(_ context.Context, entryID string) (tppclient.Item, error) {
+func (f *fakeRelay) GetEntry(ctx context.Context, entryID string) (tppclient.Item, error) {
+	if err := f.wait(ctx, func(f *fakeRelay) chan struct{} { return f.getGate }); err != nil {
+		return tppclient.Item{}, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, e := range f.entries {
@@ -1139,5 +1167,36 @@ func TestFirstConnectionDoesNotApply(t *testing.T) {
 	case meta := <-svc.incoming:
 		t.Errorf("the first connection announced %s", meta.ID)
 	default:
+	}
+}
+
+// TestEvictionAndProgressReachTheUI: the relay's eviction notice and the
+// client's transfer progress become events the UI acts on — and carry an id
+// and byte counts, never content.
+func TestEvictionAndProgressReachTheUI(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	events, stop := f.svc.Subscribe()
+	defer stop()
+
+	h := f.svc.ClientHandlers()
+	h.OnEntryEvicted("old-entry")
+	h.OnProgress(tppclient.Progress{EntryID: "big", Direction: tppclient.Download, Done: 8 << 20, Total: 25 << 20})
+
+	want := []localui.Event{
+		{Kind: localui.EventEvicted, EntryID: "old-entry"},
+		{Kind: localui.EventProgress, EntryID: "big", Direction: "download", Done: 8 << 20, Total: 25 << 20},
+	}
+	for _, w := range want {
+		select {
+		case got := <-events:
+			got.At = time.Time{}
+			if got != w {
+				t.Errorf("event = %+v, want %+v", got, w)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no %s event", w.Kind)
+		}
 	}
 }

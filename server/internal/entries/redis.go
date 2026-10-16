@@ -50,7 +50,8 @@ var _ Store = (*RedisStore)(nil)
 //	KEYS[2] entry blob key    ARGV[2] epoch         ARGV[7] "1" when inline
 //	KEYS[3] group index key   ARGV[3] size          ARGV[8] inline body
 //	                          ARGV[4] created_at    ARGV[9] index prune cutoff
-//	                          ARGV[5] expires_at
+//	                          ARGV[5] expires_at    ARGV[10] entry id
+//	                                                ARGV[11] sealed header, "" for none
 var putEntryScript = redis.NewScript(`
 if redis.call('EXISTS', KEYS[1]) == 1 then return 1 end
 
@@ -61,6 +62,9 @@ redis.call('HSET', KEYS[1],
   'created_at', ARGV[4],
   'expires_at', ARGV[5],
   'storage_ref', ARGV[6])
+if ARGV[11] ~= '' then
+  redis.call('HSET', KEYS[1], 'header', ARGV[11])
+end
 redis.call('PEXPIREAT', KEYS[1], ARGV[5])
 
 if ARGV[7] == '1' then
@@ -68,7 +72,7 @@ if ARGV[7] == '1' then
   redis.call('PEXPIREAT', KEYS[2], ARGV[5])
 end
 
-redis.call('ZADD', KEYS[3], ARGV[4], ARGV[1 + 9])
+redis.call('ZADD', KEYS[3], ARGV[4], ARGV[10])
 redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', ARGV[9])
 
 return 0
@@ -103,6 +107,7 @@ func (s *RedisStore) Put(ctx context.Context, m Meta, inline []byte) error {
 		inline,
 		prune,
 		m.ID,
+		m.Header,
 	).Int64()
 	if err != nil {
 		return fmt.Errorf("put entry %s: %w", m.ID, err)
@@ -222,7 +227,40 @@ func (s *RedisStore) InlineBody(ctx context.Context, entryID string) ([]byte, er
 
 // EntryRefs implements Store.
 func (s *RedisStore) EntryRefs(ctx context.Context) (map[string]string, error) {
-	refs := make(map[string]string)
+	metas, err := s.BlobEntries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	refs := make(map[string]string, len(metas))
+	for _, m := range metas {
+		refs[m.StorageRef] = m.ID
+	}
+	return refs, nil
+}
+
+// GroupStats implements Store. The group index is scored by creation time and
+// pruned only on writes, so it is read from the TTL cutoff onwards: an id
+// whose entry has expired is not counted.
+func (s *RedisStore) GroupStats(ctx context.Context, groupID string) (GroupStats, error) {
+	minScore := "(" + strconv.FormatInt(s.now().Add(-entryTTLBound).UnixMilli(), 10)
+	pipe := s.rdb.Pipeline()
+	count := pipe.ZCount(ctx, groupEntriesKey(groupID), minScore, "+inf")
+	oldest := pipe.ZRangeByScoreWithScores(ctx, groupEntriesKey(groupID), &redis.ZRangeBy{
+		Min: minScore, Max: "+inf", Count: 1,
+	})
+	if _, err := pipe.Exec(ctx); err != nil {
+		return GroupStats{}, fmt.Errorf("read entry stats of group %s: %w", groupID, err)
+	}
+	stats := GroupStats{Entries: count.Val()}
+	if z := oldest.Val(); len(z) > 0 {
+		stats.Oldest = time.UnixMilli(int64(z[0].Score)).UTC()
+	}
+	return stats, nil
+}
+
+// BlobEntries implements Store.
+func (s *RedisStore) BlobEntries(ctx context.Context) ([]Meta, error) {
+	var metas []Meta
 	var cursor uint64
 	for {
 		keys, next, err := s.rdb.Scan(ctx, cursor, entryPrefix+"*", 256).Result()
@@ -233,21 +271,53 @@ func (s *RedisStore) EntryRefs(ctx context.Context) (map[string]string, error) {
 			if strings.HasSuffix(key, entryBlobSuffix) {
 				continue
 			}
-			ref, err := s.rdb.HGet(ctx, key, "storage_ref").Result()
-			if errors.Is(err, redis.Nil) || ref == "" {
-				continue
-			}
+			fields, err := s.rdb.HGetAll(ctx, key).Result()
 			if err != nil {
-				return nil, fmt.Errorf("read storage ref of %s: %w", key, err)
+				return nil, fmt.Errorf("read %s: %w", key, err)
 			}
-			refs[ref] = strings.TrimPrefix(key, entryPrefix)
+			if len(fields) == 0 || fields["storage_ref"] == "" {
+				continue // expired since the scan, or inline
+			}
+			m, err := metaFromFields(strings.TrimPrefix(key, entryPrefix), fields)
+			if err != nil {
+				return nil, err
+			}
+			metas = append(metas, m)
 		}
 		if next == 0 {
-			return refs, nil
+			return metas, nil
 		}
 		cursor = next
 	}
 }
+
+// Delete implements Store. The group check and the deletes are one script, so
+// a delete addressed to the wrong group cannot remove anything.
+func (s *RedisStore) Delete(ctx context.Context, groupID, entryID string) error {
+	err := deleteEntryScript.Run(ctx, s.rdb,
+		[]string{entryKey(entryID), entryBlobKey(entryID), groupEntriesKey(groupID)},
+		groupID, entryID,
+	).Err()
+	if err != nil {
+		return fmt.Errorf("delete entry %s: %w", entryID, err)
+	}
+	return nil
+}
+
+// deleteEntryScript removes an entry that belongs to the named group. The
+// index member is removed regardless, so a stale id cannot linger there.
+//
+//	KEYS[1] entry key         ARGV[1] group id
+//	KEYS[2] entry blob key    ARGV[2] entry id
+//	KEYS[3] group index key
+var deleteEntryScript = redis.NewScript(`
+redis.call('ZREM', KEYS[3], ARGV[2])
+local g = redis.call('HGET', KEYS[1], 'group_id')
+if g == ARGV[1] then
+  redis.call('DEL', KEYS[1], KEYS[2])
+end
+return 0
+`)
 
 func metaFromFields(entryID string, fields map[string]string) (Meta, error) {
 	epoch, err := strconv.ParseUint(fields["epoch"], 10, 64)
@@ -266,6 +336,10 @@ func metaFromFields(entryID string, fields map[string]string) (Meta, error) {
 	if err != nil {
 		return Meta{}, fmt.Errorf("get entry %s: parse expires_at: %w", entryID, err)
 	}
+	var header []byte
+	if h := fields["header"]; h != "" {
+		header = []byte(h)
+	}
 	return Meta{
 		ID:         entryID,
 		GroupID:    fields["group_id"],
@@ -274,6 +348,7 @@ func metaFromFields(entryID string, fields map[string]string) (Meta, error) {
 		CreatedAt:  time.UnixMilli(createdAt).UTC(),
 		ExpiresAt:  time.UnixMilli(expiresAt).UTC(),
 		StorageRef: fields["storage_ref"],
+		Header:     header,
 	}, nil
 }
 

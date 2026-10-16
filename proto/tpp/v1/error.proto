@@ -52,7 +52,8 @@ enum ErrorCode {
   // (SPEC §3.3 step 4).
   ERROR_CODE_EPOCH_CONFLICT = 7;
 
-  // The ciphertext exceeds the 10 MB per-entry cap (SPEC §4.3).
+  // The ciphertext exceeds the per-entry cap or a storage limit, or is too
+  // large for the single-frame path it was sent or requested on (SPEC §4.3).
   ERROR_CODE_TOO_LARGE = 8;
 
   // Rate limited. The caller backs off and retries.
@@ -64,4 +65,10 @@ enum ErrorCode {
   // Server-side failure. The caller may retry; nothing about the cause is
   // disclosed beyond this code.
   ERROR_CODE_INTERNAL = 11;
+
+  // The relay's blob storage is full and evicting older entries cannot make
+  // room, because what remains is held by uploads still in progress. The
+  // caller may retry later. An entry larger than a storage limit on its own
+  // gets ERROR_CODE_TOO_LARGE instead (SPEC §4.3).
+  ERROR_CODE_QUOTA_EXCEEDED = 12;
 }
