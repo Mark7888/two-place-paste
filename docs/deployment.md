@@ -193,6 +193,14 @@ Two kinds of finding:
 - *dangling entries* — entries whose blob is missing. These are the ones that
   matter: the entry is listed and unreadable.
 
+A blob deleted from the bucket or the volume by hand — or by a lifecycle rule
+shorter than a day — is handled as it is found. The first device to read the
+entry gets "not found", and the server removes the entry there and then: it
+leaves history and stops being the group's latest, its storage is released,
+and online devices are told as for an eviction. The log records it at `warn`
+("its blob is missing from the store"). Only a definite not-found from the
+store does this; an unreachable or erroring store changes nothing.
+
 It also compares the storage accounting with the entry records (below). A
 small difference while uploads are in progress is normal.
 

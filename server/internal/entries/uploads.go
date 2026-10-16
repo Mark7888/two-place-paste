@@ -356,6 +356,7 @@ func (s *Service) FetchRange(ctx context.Context, groupID, entryID string, offse
 
 	rc, err := s.blobs.GetRange(ctx, meta.StorageRef, offset, length)
 	if errors.Is(err, blob.ErrNotFound) {
+		s.forgetMissingBlob(ctx, meta)
 		return Meta{}, nil, ErrNotFound
 	}
 	if err != nil {

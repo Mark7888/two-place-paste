@@ -421,6 +421,7 @@ func (s *Service) body(ctx context.Context, meta Meta) ([]byte, error) {
 	rc, err := s.blobs.Get(ctx, meta.StorageRef)
 	if errors.Is(err, blob.ErrNotFound) {
 		// The record outlived its blob: to a client the entry is simply gone.
+		s.forgetMissingBlob(ctx, meta)
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -445,6 +446,35 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
 	c.n += int64(n)
 	return n, err //nolint:wrapcheck // io.Reader's contract: io.EOF must pass through as is
+}
+
+// forgetMissingBlob removes an entry whose blob has gone missing while its
+// record still stands: deleted from the bucket or the volume by hand, lost
+// with a restore, or removed by an operator's lifecycle rule ahead of the
+// relay's own sweep.
+//
+// Left alone, such a record would keep failing every reader for the rest of
+// its 24 hours — listed in history, served as the group's latest, counted
+// against the storage limit. So it is retired the moment the store answers
+// "not found": the record is deleted, its room released, and the group told
+// exactly as for an eviction, so open history lists drop it. Only a definite
+// not-found does this; a store that is unreachable or erroring changes
+// nothing.
+func (s *Service) forgetMissingBlob(ctx context.Context, meta Meta) {
+	bg := context.WithoutCancel(ctx)
+	if err := s.store.Delete(bg, meta.GroupID, meta.ID); err != nil {
+		s.logger.ErrorContext(bg, "removing an entry whose blob is missing failed",
+			slog.String("entry_id", meta.ID), slog.Any("error", err))
+		return
+	}
+	s.release(bg, meta.ID)
+	s.logger.WarnContext(bg, "entry removed: its blob is missing from the store",
+		slog.String("group_id", meta.GroupID),
+		slog.String("entry_id", meta.ID),
+		slog.String("storage_ref", meta.StorageRef))
+	if s.onEvict != nil {
+		s.onEvict(bg, meta.GroupID, meta.ID)
+	}
 }
 
 // readAtMost reads up to limit bytes and reports ErrTooLarge if the source has

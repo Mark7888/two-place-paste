@@ -367,8 +367,10 @@ No crash-recovery logic is required.
 
 **Explicitly deleted entries**
 
-An entry may be deleted before its expiry — today only by a storage-limit eviction
-(§4.3). That shortens a lifetime and never lengthens one, so the invariant above
+An entry may be deleted before its expiry: by a storage-limit eviction (§4.3), or when
+a read finds its blob missing from the store — deleted outside the relay — in which
+case the reader gets not-found and the entry is retired at once, its group told as for
+an eviction, rather than failing every later reader for the rest of its lifetime. That shortens a lifetime and never lengthens one, so the invariant above
 holds. Its record is deleted first and then its blob; a blob whose delete fails stays
 on disk until its bucket expires.
 
