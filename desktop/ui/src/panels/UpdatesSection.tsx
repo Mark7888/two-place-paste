@@ -5,6 +5,7 @@ import {
   type ServiceEvent,
   type SettingsPatch,
   type SettingsView,
+  type TokenView,
   type UpdateCandidate,
   type UpdateView,
 } from "../api";
@@ -339,8 +340,9 @@ function TokenControls({
     }
   };
 
-  const expiresSoon =
-    t.expires_at !== undefined && new Date(t.expires_at).getTime() - Date.now() < 14 * 86_400_000;
+  const left = t.expires_at !== undefined ? new Date(t.expires_at).getTime() - Date.now() : Infinity;
+  const expired = left <= 0;
+  const expiresSoon = !expired && left < 14 * 86_400_000;
 
   return (
     <div className="stack" style={{ gap: "0.6rem" }}>
@@ -348,7 +350,7 @@ function TokenControls({
         <div className="row" style={{ gap: "0.5rem", flexWrap: "wrap" }}>
           <span>
             GitHub token {t.source === "environment" ? "from TPP_DESKTOP_GITHUB_TOKEN" : "saved"}
-            {t.expires_at ? <span className="muted">, expires {when(t.expires_at)}</span> : null}.
+            <TokenExpiry token={t} />.
           </span>
           {t.source === "keystore" ? (
             <>
@@ -400,6 +402,11 @@ function TokenControls({
           <Icon name="alert" />
           <span>GitHub rejected the saved token. Replace it to use Nightly.</span>
         </div>
+      ) : expired && !replacing ? (
+        <div className="notice warn">
+          <Icon name="alert" />
+          <span>The token expired on {day(t.expires_at)}. Replace it to use Nightly.</span>
+        </div>
       ) : expiresSoon && !replacing ? (
         <div className="notice warn">
           <Icon name="alert" />
@@ -414,6 +421,31 @@ function TokenControls({
       ) : null}
     </div>
   );
+}
+
+/**
+ * TokenExpiry is the token's expiry as the end of the "GitHub token saved"
+ * line: the date and how far off it is, "does not expire", or nothing while
+ * GitHub has not been asked yet.
+ */
+function TokenExpiry({ token }: { token: TokenView }) {
+  if (token.no_expiry) {
+    return <span className="muted">, does not expire</span>;
+  }
+  if (!token.expires_at) return null;
+  const past = new Date(token.expires_at).getTime() <= Date.now();
+  return (
+    <span className="muted" title={when(token.expires_at)}>
+      , {past ? "expired" : "expires"} {day(token.expires_at)}
+      {past ? null : ` (${relativeFuture(token.expires_at)})`}
+    </span>
+  );
+}
+
+/** day renders a timestamp as a date alone, in the user's locale. */
+function day(iso?: string): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
 }
 
 function relativeFuture(iso?: string): string {

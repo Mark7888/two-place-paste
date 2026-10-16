@@ -445,8 +445,13 @@ type TokenView struct {
 	Source string `json:"source,omitempty"`
 
 	// Invalid is set after GitHub rejected the token.
-	Invalid   bool       `json:"invalid,omitempty"`
+	Invalid bool `json:"invalid,omitempty"`
+
+	// ExpiresAt is when the token stops working, and NoExpiry says it never
+	// does. Both are unset until GitHub has answered a call made with it,
+	// which is the only place the expiry can be read from.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	NoExpiry  bool       `json:"no_expiry,omitempty"`
 }
 
 // InstallRequest is what the Install button sends.

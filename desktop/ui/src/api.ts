@@ -228,7 +228,10 @@ export interface TokenView {
   set: boolean;
   source?: "keystore" | "environment";
   invalid?: boolean;
+  /** When the token stops working. Unset until GitHub has answered a call made with it. */
   expires_at?: string;
+  /** The token was made with no expiration. */
+  no_expiry?: boolean;
 }
 
 export type UpdateState =

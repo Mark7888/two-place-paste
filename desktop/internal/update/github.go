@@ -34,8 +34,9 @@ type githubAPI struct {
 	base   string
 	token  string
 
-	// onExpiry receives the token's expiry from each response, when GitHub
-	// sends one.
+	// onExpiry receives the token's expiry from each successful response: a
+	// zero time when GitHub sent none, which is how it answers for a token
+	// made with no expiration.
 	onExpiry func(time.Time)
 }
 
@@ -80,8 +81,10 @@ func (g githubAPI) do(req *http.Request) (*http.Response, error) {
 		// The URL is the API's, never one with a secret in it.
 		return nil, fmt.Errorf("call GitHub: %w", err)
 	}
-	if exp := parseTokenExpiry(resp.Header.Get("Github-Authentication-Token-Expiration")); !exp.IsZero() && g.onExpiry != nil {
-		g.onExpiry(exp)
+	// Only a 200 is read: a missing header on an error page says nothing
+	// about the token.
+	if resp.StatusCode == http.StatusOK && g.onExpiry != nil {
+		g.onExpiry(parseTokenExpiry(resp.Header.Get("Github-Authentication-Token-Expiration")))
 	}
 	return resp, nil
 }
