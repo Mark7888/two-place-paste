@@ -12,8 +12,19 @@ import React, { useState } from 'react';
 import { Text, View } from 'react-native';
 
 import { useSession } from '../SessionContext';
-import { download, failureMessage, sync, upload } from '../session';
-import { Button, Choice, Notice, Screen, Section, Sheet, Status, TransferBar } from '../ui';
+import type { ClipboardItem } from '../../platform';
+import { download, failureMessage, handleFile, sync, upload, type FileChoice } from '../session';
+import {
+  Button,
+  Choice,
+  FileChoices,
+  Notice,
+  Screen,
+  Section,
+  Sheet,
+  Status,
+  TransferBar,
+} from '../ui';
 import { colors, styles } from '../theme';
 
 export function SyncScreen(): React.JSX.Element {
@@ -22,6 +33,8 @@ export function SyncScreen(): React.JSX.Element {
   const [message, setMessage] = useState('');
   const [ok, setOk] = useState(true);
   const [asking, setAsking] = useState(false);
+  // A received file the clipboard cannot hold, waiting for save-or-open.
+  const [file, setFile] = useState<ClipboardItem | null>(null);
 
   const run = (action: 'sync' | 'up' | 'down') => {
     const client = session.client;
@@ -45,6 +58,10 @@ export function SyncScreen(): React.JSX.Element {
           return;
         }
         setAsking(false);
+        if (result.direction === 'file' && result.item !== undefined) {
+          setFile(result.item);
+          return;
+        }
         setOk(true);
         setMessage(result.message);
       } catch (err) {
@@ -53,6 +70,29 @@ export function SyncScreen(): React.JSX.Element {
       } finally {
         setBusy(false);
         session.refresh();
+      }
+    })();
+  };
+
+  const choose = (choice: FileChoice) => {
+    const item = file;
+    if (item === null || busy) {
+      return;
+    }
+    setBusy(true);
+    void (async () => {
+      try {
+        const result = await handleFile(item, choice);
+        setFile(null);
+        setOk(true);
+        setMessage(result.message);
+      } catch (err) {
+        // The sheet stays up, so the other option is still one tap away —
+        // "no app opens this" is exactly when Save is the answer.
+        setOk(false);
+        setMessage(failureMessage(err));
+      } finally {
+        setBusy(false);
       }
     })();
   };
@@ -144,6 +184,15 @@ export function SyncScreen(): React.JSX.Element {
         <Text style={[styles.small, { color: colors.faint }]}>
           Nothing has been read or written yet.
         </Text>
+      </Sheet>
+
+      <Sheet visible={file !== null} title="Save or open?" onClose={() => setFile(null)}>
+        <FileChoices
+          name={file === null ? '' : file.filename !== '' ? file.filename : file.contentType}
+          disabled={busy}
+          onChoose={choose}
+        />
+        {!ok && message !== '' && <Notice message={message} tone="error" />}
       </Sheet>
     </>
   );

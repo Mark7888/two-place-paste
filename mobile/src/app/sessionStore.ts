@@ -19,8 +19,9 @@
  *  - a tile tap produces exactly one sync, never two;
  *  - a rekey installs a key and never touches the clipboard (SPEC §3.3).
  *
- * And one it adds: a sync that cannot tell which way to go asks, through
- * `question`, and waits. Whichever surface is on screen renders it.
+ * And one it adds: a sync that needs the user — it cannot tell which way to go,
+ * or it received a file the clipboard cannot hold — asks, through `question`,
+ * and waits. Whichever surface is on screen renders it.
  */
 
 import { AppState, Linking, type AppStateStatus } from 'react-native';
@@ -28,21 +29,36 @@ import { AppState, Linking, type AppStateStatus } from 'react-native';
 import type { Client, Progress } from '../core';
 import { tile } from '../platform';
 import { stripCodeEnvelope } from '../core';
-import { download, failureMessage, openSession, sync, upload } from './session';
+import {
+  download,
+  failureMessage,
+  handleFile,
+  openSession,
+  sync,
+  upload,
+  type FileChoice,
+} from './session';
 
-/** DirectionChoice is what the user answers a pending question with. */
+/** DirectionChoice is what the user answers a direction question with. */
 export type DirectionChoice = 'up' | 'down';
+
+/** Answer is any answer to a pending question: a direction, or what to do with a file. */
+export type Answer = DirectionChoice | FileChoice;
 
 /**
  * Question is a sync waiting on the user. `id` changes for every question, so
  * a late answer to one that has already been resolved is ignored rather than
  * applied to the next one.
+ *
+ * `direction` asks which way to sync; `file` asks whether a received file the
+ * clipboard cannot hold should be saved to Downloads or opened, and `name` is
+ * how the file is described to the user.
  */
-export interface Question {
+export type Question = {
   id: number;
   /** fromTile is true when the panel that asked it was opened by the tile. */
   fromTile: boolean;
-}
+} & ({ kind: 'direction' } | { kind: 'file'; name: string });
 
 /** Snapshot is what a screen renders from. */
 export interface Snapshot {
@@ -95,7 +111,7 @@ let lastError = '';
 let pendingCode = '';
 let transfer: Progress | null = null;
 let evicted: { id: string; seq: number } | null = null;
-let answer: ((choice: DirectionChoice | null) => void) | null = null;
+let answer: ((choice: Answer | null) => void) | null = null;
 let nextQuestionId = 1;
 
 let started = false;
@@ -205,10 +221,10 @@ export async function forget(): Promise<void> {
 }
 
 /**
- * answerDirection resolves a pending question. `null` means the user dismissed
+ * answerQuestion resolves a pending question. `null` means the user dismissed
  * it, which is an answer: nothing is read and nothing is written.
  */
-export function answerDirection(id: number, choice: DirectionChoice | null): void {
+export function answerQuestion(id: number, choice: Answer | null): void {
   if (question === null || question.id !== id) {
     return;
   }
@@ -220,9 +236,12 @@ export function answerDirection(id: number, choice: DirectionChoice | null): voi
 }
 
 /** ask puts a question and waits for whichever surface is on screen to answer it. */
-function ask(fromTile: boolean): Promise<DirectionChoice | null> {
+function ask(
+  fromTile: boolean,
+  what: { kind: 'direction' } | { kind: 'file'; name: string },
+): Promise<Answer | null> {
   return new Promise((resolve) => {
-    question = { id: nextQuestionId++, fromTile };
+    question = { id: nextQuestionId++, fromTile, ...what };
     answer = resolve;
     emit();
   });
@@ -417,6 +436,14 @@ function runTileSync(): void {
     emit();
   };
 
+  // The user dismissed a question: not a failure, so nothing is left on screen.
+  const cancel = (message: string) => {
+    tile.report(false, message);
+    notice = message;
+    emit();
+    tile.closeOverlay();
+  };
+
   void (async () => {
     try {
       if (!c.inGroup) {
@@ -430,12 +457,23 @@ function runTileSync(): void {
         // direction it cannot work out is a question to put now, on the panel
         // that is already on screen — not a toast saying the choice was the
         // user's to make, on a surface with no way to make it.
-        const choice = await ask(true);
+        const choice = await ask(true, { kind: 'direction' });
         if (choice === null) {
-          finish(false, 'No direction chosen; nothing was synced.');
+          cancel('No direction chosen; nothing was synced.');
           return;
         }
         result = choice === 'up' ? await upload(c) : await download(c);
+      }
+      if (result.direction === 'file' && result.item !== undefined) {
+        // A file the clipboard cannot hold: keep it, or look at it now.
+        const item = result.item;
+        const name = item.filename !== '' ? item.filename : item.contentType;
+        const choice = await ask(true, { kind: 'file', name });
+        if (choice !== 'save' && choice !== 'open') {
+          cancel('The file was neither saved nor opened.');
+          return;
+        }
+        result = await handleFile(item, choice);
       }
       finish(result.direction !== 'nothing', result.message);
     } catch (err) {

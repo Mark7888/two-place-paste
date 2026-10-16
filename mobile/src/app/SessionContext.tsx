@@ -12,7 +12,7 @@ import React, { createContext, useContext, useMemo, useSyncExternalStore } from 
 
 import type { Client, Progress } from '../core';
 import {
-  answerDirection,
+  answerQuestion,
   claimPendingCode,
   clearError,
   forget,
@@ -22,7 +22,7 @@ import {
   setError,
   setNotice,
   subscribe,
-  type DirectionChoice,
+  type Answer,
   type Question,
 } from './sessionStore';
 
@@ -40,7 +40,7 @@ export interface SessionState {
   probablyRevoked: boolean;
   /** syncing is true while a sync the store started — a tile tap — is running. */
   syncing: boolean;
-  /** question is a sync waiting on the user to pick a direction. */
+  /** question is a sync waiting on the user: a direction to pick, or what to do with a file. */
   question: Question | null;
   /** error is the last failure, for a screen to render and then clear. */
   error: string;
@@ -55,7 +55,7 @@ export interface SessionState {
   /** claimPendingCode hands the deep-linked code to exactly one screen. */
   claimPendingCode(): string;
   /** answer resolves that question. Dismissing is an answer: nothing is synced. */
-  answer(id: number, choice: DirectionChoice | null): void;
+  answer(id: number, choice: Answer | null): void;
   /** refresh re-reads the client's own state after a flow changed it. */
   refresh(): void;
   setNotice(message: string): void;
@@ -99,7 +99,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
       pendingCode: snapshot.pendingCode,
       transfer: snapshot.transfer,
       evicted: snapshot.evicted,
-      answer: answerDirection,
+      answer: answerQuestion,
       setError,
       clearError,
       claimPendingCode,

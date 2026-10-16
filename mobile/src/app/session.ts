@@ -12,6 +12,7 @@ import {
   clipboard,
   clipboardTimestamp,
   deviceInfo,
+  files,
   secureStore,
   type ClipboardItem,
 } from '../platform';
@@ -23,14 +24,22 @@ import {
  * outcome that needs the user. It means the comparison SPEC §6 defines could
  * not be made, so the caller must ask which way to go rather than report a
  * dead end — which is what the screen and the quick-settings tile both now do.
+ *
+ * `file` needs the user too: the entry was downloaded but the clipboard cannot
+ * hold it, so the caller asks whether to save it to Downloads or open it.
  */
-export type Direction = 'uploaded' | 'downloaded' | 'nothing' | 'ambiguous';
+export type Direction = 'uploaded' | 'downloaded' | 'nothing' | 'ambiguous' | 'file';
 
 /** SyncResult is the outcome of one sync, in the words a screen or a toast shows. */
 export interface SyncResult {
   direction: Direction;
   message: string;
+  /** item is the received entry when `direction` is `file`, waiting for the user's choice. */
+  item?: ClipboardItem;
 }
+
+/** FileChoice is what the user does with a received file the clipboard cannot hold. */
+export type FileChoice = 'save' | 'open';
 
 /** openSession builds the app's client over the platform's secure store. */
 export async function openSession(handlers: Handlers): Promise<Client> {
@@ -75,8 +84,34 @@ export async function download(client: Client): Promise<SyncResult> {
     }
     throw err;
   }
-  await clipboard.write(toClipboardItem(item));
+  return deliver(toClipboardItem(item));
+}
+
+/**
+ * deliver puts a received item on the clipboard — or, when the clipboard
+ * cannot hold it, hands it back as `file` so the caller can ask whether to save
+ * it or open it. Nothing is written to storage until the user has chosen.
+ */
+export async function deliver(item: ClipboardItem): Promise<SyncResult> {
+  if (!clipboard.canWrite(item) && files.available) {
+    return {
+      direction: 'file',
+      message: `${describeItem(item)} cannot go on the clipboard.`,
+      item,
+    };
+  }
+  await clipboard.write(item);
   return { direction: 'downloaded', message: `Copied ${describeItem(item)} to this device.` };
+}
+
+/** handleFile carries out the user's choice for a received file. */
+export async function handleFile(item: ClipboardItem, choice: FileChoice): Promise<SyncResult> {
+  if (choice === 'save') {
+    const name = await files.save(item);
+    return { direction: 'downloaded', message: `Saved ${name} to Downloads.` };
+  }
+  await files.open(item);
+  return { direction: 'downloaded', message: `Opened ${describeItem(item)}.` };
 }
 
 /** upload writes this device's clipboard to the group as the latest entry. */
@@ -132,7 +167,7 @@ export async function sync(client: Client): Promise<SyncResult> {
 }
 
 /** describeItem renders an entry for a status line. It never renders the entry's body. */
-export function describeItem(item: Item): string {
+export function describeItem(item: ClipboardItem): string {
   const size = `${item.body.length} bytes`;
   if (item.filename !== '') {
     // A filename from another device is display text, never a path.

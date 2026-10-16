@@ -11,7 +11,9 @@
  *
  * Tapping a text or image row opens a preview, which is the one thing that
  * decrypts an entry — the same operation copying it would do, on that entry
- * alone and only when asked. Any other row opens to its Copy button only. An entry from an older epoch has no preview and no copy: this
+ * alone and only when asked. Any other row opens to its Copy button only; a
+ * file, which the Android clipboard cannot hold, is saved to Downloads or
+ * opened in another app instead, whichever the user picks. An entry from an older epoch has no preview and no copy: this
  * device no longer holds the key it was written under (SPEC §3.3).
  */
 
@@ -19,11 +21,11 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, Image, Pressable, RefreshControl, Text, View } from 'react-native';
 
 import type { EntryMeta } from '../../core';
-import { clipboard } from '../../platform';
+import type { ClipboardItem } from '../../platform';
 import { useSession } from '../SessionContext';
-import { describeItem, failureMessage, toClipboardItem } from '../session';
+import { deliver, failureMessage, handleFile, toClipboardItem, type FileChoice } from '../session';
 import { describeHeader, headerPreviewable, previewOf, type Preview } from '../preview';
-import { Button, Notice, TransferBar } from '../ui';
+import { Button, FileChoices, Notice, Sheet, TransferBar } from '../ui';
 import { colors, styles } from '../theme';
 
 /** Loaded is a preview that arrived, or the reason one could not. */
@@ -40,6 +42,8 @@ export function HistoryScreen(): React.JSX.Element {
   // Previews live for as long as this screen does and no longer; reopening a
   // row does not decrypt it a second time.
   const [previews, setPreviews] = useState<Record<string, Loaded>>({});
+  // A fetched file the clipboard cannot hold, waiting for save-or-open.
+  const [file, setFile] = useState<ClipboardItem | null>(null);
 
   const client = session.client;
   const inFlight = useRef(false);
@@ -115,10 +119,36 @@ export function HistoryScreen(): React.JSX.Element {
     void (async () => {
       try {
         const item = await client.getEntry(meta.id);
-        await clipboard.write(toClipboardItem(item));
+        const result = await deliver(toClipboardItem(item));
+        if (result.direction === 'file' && result.item !== undefined) {
+          setFile(result.item);
+          return;
+        }
         setOk(true);
-        setMessage(`Copied ${describeItem(item)} to this device.`);
+        setMessage(result.message);
       } catch (err) {
+        setOk(false);
+        setMessage(failureMessage(err));
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
+
+  const choose = (choice: FileChoice) => {
+    const item = file;
+    if (item === null || busy) {
+      return;
+    }
+    setBusy(true);
+    void (async () => {
+      try {
+        const result = await handleFile(item, choice);
+        setFile(null);
+        setOk(true);
+        setMessage(result.message);
+      } catch (err) {
+        // The sheet stays up so the other option is still one tap away.
         setOk(false);
         setMessage(failureMessage(err));
       } finally {
@@ -192,7 +222,9 @@ export function HistoryScreen(): React.JSX.Element {
                       ? 'Hide'
                       : previewable
                         ? 'Tap to preview'
-                        : 'No preview — tap to copy'}
+                        : isFile(item)
+                          ? 'No preview — tap to save or open'
+                          : 'No preview — tap to copy'}
                 </Text>
               </Pressable>
 
@@ -206,7 +238,7 @@ export function HistoryScreen(): React.JSX.Element {
                     <Body preview={loaded.preview} />
                   )}
                   <Button
-                    label="Copy to this device"
+                    label={isFile(item) ? 'Save or open on this device' : 'Copy to this device'}
                     variant="secondary"
                     onPress={() => copy(item)}
                     disabled={busy}
@@ -217,8 +249,22 @@ export function HistoryScreen(): React.JSX.Element {
           );
         }}
       />
+
+      <Sheet visible={file !== null} title="Save or open?" onClose={() => setFile(null)}>
+        <FileChoices
+          name={file === null ? '' : file.filename !== '' ? file.filename : file.contentType}
+          disabled={busy}
+          onChoose={choose}
+        />
+        {!ok && message !== '' && <Notice message={message} tone="error" />}
+      </Sheet>
     </View>
   );
+}
+
+/** isFile says, from the sealed header alone, whether an entry is a file rather than clipboard content. */
+function isFile(meta: EntryMeta): boolean {
+  return meta.header !== null && meta.header.filename !== '';
 }
 
 /** Body renders what a preview turned out to be. */

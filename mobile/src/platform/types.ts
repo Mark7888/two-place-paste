@@ -28,6 +28,12 @@ export interface ClipboardPort {
    */
   read(): Promise<ClipboardItem | null>;
 
+  /**
+   * canWrite reports whether `write` can put this item on the clipboard. An
+   * item it cannot hold — a file, most often — goes to `files` instead.
+   */
+  canWrite(item: ClipboardItem): boolean;
+
   /** write puts an item on the clipboard, or reports why it could not. */
   write(item: ClipboardItem): Promise<void>;
 
@@ -41,6 +47,24 @@ export interface ClipboardPort {
    * clipboard entry to anything that inspects the write path.
    */
   writeText(text: string): Promise<void>;
+}
+
+/**
+ * FilesPort is what happens to a received item the clipboard cannot hold: the
+ * user either keeps it in Downloads or opens it in another app.
+ */
+export interface FilesPort {
+  /** available reports whether this platform can save or open a file at all. */
+  readonly available: boolean;
+
+  /** save keeps a copy in the Downloads folder and returns the name it was saved under. */
+  save(item: ClipboardItem): Promise<string>;
+
+  /**
+   * open shows the item in an app that opens its type, without saving it to
+   * Downloads: it is staged in this app's cache, and the next open replaces it.
+   */
+  open(item: ClipboardItem): Promise<void>;
 }
 
 /** SecureStorePort is where the device private key and the group key live at rest (spec/crypto.md §10). */

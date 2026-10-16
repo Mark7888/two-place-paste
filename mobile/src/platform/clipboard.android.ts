@@ -36,7 +36,7 @@ export const PNG_CONTENT_TYPE = 'image/png';
 
 /** base64 (standard alphabet) is what the native module speaks; the core speaks bytes. */
 const fromStandardBase64 = (s: string): Uint8Array => fromBase64URL(s);
-const toStandardBase64 = (b: Uint8Array): string => {
+export const toStandardBase64 = (b: Uint8Array): string => {
   const url = toBase64URL(b);
   const padding = url.length % 4 === 0 ? '' : '='.repeat(4 - (url.length % 4));
   return url.replace(/-/g, '+').replace(/_/g, '/') + padding;
@@ -74,6 +74,20 @@ export const clipboard: ClipboardPort = {
     return { contentType: TEXT_CONTENT_TYPE, filename: '', body: utf8(text) };
   },
 
+  canWrite(item: ClipboardItem): boolean {
+    // A filename makes it a file, whatever its type (the same rule the history
+    // uses to describe it): a document copied on a desktop is a file to keep
+    // or open here, not its bytes pasted as text.
+    if (item.filename !== '') {
+      return false;
+    }
+    return (
+      item.contentType.startsWith('image/') ||
+      item.contentType.startsWith('text/') ||
+      item.contentType.startsWith('application/json')
+    );
+  },
+
   async write(item: ClipboardItem): Promise<void> {
     if (item.contentType.startsWith('image/')) {
       // The clipboard library writes images on iOS only. An image that can be
@@ -91,8 +105,8 @@ export const clipboard: ClipboardPort = {
       return;
     }
     // Anything else — a PDF, an archive, a file entry from a desktop — has no
-    // representation this client can put on an Android clipboard. The history
-    // screen says so rather than writing bytes that would paste as mojibake.
+    // representation this client can put on an Android clipboard. Callers
+    // check `canWrite` first and offer to save or open it instead.
     throw new Error(`${item.contentType} cannot be placed on the Android clipboard`);
   },
 };
