@@ -65,6 +65,34 @@ export function headerPreviewable(header: EntryHeaderView | null): boolean {
   return header.contentType.startsWith('text/') || header.contentType.startsWith('image/');
 }
 
+const SIZE_UNITS = ['KB', 'MB', 'GB'];
+
+/**
+ * formatSize renders a byte count for people: "512 B", "3.4 KB", "12 MB".
+ *
+ * Units are binary (1 KB = 1024 bytes), like the desktop's. One decimal below
+ * 10 of a unit and whole numbers above, so a list of sizes stays short and
+ * still tells 1.2 MB from 1.8 MB.
+ */
+export function formatSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 1024) {
+    return `${Math.max(0, Math.round(bytes) || 0)} B`;
+  }
+  let value = bytes;
+  let unit = -1;
+  while (value >= 1024 && unit < SIZE_UNITS.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  // 1023.96 KB rounds to "1024 KB"; say "1.0 MB" instead.
+  if (value >= 1023.5 && unit < SIZE_UNITS.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  const text = value < 10 ? value.toFixed(1) : Math.round(value).toString();
+  return `${text} ${SIZE_UNITS[unit]}`;
+}
+
 /** describeHeader names an entry from its header: its filename, else its type. */
 export function describeHeader(header: EntryHeaderView | null): string {
   if (header === null) {

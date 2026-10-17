@@ -1,4 +1,4 @@
-import { describeHeader, headerPreviewable, kindOf, previewOf, toBase64, PREVIEW_CHARS } from '../preview';
+import { describeHeader, formatSize, headerPreviewable, kindOf, previewOf, toBase64, PREVIEW_CHARS } from '../preview';
 import { utf8, type Item } from '../../core';
 
 function item(contentType: string, body: Uint8Array, filename = ''): Item {
@@ -113,5 +113,26 @@ describe('headerPreviewable', () => {
     expect(describeHeader(h('application/pdf', 'a.pdf'))).toBe('a.pdf');
     expect(describeHeader(h('text/plain'))).toBe('text/plain');
     expect(describeHeader(null)).toBe('type unknown');
+  });
+});
+
+describe('formatSize', () => {
+  it('keeps small sizes in bytes', () => {
+    expect(formatSize(0)).toBe('0 B');
+    expect(formatSize(512)).toBe('512 B');
+    expect(formatSize(1023)).toBe('1023 B');
+  });
+
+  it('uses one decimal below ten of a unit and whole numbers above', () => {
+    expect(formatSize(1024)).toBe('1.0 KB');
+    expect(formatSize(3482)).toBe('3.4 KB');
+    expect(formatSize(20 * 1024)).toBe('20 KB');
+    expect(formatSize(1.5 * 1024 * 1024)).toBe('1.5 MB');
+    expect(formatSize(50 * 1024 * 1024)).toBe('50 MB');
+    expect(formatSize(3 * 1024 * 1024 * 1024)).toBe('3.0 GB');
+  });
+
+  it('never says 1024 of a unit', () => {
+    expect(formatSize(1024 * 1024 - 1)).toBe('1.0 MB');
   });
 });

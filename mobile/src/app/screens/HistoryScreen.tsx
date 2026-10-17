@@ -24,7 +24,7 @@ import type { EntryMeta } from '../../core';
 import type { ClipboardItem } from '../../platform';
 import { useSession } from '../SessionContext';
 import { deliver, failureMessage, handleFile, toClipboardItem, type FileChoice } from '../session';
-import { describeHeader, headerPreviewable, previewOf, type Preview } from '../preview';
+import { describeHeader, formatSize, headerPreviewable, previewOf, type Preview } from '../preview';
 import { Button, FileChoices, Notice, Sheet, TransferBar } from '../ui';
 import { colors, styles } from '../theme';
 
@@ -213,7 +213,7 @@ export function HistoryScreen(): React.JSX.Element {
               >
                 <Text style={styles.text}>{item.createdAt.toLocaleString()}</Text>
                 <Text style={styles.small}>
-                  {describeHeader(item.header)} · {item.header?.size ?? item.size} bytes
+                  {describeHeader(item.header)} · {formatSize(item.header?.size ?? item.size)}
                 </Text>
                 <Text style={{ color: canOpen ? colors.accent : colors.faint, fontSize: 13 }}>
                   {!canOpen
@@ -273,7 +273,7 @@ function Body({ preview }: { preview: Preview }): React.JSX.Element {
     if (preview.imageTooLarge || preview.imageUri === '') {
       return (
         <Text style={styles.small}>
-          {preview.contentType} · {preview.bytes} bytes — too large to show here.
+          {preview.contentType} · {formatSize(preview.bytes)} — too large to show here.
         </Text>
       );
     }
@@ -281,7 +281,7 @@ function Body({ preview }: { preview: Preview }): React.JSX.Element {
       <>
         <ImagePreview uri={preview.imageUri} />
         <Text style={styles.small}>
-          {preview.contentType} · {preview.bytes} bytes
+          {preview.contentType} · {formatSize(preview.bytes)}
         </Text>
       </>
     );
@@ -292,7 +292,7 @@ function Body({ preview }: { preview: Preview }): React.JSX.Element {
     return (
       <Text style={styles.small}>
         {preview.filename === '' ? 'file' : preview.filename} · {preview.contentType} ·{' '}
-        {preview.bytes} bytes
+        {formatSize(preview.bytes)}
       </Text>
     );
   }
@@ -306,7 +306,7 @@ function Body({ preview }: { preview: Preview }): React.JSX.Element {
       </View>
       <Text style={styles.small}>
         {preview.truncated ? 'Shown in part · ' : ''}
-        {preview.contentType} · {preview.bytes} bytes
+        {preview.contentType} · {formatSize(preview.bytes)}
       </Text>
     </>
   );

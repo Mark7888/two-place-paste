@@ -8,6 +8,7 @@
  */
 
 import { Client, Handlers, Item, TppError, classifyCode, describe as describeError } from '../core';
+import { formatSize } from './preview';
 import {
   clipboard,
   clipboardTimestamp,
@@ -127,7 +128,7 @@ export async function upload(client: Client): Promise<SyncResult> {
   });
   return {
     direction: 'uploaded',
-    message: `Sent ${item.body.length} bytes to the group (${meta.epoch} epoch).`,
+    message: `Sent ${formatSize(item.body.length)} to the group (${meta.epoch} epoch).`,
   };
 }
 
@@ -168,7 +169,7 @@ export async function sync(client: Client): Promise<SyncResult> {
 
 /** describeItem renders an entry for a status line. It never renders the entry's body. */
 export function describeItem(item: ClipboardItem): string {
-  const size = `${item.body.length} bytes`;
+  const size = formatSize(item.body.length);
   if (item.filename !== '') {
     // A filename from another device is display text, never a path.
     return `${item.filename} (${item.contentType}, ${size})`;

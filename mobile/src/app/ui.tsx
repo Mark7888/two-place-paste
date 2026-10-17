@@ -14,6 +14,7 @@ import type { Progress } from '../core';
 import { clipboard } from '../platform';
 
 import { Icon, type IconName } from './icons';
+import { formatSize } from './preview';
 import { failureMessage } from './session';
 import { colors, styles, touchTarget } from './theme';
 
@@ -141,7 +142,6 @@ export function TransferBar({ transfer }: { transfer: Progress | null }): React.
     return null;
   }
   const pct = Math.min(100, Math.round((transfer.done / transfer.total) * 100));
-  const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(1)} MB`;
   return (
     <View
       style={[styles.notice, { backgroundColor: colors.accentSoft, flexDirection: 'column', alignItems: 'stretch' }]}
@@ -149,8 +149,8 @@ export function TransferBar({ transfer }: { transfer: Progress | null }): React.
       accessibilityValue={{ min: 0, max: 100, now: pct }}
     >
       <Text style={[styles.noticeText, { color: colors.text }]}>
-        {transfer.direction === 'upload' ? 'Uploading' : 'Downloading'} a large entry — {mb(transfer.done)} of{' '}
-        {mb(transfer.total)}
+        {transfer.direction === 'upload' ? 'Uploading' : 'Downloading'} a large entry — {formatSize(transfer.done)} of{' '}
+        {formatSize(transfer.total)}
       </Text>
       <View style={{ height: 6, borderRadius: 3, backgroundColor: colors.border, marginTop: 8, overflow: 'hidden' }}>
         <View style={{ height: 6, width: `${pct}%`, backgroundColor: colors.accent }} />
