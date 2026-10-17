@@ -352,3 +352,39 @@ export function CopyButton({
     />
   );
 }
+
+/**
+ * FileChoices is the question put when a received file cannot go on the
+ * clipboard: keep it in Downloads, or look at it now without keeping it.
+ */
+export function FileChoices({
+  name,
+  onChoose,
+  disabled,
+}: {
+  name: string;
+  onChoose: (choice: 'save' | 'open') => void;
+  disabled?: boolean;
+}): React.JSX.Element {
+  return (
+    <>
+      <Text style={styles.muted}>
+        {name} is a file, and Android’s clipboard cannot hold files.
+      </Text>
+      <Choice
+        icon="download"
+        title="Save to Downloads"
+        why="Keep a copy in this device’s Downloads folder."
+        disabled={disabled}
+        onPress={() => onChoose('save')}
+      />
+      <Choice
+        icon="open"
+        title="Open"
+        why="Show it in an app that opens this type. Nothing is saved to Downloads."
+        disabled={disabled}
+        onPress={() => onChoose('open')}
+      />
+    </>
+  );
+}

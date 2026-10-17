@@ -132,6 +132,22 @@ not fill cannot decide how much memory it takes.
 FileProvider URI on the clipboard with a read grant attached to the clip. The
 provider is not exported, so without that grant nothing can read the file.
 
+## Received files
+
+The Android clipboard cannot hold a file, so a received entry with a filename
+(or a type the clipboard cannot carry, like a PDF) is not copied. The app asks
+instead — on the tile's panel, the Sync screen or the History screen — whether
+to **save it to Downloads** or **open it**. Both go through `FileModule`
+(`TppFiles`):
+
+- `saveToDownloads` writes through MediaStore on Android 10+, which needs no
+  permission. On 9 and older it is a plain file write, and the app asks for
+  `WRITE_EXTERNAL_STORAGE` (declared with `maxSdkVersion="28"`) at that moment.
+- `open` does not touch Downloads. The file is staged in the app's cache under
+  its own name and handed to the opening app as a FileProvider URI with a
+  one-off read grant. Each open replaces the last staged file. If no installed
+  app opens the type, the user is told and can save it instead.
+
 ## Sync direction
 
 SPEC §6 says upload if the local clipboard is newer, otherwise download.

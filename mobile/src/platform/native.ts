@@ -43,13 +43,27 @@ export interface TppClipboardModule {
   primaryClipTimestamp(): Promise<number>;
 }
 
+/** TppFilesModule is implemented by `android/app/src/main/java/.../FileModule.kt`. */
+export interface TppFilesModule {
+  /** saveToDownloads writes the file to Downloads and resolves with the name it was saved under. */
+  saveToDownloads(base64: string, filename: string, contentType: string): Promise<string>;
+
+  /**
+   * open hands the file to an app that opens its type, staged in this app's
+   * cache rather than saved anywhere. It rejects when no app opens the type.
+   */
+  open(base64: string, filename: string, contentType: string): Promise<void>;
+}
+
 const modules = NativeModules as {
   TppTile?: TppTileModule;
   TppClipboard?: TppClipboardModule;
+  TppFiles?: TppFilesModule;
 };
 
 export const TppTile: TppTileModule | null = modules.TppTile ?? null;
 export const TppClipboard: TppClipboardModule | null = modules.TppClipboard ?? null;
+export const TppFiles: TppFilesModule | null = modules.TppFiles ?? null;
 
 /** TILE_REQUEST_EVENT is emitted by the native tile bridge when a tap reaches a running app. */
 export const TILE_REQUEST_EVENT = 'TppTileSyncRequested';

@@ -30,6 +30,10 @@ export const clipboard: ClipboardPort = {
     return { contentType: TEXT_CONTENT_TYPE, filename: '', body: utf8(text) };
   },
 
+  canWrite(item: ClipboardItem): boolean {
+    return item.filename === '' && item.contentType.startsWith('text/');
+  },
+
   async write(item: ClipboardItem): Promise<void> {
     if (!item.contentType.startsWith('text/')) {
       throw new Error(`${item.contentType} cannot be placed on the iOS clipboard`);
