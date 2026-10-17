@@ -14,7 +14,7 @@ import type { Progress } from '../core';
 import { clipboard, files, type SavedFile } from '../platform';
 
 import { Icon, type IconName } from './icons';
-import { formatSize } from './preview';
+import { transferText } from './preview';
 import { failureMessage } from './session';
 import { colors, styles, touchTarget } from './theme';
 
@@ -168,19 +168,23 @@ export function TransferBar({ transfer }: { transfer: Progress | null }): React.
   if (transfer === null || transfer.total <= 0) {
     return null;
   }
-  const pct = Math.min(100, Math.round((transfer.done / transfer.total) * 100));
+  const { title, detail, percent } = transferText(transfer);
+  // The text is styled here rather than with `noticeText`: that style has
+  // `flex: 1`, which in this column layout gives the text a height of zero —
+  // which is how the bar came to be drawn with no words on it.
   return (
     <View
-      style={[styles.notice, { backgroundColor: colors.accentSoft, flexDirection: 'column', alignItems: 'stretch' }]}
+      style={[styles.notice, { backgroundColor: colors.accentSoft, flexDirection: 'column', alignItems: 'stretch', gap: 2 }]}
       accessibilityRole="progressbar"
-      accessibilityValue={{ min: 0, max: 100, now: pct }}
+      accessibilityLabel={`${title}, ${detail}`}
+      accessibilityValue={{ min: 0, max: 100, now: percent }}
     >
-      <Text style={[styles.noticeText, { color: colors.text }]}>
-        {transfer.direction === 'upload' ? 'Uploading' : 'Downloading'} a large entry — {formatSize(transfer.done)} of{' '}
-        {formatSize(transfer.total)}
+      <Text style={{ color: colors.text, fontSize: 14, fontWeight: '600' }} numberOfLines={1} ellipsizeMode="middle">
+        {title}
       </Text>
-      <View style={{ height: 6, borderRadius: 3, backgroundColor: colors.border, marginTop: 8, overflow: 'hidden' }}>
-        <View style={{ height: 6, width: `${pct}%`, backgroundColor: colors.accent }} />
+      <Text style={{ color: colors.muted, fontSize: 13, lineHeight: 19 }}>{detail}</Text>
+      <View style={{ height: 6, borderRadius: 3, backgroundColor: colors.border, marginTop: 6, overflow: 'hidden' }}>
+        <View style={{ height: 6, width: `${percent}%`, backgroundColor: colors.accent }} />
       </View>
     </View>
   );

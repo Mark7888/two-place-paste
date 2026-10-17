@@ -103,7 +103,7 @@ export function HistoryScreen(): React.JSX.Element {
     fetching.current.add(id);
     void (async () => {
       try {
-        const item = await client.getEntry(id, meta.size);
+        const item = await client.getEntry(id, meta);
         setPreviews((prev) => ({ ...prev, [id]: { ok: true, preview: previewOf(item) } }));
       } catch (err) {
         setPreviews((prev) => ({ ...prev, [id]: { ok: false, error: failureMessage(err) } }));
@@ -121,7 +121,7 @@ export function HistoryScreen(): React.JSX.Element {
     setSaved(null);
     void (async () => {
       try {
-        const item = await client.getEntry(meta.id, meta.size);
+        const item = await client.getEntry(meta.id, meta);
         const result = await deliver(toClipboardItem(item));
         if (result.direction === 'file' && result.item !== undefined) {
           setFile(result.item);

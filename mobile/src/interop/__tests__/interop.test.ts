@@ -170,6 +170,8 @@ describeInterop('the phone and the Go client are one implementation of one contr
     // The size is known from the latest-entry answer, so the bar starts at
     // zero rather than appearing only once the first chunk has arrived.
     expect(downloads[0].done).toBe(0);
+    // The bar can say what is downloading, from the sealed header.
+    expect(downloads.every((p) => p.filename === 'large.bin')).toBe(true);
     expect(downloads[downloads.length - 1].done).toBe(downloads[downloads.length - 1].total);
   });
 
@@ -209,6 +211,7 @@ describeInterop('the phone and the Go client are one implementation of one contr
     const uploads = progress.filter((p) => p.direction === 'upload');
     expect(uploads.length).toBeGreaterThanOrEqual(4);
     expect(uploads[uploads.length - 1].done).toBe(meta.size);
+    expect(uploads.every((p) => p.filename === 'from-the-phone.bin')).toBe(true);
   });
 
   test('a second phone pairs the other way round: it shows, the Go client accepts', async () => {

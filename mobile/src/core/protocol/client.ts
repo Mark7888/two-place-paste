@@ -152,7 +152,17 @@ export interface Progress {
   direction: 'upload' | 'download';
   done: number;
   total: number;
+  /**
+   * filename and contentType say what is moving, for the progress bar. They
+   * come from the entry being written, or from the sealed header of the one
+   * being read, and are empty when that header could not be opened.
+   */
+  filename: string;
+  contentType: string;
 }
+
+/** EntryHint is what a caller already knows about an entry it is about to read. */
+export type EntryHint = Pick<EntryMeta, 'size' | 'header'>;
 
 /** Reconnect bounds. A relay that is down comes back; a phone that hammers it while it does is a second problem. */
 const MIN_BACKOFF_MS = 500;
@@ -1162,7 +1172,10 @@ export class Client {
           `ciphertext is ${container.length} bytes, the relay accepts ${limits.maxEntryBytes}`,
         );
       }
-      response = await this.putChunked(entryId, epoch, container, header, limits);
+      response = await this.putChunked(entryId, epoch, container, header, limits, {
+        filename: item.filename ?? '',
+        contentType: item.contentType,
+      });
     } else {
       const conn = await this.connection();
       response = await conn.call(
@@ -1216,7 +1229,7 @@ export class Client {
     let ciphertext = response.ciphertext;
     if (!meta.inline) {
       // A large entry lives in the blob backend and is pulled by id.
-      const fetched = await this.fetch(meta.id, Number(meta.size));
+      const fetched = await this.fetch(meta.id, meta);
       meta = fetched.meta;
       ciphertext = fetched.ciphertext;
     }
@@ -1251,9 +1264,9 @@ export class Client {
   }
 
   /** getEntry fetches one entry by id and decrypts it — what the history tab does when the user taps an entry. */
-  async getEntry(entryId: string, sizeHint?: number): Promise<Item> {
+  async getEntry(entryId: string, hint?: EntryHint): Promise<Item> {
     this.requireGroup();
-    const { meta, ciphertext } = await this.fetch(entryId, sizeHint);
+    const { meta, ciphertext } = await this.fetch(entryId, hint);
     return this.open(meta, ciphertext);
   }
 
@@ -1302,6 +1315,7 @@ export class Client {
     container: Uint8Array,
     header: Uint8Array,
     limits: Limits,
+    what: { filename: string; contentType: string },
   ): Promise<EntryPutResponse> {
     const size = container.length;
     const begin = await (await this.connection()).call(
@@ -1331,7 +1345,7 @@ export class Client {
     };
 
     const progress = (done: number) =>
-      this.handlers.onProgress?.({ entryId, direction: 'upload', done, total: size });
+      this.handlers.onProgress?.({ entryId, direction: 'upload', done, total: size, ...what });
     progress(0);
     try {
       for (let index = 0, off = 0; off < size; index++, off += chunk) {
@@ -1381,14 +1395,23 @@ export class Client {
   private async fetchRanges(
     entryId: string,
     limits: Limits,
-    sizeHint?: number,
+    hint?: EntryHint,
   ): Promise<{ meta: EntryMeta; ciphertext: Uint8Array }> {
     let meta: EntryMeta | null = null;
     let buf = new Uint8Array(0);
     let filled = 0;
     const chunked = (size: number) => size > limits.chunkBytes;
-    if (sizeHint !== undefined && sizeHint > 0 && chunked(sizeHint)) {
-      this.handlers.onProgress?.({ entryId, direction: 'download', done: 0, total: sizeHint });
+    const report = (done: number, total: number, header: EntryHeaderView | null) =>
+      this.handlers.onProgress?.({
+        entryId,
+        direction: 'download',
+        done,
+        total,
+        filename: header?.filename ?? '',
+        contentType: header?.contentType ?? '',
+      });
+    if (hint !== undefined && hint.size > 0 && chunked(hint.size)) {
+      report(0, hint.size, hint.header);
     }
     for (;;) {
       const resp = await (await this.connection()).call(
@@ -1420,7 +1443,7 @@ export class Client {
       buf.set(data, filled);
       filled += data.length;
       if (chunked(size)) {
-        this.handlers.onProgress?.({ entryId, direction: 'download', done: filled, total: size });
+        report(filled, size, meta.header ?? hint?.header ?? null);
       }
       if (filled === size) {
         return { meta, ciphertext: buf };
@@ -1435,11 +1458,11 @@ export class Client {
    */
   private async fetch(
     entryId: string,
-    sizeHint?: number,
+    hint?: EntryHint,
   ): Promise<{ meta: EntryMeta; ciphertext: Uint8Array }> {
     const limits = await this.limits();
     if (limits.chunkBytes > 0) {
-      return this.fetchRanges(entryId, limits, sizeHint);
+      return this.fetchRanges(entryId, limits, hint);
     }
     const conn = await this.connection();
     const response = await conn.call(

@@ -1,4 +1,4 @@
-import { describeHeader, formatSize, headerPreviewable, kindOf, previewOf, toBase64, PREVIEW_CHARS } from '../preview';
+import { describeHeader, formatSize, headerPreviewable, transferText, kindOf, previewOf, toBase64, PREVIEW_CHARS } from '../preview';
 import { utf8, type Item } from '../../core';
 
 function item(contentType: string, body: Uint8Array, filename = ''): Item {
@@ -134,5 +134,37 @@ describe('formatSize', () => {
 
   it('never says 1024 of a unit', () => {
     expect(formatSize(1024 * 1024 - 1)).toBe('1.0 MB');
+  });
+});
+
+describe('transferText', () => {
+  const p = (over: Partial<Parameters<typeof transferText>[0]>) => ({
+    entryId: 'e',
+    direction: 'download' as const,
+    done: 4 << 20,
+    total: 20 << 20,
+    filename: '',
+    contentType: '',
+    ...over,
+  });
+
+  it('names a file by its filename and says how far it is', () => {
+    expect(transferText(p({ filename: 'report.pdf', contentType: 'application/pdf' }))).toEqual({
+      title: 'Downloading report.pdf',
+      detail: '4.0 MB of 20 MB · 20%',
+      percent: 20,
+    });
+  });
+
+  it('names an entry with no filename by its kind', () => {
+    expect(transferText(p({ contentType: 'image/png', direction: 'upload' })).title).toBe('Uploading an image');
+    expect(transferText(p({ contentType: 'text/plain; charset=utf-8' })).title).toBe('Downloading text');
+    expect(transferText(p({ contentType: 'application/zip' })).title).toBe('Downloading application/zip');
+    expect(transferText(p({})).title).toBe('Downloading a large entry');
+  });
+
+  it('does not reach 100% before the last byte', () => {
+    expect(transferText(p({ done: (20 << 20) - 1 })).percent).toBe(99);
+    expect(transferText(p({ done: 0, total: 0 })).percent).toBe(0);
   });
 });
