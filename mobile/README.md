@@ -140,7 +140,7 @@ instead — on the tile's panel, the Sync screen or the History screen — wheth
 to **save it to Downloads** or **open it**. Both go through `FileModule`
 (`TppFiles`):
 
-- `saveToDownloads` writes through MediaStore on Android 10+, which needs no
+- `saveToDownloads` writes into `Downloads/TwoPlacePaste`, through MediaStore on Android 10+, which needs no
   permission. On 9 and older it is a plain file write, and the app asks for
   `WRITE_EXTERNAL_STORAGE` (declared with `maxSdkVersion="28"`) at that moment.
 - `open` does not touch Downloads. The file is staged in the app's cache under

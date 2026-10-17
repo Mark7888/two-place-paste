@@ -57,7 +57,7 @@ export interface FilesPort {
   /** available reports whether this platform can save or open a file at all. */
   readonly available: boolean;
 
-  /** save keeps a copy in the Downloads folder and returns the name it was saved under. */
+  /** save keeps a copy in Downloads/TwoPlacePaste and returns the name it was saved under. */
   save(item: ClipboardItem): Promise<string>;
 
   /**

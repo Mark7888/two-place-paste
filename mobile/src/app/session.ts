@@ -109,7 +109,7 @@ export async function deliver(item: ClipboardItem): Promise<SyncResult> {
 export async function handleFile(item: ClipboardItem, choice: FileChoice): Promise<SyncResult> {
   if (choice === 'save') {
     const name = await files.save(item);
-    return { direction: 'downloaded', message: `Saved ${name} to Downloads.` };
+    return { direction: 'downloaded', message: `Saved ${name} to Downloads/TwoPlacePaste.` };
   }
   await files.open(item);
   return { direction: 'downloaded', message: `Opened ${describeItem(item)}.` };

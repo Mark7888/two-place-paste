@@ -374,7 +374,7 @@ export function FileChoices({
       <Choice
         icon="download"
         title="Save to Downloads"
-        why="Keep a copy in this device’s Downloads folder."
+        why="Keep a copy in Downloads/TwoPlacePaste on this device."
         disabled={disabled}
         onPress={() => onChoose('save')}
       />

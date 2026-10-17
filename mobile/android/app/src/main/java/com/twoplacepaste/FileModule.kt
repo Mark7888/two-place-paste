@@ -22,7 +22,7 @@ import java.io.File
  * What happens to a received entry the Android clipboard cannot hold — a file
  * from a desktop, a PDF, an archive. The user picks one of two things:
  *
- *  - [saveToDownloads] keeps a copy in the shared Downloads folder;
+ *  - [saveToDownloads] keeps a copy in Downloads/TwoPlacePaste;
  *  - [open] hands it to whichever app opens that type, and keeps nothing.
  *
  * Opening does not go through Downloads. The bytes are staged in this app's
@@ -36,7 +36,8 @@ class FileModule(reactContext: ReactApplicationContext) :
     override fun getName(): String = NAME
 
     /**
-     * saveToDownloads writes the file to the shared Downloads folder and
+     * saveToDownloads writes the file to [SUBFOLDER] inside the shared
+     * Downloads folder, so received files stay together, and
      * resolves with the name it was saved under — which can differ from the
      * one asked for, because Android adds " (1)" rather than overwrite.
      *
@@ -68,7 +69,8 @@ class FileModule(reactContext: ReactApplicationContext) :
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
             put(MediaStore.MediaColumns.MIME_TYPE, mime)
-            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            // MediaStore creates the subfolder on first use.
+            put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/$SUBFOLDER")
             // Hidden from other apps until the bytes are all there.
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
@@ -95,9 +97,12 @@ class FileModule(reactContext: ReactApplicationContext) :
 
     @Suppress("DEPRECATION")
     private fun saveLegacy(context: Context, bytes: ByteArray, name: String, mime: String): String {
-        val directory = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        val directory = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+            SUBFOLDER,
+        )
         if (!directory.exists() && !directory.mkdirs()) {
-            throw IllegalStateException("the Downloads folder could not be created")
+            throw IllegalStateException("the $SUBFOLDER folder in Downloads could not be created")
         }
         val file = uniqueFile(directory, name)
         file.outputStream().use { it.write(bytes) }
@@ -165,6 +170,9 @@ class FileModule(reactContext: ReactApplicationContext) :
 
     companion object {
         const val NAME = "TppFiles"
+
+        /** SUBFOLDER is where saved files go, inside Downloads. */
+        const val SUBFOLDER = "TwoPlacePaste"
         private const val OPEN_DIRECTORY = "open"
         private const val ERROR_CODE = "tpp_files"
         private const val OCTET_STREAM = "application/octet-stream"
