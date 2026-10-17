@@ -13,7 +13,7 @@ import { PermissionsAndroid, Platform } from 'react-native';
 
 import { toStandardBase64 } from './clipboard.android';
 import { TppFiles } from './native';
-import type { ClipboardItem, FilesPort } from './types';
+import type { ClipboardItem, FilesPort, SavedFile } from './types';
 
 /**
  * ensureLegacyWrite asks for storage access on Android 9 and older, the only
@@ -35,12 +35,24 @@ async function ensureLegacyWrite(): Promise<void> {
 export const files: FilesPort = {
   available: TppFiles !== null,
 
-  async save(item: ClipboardItem): Promise<string> {
+  async save(item: ClipboardItem): Promise<SavedFile> {
     if (TppFiles === null) {
       throw new Error('this build cannot save files');
     }
     await ensureLegacyWrite();
-    return TppFiles.saveToDownloads(toStandardBase64(item.body), item.filename, item.contentType);
+    const saved = await TppFiles.saveToDownloads(
+      toStandardBase64(item.body),
+      item.filename,
+      item.contentType,
+    );
+    return { ...saved, contentType: item.contentType, filename: item.filename };
+  },
+
+  async openSaved(file: SavedFile): Promise<void> {
+    if (TppFiles === null) {
+      throw new Error('this build cannot open files');
+    }
+    await TppFiles.openSaved(file.uri, file.contentType, file.filename);
   },
 
   async open(item: ClipboardItem): Promise<void> {

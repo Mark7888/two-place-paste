@@ -5,6 +5,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.media.MediaScannerConnection
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -12,6 +13,7 @@ import android.util.Base64
 import android.webkit.MimeTypeMap
 import androidx.annotation.RequiresApi
 import androidx.core.content.FileProvider
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -38,8 +40,9 @@ class FileModule(reactContext: ReactApplicationContext) :
     /**
      * saveToDownloads writes the file to [SUBFOLDER] inside the shared
      * Downloads folder, so received files stay together, and
-     * resolves with the name it was saved under — which can differ from the
-     * one asked for, because Android adds " (1)" rather than overwrite.
+     * resolves with `{ name, uri }`: the name it was saved under — which can
+     * differ from the one asked for, because Android adds " (1)" rather than
+     * overwrite — and a `content://` URI [openSaved] can open it by.
      *
      * From Android 10 this goes through MediaStore and needs no permission.
      * Before that it is a plain file write, which needs WRITE_EXTERNAL_STORAGE;
@@ -52,11 +55,17 @@ class FileModule(reactContext: ReactApplicationContext) :
             val mime = mimeOf(contentType, filename)
             val name = safeName(filename, mime)
             val context = reactApplicationContext
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                promise.resolve(saveWithMediaStore(context, bytes, name, mime))
+            val (savedName, uri) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                saveWithMediaStore(context, bytes, name, mime)
             } else {
-                promise.resolve(saveLegacy(context, bytes, name, mime))
+                saveLegacy(context, bytes, name, mime)
             }
+            promise.resolve(
+                Arguments.createMap().apply {
+                    putString("name", savedName)
+                    putString("uri", uri.toString())
+                },
+            )
         } catch (e: Exception) {
             // The message names the operation, never the bytes.
             promise.reject(ERROR_CODE, "the file could not be saved to Downloads", e)
@@ -64,7 +73,7 @@ class FileModule(reactContext: ReactApplicationContext) :
     }
 
     @RequiresApi(Build.VERSION_CODES.Q)
-    private fun saveWithMediaStore(context: Context, bytes: ByteArray, name: String, mime: String): String {
+    private fun saveWithMediaStore(context: Context, bytes: ByteArray, name: String, mime: String): Pair<String, Uri> {
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
@@ -89,14 +98,14 @@ class FileModule(reactContext: ReactApplicationContext) :
         }
         resolver.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use {
             if (it.moveToFirst()) {
-                return it.getString(0) ?: name
+                return Pair(it.getString(0) ?: name, uri)
             }
         }
-        return name
+        return Pair(name, uri)
     }
 
     @Suppress("DEPRECATION")
-    private fun saveLegacy(context: Context, bytes: ByteArray, name: String, mime: String): String {
+    private fun saveLegacy(context: Context, bytes: ByteArray, name: String, mime: String): Pair<String, Uri> {
         val directory = File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
             SUBFOLDER,
@@ -108,7 +117,9 @@ class FileModule(reactContext: ReactApplicationContext) :
         file.outputStream().use { it.write(bytes) }
         // So the file shows up in the Files app without a reboot.
         MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), arrayOf(mime), null)
-        return file.name
+        // A file:// URI cannot be handed to another app, so the saved file is
+        // reached through the provider's "downloads" path (res/xml/file_paths).
+        return Pair(file.name, FileProvider.getUriForFile(context, "${context.packageName}.clips", file))
     }
 
     /** uniqueFile picks "name (1).ext", "name (2).ext", … rather than overwrite. */
@@ -165,6 +176,36 @@ class FileModule(reactContext: ReactApplicationContext) :
             promise.resolve(null)
         } catch (e: Exception) {
             promise.reject(ERROR_CODE, "the file could not be opened", e)
+        }
+    }
+
+    /**
+     * openSaved opens a file [saveToDownloads] saved, by the URI it returned,
+     * in whichever app opens its type. Only `content://` URIs are accepted:
+     * this opens what this app saved, not arbitrary paths.
+     */
+    @ReactMethod
+    fun openSaved(uri: String, contentType: String, filename: String, promise: Promise) {
+        try {
+            val parsed = Uri.parse(uri)
+            if (parsed.scheme != "content") {
+                promise.reject(ERROR_CODE, "only a saved file can be opened this way")
+                return
+            }
+            val mime = mimeOf(contentType, filename)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(parsed, mime)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                reactApplicationContext.startActivity(intent)
+            } catch (e: ActivityNotFoundException) {
+                promise.reject(ERROR_CODE, "no app on this device can open $mime files", e)
+                return
+            }
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject(ERROR_CODE, "the saved file could not be opened", e)
         }
     }
 

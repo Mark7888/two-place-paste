@@ -1216,7 +1216,7 @@ export class Client {
     let ciphertext = response.ciphertext;
     if (!meta.inline) {
       // A large entry lives in the blob backend and is pulled by id.
-      const fetched = await this.fetch(meta.id);
+      const fetched = await this.fetch(meta.id, Number(meta.size));
       meta = fetched.meta;
       ciphertext = fetched.ciphertext;
     }
@@ -1251,9 +1251,9 @@ export class Client {
   }
 
   /** getEntry fetches one entry by id and decrypts it — what the history tab does when the user taps an entry. */
-  async getEntry(entryId: string): Promise<Item> {
+  async getEntry(entryId: string, sizeHint?: number): Promise<Item> {
     this.requireGroup();
-    const { meta, ciphertext } = await this.fetch(entryId);
+    const { meta, ciphertext } = await this.fetch(entryId, sizeHint);
     return this.open(meta, ciphertext);
   }
 
@@ -1367,14 +1367,29 @@ export class Client {
     }
   }
 
-  /** fetchRanges reads an entry one range at a time; the first range brings the metadata. */
+  /**
+   * fetchRanges reads an entry one range at a time; the first range brings the
+   * metadata.
+   *
+   * Progress is reported for any entry that takes more than one range — not
+   * only for those past the single-frame cap, which left an entry between the
+   * chunk size and that cap downloading in several ranges with no bar. When the
+   * caller already knows the size (from the latest-entry or history listing),
+   * the bar starts at zero before the first range is asked for, rather than
+   * appearing only once a whole chunk has arrived.
+   */
   private async fetchRanges(
     entryId: string,
     limits: Limits,
+    sizeHint?: number,
   ): Promise<{ meta: EntryMeta; ciphertext: Uint8Array }> {
     let meta: EntryMeta | null = null;
     let buf = new Uint8Array(0);
     let filled = 0;
+    const chunked = (size: number) => size > limits.chunkBytes;
+    if (sizeHint !== undefined && sizeHint > 0 && chunked(sizeHint)) {
+      this.handlers.onProgress?.({ entryId, direction: 'download', done: 0, total: sizeHint });
+    }
     for (;;) {
       const resp = await (await this.connection()).call(
         MessageType.MESSAGE_TYPE_ENTRY_FETCH_CHUNK_REQUEST,
@@ -1404,7 +1419,7 @@ export class Client {
       }
       buf.set(data, filled);
       filled += data.length;
-      if (size > SINGLE_FRAME_MAX_BYTES) {
+      if (chunked(size)) {
         this.handlers.onProgress?.({ entryId, direction: 'download', done: filled, total: size });
       }
       if (filled === size) {
@@ -1418,10 +1433,13 @@ export class Client {
    * them, which is the only way to read an entry larger than one frame, and in
    * one frame from a relay that predates them.
    */
-  private async fetch(entryId: string): Promise<{ meta: EntryMeta; ciphertext: Uint8Array }> {
+  private async fetch(
+    entryId: string,
+    sizeHint?: number,
+  ): Promise<{ meta: EntryMeta; ciphertext: Uint8Array }> {
     const limits = await this.limits();
     if (limits.chunkBytes > 0) {
-      return this.fetchRanges(entryId, limits);
+      return this.fetchRanges(entryId, limits, sizeHint);
     }
     const conn = await this.connection();
     const response = await conn.call(

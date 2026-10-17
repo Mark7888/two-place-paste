@@ -21,11 +21,11 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, Image, Pressable, RefreshControl, Text, View } from 'react-native';
 
 import type { EntryMeta } from '../../core';
-import type { ClipboardItem } from '../../platform';
+import type { ClipboardItem, SavedFile } from '../../platform';
 import { useSession } from '../SessionContext';
 import { deliver, failureMessage, handleFile, toClipboardItem, type FileChoice } from '../session';
 import { describeHeader, formatSize, headerPreviewable, previewOf, type Preview } from '../preview';
-import { Button, FileChoices, Notice, Sheet, TransferBar } from '../ui';
+import { Button, FileChoices, Notice, OutcomeNotice, Sheet, TransferBar } from '../ui';
 import { colors, styles } from '../theme';
 
 /** Loaded is a preview that arrived, or the reason one could not. */
@@ -37,6 +37,8 @@ export function HistoryScreen(): React.JSX.Element {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  // saved is the file the last outcome saved, which its notice offers to open.
+  const [saved, setSaved] = useState<SavedFile | null>(null);
   const [ok, setOk] = useState(true);
   const [open, setOpen] = useState<string | null>(null);
   // Previews live for as long as this screen does and no longer; reopening a
@@ -101,7 +103,7 @@ export function HistoryScreen(): React.JSX.Element {
     fetching.current.add(id);
     void (async () => {
       try {
-        const item = await client.getEntry(id);
+        const item = await client.getEntry(id, meta.size);
         setPreviews((prev) => ({ ...prev, [id]: { ok: true, preview: previewOf(item) } }));
       } catch (err) {
         setPreviews((prev) => ({ ...prev, [id]: { ok: false, error: failureMessage(err) } }));
@@ -116,9 +118,10 @@ export function HistoryScreen(): React.JSX.Element {
       return;
     }
     setBusy(true);
+    setSaved(null);
     void (async () => {
       try {
-        const item = await client.getEntry(meta.id);
+        const item = await client.getEntry(meta.id, meta.size);
         const result = await deliver(toClipboardItem(item));
         if (result.direction === 'file' && result.item !== undefined) {
           setFile(result.item);
@@ -129,6 +132,7 @@ export function HistoryScreen(): React.JSX.Element {
       } catch (err) {
         setOk(false);
         setMessage(failureMessage(err));
+        setSaved(null);
       } finally {
         setBusy(false);
       }
@@ -147,10 +151,12 @@ export function HistoryScreen(): React.JSX.Element {
         setFile(null);
         setOk(true);
         setMessage(result.message);
+        setSaved(result.saved ?? null);
       } catch (err) {
         // The sheet stays up so the other option is still one tap away.
         setOk(false);
         setMessage(failureMessage(err));
+        setSaved(null);
       } finally {
         setBusy(false);
       }
@@ -169,7 +175,18 @@ export function HistoryScreen(): React.JSX.Element {
           Newest first. Entries expire within 24 hours. Tap one to see what is in it.
         </Text>
         <TransferBar transfer={session.transfer} />
-        {message !== '' && <Notice message={message} tone={ok ? 'ok' : 'error'} />}
+        {message !== '' && (
+          <OutcomeNotice
+            message={message}
+            ok={ok}
+            saved={saved}
+            onError={(m) => {
+              setOk(false);
+              setMessage(m);
+              setSaved(null);
+            }}
+          />
+        )}
       </View>
 
       <FlatList

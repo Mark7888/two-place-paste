@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 
 import type { Progress } from '../core';
-import { clipboard } from '../platform';
+import { clipboard, files, type SavedFile } from '../platform';
 
 import { Icon, type IconName } from './icons';
 import { formatSize } from './preview';
@@ -115,9 +115,12 @@ export function Card({
 export function Notice({
   message,
   tone = 'info',
+  action,
 }: {
   message: string;
   tone?: 'info' | 'ok' | 'error';
+  /** action is one button at the right of the notice, such as "Open" after a save. */
+  action?: { label: string; onPress: () => void; disabled?: boolean };
 }): React.JSX.Element | null {
   if (message === '') {
     return null;
@@ -132,6 +135,30 @@ export function Notice({
     <View style={[styles.notice, { backgroundColor: palette.bg }]}>
       <Icon name={palette.icon} size={16} color={palette.fg} />
       <Text style={[styles.noticeText, { color: palette.fg }]}>{message}</Text>
+      {action !== undefined && (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={action.label}
+          accessibilityState={{ disabled: action.disabled === true }}
+          onPress={action.onPress}
+          disabled={action.disabled}
+          hitSlop={8}
+          android_ripple={{ color: 'rgba(255,255,255,0.12)', borderless: true }}
+          style={[
+            {
+              borderWidth: 1,
+              borderColor: palette.fg,
+              borderRadius: 8,
+              paddingHorizontal: 12,
+              paddingVertical: 6,
+              alignSelf: 'center',
+            },
+            action.disabled === true && styles.buttonDisabled,
+          ]}
+        >
+          <Text style={{ color: palette.fg, fontWeight: '600', fontSize: 14 }}>{action.label}</Text>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -386,5 +413,40 @@ export function FileChoices({
         onPress={() => onChoose('open')}
       />
     </>
+  );
+}
+
+/**
+ * OutcomeNotice is a screen's last outcome. After a file was saved to
+ * Downloads it carries an Open button that opens that saved file.
+ */
+export function OutcomeNotice({
+  message,
+  ok,
+  saved,
+  onError,
+}: {
+  message: string;
+  ok: boolean;
+  saved: SavedFile | null;
+  onError: (message: string) => void;
+}): React.JSX.Element | null {
+  const [opening, setOpening] = React.useState(false);
+  const open = () => {
+    if (saved === null || opening) {
+      return;
+    }
+    setOpening(true);
+    files
+      .openSaved(saved)
+      .catch((err: unknown) => onError(failureMessage(err)))
+      .finally(() => setOpening(false));
+  };
+  return (
+    <Notice
+      message={message}
+      tone={ok ? 'ok' : 'error'}
+      action={ok && saved !== null ? { label: 'Open', onPress: open, disabled: opening } : undefined}
+    />
   );
 }

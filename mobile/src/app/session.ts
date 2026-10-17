@@ -16,6 +16,7 @@ import {
   files,
   secureStore,
   type ClipboardItem,
+  type SavedFile,
 } from '../platform';
 
 /**
@@ -37,6 +38,8 @@ export interface SyncResult {
   message: string;
   /** item is the received entry when `direction` is `file`, waiting for the user's choice. */
   item?: ClipboardItem;
+  /** saved is the file just saved to Downloads, so the notice can offer to open it. */
+  saved?: SavedFile;
 }
 
 /** FileChoice is what the user does with a received file the clipboard cannot hold. */
@@ -108,8 +111,12 @@ export async function deliver(item: ClipboardItem): Promise<SyncResult> {
 /** handleFile carries out the user's choice for a received file. */
 export async function handleFile(item: ClipboardItem, choice: FileChoice): Promise<SyncResult> {
   if (choice === 'save') {
-    const name = await files.save(item);
-    return { direction: 'downloaded', message: `Saved ${name} to Downloads/TwoPlacePaste.` };
+    const saved = await files.save(item);
+    return {
+      direction: 'downloaded',
+      message: `Saved ${saved.name} to Downloads/TwoPlacePaste.`,
+      saved,
+    };
   }
   await files.open(item);
   return { direction: 'downloaded', message: `Opened ${describeItem(item)}.` };

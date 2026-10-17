@@ -12,13 +12,14 @@ import React, { useState } from 'react';
 import { Text, View } from 'react-native';
 
 import { useSession } from '../SessionContext';
-import type { ClipboardItem } from '../../platform';
+import type { ClipboardItem, SavedFile } from '../../platform';
 import { download, failureMessage, handleFile, sync, upload, type FileChoice } from '../session';
 import {
   Button,
   Choice,
   FileChoices,
   Notice,
+  OutcomeNotice,
   Screen,
   Section,
   Sheet,
@@ -31,6 +32,8 @@ export function SyncScreen(): React.JSX.Element {
   const session = useSession();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  // saved is the file the last outcome saved, which its notice offers to open.
+  const [saved, setSaved] = useState<SavedFile | null>(null);
   const [ok, setOk] = useState(true);
   const [asking, setAsking] = useState(false);
   // A received file the clipboard cannot hold, waiting for save-or-open.
@@ -43,6 +46,7 @@ export function SyncScreen(): React.JSX.Element {
     }
     setBusy(true);
     setMessage('');
+    setSaved(null);
     void (async () => {
       try {
         await client.connect();
@@ -67,6 +71,7 @@ export function SyncScreen(): React.JSX.Element {
       } catch (err) {
         setOk(false);
         setMessage(failureMessage(err));
+        setSaved(null);
       } finally {
         setBusy(false);
         session.refresh();
@@ -86,11 +91,13 @@ export function SyncScreen(): React.JSX.Element {
         setFile(null);
         setOk(true);
         setMessage(result.message);
+        setSaved(result.saved ?? null);
       } catch (err) {
         // The sheet stays up, so the other option is still one tap away —
         // "no app opens this" is exactly when Save is the answer.
         setOk(false);
         setMessage(failureMessage(err));
+        setSaved(null);
       } finally {
         setBusy(false);
       }
@@ -139,7 +146,18 @@ export function SyncScreen(): React.JSX.Element {
           nobody was looking at; `session.notice` is what merely happened.
         */}
         <TransferBar transfer={session.transfer} />
-        {message !== '' && <Notice message={message} tone={ok ? 'ok' : 'error'} />}
+        {message !== '' && (
+          <OutcomeNotice
+            message={message}
+            ok={ok}
+            saved={saved}
+            onError={(m) => {
+              setOk(false);
+              setMessage(m);
+              setSaved(null);
+            }}
+          />
+        )}
         {session.error !== '' && (
           <View style={{ gap: 8 }}>
             <Notice message={session.error} tone="error" />

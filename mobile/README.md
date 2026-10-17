@@ -143,6 +143,9 @@ to **save it to Downloads** or **open it**. Both go through `FileModule`
 - `saveToDownloads` writes into `Downloads/TwoPlacePaste`, through MediaStore on Android 10+, which needs no
   permission. On 9 and older it is a plain file write, and the app asks for
   `WRITE_EXTERNAL_STORAGE` (declared with `maxSdkVersion="28"`) at that moment.
+  It returns the saved file's URI (MediaStore on 10+, the FileProvider's
+  `downloads` path on 9 and older), so the green "Saved" notice can carry an
+  **Open** button that opens that saved file through `openSaved`.
 - `open` does not touch Downloads. The file is staged in the app's cache under
   its own name and handed to the opening app as a FileProvider URI with a
   one-off read grant. Each open replaces the last staged file. If no installed

@@ -45,8 +45,18 @@ export interface TppClipboardModule {
 
 /** TppFilesModule is implemented by `android/app/src/main/java/.../FileModule.kt`. */
 export interface TppFilesModule {
-  /** saveToDownloads writes the file to Downloads/TwoPlacePaste and resolves with the name it was saved under. */
-  saveToDownloads(base64: string, filename: string, contentType: string): Promise<string>;
+  /**
+   * saveToDownloads writes the file to Downloads/TwoPlacePaste and resolves
+   * with the name it was saved under and a content URI to open it by.
+   */
+  saveToDownloads(
+    base64: string,
+    filename: string,
+    contentType: string,
+  ): Promise<{ name: string; uri: string }>;
+
+  /** openSaved opens a file saveToDownloads saved, by the URI it returned. */
+  openSaved(uri: string, contentType: string, filename: string): Promise<void>;
 
   /**
    * open hands the file to an app that opens its type, staged in this app's

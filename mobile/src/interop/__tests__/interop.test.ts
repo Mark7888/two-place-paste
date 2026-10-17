@@ -167,6 +167,25 @@ describeInterop('the phone and the Go client are one implementation of one contr
     expect(same).toBe(true);
     const downloads = progress.filter((p) => p.direction === 'download');
     expect(downloads.length).toBeGreaterThanOrEqual(3);
+    // The size is known from the latest-entry answer, so the bar starts at
+    // zero rather than appearing only once the first chunk has arrived.
+    expect(downloads[0].done).toBe(0);
+    expect(downloads[downloads.length - 1].done).toBe(downloads[downloads.length - 1].total);
+  });
+
+  test('an entry under one frame but over one chunk still reports download progress', async () => {
+    // Past the relay's 8 MiB chunk and under the 10 MiB frame cap: it is read
+    // in two ranges, and used to be read with no progress at all.
+    const size = 9 << 20;
+    const written = await go.send(`put-large ${size}`);
+    progress.length = 0;
+    const item = await phone.getLatest();
+
+    expect(item.meta?.id).toBe(written.entry_id);
+    expect(item.body.length).toBe(size);
+    const downloads = progress.filter((p) => p.direction === 'download');
+    expect(downloads.length).toBeGreaterThanOrEqual(2);
+    expect(downloads[0].done).toBe(0);
     expect(downloads[downloads.length - 1].done).toBe(downloads[downloads.length - 1].total);
   });
 

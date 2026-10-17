@@ -49,6 +49,16 @@ export interface ClipboardPort {
   writeText(text: string): Promise<void>;
 }
 
+/** SavedFile is a file `FilesPort.save` wrote, and what it takes to open it again. */
+export interface SavedFile {
+  /** name is what it was saved as, which can differ from the filename asked for. */
+  name: string;
+  /** uri addresses the saved file for `FilesPort.openSaved`. */
+  uri: string;
+  contentType: string;
+  filename: string;
+}
+
 /**
  * FilesPort is what happens to a received item the clipboard cannot hold: the
  * user either keeps it in Downloads or opens it in another app.
@@ -57,8 +67,11 @@ export interface FilesPort {
   /** available reports whether this platform can save or open a file at all. */
   readonly available: boolean;
 
-  /** save keeps a copy in Downloads/TwoPlacePaste and returns the name it was saved under. */
-  save(item: ClipboardItem): Promise<string>;
+  /** save keeps a copy in Downloads/TwoPlacePaste and says where it went. */
+  save(item: ClipboardItem): Promise<SavedFile>;
+
+  /** openSaved opens a file `save` wrote, in an app that opens its type. */
+  openSaved(file: SavedFile): Promise<void>;
 
   /**
    * open shows the item in an app that opens its type, without saving it to
