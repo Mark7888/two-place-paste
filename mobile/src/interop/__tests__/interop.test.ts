@@ -55,6 +55,8 @@ describeInterop('the phone and the Go client are one implementation of one contr
   let go: GoPeer;
   let phone: Client;
   const progress: Progress[] = [];
+  // onProgress lets a test act in the middle of a transfer.
+  let onProgress: ((p: Progress) => void) | null = null;
 
   beforeAll(async () => {
     relay = await Relay.start();
@@ -62,7 +64,12 @@ describeInterop('the phone and the Go client are one implementation of one contr
     phone = await Client.open({
       store: new InMemoryStore(),
       deviceName: 'Anna — phone',
-      handlers: { onProgress: (p) => progress.push(p) },
+      handlers: {
+        onProgress: (p) => {
+          progress.push(p);
+          onProgress?.(p);
+        },
+      },
     });
   });
 
@@ -189,6 +196,67 @@ describeInterop('the phone and the Go client are one implementation of one contr
     expect(downloads.length).toBeGreaterThanOrEqual(2);
     expect(downloads[0].done).toBe(0);
     expect(downloads[downloads.length - 1].done).toBe(downloads[downloads.length - 1].total);
+  });
+
+  test('a download carries on when the app goes to the background part-way through', async () => {
+    const size = 20 << 20;
+    const written = await go.send(`put-large ${size}`);
+    progress.length = 0;
+    let backgrounded = false;
+    onProgress = (p) => {
+      if (!backgrounded && p.direction === 'download' && p.done > 0) {
+        backgrounded = true;
+        // What the app does when the user switches to another app.
+        phone.disconnect();
+      }
+    };
+    try {
+      const item = await phone.getLatest();
+      expect(backgrounded).toBe(true);
+      expect(item.meta?.id).toBe(written.entry_id);
+      expect(item.body.length).toBe(size);
+      // The socket was kept for the transfer only, and closed once it ended.
+      expect(phone.connected).toBe(false);
+    } finally {
+      onProgress = null;
+      await phone.connect();
+    }
+  });
+
+  test('a download whose socket drops in the background resumes where it was when the app returns', async () => {
+    const size = 20 << 20;
+    const written = await go.send(`put-large ${size}`);
+    progress.length = 0;
+    let dropped = false;
+    onProgress = (p) => {
+      if (!dropped && p.direction === 'download' && p.done > 0) {
+        dropped = true;
+        phone.disconnect();
+        // The OS kills the socket while the app is away.
+        (phone as unknown as { conn: { close(reason: string): void } }).conn.close('simulated drop');
+        setTimeout(() => void phone.connect(), 200);
+      }
+    };
+    try {
+      const item = await phone.getLatest();
+      expect(dropped).toBe(true);
+      expect(item.meta?.id).toBe(written.entry_id);
+      expect(item.body.length).toBe(size);
+      let same = true;
+      for (let i = 0; i < size; i++) {
+        if (item.body[i] !== ((i * 31 + 7) & 0xff)) {
+          same = false;
+          break;
+        }
+      }
+      expect(same).toBe(true);
+      // It picked up from the range it had, rather than starting over.
+      const downloads = progress.filter((x) => x.direction === 'download');
+      const done = downloads.map((x) => x.done);
+      expect(done).toEqual([...done].sort((a, b) => a - b));
+    } finally {
+      onProgress = null;
+    }
   });
 
   test('an entry larger than one frame, written by the phone, uploads in chunks and reads in Go', async () => {

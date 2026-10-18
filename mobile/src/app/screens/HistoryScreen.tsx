@@ -25,7 +25,7 @@ import type { ClipboardItem, SavedFile } from '../../platform';
 import { useSession } from '../SessionContext';
 import { deliver, failureMessage, handleFile, toClipboardItem, type FileChoice } from '../session';
 import { describeHeader, formatSize, headerPreviewable, previewOf, type Preview } from '../preview';
-import { Button, FileChoices, Notice, OutcomeNotice, Sheet, TransferBar } from '../ui';
+import { Button, FileChoices, Notice, OutcomeNotice, Sheet, Shimmer, TransferBar } from '../ui';
 import { colors, styles } from '../theme';
 
 /** Loaded is a preview that arrived, or the reason one could not. */
@@ -44,6 +44,20 @@ export function HistoryScreen(): React.JSX.Element {
   // Previews live for as long as this screen does and no longer; reopening a
   // row does not decrypt it a second time.
   const [previews, setPreviews] = useState<Record<string, Loaded>>({});
+  // downloading is the entries this screen is fetching right now, which their
+  // rows show with a light sweeping along the top edge.
+  const [downloading, setDownloading] = useState<ReadonlySet<string>>(new Set());
+  const fetchingEntry = useCallback((id: string, on: boolean) => {
+    setDownloading((prev) => {
+      const next = new Set(prev);
+      if (on) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  }, []);
   // A fetched file the clipboard cannot hold, waiting for save-or-open.
   const [file, setFile] = useState<ClipboardItem | null>(null);
 
@@ -101,6 +115,7 @@ export function HistoryScreen(): React.JSX.Element {
       return;
     }
     fetching.current.add(id);
+    fetchingEntry(id, true);
     void (async () => {
       try {
         const item = await client.getEntry(id, meta);
@@ -109,6 +124,7 @@ export function HistoryScreen(): React.JSX.Element {
         setPreviews((prev) => ({ ...prev, [id]: { ok: false, error: failureMessage(err) } }));
       } finally {
         fetching.current.delete(id);
+        fetchingEntry(id, false);
       }
     })();
   };
@@ -119,9 +135,12 @@ export function HistoryScreen(): React.JSX.Element {
     }
     setBusy(true);
     setSaved(null);
+    fetchingEntry(meta.id, true);
     void (async () => {
       try {
         const item = await client.getEntry(meta.id, meta);
+        // The download is over; what follows is local.
+        fetchingEntry(meta.id, false);
         const result = await deliver(toClipboardItem(item));
         if (result.direction === 'file' && result.item !== undefined) {
           setFile(result.item);
@@ -134,6 +153,7 @@ export function HistoryScreen(): React.JSX.Element {
         setMessage(failureMessage(err));
         setSaved(null);
       } finally {
+        fetchingEntry(meta.id, false);
         setBusy(false);
       }
     })();
@@ -218,7 +238,13 @@ export function HistoryScreen(): React.JSX.Element {
           const loaded = previews[item.id];
           const previewable = headerPreviewable(item.header);
           return (
-            <View style={[styles.card, !canOpen && { opacity: 0.6 }]}>
+            <View style={[styles.card, { overflow: 'hidden' }, !canOpen && { opacity: 0.6 }]}>
+              <Shimmer
+                active={
+                  downloading.has(item.id) ||
+                  (session.transfer?.direction === 'download' && session.transfer.entryId === item.id)
+                }
+              />
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`Entry from ${item.createdAt.toLocaleString()}`}

@@ -1,7 +1,10 @@
 /** The controls every screen is built from. */
 
 import React from 'react';
+import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import {
+  Animated,
+  Easing,
   KeyboardAvoidingView,
   Modal,
   Pressable,
@@ -452,5 +455,61 @@ export function OutcomeNotice({
       tone={ok ? 'ok' : 'error'}
       action={ok && saved !== null ? { label: 'Open', onPress: open, disabled: opening } : undefined}
     />
+  );
+}
+
+/**
+ * Shimmer is a thin light that sweeps left to right along the top edge of a
+ * card, for as long as `active` is true: the History row whose entry is being
+ * downloaded right now. It sits over the card's top edge, so the card needs
+ * `overflow: 'hidden'` for the band to follow its rounded corners.
+ */
+export function Shimmer({ active }: { active: boolean }): React.JSX.Element | null {
+  const [width, setWidth] = React.useState(0);
+  const x = React.useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    if (!active || width === 0) {
+      return;
+    }
+    x.setValue(0);
+    const loop = Animated.loop(
+      Animated.timing(x, {
+        toValue: 1,
+        duration: 1300,
+        easing: Easing.inOut((t) => Easing.quad(t)),
+        useNativeDriver: true,
+      }),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [active, width, x]);
+
+  if (!active) {
+    return null;
+  }
+  const band = Math.max(80, width * 0.45);
+  const translateX = x.interpolate({ inputRange: [0, 1], outputRange: [-band, width] });
+  return (
+    <View
+      pointerEvents="none"
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
+      style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, overflow: 'hidden' }}
+    >
+      <Animated.View style={{ width: band, height: 3, transform: [{ translateX }] }}>
+        <Svg width={band} height={3}>
+          <Defs>
+            <LinearGradient id="shimmer" x1="0" y1="0" x2="1" y2="0">
+              <Stop offset="0" stopColor={colors.accent} stopOpacity={0} />
+              <Stop offset="0.5" stopColor={colors.accent} stopOpacity={1} />
+              <Stop offset="1" stopColor={colors.accent} stopOpacity={0} />
+            </LinearGradient>
+          </Defs>
+          <Rect x={0} y={0} width={band} height={3} fill="url(#shimmer)" />
+        </Svg>
+      </Animated.View>
+    </View>
   );
 }

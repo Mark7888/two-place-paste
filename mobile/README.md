@@ -55,6 +55,16 @@ binary blobs, and the same rule keeps the launcher icon and the tile icon as
 vector drawables and the debug keystore as the one Gradle generates on the
 machine that builds.
 
+## Leaving the app mid-transfer
+
+The socket follows the foreground (SPEC §5.2), with one exception: a chunked
+upload or download the user started is let finish. Going to the background
+during one keeps the socket open until the transfer ends, then closes it. If
+the OS drops the socket anyway, a download asks again for the range it lost
+once the app is back, and carries on from there. An upload cannot resume that
+way (the relay rejects a chunk index it has already taken), so it relies on the
+socket staying up.
+
 ## The quick-settings tile
 
 Android 10 blocked clipboard reads from apps that are not focused and are not

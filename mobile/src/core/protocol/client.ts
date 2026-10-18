@@ -168,6 +168,9 @@ export type EntryHint = Pick<EntryMeta, 'size' | 'header'>;
 const MIN_BACKOFF_MS = 500;
 const MAX_BACKOFF_MS = 30_000;
 
+/** RANGE_RETRIES is how many times a download asks again for a range a dropped socket lost. */
+const RANGE_RETRIES = 3;
+
 /** PAIRING_WRAP_TIMEOUT_MS bounds a joiner's wait for the inviter to hand over the group key. */
 export const PAIRING_WRAP_TIMEOUT_MS = 120_000;
 
@@ -407,6 +410,12 @@ export class Client {
   private conn: Connection | null = null;
   private dialling: Promise<Connection> | null = null;
   private wanted = false;
+  /** transfers counts chunked uploads and downloads in flight; see `disconnect`. */
+  private transfers = 0;
+  /** lingering is a disconnect that waits for the transfers in flight to finish first. */
+  private lingering = false;
+  /** wantedWaiters are downloads that lost their socket in the background, waiting for `connect`. */
+  private wantedWaiters: (() => void)[] = [];
   private backoffMs = MIN_BACKOFF_MS;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private refusals = 0;
@@ -495,20 +504,64 @@ export class Client {
       throw new TppError('no-group', 'this device is not in a group');
     }
     this.wanted = true;
+    this.lingering = false;
+    const waiters = this.wantedWaiters;
+    this.wantedWaiters = [];
+    for (const wake of waiters) {
+      wake();
+    }
     await this.connection();
   }
 
-  /** disconnect drops the socket and stops re-dialling. Called when the app goes to the background. */
+  /**
+   * disconnect drops the socket and stops re-dialling. Called when the app goes
+   * to the background.
+   *
+   * A chunked transfer the user started is let finish first: switching apps
+   * for a moment during a 50 MB download should not throw it away. The socket
+   * stays up until the last transfer ends and is closed then, unless the app
+   * has come back by that time. Nothing else is done on it in the meantime —
+   * no re-dial, and nothing new is started on the app's behalf.
+   */
   disconnect(): void {
     this.wanted = false;
     if (this.retryTimer !== null) {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
+    if (this.transfers > 0) {
+      this.lingering = true;
+      return;
+    }
+    this.lingering = false;
     const conn = this.conn;
     this.conn = null;
     this.dialling = null;
     conn?.close('the app is no longer in the foreground');
+  }
+
+  /**
+   * transfer runs one chunked upload or download, keeping the socket open for
+   * it if the app goes to the background meanwhile (see `disconnect`).
+   */
+  private async transfer<T>(run: () => Promise<T>): Promise<T> {
+    this.transfers++;
+    try {
+      return await run();
+    } finally {
+      this.transfers--;
+      if (this.transfers === 0 && this.lingering && !this.wanted) {
+        this.disconnect();
+      }
+    }
+  }
+
+  /** whenWanted resolves the next time the app asks to be online. */
+  private whenWanted(): Promise<void> {
+    if (this.wanted) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => this.wantedWaiters.push(resolve));
   }
 
   /** connection returns a live connection, dialling if there is none. */
@@ -1172,10 +1225,12 @@ export class Client {
           `ciphertext is ${container.length} bytes, the relay accepts ${limits.maxEntryBytes}`,
         );
       }
-      response = await this.putChunked(entryId, epoch, container, header, limits, {
-        filename: item.filename ?? '',
-        contentType: item.contentType,
-      });
+      response = await this.transfer(() =>
+        this.putChunked(entryId, epoch, container, header, limits, {
+          filename: item.filename ?? '',
+          contentType: item.contentType,
+        }),
+      );
     } else {
       const conn = await this.connection();
       response = await conn.call(
@@ -1392,11 +1447,29 @@ export class Client {
    * the bar starts at zero before the first range is asked for, rather than
    * appearing only once a whole chunk has arrived.
    */
-  private async fetchRanges(
+  private fetchRanges(
     entryId: string,
     limits: Limits,
     hint?: EntryHint,
   ): Promise<{ meta: EntryMeta; ciphertext: Uint8Array }> {
+    return this.transfer(() => this.readRanges(entryId, limits, hint));
+  }
+
+  /**
+   * readRanges is the body of `fetchRanges`.
+   *
+   * A range lost to a dropped socket is asked for again from the same offset
+   * rather than failing the download: once the app is back in the foreground
+   * when the drop happened in the background, and after a short pause up to
+   * RANGE_RETRIES times when it happened in the foreground. Reading a range is
+   * idempotent, so asking twice costs nothing but the bytes.
+   */
+  private async readRanges(
+    entryId: string,
+    limits: Limits,
+    hint?: EntryHint,
+  ): Promise<{ meta: EntryMeta; ciphertext: Uint8Array }> {
+    let retries = 0;
     let meta: EntryMeta | null = null;
     let buf = new Uint8Array(0);
     let filled = 0;
@@ -1414,14 +1487,33 @@ export class Client {
       report(0, hint.size, hint.header);
     }
     for (;;) {
-      const resp = await (await this.connection()).call(
-        MessageType.MESSAGE_TYPE_ENTRY_FETCH_CHUNK_REQUEST,
-        {
-          codec: EntryFetchChunkRequest,
-          message: { entryId, offset: filled.toString(), length: limits.chunkBytes.toString() },
-        },
-        EntryFetchChunkResponse,
-      );
+      let resp: EntryFetchChunkResponse;
+      try {
+        resp = await (await this.connection()).call(
+          MessageType.MESSAGE_TYPE_ENTRY_FETCH_CHUNK_REQUEST,
+          {
+            codec: EntryFetchChunkRequest,
+            message: { entryId, offset: filled.toString(), length: limits.chunkBytes.toString() },
+          },
+          EntryFetchChunkResponse,
+        );
+      } catch (err) {
+        if (!(err instanceof TppError && err.kind === 'disconnected')) {
+          throw err;
+        }
+        if (!this.wanted) {
+          // Lost while the app was away: carry on when it comes back.
+          await this.whenWanted();
+          continue;
+        }
+        if (retries >= RANGE_RETRIES) {
+          throw err;
+        }
+        retries++;
+        await new Promise((resolve) => setTimeout(resolve, jitter(MIN_BACKOFF_MS * 2 ** retries)));
+        continue;
+      }
+      retries = 0;
       if (!resp.meta) {
         throw new TppError('no-entry', `the relay returned no metadata for entry ${entryId}`);
       }
