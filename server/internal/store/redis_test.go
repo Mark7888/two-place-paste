@@ -16,7 +16,7 @@ import (
 // redisAddr is the integration-test Redis. CI runs it as a service container;
 // a developer runs `redis-server` locally. When neither is there the Redis
 // half of every test skips with a reason rather than failing
-// (docs/conventions.md §5).
+// (docs/internal/conventions.md §5).
 func redisAddr() string {
 	if addr := os.Getenv("TPP_TEST_REDIS_ADDR"); addr != "" {
 		return addr

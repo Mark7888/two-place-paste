@@ -1,6 +1,6 @@
 # TwoPlacePaste — Implementation Roadmap
 
-**Companion to:** `docs/SPECS.md` v0.1
+**Companion to:** `docs/internal/SPECS.md` v0.1
 **Purpose:** the execution plan for coding agents. One phase = one branch = one pull
 request. Phases run in numeric order; only one pair of phases may overlap.
 
@@ -31,8 +31,8 @@ When a phase merges, update its row here to ✅ and flip the next row to ▶.
 P9 is a cross-cutting change rather than a phase in the sequence above: it touches
 `/proto`, `/server`, `/pkg/tppclient`, `/desktop`, `/mobile` and `/deploy` together,
 because a wire change has to land in every client at once. Its plan, decisions and
-work items are in [`docs/plans/s3-blob-storage.md`](plans/s3-blob-storage.md), in the
-same way `docs/plans/joiner-emitted-pairing.md` carried the last such change.
+work items are in [`docs/internal/plans/s3-blob-storage.md`](plans/s3-blob-storage.md), in the
+same way `docs/internal/plans/joiner-emitted-pairing.md` carried the last such change.
 
 ---
 
@@ -40,7 +40,7 @@ same way `docs/plans/joiner-emitted-pairing.md` carried the last such change.
 
 Give the agent exactly this:
 
-> Implement **Phase N** from `docs/ROADMAP.md`. Follow `docs/conventions.md`. Work only
+> Implement **Phase N** from `docs/internal/ROADMAP.md`. Follow `docs/internal/conventions.md`. Work only
 > inside the phase's **Owns** paths. Open one PR when every acceptance criterion passes.
 
 Everything the agent needs is in that phase's section below. It should not need to read
@@ -154,13 +154,13 @@ graph TD
 # PHASE 0 — Foundation ✅ Done
 
 **SPEC §4.4, §9** · **Owns:** `/go.work`, `/Makefile`, `/.github/workflows/**`,
-`/.gitignore`, `/README.md`, `/docs/conventions.md`, module skeletons,
+`/.gitignore`, `/README.md`, `/docs/internal/conventions.md`, module skeletons,
 `/server/internal/httpapi/router.go`, `/server/internal/config/**`.
 
 Delivered: Go workspace with three modules; `make proto build test lint run-server`; CI
 running build, `go vet`, `golangci-lint` and tests per module with path-gated Node jobs;
 config loader accepting `ADMIN_PASSWORD` **or** `ADMIN_PASSWORD_HASH` so hashing later is
-config-only; the router registry above; `docs/conventions.md` (error wrapping, `log/slog`,
+config-only; the router registry above; `docs/internal/conventions.md` (error wrapping, `log/slog`,
 context propagation, table-driven tests, no panics in request paths).
 
 ---
@@ -941,7 +941,7 @@ Making it symmetric needs new message types, relay-held offers, and a named conf
 on the accepting member — a shared-contract change, so it is its own PR and not part of
 any feature phase (§3). The mechanism, the wire additions, the security consequence of
 moving the risk onto the member, and the work split are in
-[`docs/plans/joiner-emitted-pairing.md`](plans/joiner-emitted-pairing.md).
+[`docs/internal/plans/joiner-emitted-pairing.md`](plans/joiner-emitted-pairing.md).
 
 ---
 

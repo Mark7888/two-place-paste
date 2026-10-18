@@ -530,7 +530,7 @@ func TestRevocationNeedsAPlan(t *testing.T) {
 // TestAcceptingAnOfferNeedsAPlan is the same gate as the one above, over the
 // flow where it matters more: a revocation the user did not mean costs the
 // group a rekey, but admitting a device the user did not look at hands a
-// stranger the group key (docs/plans/joiner-emitted-pairing.md §5).
+// stranger the group key (docs/internal/plans/joiner-emitted-pairing.md §5).
 func TestAcceptingAnOfferNeedsAPlan(t *testing.T) {
 	t.Parallel()
 

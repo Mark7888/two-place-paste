@@ -6,7 +6,7 @@
 # It runs on the same events the desktop build does — a push to the default
 # branch, a pull request, and a release tag (release.yml calls it) — and never
 # on a push to any other branch. The tags follow the version and channel
-# scripts/version.sh computes (docs/plans/versioning-releases-and-updates.md §1):
+# scripts/version.sh computes (docs/internal/plans/versioning-releases-and-updates.md §1):
 #
 #   release tag vX.Y.Z        → :X.Y.Z  :X.Y  :X  :latest  :sha-<7>
 #   release tag vX.Y.Z-pre    → :X.Y.Z-pre                 :sha-<7>

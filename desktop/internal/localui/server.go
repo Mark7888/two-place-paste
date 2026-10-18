@@ -34,7 +34,7 @@ type Options struct {
 	DevProxy string
 
 	// Logger receives request-level logs. It never sees a token or clipboard
-	// content (docs/conventions.md §2).
+	// content (docs/internal/conventions.md §2).
 	Logger *slog.Logger
 }
 

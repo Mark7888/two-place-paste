@@ -39,7 +39,7 @@ func decode(env *tppv1.Envelope, msg proto.Message) error {
 // errorFrame builds the Error response for a failed request. The message
 // reaches the server log and the client's UI, so it names ids, epochs and byte
 // lengths only — never ciphertext, a key, a wrapped key or a token
-// (SPEC §2.3, docs/conventions.md §1).
+// (SPEC §2.3, docs/internal/conventions.md §1).
 func errorFrame(id string, code tppv1.ErrorCode, message string) ([]byte, error) {
 	return encode(id, tppv1.MessageType_MESSAGE_TYPE_ERROR, &tppv1.Error{Code: code, Message: message})
 }

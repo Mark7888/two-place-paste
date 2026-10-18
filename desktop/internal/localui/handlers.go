@@ -267,7 +267,7 @@ func (s *Server) handleConfirmAcceptOffer(w http.ResponseWriter, r *http.Request
 	if body.PlanID == "" {
 		// Accepting hands over the group key, so there is no endpoint here
 		// that takes a code: the confirmation dialog's plan id is the only way
-		// in (docs/plans/joiner-emitted-pairing.md §5).
+		// in (docs/internal/plans/joiner-emitted-pairing.md §5).
 		writeError(w, http.StatusBadRequest, "plan_id is required")
 		return
 	}

@@ -8,7 +8,7 @@ import (
 )
 
 // Sentinel conditions a caller branches on. Everything else is an ordinary
-// wrapped error (docs/conventions.md §4).
+// wrapped error (docs/internal/conventions.md §4).
 var (
 	// ErrNoGroup means this client has no group yet: call CreateGroup or
 	// JoinPairing first.

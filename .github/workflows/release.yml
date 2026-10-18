@@ -1,5 +1,5 @@
 # Release: a vX.Y.Z tag becomes a GitHub Release
-# (docs/plans/versioning-releases-and-updates.md §2).
+# (docs/internal/plans/versioning-releases-and-updates.md §2).
 #
 #   git tag v0.1.0 && git push origin v0.1.0
 #

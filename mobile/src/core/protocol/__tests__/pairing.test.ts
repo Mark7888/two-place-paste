@@ -4,7 +4,7 @@
  *
  * The fingerprint vectors here are the same ones `TestFingerprintFormat` pins
  * in the Go client. If the two ever disagree the confirmation dialog of
- * docs/plans/joiner-emitted-pairing.md §5 is worthless, because the user is
+ * docs/internal/plans/joiner-emitted-pairing.md §5 is worthless, because the user is
  * being asked to compare two renderings of one key that do not look alike.
  */
 

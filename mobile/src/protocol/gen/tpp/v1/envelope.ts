@@ -42,7 +42,7 @@ export enum MessageType {
   /**
    * MESSAGE_TYPE_PAIRING_OFFER_REQUEST - Joiner-emitted pairing: the same exchange with the roles swapped, so that
    * the device without a group key can be the one that shows a code
-   * (docs/plans/joiner-emitted-pairing.md). PairingComplete above is reused
+   * (docs/internal/plans/joiner-emitted-pairing.md). PairingComplete above is reused
    * unchanged as the last step of both directions.
    */
   MESSAGE_TYPE_PAIRING_OFFER_REQUEST = 26,

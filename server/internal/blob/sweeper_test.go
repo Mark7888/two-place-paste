@@ -14,7 +14,7 @@ import (
 
 // recordingBackend reports every sweep on a channel, so the test observes the
 // schedule through synchronisation rather than through sleeping
-// (docs/conventions.md §5).
+// (docs/internal/conventions.md §5).
 type recordingBackend struct{ swept chan time.Time }
 
 func (b *recordingBackend) Put(context.Context, string, time.Time, io.Reader) (string, error) {

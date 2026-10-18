@@ -99,7 +99,7 @@ type Options struct {
 	HTTPClient *http.Client
 
 	// Logger receives connection-level logs. It never sees a key, a token or
-	// any ciphertext (docs/conventions.md §2).
+	// any ciphertext (docs/internal/conventions.md §2).
 	Logger *slog.Logger
 
 	// Handlers are optional callbacks.

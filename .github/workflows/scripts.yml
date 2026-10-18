@@ -1,5 +1,5 @@
 # The release tooling's own checks: the shell scripts every build depends on
-# for its version and its manifest (docs/plans/versioning-releases-and-updates.md).
+# for its version and its manifest (docs/internal/plans/versioning-releases-and-updates.md).
 #
 # A broken version.sh breaks every other workflow at once, so it is linted and
 # tested on its own whenever it changes.

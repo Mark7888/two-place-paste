@@ -1,7 +1,7 @@
 /**
  * The whole app until this device is in a group.
  *
- * There are three ways in (SPEC §3, docs/plans/joiner-emitted-pairing.md):
+ * There are three ways in (SPEC §3, docs/internal/plans/joiner-emitted-pairing.md):
  * read a code a device that is already in a group is showing, show a code of
  * this device's own for a member to accept, or create the first group from the
  * link a relay's admin page gives an operator. All three are on this one

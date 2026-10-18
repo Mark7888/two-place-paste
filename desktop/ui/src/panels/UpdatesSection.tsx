@@ -45,7 +45,7 @@ const busyStates = new Set(["checking", "downloading", "installing", "restarting
 
 /**
  * Updates: which channel this installation follows, what it is running, and
- * what that channel offers (docs/plans/versioning-releases-and-updates.md §3).
+ * what that channel offers (docs/internal/plans/versioning-releases-and-updates.md §3).
  *
  * Installing restarts the service, and a restarted service has a new launch
  * token, so this page cannot follow it: after an install it says to reopen

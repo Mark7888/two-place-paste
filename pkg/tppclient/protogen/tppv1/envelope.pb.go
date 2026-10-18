@@ -51,7 +51,7 @@ const (
 	MessageType_MESSAGE_TYPE_PAIRING_COMPLETE           MessageType = 25
 	// Joiner-emitted pairing: the same exchange with the roles swapped, so that
 	// the device without a group key can be the one that shows a code
-	// (docs/plans/joiner-emitted-pairing.md). PairingComplete above is reused
+	// (docs/internal/plans/joiner-emitted-pairing.md). PairingComplete above is reused
 	// unchanged as the last step of both directions.
 	MessageType_MESSAGE_TYPE_PAIRING_OFFER_REQUEST        MessageType = 26
 	MessageType_MESSAGE_TYPE_PAIRING_OFFER_RESPONSE       MessageType = 27

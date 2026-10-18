@@ -7,7 +7,7 @@
 # open an app that is not notarised until it is approved in System Settings →
 # Privacy & Security. curl sets no quarantine flag, so an app this script
 # downloads and installs opens straight away
-# (docs/plans/versioning-releases-and-updates.md §3.5).
+# (docs/internal/plans/versioning-releases-and-updates.md §3.5).
 #
 # Options, from the environment:
 #   TPP_VERSION=0.1.0   install that release rather than the latest one

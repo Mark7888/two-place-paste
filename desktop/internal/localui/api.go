@@ -46,7 +46,7 @@ type API interface {
 
 	// StartOffer shows a code for a member of some group to accept, which is
 	// how a device with no group key pairs when it is the one with a screen
-	// the user is looking at (docs/plans/joiner-emitted-pairing.md).
+	// the user is looking at (docs/internal/plans/joiner-emitted-pairing.md).
 	StartOffer(ctx context.Context, serverURL string) (OfferView, error)
 
 	// CancelOffer withdraws the offer this device is showing.
@@ -80,7 +80,7 @@ type API interface {
 }
 
 // UpdateAPI is the updater, as the UI drives it
-// (docs/plans/versioning-releases-and-updates.md §3). Which channel it follows
+// (docs/internal/plans/versioning-releases-and-updates.md §3). Which channel it follows
 // is a setting, changed through API.UpdateSettings like any other.
 type UpdateAPI interface {
 	// UpdateStatus is the updates section's model.

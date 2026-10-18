@@ -225,7 +225,7 @@ type Invite struct {
 }
 
 // OfferView is a pairing offer this device is showing while it waits for a
-// member to accept it (docs/plans/joiner-emitted-pairing.md). The code is both
+// member to accept it (docs/internal/plans/joiner-emitted-pairing.md). The code is both
 // the QR contents and the copyable string: one string, whichever form the
 // accepting device can read.
 type OfferView struct {
@@ -354,7 +354,7 @@ const (
 )
 
 // UpdateView is the updates section's model
-// (docs/plans/versioning-releases-and-updates.md §3).
+// (docs/internal/plans/versioning-releases-and-updates.md §3).
 type UpdateView struct {
 	// Current is the running build.
 	Current BuildView `json:"current"`

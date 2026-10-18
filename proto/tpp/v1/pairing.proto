@@ -95,7 +95,7 @@ message PairingComplete {
 }
 
 // ---------------------------------------------------------------------------
-// Joiner-emitted pairing (docs/plans/joiner-emitted-pairing.md)
+// Joiner-emitted pairing (docs/internal/plans/joiner-emitted-pairing.md)
 //
 // The mirror image of the flow above: the device that holds no group key mints
 // the code, and a member consumes it. Everything below exists because a joiner

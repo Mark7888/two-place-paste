@@ -43,7 +43,7 @@ import (
 )
 
 // Store is the persistent-zone subset this package needs. It is declared here,
-// at the consumer, rather than imported as a whole (docs/conventions.md §7).
+// at the consumer, rather than imported as a whole (docs/internal/conventions.md §7).
 type Store interface {
 	CreateGroup(ctx context.Context, token string, dev store.NewDevice) (store.GroupCreation, error)
 	GetGroup(ctx context.Context, groupID string) (store.Group, error)

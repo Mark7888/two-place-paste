@@ -3,7 +3,7 @@ module github.com/Mark7888/two-place-paste/server
 go 1.26.0
 
 // Direct dependencies. Each one is a thing the operator must trust and the
-// maintainer must update (docs/conventions.md §9):
+// maintainer must update (docs/internal/conventions.md §9):
 //
 //   - coder/websocket: the transport of SPEC §5.1. Context-aware, no
 //     third-party dependencies of its own, and it does not bring a router or a

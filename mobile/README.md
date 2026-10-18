@@ -152,7 +152,7 @@ There is no third one, and the shell enforces it (`src/app/App.tsx`).
 **Not in a group.** The setup screen is the whole app: no tab bar, because
 every other screen needs a group key to do anything and a tab that leads
 nowhere is worse than no tab. It offers the three ways in (SPEC §3,
-[`docs/plans/joiner-emitted-pairing.md`](../docs/plans/joiner-emitted-pairing.md))
+[`docs/internal/plans/joiner-emitted-pairing.md`](../docs/internal/plans/joiner-emitted-pairing.md))
 — read a code a member is showing, show a code of this phone's own for a
 member to accept, or create the first group from a relay's creation link — and
 one scanner that takes any of them and works out which it is from the code

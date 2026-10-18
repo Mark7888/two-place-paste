@@ -82,7 +82,7 @@ func NewWithOptions(opts Options, regs ...Registrar) http.Handler {
 }
 
 // recoverer converts a panic in a handler into a 500 rather than tearing down
-// the process. Handlers themselves must not panic (docs/conventions.md); this
+// the process. Handlers themselves must not panic (docs/internal/conventions.md); this
 // is a backstop, not a licence.
 func recoverer(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

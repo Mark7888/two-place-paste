@@ -174,7 +174,7 @@ func TestStartOfferNeedsARelayURL(t *testing.T) {
 }
 
 // TestPrepareAcceptOfferIsTheOnlyWayIn asserts the consent gate of
-// docs/plans/joiner-emitted-pairing.md §5 in the client rather than in a
+// docs/internal/plans/joiner-emitted-pairing.md §5 in the client rather than in a
 // screen: there is no method that admits a device without a prepared
 // acceptance, and preparing one contacts nothing.
 func TestPrepareAcceptOfferIsTheOnlyWayIn(t *testing.T) {

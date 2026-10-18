@@ -180,7 +180,7 @@ func (s *Service) PutWithHeader(ctx context.Context, groupID string, epoch uint6
 		if !ValidID(entryID) {
 			// Checked before the id reaches a key or a path, and without
 			// echoing it: an id that failed validation is not something to put
-			// in a log line (docs/conventions.md §2).
+			// in a log line (docs/internal/conventions.md §2).
 			return Meta{}, fmt.Errorf("put entry: %w: %d bytes outside [A-Za-z0-9_-]{1,%d}",
 				ErrInvalidID, len(entryID), MaxIDLen)
 		}

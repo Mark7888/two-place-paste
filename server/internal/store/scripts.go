@@ -135,7 +135,7 @@ return 0
 `)
 
 // acceptOfferScript admits the device an offer describes into a group, in one
-// step (docs/plans/joiner-emitted-pairing.md §3 step 6).
+// step (docs/internal/plans/joiner-emitted-pairing.md §3 step 6).
 //
 // Everything is validated before anything is written, so two members racing to
 // accept one offer admit exactly one device: the loser sees the offer already

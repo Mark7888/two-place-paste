@@ -479,7 +479,7 @@ device key (`pkg/tppclient/keystore`):
 
 So it gets exactly the protection the clipboard's own keys already have, without new storage
 code. Never in `desktop.json`, never in the log: the conventions already forbid logging
-secrets (docs/conventions.md §2), and the updater logs only "token set / not set / rejected".
+secrets (docs/internal/conventions.md §2), and the updater logs only "token set / not set / rejected".
 
 **How the UI handles it:**
 - `PUT /api/update/token` accepts it, checks it (one call to the run listing), and then

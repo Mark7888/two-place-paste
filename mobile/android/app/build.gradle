@@ -25,7 +25,7 @@ react {
     }
 }
 
-// The release keystore (docs/plans/versioning-releases-and-updates.md §1.4).
+// The release keystore (docs/internal/plans/versioning-releases-and-updates.md §1.4).
 // CI decodes it from the ANDROID_KEYSTORE_B64 secret into a file and points
 // TPP_ANDROID_KEYSTORE at it. Every build an update can install over has to
 // carry this one signature — Android refuses an APK signed by a different key

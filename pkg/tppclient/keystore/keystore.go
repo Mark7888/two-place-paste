@@ -15,7 +15,7 @@
 // actually in use so a client can tell the user.
 //
 // Nothing in this package logs a secret, embeds one in an error, or hands one
-// to a subprocess argument list (docs/conventions.md §1, §2).
+// to a subprocess argument list (docs/internal/conventions.md §1, §2).
 package keystore
 
 import (

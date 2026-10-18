@@ -55,7 +55,7 @@ type Relay interface {
 	JoinPairing(ctx context.Context, payload string) error
 
 	// StartOffer shows a code from a device that is in no group yet, for a
-	// member to accept (docs/plans/joiner-emitted-pairing.md).
+	// member to accept (docs/internal/plans/joiner-emitted-pairing.md).
 	StartOffer(ctx context.Context, serverURL string) (Offer, error)
 
 	// PrepareAcceptOffer decodes an offer and changes nothing.
@@ -110,7 +110,7 @@ type OfferAcceptance interface {
 	// with what that device is showing. This is the part that identifies it.
 	Fingerprint() string
 
-	// Confirm admits the device (docs/plans/joiner-emitted-pairing.md §3
+	// Confirm admits the device (docs/internal/plans/joiner-emitted-pairing.md §3
 	// step 5).
 	Confirm(ctx context.Context) (tppclient.Device, error)
 }

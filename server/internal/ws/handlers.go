@@ -23,7 +23,7 @@ import (
 //
 // Only three message types are legal without a device identity: they are the
 // three ways a device acquires one (SPEC §3.1, §3.2, and the joiner-emitted
-// direction of docs/plans/joiner-emitted-pairing.md). Everything else needs an
+// direction of docs/internal/plans/joiner-emitted-pairing.md). Everything else needs an
 // authenticated connection.
 func (s *Server) dispatch(ctx context.Context, c *conn, env *tppv1.Envelope) ([]byte, error) {
 	switch env.GetType() {
@@ -298,7 +298,7 @@ const offersPerConn = 5
 
 // handlePairingOffer registers an offer minted by a device that holds no group
 // key, so that a member can admit it
-// (docs/plans/joiner-emitted-pairing.md §3 steps 1-2).
+// (docs/internal/plans/joiner-emitted-pairing.md §3 steps 1-2).
 //
 // This is the mirror of handlePairingStart, and the connection it arrives on is
 // deliberately not authenticated: a device with no group key is exactly the
@@ -336,7 +336,7 @@ func (s *Server) handlePairingOffer(ctx context.Context, c *conn, env *tppv1.Env
 }
 
 // handlePairingOfferAccept admits the offered device into the accepting
-// member's group (docs/plans/joiner-emitted-pairing.md §3 steps 5-7).
+// member's group (docs/internal/plans/joiner-emitted-pairing.md §3 steps 5-7).
 //
 // Accepting hands over the group key, so this is legal only on an
 // authenticated connection — the dispatch above is what enforces that. The

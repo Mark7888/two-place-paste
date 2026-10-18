@@ -56,7 +56,7 @@ type sweepTask struct {
 
 // NewSweeper returns a sweeper for backend. A non-positive interval is a
 // programmer error and panics at construction rather than producing a loop
-// that never sleeps (docs/conventions.md §4).
+// that never sleeps (docs/internal/conventions.md §4).
 func NewSweeper(backend Backend, interval time.Duration, logger *slog.Logger) *Sweeper {
 	if interval <= 0 {
 		panic("blob: sweep interval must be positive")
@@ -83,7 +83,7 @@ func (s *Sweeper) Also(name string, run func(ctx context.Context, now time.Time)
 
 // Run sweeps immediately and then every interval until ctx is done. It is the
 // goroutine's whole life: the caller owns it and stops it by cancelling ctx
-// (docs/conventions.md §8).
+// (docs/internal/conventions.md §8).
 func (s *Sweeper) Run(ctx context.Context) {
 	s.sweepOnce(ctx)
 

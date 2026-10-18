@@ -180,7 +180,7 @@ type Device struct {
 	// The device's public key, used by a rekeying peer to wrap the new group key
 	// (SPEC §3.3 step 3).
 	PublicKey []byte `protobuf:"bytes,3,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
-	// Milliseconds since the Unix epoch, UTC (docs/conventions.md §6).
+	// Milliseconds since the Unix epoch, UTC (docs/internal/conventions.md §6).
 	CreatedAtUnixMs int64 `protobuf:"varint,4,opt,name=created_at_unix_ms,json=createdAtUnixMs,proto3" json:"created_at_unix_ms,omitempty"`
 	// Milliseconds since the Unix epoch, UTC. Zero when the device has never
 	// connected.

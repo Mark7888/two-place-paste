@@ -4,7 +4,7 @@
  *
  * The navigation is five tabs and a piece of state. A navigation library would
  * be a dependency to keep current for a stack that is one level deep
- * (docs/conventions.md §9).
+ * (docs/internal/conventions.md §9).
  *
  * # The tab bar
  *
