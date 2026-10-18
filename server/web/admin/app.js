@@ -120,8 +120,22 @@
       title.textContent = button.getAttribute("data-name") || "Creation code";
       url.textContent = button.getAttribute("data-url") || "";
       copied.textContent = "";
-      qr.src = button.getAttribute("data-qr") || "";
+      var src = qrSource(button);
+      if (src) qr.src = src;
       dialog.showModal();
+    }
+
+    /** qrSource returns the QR image path the server put on the button, but
+     *  only when it has the exact shape the server builds. The image is
+     *  always fetched from this page's own token route, never from a URL
+     *  taken as-is from the page. */
+    function qrSource(button) {
+      var match = /^\/admin\/tokens\/([A-Za-z0-9_-]+)\/qr\.png$/.exec(
+        button.getAttribute("data-qr") || ""
+      );
+      // Tokens are base64url, so encoding changes nothing; it guarantees the
+      // token stays one path segment.
+      return match ? "/admin/tokens/" + encodeURIComponent(match[1]) + "/qr.png" : "";
     }
 
     dialog.addEventListener("close", function () {

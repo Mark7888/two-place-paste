@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/Mark7888/two-place-paste/pkg/tppclient/keystore"
@@ -108,16 +109,33 @@ func normalizeServerURL(raw string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("tppclient: server URL %q is not a URL: %w", raw, err)
 	}
+	var scheme string
 	switch u.Scheme {
-	case "http", "https":
+	case "http":
+		scheme = "http"
+	case "https":
+		scheme = "https"
 	default:
 		return "", fmt.Errorf("tppclient: server URL %q must be http or https", raw)
 	}
-	if u.Host == "" {
+	host := u.Host
+	if host == "" {
 		return "", errors.New("tppclient: server URL has no host")
 	}
-	return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String(), nil
+	// The relay is whatever server the user chose, so its host cannot be
+	// allow-listed; it can be held to the shape of a host name or IP address
+	// and an optional port, so nothing else rides into the request URL.
+	if !serverHostPattern.MatchString(host) {
+		return "", fmt.Errorf("tppclient: server URL %q does not have a valid host", raw)
+	}
+	return (&url.URL{Scheme: scheme, Host: host}).String(), nil
 }
+
+// serverHostPattern matches a host name (letters, digits, '-' and '_' in
+// dot-separated labels, including internationalised names), an IPv4 address
+// or a bracketed IPv6 address with an optional zone, each with an optional
+// port.
+var serverHostPattern = regexp.MustCompile(`^(?:[\p{L}\p{N}_-]+(?:\.[\p{L}\p{N}_-]+)*\.?|\[[0-9A-Fa-f:.]+(?:%[\p{L}\p{N}._~-]+)?\])(?::[0-9]{1,5})?$`)
 
 // splitCreationURL splits https://<host>/<token> into its base URL and token
 // (SPEC §3.1). The whole URL is what an operator hands a user, as text or as

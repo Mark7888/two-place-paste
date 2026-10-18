@@ -194,7 +194,15 @@ func (p passphraseProtector) key(salt []byte) ([]byte, error) {
 	return key, nil
 }
 
+// maxSecretSize bounds what one file may hold. The secrets kept here are keys
+// and a small state record, far below it; the bound keeps the size arithmetic
+// in protect well away from overflow.
+const maxSecretSize = 64 << 20
+
 func (p passphraseProtector) protect(plaintext []byte) ([]byte, error) {
+	if len(plaintext) > maxSecretSize {
+		return nil, fmt.Errorf("the secret is %d bytes, the limit is %d", len(plaintext), maxSecretSize)
+	}
 	salt := make([]byte, saltSize)
 	if _, err := rand.Read(salt); err != nil {
 		return nil, fmt.Errorf("generate salt: %w", err)
