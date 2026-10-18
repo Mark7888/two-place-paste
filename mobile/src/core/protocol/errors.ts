@@ -1,5 +1,5 @@
 /**
- * The conditions a caller branches on (docs/conventions.md §1, §11: wrap with
+ * The conditions a caller branches on (docs/internal/conventions.md §1, §11: wrap with
  * context, preserve the cause).
  *
  * Nothing here ever carries plaintext, a key or a token in its message: an

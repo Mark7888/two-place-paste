@@ -125,7 +125,7 @@ battery, so it does nothing on a timer that it can avoid:
 ## Updates
 
 The Updates section of Settings, and the tray's *Check for updates…*, follow
-one of three channels (docs/plans/versioning-releases-and-updates.md):
+one of three channels (docs/internal/plans/versioning-releases-and-updates.md):
 
 | Channel | Installs | Needs |
 |---|---|---|

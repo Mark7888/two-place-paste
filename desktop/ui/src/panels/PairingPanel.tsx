@@ -192,7 +192,7 @@ function InvitePanel({ guard, setNotice }: { guard: Guard; setNotice: SetNotice 
 }
 
 // Accepting an offer: the other device is showing the code, and this one admits
-// it (docs/plans/joiner-emitted-pairing.md).
+// it (docs/internal/plans/joiner-emitted-pairing.md).
 //
 // The confirmation is not a formality here. An invitation a joiner reads wrongly
 // costs it a failed pairing; a code this device reads wrongly costs the group its

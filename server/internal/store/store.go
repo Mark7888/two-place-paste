@@ -21,7 +21,7 @@ import (
 )
 
 // Sentinel errors. Callers compare with errors.Is, never on strings
-// (docs/conventions.md §1).
+// (docs/internal/conventions.md §1).
 var (
 	// ErrNotFound is returned when a group, device, token or pairing does not
 	// exist.
@@ -147,7 +147,7 @@ type Pairing struct {
 }
 
 // PairingOffer is a short-lived offer minted by a device that holds no group
-// key, for a member to accept (docs/plans/joiner-emitted-pairing.md).
+// key, for a member to accept (docs/internal/plans/joiner-emitted-pairing.md).
 //
 // It is the mirror image of Pairing: there the member mints and the joiner
 // consumes, here the joiner mints and the member consumes. The joiner's public
@@ -294,7 +294,7 @@ func newID() string {
 	if _, err := rand.Read(b[:]); err != nil {
 		// crypto/rand.Read never fails on any supported platform; a failure
 		// here is a broken machine, not a request-path condition
-		// (docs/conventions.md §4).
+		// (docs/internal/conventions.md §4).
 		panic("store: crypto/rand: " + err.Error())
 	}
 	return base64.RawURLEncoding.EncodeToString(b[:])

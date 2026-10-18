@@ -1,6 +1,6 @@
 /**
  * Bringing another device into this group (SPEC §3.2,
- * docs/plans/joiner-emitted-pairing.md).
+ * docs/internal/plans/joiner-emitted-pairing.md).
  *
  * Pairing runs in both directions, and this screen has both, because which one
  * the user wants depends on which device has the screen they are looking at.
@@ -275,7 +275,7 @@ export function PairingScreen(): React.JSX.Element {
       </Card>
 
       {/*
-        The confirmation of docs/plans/joiner-emitted-pairing.md §5. It is the
+        The confirmation of docs/internal/plans/joiner-emitted-pairing.md §5. It is the
         whole of the user's protection here, so it says what is at stake and it
         shows the fingerprint, which is the only part of this that a hostile
         code cannot choose freely.

@@ -39,7 +39,7 @@ export const secureStore: SecureStorePort = {
     const result = await Keychain.setGenericPassword(ACCOUNT, value, options(name));
     if (result === false) {
       // Never include the value: it is the device private key and the group key
-      // (docs/conventions.md §1).
+      // (docs/internal/conventions.md §1).
       throw new Error('the Android Keystore refused to store this device’s keys');
     }
   },

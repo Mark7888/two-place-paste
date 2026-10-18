@@ -1,0 +1,119 @@
+---
+title: From source
+description: Build the relay yourself — as a Docker image or as a plain binary under systemd.
+---
+
+import { Tabs, TabItem, Steps, Aside } from '@astrojs/starlight/components';
+
+<Tabs>
+<TabItem label="Docker image" icon="seti:docker">
+
+The repository's `deploy/` directory builds the image from source instead of pulling it, and reads
+Redis's settings from `deploy/redis.conf`.
+
+```sh
+git clone https://github.com/Mark7888/two-place-paste
+cd two-place-paste/deploy
+
+cp .env.example .env
+$EDITOR .env                  # set TPP_PUBLIC_BASE_URL and ADMIN_PASSWORD
+
+docker compose up -d --build
+curl -fsS http://127.0.0.1:8080/healthz      # → ok
+```
+
+Upgrade with `git pull && docker compose up -d --build`.
+
+`deploy/docker-compose.yml` also contains an optional MinIO service — see
+[Blob storage](/two-place-paste/self-hosting/blob-storage/) (the *MinIO with compose* tab).
+
+</TabItem>
+<TabItem label="Go binary + systemd" icon="seti:go">
+
+<Steps>
+
+1. **Install Go 1.26 and Redis 7.** On Debian or Ubuntu, Redis is `apt install redis-server`.
+
+2. **Configure Redis** for TwoPlacePaste. These two settings are required, not tuning — see
+   [why](/two-place-paste/self-hosting/operations/#redis-settings-that-are-not-tuning):
+
+   ```ini title="/etc/redis/redis.conf"
+   appendonly yes
+   maxmemory-policy volatile-lru
+   maxmemory 512mb
+   ```
+
+   Restart Redis afterwards.
+
+3. **Build the relay.** Build from the repository root: the Go workspace (`go.work`) links the
+   server to the shared client module.
+
+   ```sh
+   git clone https://github.com/Mark7888/two-place-paste
+   cd two-place-paste
+   CGO_ENABLED=0 go build -C server -trimpath -ldflags="-s -w" -o /tmp/tpp ./cmd/tpp
+   sudo install -m 0755 /tmp/tpp /usr/local/bin/tpp
+   ```
+
+4. **Create a user, a blob directory and the settings file.**
+
+   ```sh
+   sudo useradd --system --home /var/lib/tpp --shell /usr/sbin/nologin tpp
+   sudo install -d -o tpp -g tpp -m 0750 /var/lib/tpp/blobs
+   sudo install -d -m 0750 /etc/tpp
+   sudo cp deploy/.env.example /etc/tpp/tpp.env
+   sudo chmod 0640 /etc/tpp/tpp.env && sudo chgrp tpp /etc/tpp/tpp.env
+   ```
+
+   In `/etc/tpp/tpp.env`, set at least:
+
+   ```sh title="/etc/tpp/tpp.env"
+   TPP_PUBLIC_BASE_URL=https://tpp.example.com
+   ADMIN_PASSWORD=pick-a-long-random-password
+   TPP_HTTP_ADDR=127.0.0.1:8080
+   TPP_REDIS_ADDR=127.0.0.1:6379
+   TPP_BLOB_ROOT=/var/lib/tpp/blobs
+   ```
+
+5. **Add a systemd unit.**
+
+   ```ini title="/etc/systemd/system/tpp.service"
+   [Unit]
+   Description=TwoPlacePaste relay
+   After=network-online.target redis-server.service
+   Wants=network-online.target
+
+   [Service]
+   User=tpp
+   Group=tpp
+   EnvironmentFile=/etc/tpp/tpp.env
+   ExecStart=/usr/local/bin/tpp serve
+   Restart=on-failure
+   NoNewPrivileges=true
+   ProtectSystem=strict
+   ProtectHome=true
+   PrivateTmp=true
+   ReadWritePaths=/var/lib/tpp
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+   ```sh
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now tpp
+   curl -fsS http://127.0.0.1:8080/healthz      # → ok
+   journalctl -u tpp -f                         # logs, one JSON object per line
+   ```
+
+</Steps>
+
+To upgrade, pull, rebuild, install the new binary and `sudo systemctl restart tpp`.
+
+</TabItem>
+</Tabs>
+
+<Aside>
+	`tpp` also has maintenance commands: `tpp gc --verify` and `tpp gc --rebuild-accounting`. See
+	[Operations](/two-place-paste/self-hosting/operations/#checking-the-blob-store).
+</Aside>

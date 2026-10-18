@@ -1,0 +1,38 @@
+---
+// One tray icon state, drawn by the desktop app's own icon code
+// (desktop/internal/tray/icon.go). Shows the dark-ink icon on the light theme
+// and the light-ink icon on the dark theme, as the menu bar would.
+import { Image } from 'astro:assets';
+import type { ImageMetadata } from 'astro';
+
+interface Props {
+	state: string;
+	alt: string;
+}
+
+const { state, alt } = Astro.props;
+const icons = import.meta.glob<{ default: ImageMetadata }>('../assets/tray/*.png', { eager: true });
+const light = icons[`../assets/tray/${state}-light.png`]?.default;
+const dark = icons[`../assets/tray/${state}-dark.png`]?.default;
+if (!light || !dark) throw new Error(`No tray icon for state "${state}"`);
+---
+
+<span class="tray-icon">
+	<Image src={light} alt={alt} width={32} height={32} class="dark:sl-hidden" />
+	<Image src={dark} alt={alt} width={32} height={32} class="light:sl-hidden" />
+</span>
+
+<style>
+	.tray-icon {
+		display: inline-flex;
+		padding: 0.25rem;
+		border-radius: 0.375rem;
+		background: var(--sl-color-gray-6);
+		vertical-align: middle;
+	}
+	.tray-icon :global(img) {
+		width: 24px;
+		height: 24px;
+		margin: 0;
+	}
+</style>

@@ -1,0 +1,35 @@
+---
+title: The tray icon
+description: What each tray icon means, and what is in the tray menu.
+---
+
+import TrayIcon from '../../../components/TrayIcon.astro';
+
+TwoPlacePaste lives in the system tray on Windows and in the menu bar on macOS. The icon is a small
+clipboard that changes to show what the app is doing.
+
+| Icon | Meaning |
+|---|---|
+| <TrayIcon state="connected" alt="Connected" /> | **Connected** to the relay and idle. |
+| <TrayIcon state="connecting" alt="Connecting" /> | **Connecting** — faded while the connection comes up. |
+| <TrayIcon state="uploading" alt="Uploading" /> | **Uploading** an entry (↑). |
+| <TrayIcon state="downloading" alt="Downloading" /> | **Downloading** an entry (↓). |
+| <TrayIcon state="syncing" alt="Uploading and downloading" /> | **Both at once** (⇅). |
+| <TrayIcon state="disconnected" alt="Disconnected" /> | **Disconnected** — struck through. It keeps retrying on its own. |
+| <TrayIcon state="unpaired" alt="Not paired" /> | **Not paired yet** — faded and empty. Open the app to [create](/two-place-paste/guides/create-a-group/) or [join](/two-place-paste/guides/add-a-device/) a group. |
+| <TrayIcon state="skipped" alt="Needs attention" /> | **Needs a look** — the **!** badge. An automatic upload or download was held back by your [size limit](/two-place-paste/guides/settings/#automatic-size-limits), or failed. It clears at the next sync or when you dismiss the notice in the app. |
+
+## The menu
+
+| Item | What it does |
+|---|---|
+| *(status line)* | The state above, in words. |
+| **Sync now** | Syncs in whichever direction is newer — see [Syncing](/two-place-paste/guides/sync/). |
+| **Upload this clipboard** / **Download the latest** | Appear for a few minutes after **Sync now** could not tell which way to go. |
+| **Open TwoPlacePaste** | Opens the app in your browser. |
+| **Check for updates…** | Checks your [update channel](/two-place-paste/install/updates/). |
+| **Quit** | Stops the app. Nothing syncs until you start it again. |
+
+If the app cannot start its window — usually because its port is taken — the menu says
+**TwoPlacePaste could not start**, shows the reason, and offers **Open the settings file…** so you
+can change the port. See [Troubleshooting](/two-place-paste/guides/troubleshooting/#the-tray-says-twoplacepaste-could-not-start).

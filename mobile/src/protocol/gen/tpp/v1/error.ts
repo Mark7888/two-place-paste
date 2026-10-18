@@ -159,7 +159,7 @@ export interface Error {
   /**
    * Human-readable detail for logs and operator-facing UI.
    *
-   * This string reaches server logs, so it obeys docs/conventions.md §1: it may
+   * This string reaches server logs, so it obeys docs/internal/conventions.md §1: it may
    * name an entry id, an epoch, a device id or a byte length, and it may never
    * contain ciphertext, a key, a wrapped key, a creation token, a pairing
    * token, a filename or a content type (SPEC §2.3).

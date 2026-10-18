@@ -8,7 +8,7 @@
 #
 # With the release keystore (a repository secret) it builds the signed release
 # APK that updates install over; without it, as on a fork's pull request, the
-# debug APK it always built (docs/plans/versioning-releases-and-updates.md §1.4).
+# debug APK it always built (docs/internal/plans/versioning-releases-and-updates.md §1.4).
 name: Android
 
 on:
@@ -45,7 +45,7 @@ permissions:
   contents: read
 
 jobs:
-  # The same computation desktop.yml makes (docs/plans/versioning-releases-and-updates.md §1).
+  # The same computation desktop.yml makes (docs/internal/plans/versioning-releases-and-updates.md §1).
   # The stamp is the APK's versionCode, so a later build always installs over
   # an earlier one.
   version:
@@ -226,7 +226,7 @@ jobs:
           "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --print-certs "dist/${{ steps.apk.outputs.name }}"
 
       # The same signed manifest the desktop build gets
-      # (docs/plans/versioning-releases-and-updates.md §3.6), in the same
+      # (docs/internal/plans/versioning-releases-and-updates.md §3.6), in the same
       # artifact as the APK it vouches for.
       - name: Write and sign the manifest
         run: scripts/manifest.sh android dist "dist/${{ steps.apk.outputs.name }}"
@@ -248,7 +248,7 @@ jobs:
 
   # A push to the default branch replaces the android files of the rolling
   # `channel-beta` prerelease, which the Beta update channel reads with no
-  # token (docs/plans/versioning-releases-and-updates.md §3.7). The only job
+  # token (docs/internal/plans/versioning-releases-and-updates.md §3.7). The only job
   # here that can write to the repository.
   publish-beta:
     name: Publish to Beta

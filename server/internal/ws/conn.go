@@ -13,7 +13,7 @@ import (
 
 // writeQueueDepth bounds how far a connection may fall behind before it is
 // dropped. A slow client is disconnected, never buffered without limit
-// (ROADMAP P3 backpressure, docs/conventions.md §8): it reconnects and pulls
+// (ROADMAP P3 backpressure, docs/internal/conventions.md §8): it reconnects and pulls
 // what it missed, which is cheaper than letting one stalled socket consume the
 // server's memory.
 const writeQueueDepth = 32

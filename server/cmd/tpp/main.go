@@ -91,7 +91,8 @@ Commands:
                      entries in Redis; never deletes a blob
 
 Configuration comes from .env and the process environment; see
-deploy/.env.example and docs/deployment.md.
+deploy/.env.example and
+https://mark7888.github.io/two-place-paste/self-hosting/configuration/
 `)
 }
 
@@ -110,7 +111,7 @@ func serve(args []string) error {
 
 	// The signal context is the parent of everything: cancelling it stops the
 	// sweeper and unblocks every handler holding a request context
-	// (docs/conventions.md §3, §8).
+	// (docs/internal/conventions.md §3, §8).
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -291,7 +292,7 @@ func reapUploads(ctx context.Context, svc *entries.Service) {
 }
 
 // newLogger builds the process-wide logger. Libraries never configure logging
-// (docs/conventions.md §2); this is the one place that does.
+// (docs/internal/conventions.md §2); this is the one place that does.
 func newLogger(level slog.Level) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 }

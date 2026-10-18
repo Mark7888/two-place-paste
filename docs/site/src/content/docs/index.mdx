@@ -1,0 +1,50 @@
+---
+title: TwoPlacePaste
+description: A self-hosted, end-to-end encrypted shared clipboard. Copy on one device, paste on another.
+template: splash
+hero:
+  tagline: A self-hosted, end-to-end encrypted shared clipboard. Copy on one device, paste on another. The server only ever sees ciphertext.
+  image:
+    file: ../../assets/logo.svg
+  actions:
+    - text: Get started
+      link: /two-place-paste/getting-started/
+      icon: right-arrow
+    - text: Run your own server
+      link: /two-place-paste/self-hosting/overview/
+      icon: seti:docker
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import { Image } from 'astro:assets';
+import sync from '../../assets/screenshots/desktop-sync.webp';
+
+<Image src={sync} alt="The TwoPlacePaste desktop app on its Sync tab, showing this clipboard and the group's relay" class="screenshot" />
+
+<CardGrid>
+	<Card title="End-to-end encrypted" icon="padlock">
+		Every entry is encrypted on your device before it leaves. The relay stores ciphertext, sizes
+		and timestamps — never content, type or filename.
+	</Card>
+	<Card title="Yours to host" icon="seti:docker">
+		One Go binary and one Redis. Run the published Docker image behind your reverse proxy in a few
+		minutes.
+	</Card>
+	<Card title="Nothing lingers" icon="clock">
+		Every entry expires after 24 hours. Revoking a device rotates the group key, so it cannot read
+		anything written afterwards.
+	</Card>
+	<Card title="Text, images and files" icon="document">
+		Up to 50 MB per entry. Sync on demand, or let the app watch the clipboard for you.
+	</Card>
+</CardGrid>
+
+## Where to go next
+
+<CardGrid>
+	<LinkCard title="Install on Windows" href="/two-place-paste/install/windows/" />
+	<LinkCard title="Install on macOS" href="/two-place-paste/install/macos/" />
+	<LinkCard title="Set up the server with Docker" href="/two-place-paste/self-hosting/docker/" />
+	<LinkCard title="How it works" href="/two-place-paste/how-it-works/" />
+</CardGrid>

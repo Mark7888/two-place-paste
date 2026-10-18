@@ -3,7 +3,7 @@ module github.com/Mark7888/two-place-paste/pkg/tppclient
 go 1.26.0
 
 // Direct dependencies. Each one is a thing every client shipped from this
-// module must trust and the maintainer must update (docs/conventions.md §9):
+// module must trust and the maintainer must update (docs/internal/conventions.md §9):
 //
 //   - coder/websocket: the transport of SPEC §5.1, the same library the server
 //     speaks. Context-aware, and it brings no dependencies of its own.

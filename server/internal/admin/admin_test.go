@@ -24,7 +24,7 @@ import (
 const testPassword = "correct horse battery staple"
 
 // clock is a manually advanced UTC clock. Nothing in these tests sleeps
-// (docs/conventions.md §5).
+// (docs/internal/conventions.md §5).
 type clock struct {
 	mu sync.Mutex
 	t  time.Time
@@ -214,7 +214,7 @@ func TestNewRejectsHashedPassword(t *testing.T) {
 	}
 }
 
-// TestSessionCookieFlags pins the flags SPEC §4.4 and docs/conventions.md §10
+// TestSessionCookieFlags pins the flags SPEC §4.4 and docs/internal/conventions.md §10
 // require. Secure follows the public base URL's scheme, so both are asserted.
 func TestSessionCookieFlags(t *testing.T) {
 	t.Parallel()

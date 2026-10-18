@@ -2,7 +2,7 @@
   "schema_version": 1,
   "profile": "tpp-crypto-v1",
   "spec": "spec/crypto.md",
-  "description": "Cross-language test vectors for the TwoPlacePaste crypto profile. All byte strings are lowercase hex. A client that cannot reproduce every vector in this corpus does not ship (docs/conventions.md §11).",
+  "description": "Cross-language test vectors for the TwoPlacePaste crypto profile. All byte strings are lowercase hex. A client that cannot reproduce every vector in this corpus does not ship (docs/internal/conventions.md §11).",
   "total_vectors": 56,
   "suites": [
     {

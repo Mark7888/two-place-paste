@@ -1,6 +1,6 @@
 // Package quota accounts for blob storage and enforces the global and
 // per-group limits on it, evicting the oldest entries when a new one would not
-// fit (docs/plans/s3-blob-storage.md §4.4).
+// fit (docs/internal/plans/s3-blob-storage.md §4.4).
 //
 // Only blob-backed entries are accounted. Inline entries live in Redis and are
 // bounded by its maxmemory; counting them here would double-charge them.

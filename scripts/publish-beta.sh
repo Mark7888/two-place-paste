@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Publish one platform's build to the rolling Beta release
-# (docs/plans/versioning-releases-and-updates.md §3.7).
+# (docs/internal/plans/versioning-releases-and-updates.md §3.7).
 #
 #   scripts/publish-beta.sh <platform> <dir>
 #

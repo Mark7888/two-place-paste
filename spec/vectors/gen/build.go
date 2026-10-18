@@ -108,7 +108,7 @@ func build() (map[string][]byte, error) {
 		Spec:          "spec/crypto.md",
 		Description: "Cross-language test vectors for the TwoPlacePaste crypto profile. " +
 			"All byte strings are lowercase hex. A client that cannot reproduce every " +
-			"vector in this corpus does not ship (docs/conventions.md §11).",
+			"vector in this corpus does not ship (docs/internal/conventions.md §11).",
 	}
 	for _, s := range suites {
 		files[s.file] = s.body

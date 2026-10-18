@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Write, and sign, the update manifest for one platform's build
-# (docs/plans/versioning-releases-and-updates.md §3.6).
+# (docs/internal/plans/versioning-releases-and-updates.md §3.6).
 #
 #   scripts/manifest.sh <platform> <out-dir> <file>...
 #

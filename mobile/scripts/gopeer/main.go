@@ -133,7 +133,7 @@ func run() error {
 			reply(map[string]any{"ok": true, "device_id": device.ID, "device_name": device.Name})
 
 		case "read-offer":
-			// The consent gate of docs/plans/joiner-emitted-pairing.md §5,
+			// The consent gate of docs/internal/plans/joiner-emitted-pairing.md §5,
 			// across the process boundary: reading a code changes nothing and
 			// returns only what a dialog would render.
 			accept, err := client.PrepareAcceptOffer(ctx, argument)

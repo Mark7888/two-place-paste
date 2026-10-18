@@ -73,7 +73,7 @@ func (s *sessionStore) get(id string) (session, bool) {
 		return session{}, false
 	}
 	// The map lookup already matched; this is the constant-time comparison
-	// docs/conventions.md §10 requires of session identifiers, kept so that a
+	// docs/internal/conventions.md §10 requires of session identifiers, kept so that a
 	// future lookup by any other means inherits it.
 	if subtle.ConstantTimeCompare([]byte(sess.id), []byte(id)) != 1 {
 		return session{}, false
@@ -132,7 +132,7 @@ func randomID() string {
 	if _, err := rand.Read(b[:]); err != nil {
 		// crypto/rand.Read does not fail on any supported platform; a failure
 		// here is a broken machine, not a request-path condition
-		// (docs/conventions.md §4).
+		// (docs/internal/conventions.md §4).
 		panic("admin: crypto/rand: " + err.Error())
 	}
 	return base64.RawURLEncoding.EncodeToString(b[:])

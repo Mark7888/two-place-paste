@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Compute the version of the build a CI run is producing
-# (docs/plans/versioning-releases-and-updates.md §1).
+# (docs/internal/plans/versioning-releases-and-updates.md §1).
 #
 # The newest vX.Y.Z tag reachable from the commit is the source of truth.
 # Nothing is ever written back to the repository, so two runs can never race

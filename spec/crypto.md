@@ -3,7 +3,7 @@
 **Profile:** `tpp-crypto-v1`
 **Version:** 1.2
 **Status:** normative for MVP
-**Companion to:** [`docs/SPECS.md`](../docs/SPECS.md) §2, §3
+**Companion to:** [`docs/internal/SPECS.md`](../docs/internal/SPECS.md) §2, §3
 **Vectors:** [`spec/vectors/`](vectors/) — 42 vectors, 6 suites
 
 This document defines every byte of TwoPlacePaste cryptography. It exists so
@@ -45,7 +45,7 @@ defined here and cannot read any of them (SPEC §2.1).
 
 ### 2.2 Primitives
 
-These are pinned here and are **not** chosen per phase (`docs/conventions.md` §9).
+These are pinned here and are **not** chosen per phase (`docs/internal/conventions.md` §9).
 
 | Purpose | Algorithm | Parameters |
 |---|---|---|
@@ -107,7 +107,7 @@ device_public   = X25519(device_private, basepoint)
 ```
 
 - The private key MUST NOT leave the device — not to the server, not to another
-  device, not into a log or an error message (`docs/conventions.md` §1).
+  device, not into a log or an error message (`docs/internal/conventions.md` §1).
 - Scalar clamping is performed inside the scalar multiplication, per RFC 7748
   §5. The stored private key is the raw 32 bytes as generated; implementations
   MUST NOT store a pre-clamped scalar, because the vectors give the raw bytes.
@@ -494,7 +494,7 @@ is the user reading a name and a fingerprint that catches that, exactly as
 
 [`spec/vectors/`](vectors/) holds 56 vectors in 7 suites, indexed by
 [`index.json`](vectors/index.json). Every byte string is lowercase hex. A client
-that cannot reproduce every vector does not ship (`docs/conventions.md` §11).
+that cannot reproduce every vector does not ship (`docs/internal/conventions.md` §11).
 
 | Suite | Vectors | Asserts |
 |---|---|---|
@@ -556,7 +556,7 @@ two rules are normative because they are cryptographic:
   local applications cannot read them: the OS keychain/credential store where
   one is available, and a file with owner-only permissions otherwise.
 - Neither key, nor a wrapped key, nor a plaintext frame may be written to a log
-  or embedded in an error (`docs/conventions.md` §1, §2).
+  or embedded in an error (`docs/internal/conventions.md` §1, §2).
 
 ---
 

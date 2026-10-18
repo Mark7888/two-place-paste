@@ -19,7 +19,7 @@ import (
 // The S3 half of these tests runs against a real S3-compatible store. CI runs
 // MinIO as a service container; a developer runs `minio server` locally. When
 // neither is there the S3 half skips with a reason rather than failing
-// (docs/conventions.md §5), exactly like the Redis tests.
+// (docs/internal/conventions.md §5), exactly like the Redis tests.
 func s3Env(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v

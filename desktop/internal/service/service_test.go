@@ -714,7 +714,7 @@ func boolPtr(b bool) *bool { return &b }
 func intPtr(i int) *int    { return &i }
 
 // TestAcceptingAnOfferNeedsTheDialog is the consent gate of
-// docs/plans/joiner-emitted-pairing.md §5 at the service level: nothing is
+// docs/internal/plans/joiner-emitted-pairing.md §5 at the service level: nothing is
 // wrapped until a plan the dialog produced comes back, and each plan admits a
 // device exactly once.
 func TestAcceptingAnOfferNeedsTheDialog(t *testing.T) {

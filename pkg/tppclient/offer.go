@@ -13,7 +13,7 @@ import (
 	"github.com/Mark7888/two-place-paste/pkg/tppclient/tppcrypto"
 )
 
-// Joiner-emitted pairing (docs/plans/joiner-emitted-pairing.md): the same
+// Joiner-emitted pairing (docs/internal/plans/joiner-emitted-pairing.md): the same
 // exchange as StartPairing and JoinPairing, with the roles swapped.
 //
 // StartOffer is the unpaired half. PrepareAcceptOffer and Confirm are the
@@ -51,7 +51,7 @@ type Offer struct {
 }
 
 // StartOffer asks the relay to hold an offer for this device and returns the
-// code to show (docs/plans/joiner-emitted-pairing.md §3 steps 1-3).
+// code to show (docs/internal/plans/joiner-emitted-pairing.md §3 steps 1-3).
 //
 // serverURL is the one real cost of this direction: a device with no group has
 // no relay URL either, so the user supplies it once. An empty serverURL falls
@@ -233,7 +233,7 @@ type OfferAcceptance struct {
 }
 
 // PrepareAcceptOffer decodes an offer and returns what the confirmation dialog
-// must show (docs/plans/joiner-emitted-pairing.md §5). It contacts nothing and
+// must show (docs/internal/plans/joiner-emitted-pairing.md §5). It contacts nothing and
 // changes nothing.
 func (c *Client) PrepareAcceptOffer(ctx context.Context, code string) (*OfferAcceptance, error) {
 	state := c.State()
@@ -274,7 +274,7 @@ func (c *Client) PrepareAcceptOffer(ctx context.Context, code string) (*OfferAcc
 
 // Confirm admits the offered device into this group: it wraps the current
 // group key to the public key from the code and sends it
-// (docs/plans/joiner-emitted-pairing.md §3 step 5).
+// (docs/internal/plans/joiner-emitted-pairing.md §3 step 5).
 //
 // The wrap targets the key the user just confirmed, never one the relay
 // supplied — and the relay refuses an accept whose key is not the one the

@@ -894,7 +894,7 @@ func TestGroupsAreIsolated(t *testing.T) {
 	}
 }
 
-// offer runs the joiner-emitted flow of docs/plans/joiner-emitted-pairing.md and
+// offer runs the joiner-emitted flow of docs/internal/plans/joiner-emitted-pairing.md and
 // returns the offering device's connection, the code it would display, and the
 // completion it receives once the member accepts.
 func (h *harness) offer(t *testing.T, name string) (*client, *tppv1.PairingOfferResponse) {

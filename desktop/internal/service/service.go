@@ -785,7 +785,7 @@ func (s *Service) sweepPlansLocked() {
 
 // StartOffer implements localui.API: this device, which is in no group, shows
 // a code for a member of one to accept
-// (docs/plans/joiner-emitted-pairing.md §3 steps 1-3).
+// (docs/internal/plans/joiner-emitted-pairing.md §3 steps 1-3).
 //
 // The relay URL is the one thing the user supplies in this direction, because
 // a device with no group has no relay URL either. Showing a second code
@@ -877,7 +877,7 @@ func (s *Service) awaitOffer(ctx context.Context, offer Offer) {
 
 // PrepareAcceptOffer implements localui.API. It changes nothing: it returns
 // the name and fingerprint the confirmation dialog must render
-// (docs/plans/joiner-emitted-pairing.md §5).
+// (docs/internal/plans/joiner-emitted-pairing.md §5).
 func (s *Service) PrepareAcceptOffer(ctx context.Context, code string) (localui.OfferPlan, error) {
 	relay, err := s.ready()
 	if err != nil {

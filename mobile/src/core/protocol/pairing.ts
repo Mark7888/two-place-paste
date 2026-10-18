@@ -1,7 +1,7 @@
 /**
  * The codes that travel out of band, as a QR code or as copied text: the
  * pairing payload a member shows (SPEC §3.2) and the offer a device with no
- * group shows (docs/plans/joiner-emitted-pairing.md).
+ * group shows (docs/internal/plans/joiner-emitted-pairing.md).
  *
  * Both are identical in every direction — a phone must be able to read what a
  * desktop shows, and the desktop must be able to read what the phone shows —
@@ -38,7 +38,7 @@ export function encodePairingPayload(payload: PairingPayload): string {
 /**
  * encodePairingOffer serializes a joiner-emitted offer: a PairingCode wrapping
  * it, base64url without padding
- * (docs/plans/joiner-emitted-pairing.md).
+ * (docs/internal/plans/joiner-emitted-pairing.md).
  *
  * The wrapper is not optional. Protobuf decodes by field number, so a bare
  * PairingOffer decodes as a PairingPayload without complaint — an offer shown
@@ -229,7 +229,7 @@ export function decodePairingPayload(text: string): PairingPayload {
  * There are three: the creation link on a relay's admin page (SPEC §3.1), the
  * pairing payload a device that is already in a group displays (SPEC §3.2),
  * and the offer a device with no group shows for a member to accept
- * (docs/plans/joiner-emitted-pairing.md).
+ * (docs/internal/plans/joiner-emitted-pairing.md).
  *
  * They are told apart by shape rather than by asking the user which one they
  * are holding. A creation link is an http(s) URL ending in one token segment,

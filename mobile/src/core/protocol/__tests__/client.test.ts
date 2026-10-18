@@ -116,7 +116,7 @@ describe('pairing (SPEC §3.2)', () => {
   });
 });
 
-describe('joiner-emitted pairing (docs/plans/joiner-emitted-pairing.md)', () => {
+describe('joiner-emitted pairing (docs/internal/plans/joiner-emitted-pairing.md)', () => {
   test('the device with no group key shows the code, and ends at the member’s epoch', async () => {
     const relay = new FakeRelay();
     const member = await open(relay, new MemoryStore(), 'laptop');

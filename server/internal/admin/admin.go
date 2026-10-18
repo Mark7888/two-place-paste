@@ -34,7 +34,7 @@ import (
 )
 
 // Store is the persistent-zone subset this package needs, declared at the
-// consumer (docs/conventions.md §7).
+// consumer (docs/internal/conventions.md §7).
 type Store interface {
 	// CreateToken mints a creation token with an admin-chosen name.
 	CreateToken(ctx context.Context, name string) (store.Token, error)

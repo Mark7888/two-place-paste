@@ -326,7 +326,7 @@ export interface Invitation {
 
 /**
  * Offer is a pairing offer this device is showing while it waits for a member
- * of some group to accept it (docs/plans/joiner-emitted-pairing.md).
+ * of some group to accept it (docs/internal/plans/joiner-emitted-pairing.md).
  *
  * `code` is what the user transports out of band: rendered as a QR code, or
  * copied as text. The two are one string, exactly as for an invitation.
@@ -944,7 +944,7 @@ export class Client {
 
   /**
    * startOffer asks the relay to hold an offer for this device and returns the
-   * code to show (docs/plans/joiner-emitted-pairing.md §3 steps 1-3).
+   * code to show (docs/internal/plans/joiner-emitted-pairing.md §3 steps 1-3).
    *
    * This is the direction the flows above cannot express: a device with no
    * group key cannot mint a pairing token, because that takes an authenticated
@@ -1032,7 +1032,7 @@ export class Client {
 
   /**
    * prepareAcceptOffer decodes an offer and returns what the confirmation
-   * dialog must show (docs/plans/joiner-emitted-pairing.md §5). It contacts
+   * dialog must show (docs/internal/plans/joiner-emitted-pairing.md §5). It contacts
    * nothing and changes nothing.
    *
    * The split is the client's half of the rule, not the screen's: `confirm` is

@@ -1,0 +1,103 @@
+---
+title: Reverse proxy
+description: Put Caddy, nginx or Traefik in front of the relay to terminate TLS.
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+The relay speaks plain HTTP. A reverse proxy in front of it must:
+
+1. **terminate TLS** for your domain,
+2. **forward to the relay's port** (`127.0.0.1:8080` with the defaults),
+3. **pass the WebSocket upgrade through** for `/ws`, and not time out an idle WebSocket quickly,
+4. **set `X-Forwarded-For`** — the admin login rate limiter uses it to tell clients apart.
+
+<Tabs syncKey="proxy">
+<TabItem label="Caddy">
+
+Caddy gets a certificate, handles WebSockets and sets `X-Forwarded-For` on its own:
+
+```txt title="Caddyfile"
+tpp.example.com {
+	reverse_proxy 127.0.0.1:8080
+}
+```
+
+</TabItem>
+<TabItem label="nginx">
+
+```nginx title="/etc/nginx/sites-available/tpp"
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name tpp.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/tpp.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/tpp.example.com/privkey.pem;
+
+    # One WebSocket frame carries at most 10 MiB; larger entries are chunked.
+    client_max_body_size 12m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;     # required for /ws
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # A WebSocket is idle between clipboard events; do not cut it off.
+        proxy_read_timeout  1h;
+        proxy_send_timeout  1h;
+    }
+}
+```
+
+</TabItem>
+<TabItem label="Traefik">
+
+Labels for the `server` service in your `docker-compose.yml`, assuming Traefik runs in Docker on
+the same network with a certificate resolver named `le`. Traefik handles WebSockets and
+`X-Forwarded-For` on its own.
+
+```yaml title="docker-compose.yml (excerpt)"
+  server:
+    # ...as in the Docker guide, but without the `ports:` section...
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.tpp.rule=Host(`tpp.example.com`)
+      - traefik.http.routers.tpp.entrypoints=websecure
+      - traefik.http.routers.tpp.tls.certresolver=le
+      - traefik.http.services.tpp.loadbalancer.server.port=8080
+```
+
+</TabItem>
+</Tabs>
+
+<Aside type="caution">
+	**Do not put a cache in front of the relay.** The admin pages and creation links send
+	`Cache-Control: no-store`, and a creation link's QR code is a live credential.
+</Aside>
+
+## Check it
+
+```sh
+curl -fsS https://tpp.example.com/healthz     # → ok
+```
+
+Then sign in at `https://tpp.example.com/admin/`.
+
+## Endpoints
+
+| Path | Purpose |
+|---|---|
+| `/healthz` | Health check. Returns `ok`. |
+| `/ws` | The devices' WebSocket. |
+| `/admin/` | The [admin page](/two-place-paste/self-hosting/admin/): dashboard and creation tokens. |
+| `/pair` | The page a pairing link opens on a device without the app. |
+| `/<token>` | Group creation. A browser `GET` returns 404 on purpose; only the app's `POST` uses the token. |

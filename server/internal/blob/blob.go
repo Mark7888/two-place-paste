@@ -65,7 +65,7 @@ const BucketLayout = "2006010215"
 //
 // Implementations must be safe for concurrent use. Unlike the interface
 // sketched in SPEC §4.3, every method takes a context first
-// (docs/conventions.md §3).
+// (docs/internal/conventions.md §3).
 type Backend interface {
 	// Put stores r under entryID and returns the reference to record in the
 	// Redis entry. expiresAt is passed in rather than derived because
@@ -122,7 +122,7 @@ type Upload interface {
 //
 // All arithmetic is UTC. A bucket that shifted with the host timezone would
 // delete live blobs every spring and leak dead ones every autumn (SPEC §4.5,
-// docs/conventions.md §6).
+// docs/internal/conventions.md §6).
 func Bucket(expiresAt time.Time) string {
 	utc := expiresAt.UTC()
 	rounded := utc.Truncate(time.Hour)

@@ -71,7 +71,7 @@ type Settings struct {
 
 	// UpdateChannel is where updates come from: ChannelStable (the default,
 	// also when empty), ChannelBeta or ChannelNightly
-	// (docs/plans/versioning-releases-and-updates.md §3).
+	// (docs/internal/plans/versioning-releases-and-updates.md §3).
 	UpdateChannel string `json:"update_channel"`
 
 	// AutoUpdate installs Stable and Beta updates without asking. Off by

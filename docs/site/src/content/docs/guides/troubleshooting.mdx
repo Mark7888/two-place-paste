@@ -1,0 +1,60 @@
+---
+title: Troubleshooting
+description: Fixes for the most common problems with the desktop app.
+---
+
+## The tray says "TwoPlacePaste could not start"
+
+Almost always another program already uses port **47821**. Choose **Open the settings file…** in
+the tray menu, add or change the `port` value, save, and start the app again:
+
+```json title="desktop.json"
+{
+  "port": 47822
+}
+```
+
+## Sync now asks me which way to go
+
+That is expected after the app starts: Windows and macOS do not record when something was copied,
+so until the app sees the clipboard change it cannot know which side is newer. Pick **Sync up** or
+**Sync down**. See [Syncing](/two-place-paste/guides/sync/#when-sync-now-has-to-ask).
+
+## The badge says "disconnected"
+
+The app cannot reach the relay. It retries on its own with a growing delay.
+
+- Check that the relay's address opens in a browser: `https://tpp.example.com/healthz` should say
+  `ok`.
+- If you run the relay, check its logs and that your reverse proxy passes WebSockets through. See
+  [Reverse proxy](/two-place-paste/self-hosting/reverse-proxy/).
+
+## Something I copied was not uploaded
+
+- Is **Watch the clipboard** on? It is off by default.
+- Was it larger than **Upload automatically up to**? Then a notice in the app says so; send it with
+  **Upload**.
+- Content the app itself put on the clipboard is never uploaded back.
+
+## Notifications do not appear on macOS
+
+Open **System Settings → Notifications → TwoPlacePaste** and allow notifications. Without them,
+**Sync now** from the tray adds **Upload this clipboard** and **Download the latest** to the menu
+for a few minutes instead.
+
+## Where are the logs?
+
+The app writes `tppdesktop.log` next to its settings file. It is cleared on start once it passes
+2 MB.
+
+| OS | Location |
+|---|---|
+| Windows | `%APPDATA%\TwoPlacePaste\tppdesktop.log` |
+| macOS | `~/Library/Application Support/TwoPlacePaste/tppdesktop.log` |
+
+Logs never contain clipboard content or keys.
+
+## Still stuck?
+
+[Open an issue](https://github.com/Mark7888/two-place-paste/issues/new) with your OS, the app
+version (Settings → Updates) and the relevant log lines.

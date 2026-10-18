@@ -1,0 +1,62 @@
+---
+title: Add a device
+description: Pair another computer with your group, in whichever direction is easier.
+---
+
+import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+import { Image } from 'astro:assets';
+import code from '../../../assets/screenshots/desktop-pairing-code.webp';
+
+Adding a device means a device that is **already in the group** hands the group key to the
+**new device**. It works in either direction — pick whichever device has the screen the other one
+can read. Either way, the code is a QR code and the same text with a **Copy** button.
+
+<Tabs>
+<TabItem label="The member shows a code">
+
+Use this when the new device can scan or paste.
+
+<Steps>
+
+1. On a device **already in the group**, open **Pairing** and press **Show pairing code**.
+
+   <Image src={code} alt="The Pairing tab showing a pairing QR code and link" class="screenshot" />
+
+   The code works once and expires after 5 minutes.
+
+2. On the **new device**, open **Pairing**, paste the code into **Join a group** and press **Join**.
+
+3. Keep the first device's app running until the new one says it is paired — it is the one that
+   sends the group key.
+
+</Steps>
+
+</TabItem>
+<TabItem label="The new device shows a code">
+
+Use this when the **member** is the one that can read a code — for example a phone scanning a
+desktop that is not in the group yet.
+
+<Steps>
+
+1. On the **new device**, open **Pairing → Show a code instead**. Type the relay's address
+   (for example `https://tpp.example.com`) and press **Show a code**.
+
+2. On a device **already in the group**, open **Pairing**, paste the code under
+   **Accept a code from a device with no group** and press **Connect**.
+
+3. Check the dialog. It names the new device and shows a fingerprint of its key. **Confirm only if
+   the fingerprint matches the one the new device shows.**
+
+</Steps>
+
+<Aside type="caution">
+	This confirmation matters. Confirming hands that device the group key — if the fingerprint does
+	not match, someone else's device is asking to join.
+</Aside>
+
+</TabItem>
+</Tabs>
+
+A device can be in one group at a time. To move it to another group, use
+**Settings → Leave the group** first.

@@ -37,7 +37,7 @@ Conventions inside the schema:
 
 - **Timestamps** are `int64` milliseconds since the Unix epoch, UTC — never a
   well-known `Timestamp`, so neither language needs the WKT descriptors and
-  neither can accidentally involve local time (docs/conventions.md §6).
+  neither can accidentally involve local time (docs/internal/conventions.md §6).
 - **Key material** is always `bytes` and always opaque to the server. Algorithms
   and byte layouts are pinned by `/spec/crypto.md` (Phase 2), never here.
 - **Enum numbers are permanent.** Renumbering an `ErrorCode` or a `MessageType`

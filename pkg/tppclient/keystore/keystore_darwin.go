@@ -81,7 +81,7 @@ func (k *keychainStore) Save(name string, secret []byte) error {
 	// It is fed through `security -i`, which reads *commands* from stdin, so
 	// that the secret never appears in this machine's process list — passing
 	// it as -w's argument would expose it to every local `ps` for the life of
-	// the call (docs/conventions.md §1).
+	// the call (docs/internal/conventions.md §1).
 	cmd, cancel := securityCmd("-i")
 	defer cancel()
 	cmd.Stdin = strings.NewReader(fmt.Sprintf("add-generic-password -U -a %s -s %s -w %s\n",

@@ -36,7 +36,7 @@ export default tseslint.config(
       // screen; nothing else in this toolchain catches it, because it is
       // perfectly valid TypeScript.
       'react-hooks/rules-of-hooks': 'error',
-      // The log is part of the threat model (docs/conventions.md §2): this app
+      // The log is part of the threat model (docs/internal/conventions.md §2): this app
       // has no logger of its own, and console output on Android is logcat,
       // which every app on the device with the right tooling can read.
       'no-console': 'error',

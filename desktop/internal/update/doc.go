@@ -1,5 +1,5 @@
 // Package update keeps the desktop service up to date
-// (docs/plans/versioning-releases-and-updates.md §3).
+// (docs/internal/plans/versioning-releases-and-updates.md §3).
 //
 // It finds the newest build on the user's channel, downloads it, refuses it
 // unless its checksum is in a manifest signed by the key compiled into this

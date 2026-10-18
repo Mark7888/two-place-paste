@@ -23,7 +23,7 @@ type RedisStore struct {
 	rdb redis.Cmdable
 
 	// now supplies UTC timestamps. Tests replace it; production never does
-	// (docs/conventions.md §5, §6).
+	// (docs/internal/conventions.md §5, §6).
 	now func() time.Time
 
 	// applyRekey is the rekey script. It is a field so that a test can install
@@ -547,7 +547,7 @@ func (s *RedisStore) TouchLastSeen(ctx context.Context, deviceID string) error {
 }
 
 // msString renders a timestamp as unix milliseconds, UTC
-// (docs/conventions.md §6).
+// (docs/internal/conventions.md §6).
 func msString(t time.Time) string {
 	if t.IsZero() {
 		return "0"

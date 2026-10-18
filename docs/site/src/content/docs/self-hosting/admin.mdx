@@ -1,0 +1,53 @@
+---
+title: Admin page and groups
+description: Sign in to the admin page, hand out groups, and read the dashboard.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+import { Image } from 'astro:assets';
+import token from '../../../assets/screenshots/admin-token-created.webp';
+import dashboard from '../../../assets/screenshots/admin-dashboard.webp';
+
+The admin page lives at `https://tpp.example.com/admin/`. Sign in with `ADMIN_PASSWORD`. It shows
+sizes, counts and tokens — never content, because the relay has none to show.
+
+## Hand out a group
+
+A **creation token** lets one device create one group. Make one per person (or per set of devices
+that should share a clipboard).
+
+<Steps>
+
+1. Open **Tokens**, type a name that tells you who it is for, and press **Generate token**.
+
+   <Image src={token} alt="A new creation token with its QR code and link" class="screenshot" />
+
+2. Send the link to its owner — or let them scan the QR code. They paste it into the app under
+   **Pairing → Create a group**. See [Create a group](/two-place-paste/guides/create-a-group/).
+
+</Steps>
+
+- One token creates exactly one group; using it again fails.
+- A `GET` on a creation link returns **404** on purpose, so link previews, crawlers and mail
+  scanners cannot use it up.
+- An unused token can be **revoked** from the same page. A used one cannot — its group already
+  exists; remove its devices by revoking them from a device in the group.
+
+## The dashboard
+
+<Image src={dashboard} alt="The admin dashboard with storage, groups, devices and evictions" class="screenshot" />
+
+- **Blob storage** used against `TPP_BLOB_MAX_TOTAL_BYTES`.
+- **Groups, devices** and unused tokens.
+- **Evictions in the last 24 hours** — entries removed early to make room. If this is often above
+  zero, the storage limits are too tight.
+- **Groups**, heaviest first: devices, last activity, live entries, oldest entry and storage
+  against the per-group limit.
+- **Storage**: the backend and its limits, and when the last cleanup sweep ran.
+
+If part of the dashboard cannot be read (say Redis is down), it says which part and shows the rest.
+
+<Aside>
+	Sign-ins are rate-limited per IP address. That needs your reverse proxy to set
+	`X-Forwarded-For`; see [Reverse proxy](/two-place-paste/self-hosting/reverse-proxy/).
+</Aside>

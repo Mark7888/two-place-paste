@@ -10,7 +10,7 @@
  *
  * It is not part of `npm test`: it needs Go and Redis, which the Node CI job
  * has neither of. `npm run interop` runs it, and it skips with a reason when a
- * machine cannot host it (docs/conventions.md §5).
+ * machine cannot host it (docs/internal/conventions.md §5).
  */
 
 import { sha256 } from '@noble/hashes/sha2.js';
@@ -371,7 +371,7 @@ describeInterop('the phone and the Go client are one implementation of one contr
 
   test('a second phone pairs the other way round: it shows, the Go client accepts', async () => {
     // The direction the wire contract could not express before
-    // docs/plans/joiner-emitted-pairing.md, and the one that proves the two
+    // docs/internal/plans/joiner-emitted-pairing.md, and the one that proves the two
     // implementations agree on PairingCode: this phone encodes the offer, the
     // Go client decodes it, and the group key travels back.
     const second = await Client.open({

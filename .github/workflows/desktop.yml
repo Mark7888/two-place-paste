@@ -54,7 +54,7 @@ env:
 
 jobs:
   # One version for the whole run, computed once so every platform's build of
-  # it carries the same one (docs/plans/versioning-releases-and-updates.md §1).
+  # it carries the same one (docs/internal/plans/versioning-releases-and-updates.md §1).
   version:
     name: Version
     runs-on: ubuntu-latest
@@ -303,7 +303,7 @@ jobs:
             dist/TwoPlacePaste-Setup.exe
 
   # One manifest for every desktop file of this run, signed with the
-  # update-signing key (docs/plans/versioning-releases-and-updates.md §3.6).
+  # update-signing key (docs/internal/plans/versioning-releases-and-updates.md §3.6).
   # The updater installs nothing whose checksum is not in a manifest that
   # verifies against the public key compiled into it. A fork's pull request
   # has no key, so its manifest is unsigned and the updater treats the build
@@ -339,7 +339,7 @@ jobs:
 
   # A push to the default branch replaces the desktop files of the rolling
   # `channel-beta` prerelease, which the Beta update channel reads with no
-  # token (docs/plans/versioning-releases-and-updates.md §3.7). The only job
+  # token (docs/internal/plans/versioning-releases-and-updates.md §3.7). The only job
   # here that can write to the repository.
   publish-beta:
     name: Publish to Beta

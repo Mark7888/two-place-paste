@@ -13,7 +13,7 @@ import (
 
 // TestSendDropsASlowClient is the backpressure rule: the write queue is
 // bounded, and a client that stops draining it is disconnected rather than
-// buffered without limit (ROADMAP P3, docs/conventions.md §8).
+// buffered without limit (ROADMAP P3, docs/internal/conventions.md §8).
 //
 // The write pump is deliberately not started, which is exactly what a client
 // that has stopped reading looks like from the server's side.

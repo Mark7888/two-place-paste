@@ -6,7 +6,7 @@ Cross-language test vectors for [`spec/crypto.md`](../crypto.md), profile
 These fixtures are the contract between the Go client (`pkg/tppclient`,
 ROADMAP P4) and the TypeScript client (`mobile/src/crypto`, ROADMAP P6a). Both
 run them; a client that cannot reproduce every vector does not ship
-(`docs/conventions.md` §11).
+(`docs/internal/conventions.md` §11).
 
 ## Layout
 

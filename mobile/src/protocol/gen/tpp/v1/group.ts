@@ -66,7 +66,7 @@ export interface Device {
    * (SPEC §3.3 step 3).
    */
   publicKey: Uint8Array;
-  /** Milliseconds since the Unix epoch, UTC (docs/conventions.md §6). */
+  /** Milliseconds since the Unix epoch, UTC (docs/internal/conventions.md §6). */
   createdAtUnixMs: string;
   /**
    * Milliseconds since the Unix epoch, UTC. Zero when the device has never

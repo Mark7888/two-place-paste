@@ -90,7 +90,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
 	if ok, scope := s.logins.allow(ip); !ok {
 		// Logged at Warn: an operator wants to see lockouts. The password is
-		// never logged, here or anywhere (docs/conventions.md §2).
+		// never logged, here or anywhere (docs/internal/conventions.md §2).
 		s.logger.WarnContext(r.Context(), "admin login rate limited",
 			slog.String("client_ip", ip), slog.String("scope", scope))
 		w.Header().Set("Retry-After", "60")
@@ -192,7 +192,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The token value itself is a credential and is never logged
-	// (docs/conventions.md §2).
+	// (docs/internal/conventions.md §2).
 	s.logger.InfoContext(r.Context(), "creation token issued", slog.String("token_name", tok.Name))
 	// Remember which token this redirect is carrying the user back to see, so
 	// the listing opens its code straight away. It is held on the session for
@@ -239,7 +239,7 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		s.renderTokens(w, r, sess, http.StatusInternalServerError, "The token could not be revoked.")
 		return
 	}
-	// Logged by name only: the value is a credential (docs/conventions.md §2).
+	// Logged by name only: the value is a credential (docs/internal/conventions.md §2).
 	s.logger.InfoContext(r.Context(), "creation token revoked", slog.String("token_name", tok.Name))
 	s.redirect(w, r, "/admin/tokens")
 }

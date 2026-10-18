@@ -6,7 +6,7 @@
  * project on purpose: they are the contract between this client and the Go one
  * (`pkg/tppclient/tppcrypto`), and a copy is a contract that can drift. A
  * client that cannot reproduce every vector does not ship
- * (docs/conventions.md §11).
+ * (docs/internal/conventions.md §11).
  *
  * Epochs come from `epoch_hex`, never from the JSON number: a u64 above 2^53
  * does not survive JSON.parse, and one vector uses 2^64-1.

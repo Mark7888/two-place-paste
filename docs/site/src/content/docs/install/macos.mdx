@@ -1,0 +1,63 @@
+---
+title: Install on macOS
+description: Install the TwoPlacePaste desktop app on a Mac with Apple Silicon or Intel.
+sidebar:
+  label: macOS
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+<Steps>
+
+1. Open **Terminal** and run:
+
+   ```sh
+   curl -fsSL https://github.com/Mark7888/two-place-paste/releases/latest/download/install-macos.sh | sh
+   ```
+
+   The script picks the right build for your Mac (Apple Silicon or Intel), checks it against the
+   release's checksum, and installs `TwoPlacePaste.app` into `/Applications` — or into
+   `~/Applications` if `/Applications` is not writable without a password.
+
+2. Open **TwoPlacePaste** from Applications or Spotlight. It has no Dock icon: look for the icon in
+   the menu bar. Because this Mac is not in a group yet, the app also opens in your browser.
+
+3. The first time it shows a notification, macOS asks whether TwoPlacePaste may send notifications.
+   Allow it — that is how the app asks which way to sync when it cannot tell.
+
+</Steps>
+
+<Aside type="note" title="Why a script and not a .dmg?">
+	The app is not notarised by Apple yet. An app downloaded with a browser is quarantined, and
+	macOS would make you approve it in **System Settings → Privacy & Security** before it opens. The
+	script downloads with `curl`, which does not set that flag, so the app opens straight away.
+</Aside>
+
+## Options
+
+Set a variable in front of `sh` to install something other than the latest stable release:
+
+```sh
+# a specific release
+curl -fsSL https://github.com/Mark7888/two-place-paste/releases/latest/download/install-macos.sh | TPP_VERSION=0.1.0 sh
+
+# the latest Beta build
+curl -fsSL https://github.com/Mark7888/two-place-paste/releases/latest/download/install-macos.sh | TPP_CHANNEL=beta sh
+```
+
+Running the command again updates the app by hand. Normally you do not need to: the app
+[updates itself](/two-place-paste/install/updates/).
+
+## Next
+
+- [Create a group](/two-place-paste/guides/create-a-group/) if this is your first device, or
+- [add it to your group](/two-place-paste/guides/add-a-device/) if you already have one.
+
+## Where things are kept
+
+| What | Where |
+|---|---|
+| The program | `/Applications/TwoPlacePaste.app` (or `~/Applications`) |
+| Settings (`desktop.json`) | `~/Library/Application Support/TwoPlacePaste/` |
+| Keys | Your login keychain, under the service name `TwoPlacePaste` |
+| Login item | `~/Library/LaunchAgents/com.twoplacepaste.desktop.plist` (only if **Start at login** is on) |

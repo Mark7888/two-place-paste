@@ -47,7 +47,7 @@ type WatchOptions struct {
 	OnChange func(ctx context.Context, c Content, at time.Time)
 
 	// Logger receives poll-level detail at Debug. It must never be handed the
-	// content (docs/conventions.md §2).
+	// content (docs/internal/conventions.md §2).
 	Logger *slog.Logger
 
 	// Now supplies timestamps; tests replace it.

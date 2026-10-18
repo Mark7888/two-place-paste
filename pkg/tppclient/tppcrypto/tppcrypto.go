@@ -90,7 +90,7 @@ var (
 // multiplication).
 //
 // The result never leaves the device: not to the server, not to another
-// device, not into a log or an error (docs/conventions.md §1).
+// device, not into a log or an error (docs/internal/conventions.md §1).
 func GenerateKey() ([]byte, error) {
 	priv := make([]byte, KeySize)
 	if _, err := rand.Read(priv); err != nil {
