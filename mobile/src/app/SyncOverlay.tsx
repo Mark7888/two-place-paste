@@ -49,7 +49,11 @@ function Panel(): React.JSX.Element {
         {question !== null && question.kind === 'file' ? (
           <>
             <Text style={styles.sheetTitle}>Save or open?</Text>
-            <FileChoices name={question.name} onChoose={(c) => session.answer(question.id, c)} />
+            <FileChoices
+              name={question.name}
+              detail={question.detail}
+              onChoose={(c) => session.answer(question.id, c)}
+            />
           </>
         ) : question !== null ? (
           <>

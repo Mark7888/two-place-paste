@@ -28,6 +28,7 @@ import {
   headerKey,
   openEntry,
   openEntryHeader,
+  openEntrySliced,
   openHeader,
   publicKey,
   sealEntry,
@@ -195,7 +196,7 @@ describe('entries end to end (spec/crypto.md §5)', () => {
     container: string;
   }>('entry.json');
 
-  test.each(suite.vectors.map((v) => [v.name, v] as const))('%s', (_name, v) => {
+  test.each(suite.vectors.map((v) => [v.name, v] as const))('%s', async (_name, v) => {
     const epoch = epochOf(v);
     expect(toHex(encodeFrame(frameOf(v.frame)))).toBe(v.encoded_frame);
     expect(toHex(entryAAD(epoch, v.entry_id))).toBe(v.aad);
@@ -214,6 +215,10 @@ describe('entries end to end (spec/crypto.md §5)', () => {
     expect(toHex(openEntry(fromHex(v.group_key), fromHex(v.container), epoch, v.entry_id))).toBe(
       v.encoded_frame,
     );
+    // The sliced decryption the app uses for large entries agrees byte for byte.
+    expect(
+      toHex(await openEntrySliced(fromHex(v.group_key), fromHex(v.container), epoch, v.entry_id)),
+    ).toBe(v.encoded_frame);
   });
 });
 
@@ -277,7 +282,7 @@ describe('inputs that must be rejected (spec/vectors/failure.json)', () => {
     encoded_header?: string;
   }>('failure.json');
 
-  test.each(suite.vectors.map((v) => [v.name, v] as const))('%s', (_name, v) => {
+  test.each(suite.vectors.map((v) => [v.name, v] as const))('%s', async (_name, v) => {
     expect(v.expect).toBe('error');
     // Returning plaintext for any of these is broken, not lenient.
     switch (v.operation) {
@@ -290,6 +295,9 @@ describe('inputs that must be rejected (spec/vectors/failure.json)', () => {
         expect(() =>
           openEntry(fromHex(v.group_key!), fromHex(v.container!), epochOf(v), v.entry_id!),
         ).toThrow();
+        await expect(
+          openEntrySliced(fromHex(v.group_key!), fromHex(v.container!), epochOf(v), v.entry_id!),
+        ).rejects.toThrow();
         break;
       case 'decode_frame':
         expect(() => decodeFrame(fromHex(v.encoded_frame!))).toThrow();

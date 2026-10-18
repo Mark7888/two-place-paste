@@ -316,3 +316,56 @@ export function decodeBase64Std(s: string): Uint8Array {
   }
   return out;
 }
+
+/** ASYNC_BLOCKS is how many base64 blocks (24 KiB each) are done between yields: about 240 KiB. */
+const ASYNC_BLOCKS = 10;
+
+const yieldNow = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+/**
+ * encodeBase64StdAsync is `encodeBase64Std` for large inputs, letting the
+ * event loop run every few hundred KiB so the app keeps answering taps while
+ * a big entry is turned into a string for the native bridge.
+ */
+export async function encodeBase64StdAsync(
+  b: Uint8Array,
+  pause: () => Promise<void> = yieldNow,
+): Promise<string> {
+  const parts: string[] = [];
+  const step = BASE64_BLOCK * ASYNC_BLOCKS;
+  for (let start = 0; start < b.length; start += step) {
+    parts.push(encodeBase64Std(b.subarray(start, Math.min(start + step, b.length))));
+    if (start + step < b.length) {
+      await pause();
+    }
+  }
+  return parts.join('');
+}
+
+/** decodeBase64StdAsync is `decodeBase64Std` for large inputs, yielding the same way. */
+export async function decodeBase64StdAsync(
+  s: string,
+  pause: () => Promise<void> = yieldNow,
+): Promise<Uint8Array> {
+  // Whole groups of four characters decode independently, so the string is
+  // cut on a multiple of four and each piece decoded on its own.
+  const step = (BASE64_BLOCK / 3) * 4 * ASYNC_BLOCKS;
+  if (s.length <= step) {
+    return decodeBase64Std(s);
+  }
+  const pieces: Uint8Array[] = [];
+  let total = 0;
+  for (let start = 0; start < s.length; start += step) {
+    const piece = decodeBase64Std(s.slice(start, Math.min(start + step, s.length)));
+    pieces.push(piece);
+    total += piece.length;
+    await pause();
+  }
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const piece of pieces) {
+    out.set(piece, o);
+    o += piece.length;
+  }
+  return out;
+}

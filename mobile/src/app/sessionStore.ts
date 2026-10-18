@@ -58,7 +58,7 @@ export type Question = {
   id: number;
   /** fromTile is true when the panel that asked it was opened by the tile. */
   fromTile: boolean;
-} & ({ kind: 'direction' } | { kind: 'file'; name: string });
+} & ({ kind: 'direction' } | { kind: 'file'; name: string; detail: string });
 
 /** Snapshot is what a screen renders from. */
 export interface Snapshot {
@@ -242,7 +242,7 @@ export function answerQuestion(id: number, choice: Answer | null): void {
 /** ask puts a question and waits for whichever surface is on screen to answer it. */
 function ask(
   fromTile: boolean,
-  what: { kind: 'direction' } | { kind: 'file'; name: string },
+  what: { kind: 'direction' } | { kind: 'file'; name: string; detail: string },
 ): Promise<Answer | null> {
   return new Promise((resolve) => {
     question = { id: nextQuestionId++, fromTile, ...what };
@@ -473,16 +473,16 @@ function runTileSync(): void {
         }
         result = choice === 'up' ? await upload(c) : await download(c);
       }
-      if (result.direction === 'file' && result.item !== undefined) {
-        // A file the clipboard cannot hold: keep it, or look at it now.
-        const item = result.item;
-        const name = item.filename !== '' ? item.filename : item.contentType;
-        const choice = await ask(true, { kind: 'file', name });
+      if (result.direction === 'file' && result.file !== undefined) {
+        // A file the clipboard cannot hold: keep it, or look at it now. It is
+        // asked before the download, so the panel shows which file it is.
+        const file = result.file;
+        const choice = await ask(true, { kind: 'file', name: file.name, detail: file.detail });
         if (choice !== 'save' && choice !== 'open') {
           cancel('The file was neither saved nor opened.');
           return;
         }
-        result = await handleFile(item, choice);
+        result = await handleFile(c, file, choice);
       }
       finish(result.direction !== 'nothing', result.message);
     } catch (err) {

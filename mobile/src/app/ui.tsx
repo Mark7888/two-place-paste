@@ -415,18 +415,27 @@ export function CopyButton({
  */
 export function FileChoices({
   name,
+  detail,
   onChoose,
   disabled,
 }: {
   name: string;
+  /** detail is "type · size · time": what tells two files with similar names apart. */
+  detail: string;
   onChoose: (choice: 'save' | 'open') => void;
   disabled?: boolean;
 }): React.JSX.Element {
   return (
     <>
-      <Text style={styles.muted}>
-        {name} is a file, and Android’s clipboard cannot hold files.
-      </Text>
+      {/* Which file this is, first: with two downloads going, the question
+          has to say which one it is about. */}
+      <View style={[styles.card, { backgroundColor: colors.accentSoft, gap: 2 }]}>
+        <Text style={{ color: colors.text, fontSize: 15, fontWeight: '600' }} numberOfLines={2} ellipsizeMode="middle">
+          {name}
+        </Text>
+        <Text style={styles.small}>{detail}</Text>
+      </View>
+      <Text style={styles.muted}>Android’s clipboard cannot hold files.</Text>
       <Choice
         icon="download"
         title="Save to Downloads"

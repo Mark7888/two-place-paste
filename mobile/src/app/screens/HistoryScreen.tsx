@@ -21,9 +21,18 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, Image, Pressable, RefreshControl, Text, View } from 'react-native';
 
 import type { EntryMeta, Progress } from '../../core';
-import type { ClipboardItem, SavedFile } from '../../platform';
+import type { SavedFile } from '../../platform';
 import { useSession } from '../SessionContext';
-import { deliver, failureMessage, handleFile, toClipboardItem, type FileChoice } from '../session';
+import {
+  deliver,
+  failureMessage,
+  handleFile,
+  needsFileChoice,
+  pendingFromEntry,
+  toClipboardItem,
+  type FileChoice,
+  type PendingFile,
+} from '../session';
 import { describeHeader, formatSize, headerPreviewable, previewOf, type Preview } from '../preview';
 import { Button, FileChoices, Notice, OutcomeNotice, Sheet, Shimmer, TransferList } from '../ui';
 import { colors, styles } from '../theme';
@@ -58,8 +67,24 @@ export function HistoryScreen(): React.JSX.Element {
       return next;
     });
   }, []);
-  // A fetched file the clipboard cannot hold, waiting for save-or-open.
-  const [file, setFile] = useState<ClipboardItem | null>(null);
+  // jobs are the file rows being saved or opened right now, each on its own.
+  const [jobs, setJobs] = useState<ReadonlySet<string>>(new Set());
+  const setJob = useCallback((id: string, on: boolean) => {
+    if (id === '') {
+      return;
+    }
+    setJobs((prev) => {
+      const next = new Set(prev);
+      if (on) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  }, []);
+  // A file waiting for save-or-open: asked before its download, from its header.
+  const [file, setFile] = useState<PendingFile | null>(null);
 
   const client = session.client;
   const inFlight = useRef(false);
@@ -130,7 +155,16 @@ export function HistoryScreen(): React.JSX.Element {
   };
 
   const copy = (meta: EntryMeta) => {
-    if (client === null || busy) {
+    if (client === null) {
+      return;
+    }
+    if (needsFileChoice(meta.header)) {
+      // A file: ask first, from what its header says — the question appears
+      // at once and names the file, and the download runs after the answer.
+      setFile(pendingFromEntry(meta));
+      return;
+    }
+    if (busy) {
       return;
     }
     setBusy(true);
@@ -142,8 +176,9 @@ export function HistoryScreen(): React.JSX.Element {
         // The download is over; what follows is local.
         fetchingEntry(meta.id, false);
         const result = await deliver(toClipboardItem(item));
-        if (result.direction === 'file' && result.item !== undefined) {
-          setFile(result.item);
+        if (result.direction === 'file' && result.file !== undefined) {
+          // Only when the header could not be read: the download came first.
+          setFile(result.file);
           return;
         }
         setOk(true);
@@ -159,26 +194,37 @@ export function HistoryScreen(): React.JSX.Element {
     })();
   };
 
+  /**
+   * choose runs the answer to a file question as a job of its own: the sheet
+   * closes at once, the row shows the light while its entry downloads, and the
+   * rest of the screen stays usable — another row can be started meanwhile.
+   */
   const choose = (choice: FileChoice) => {
-    const item = file;
-    if (item === null || busy) {
+    const pending = file;
+    if (pending === null || client === null) {
       return;
     }
-    setBusy(true);
+    const id = pending.entry?.id ?? '';
+    if (id !== '' && jobs.has(id)) {
+      return;
+    }
+    setFile(null);
+    setJob(id, true);
     void (async () => {
       try {
-        const result = await handleFile(item, choice);
-        setFile(null);
+        const result = await handleFile(client, pending, choice);
         setOk(true);
         setMessage(result.message);
         setSaved(result.saved ?? null);
       } catch (err) {
-        // The sheet stays up so the other option is still one tap away.
+        // The question comes back, naming the file, with the reason: the
+        // other option is one tap away, and the entry is cached by now.
         setOk(false);
         setMessage(failureMessage(err));
         setSaved(null);
+        setFile(pending);
       } finally {
-        setBusy(false);
+        setJob(id, false);
       }
     })();
   };
@@ -240,7 +286,7 @@ export function HistoryScreen(): React.JSX.Element {
           return (
             <View style={[styles.card, { overflow: 'hidden' }, !canOpen && { opacity: 0.6 }]}>
               <Shimmer
-                active={downloadingNow(item.id, downloading, session.transfers)}
+                active={downloadingNow(item.id, downloading, jobs, session.transfers)}
               />
               <Pressable
                 accessibilityRole="button"
@@ -262,7 +308,7 @@ export function HistoryScreen(): React.JSX.Element {
                       ? 'Hide'
                       : previewable
                         ? 'Tap to preview'
-                        : isFile(item)
+                        : needsFileChoice(item.header)
                           ? 'No preview — tap to save or open'
                           : 'No preview — tap to copy'}
                 </Text>
@@ -278,10 +324,16 @@ export function HistoryScreen(): React.JSX.Element {
                     <Body preview={loaded.preview} />
                   )}
                   <Button
-                    label={isFile(item) ? 'Save or open on this device' : 'Copy to this device'}
+                    label={
+                      jobs.has(item.id)
+                        ? 'Downloading…'
+                        : needsFileChoice(item.header)
+                          ? 'Save or open on this device'
+                          : 'Copy to this device'
+                    }
                     variant="secondary"
                     onPress={() => copy(item)}
-                    disabled={busy}
+                    disabled={jobs.has(item.id) || (busy && !needsFileChoice(item.header))}
                   />
                 </View>
               )}
@@ -292,7 +344,8 @@ export function HistoryScreen(): React.JSX.Element {
 
       <Sheet visible={file !== null} title="Save or open?" onClose={() => setFile(null)}>
         <FileChoices
-          name={file === null ? '' : file.filename !== '' ? file.filename : file.contentType}
+          name={file?.name ?? ''}
+          detail={file?.detail ?? ''}
           disabled={busy}
           onChoose={choose}
         />
@@ -311,19 +364,16 @@ export function HistoryScreen(): React.JSX.Element {
 function downloadingNow(
   id: string,
   fetching: ReadonlySet<string>,
+  jobs: ReadonlySet<string>,
   transfers: readonly Progress[],
 ): boolean {
   const t = transfers.find((x) => x.direction === 'download' && x.entryId === id);
   if (t !== undefined) {
     return !t.waiting;
   }
-  return fetching.has(id);
+  return fetching.has(id) || jobs.has(id);
 }
 
-/** isFile says, from the sealed header alone, whether an entry is a file rather than clipboard content. */
-function isFile(meta: EntryMeta): boolean {
-  return meta.header !== null && meta.header.filename !== '';
-}
 
 /** Body renders what a preview turned out to be. */
 function Body({ preview }: { preview: Preview }): React.JSX.Element {

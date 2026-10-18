@@ -2,20 +2,21 @@
  * The downloaded-entry cache on Android: the rules in `src/core` over files in
  * the app's cache directory (`CacheModule.kt`).
  *
- * Bytes cross the native bridge as base64, with the fast codec from the core:
+ * Bytes cross the native bridge as base64, with the core's fast codec, done in
+ * slices so the app keeps answering taps meanwhile:
  * a 50 MB entry read back from disk still beats downloading it again by far.
  */
 
-import { EntryCache, decodeBase64Std, encodeBase64Std, type CacheStore } from '../core';
+import { EntryCache, decodeBase64StdAsync, encodeBase64StdAsync, type CacheStore } from '../core';
 import { TppCache, type TppCacheModule } from './native';
 
 function storeOver(native: TppCacheModule): CacheStore {
   return {
     async read(name) {
       const b64 = await native.read(name);
-      return b64 === null ? null : decodeBase64Std(b64);
+      return b64 === null ? null : decodeBase64StdAsync(b64);
     },
-    write: (name, data) => native.write(name, encodeBase64Std(data)),
+    write: async (name, data) => native.write(name, await encodeBase64StdAsync(data)),
     remove: (name) => native.remove(name),
     list: () => native.list(),
   };

@@ -6,7 +6,9 @@
 import {
   concat,
   decodeBase64Std,
+  decodeBase64StdAsync,
   encodeBase64Std,
+  encodeBase64StdAsync,
   fromBase64URL,
   fromHex,
   fromUTF8,
@@ -103,5 +105,17 @@ describe('standard base64 for the native bridge', () => {
   it('rejects what is not base64', () => {
     expect(() => decodeBase64Std('ab-c')).toThrow();
     expect(() => decodeBase64Std('abcde')).toThrow();
+  });
+});
+
+describe('the yielding base64 codec', () => {
+  it('agrees with Node across several yield steps and every padding case', async () => {
+    const none = () => Promise.resolve();
+    for (const n of [0, 1, 2, 245759, 245760, 245761, 1_000_001]) {
+      const b = Uint8Array.from({ length: n }, (_, i) => (i * 29 + 1) & 0xff);
+      const expected = Buffer.from(b).toString('base64');
+      expect(await encodeBase64StdAsync(b, none)).toBe(expected);
+      expect(Buffer.from(await decodeBase64StdAsync(expected, none)).equals(Buffer.from(b))).toBe(true);
+    }
   });
 });

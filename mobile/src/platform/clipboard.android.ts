@@ -25,7 +25,7 @@ import Clipboard from '@react-native-clipboard/clipboard';
 
 import { TppClipboard } from './native';
 
-import { decodeBase64Std, encodeBase64Std, utf8, fromUTF8 } from '../core/bytes';
+import { decodeBase64StdAsync, encodeBase64StdAsync, utf8, fromUTF8 } from '../core/bytes';
 import type { ClipboardItem, ClipboardPort } from './types';
 
 /** TEXT_CONTENT_TYPE is what a text entry is written as. */
@@ -35,8 +35,8 @@ export const TEXT_CONTENT_TYPE = 'text/plain; charset=utf-8';
 export const PNG_CONTENT_TYPE = 'image/png';
 
 /** base64 (standard alphabet) is what the native module speaks; the core speaks bytes. */
-const fromStandardBase64 = (s: string): Uint8Array => decodeBase64Std(s);
-export const toStandardBase64 = (b: Uint8Array): string => encodeBase64Std(b);
+const fromStandardBase64 = (s: string): Promise<Uint8Array> => decodeBase64StdAsync(s);
+export const toStandardBase64 = (b: Uint8Array): Promise<string> => encodeBase64StdAsync(b);
 
 export const clipboard: ClipboardPort = {
   async writeText(text: string): Promise<void> {
@@ -59,7 +59,7 @@ export const clipboard: ClipboardPort = {
         return {
           contentType: PNG_CONTENT_TYPE,
           filename: '',
-          body: fromStandardBase64(png),
+          body: await fromStandardBase64(png),
         };
       }
     }
@@ -93,7 +93,7 @@ export const clipboard: ClipboardPort = {
       if (TppClipboard === null) {
         throw new Error('this build cannot place an image on the clipboard');
       }
-      await TppClipboard.setImagePNG(toStandardBase64(item.body));
+      await TppClipboard.setImagePNG(await toStandardBase64(item.body));
       return;
     }
     if (item.contentType.startsWith('text/') || item.contentType.startsWith('application/json')) {

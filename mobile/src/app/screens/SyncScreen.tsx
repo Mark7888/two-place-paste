@@ -12,8 +12,16 @@ import React, { useState } from 'react';
 import { Text, View } from 'react-native';
 
 import { useSession } from '../SessionContext';
-import type { ClipboardItem, SavedFile } from '../../platform';
-import { download, failureMessage, handleFile, sync, upload, type FileChoice } from '../session';
+import type { SavedFile } from '../../platform';
+import {
+  download,
+  failureMessage,
+  handleFile,
+  sync,
+  upload,
+  type FileChoice,
+  type PendingFile,
+} from '../session';
 import {
   Button,
   Choice,
@@ -36,8 +44,9 @@ export function SyncScreen(): React.JSX.Element {
   const [saved, setSaved] = useState<SavedFile | null>(null);
   const [ok, setOk] = useState(true);
   const [asking, setAsking] = useState(false);
-  // A received file the clipboard cannot hold, waiting for save-or-open.
-  const [file, setFile] = useState<ClipboardItem | null>(null);
+  // A file the clipboard cannot hold, waiting for save-or-open. It is asked
+  // before the download, so the sheet appears at once and names the file.
+  const [file, setFile] = useState<PendingFile | null>(null);
 
   const run = (action: 'sync' | 'up' | 'down') => {
     const client = session.client;
@@ -62,8 +71,8 @@ export function SyncScreen(): React.JSX.Element {
           return;
         }
         setAsking(false);
-        if (result.direction === 'file' && result.item !== undefined) {
-          setFile(result.item);
+        if (result.direction === 'file' && result.file !== undefined) {
+          setFile(result.file);
           return;
         }
         setOk(true);
@@ -80,24 +89,31 @@ export function SyncScreen(): React.JSX.Element {
   };
 
   const choose = (choice: FileChoice) => {
-    const item = file;
-    if (item === null || busy) {
+    const pending = file;
+    const client = session.client;
+    if (pending === null || client === null || busy) {
       return;
     }
+    // The sheet closes at once; the download shows on the progress bar, and
+    // the screen stays usable while it runs.
+    setFile(null);
     setBusy(true);
+    setMessage('');
+    setSaved(null);
     void (async () => {
       try {
-        const result = await handleFile(item, choice);
-        setFile(null);
+        const result = await handleFile(client, pending, choice);
         setOk(true);
         setMessage(result.message);
         setSaved(result.saved ?? null);
       } catch (err) {
-        // The sheet stays up, so the other option is still one tap away —
-        // "no app opens this" is exactly when Save is the answer.
+        // The question comes back with the reason, so the other option is
+        // one tap away — "no app opens this" is exactly when Save is the
+        // answer, and by now the entry is downloaded and cached.
         setOk(false);
         setMessage(failureMessage(err));
         setSaved(null);
+        setFile(pending);
       } finally {
         setBusy(false);
       }
@@ -206,7 +222,8 @@ export function SyncScreen(): React.JSX.Element {
 
       <Sheet visible={file !== null} title="Save or open?" onClose={() => setFile(null)}>
         <FileChoices
-          name={file === null ? '' : file.filename !== '' ? file.filename : file.contentType}
+          name={file?.name ?? ''}
+          detail={file?.detail ?? ''}
           disabled={busy}
           onChoose={choose}
         />

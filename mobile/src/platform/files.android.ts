@@ -41,7 +41,7 @@ export const files: FilesPort = {
     }
     await ensureLegacyWrite();
     const saved = await TppFiles.saveToDownloads(
-      toStandardBase64(item.body),
+      await toStandardBase64(item.body),
       item.filename,
       item.contentType,
     );
@@ -59,6 +59,6 @@ export const files: FilesPort = {
     if (TppFiles === null) {
       throw new Error('this build cannot open files');
     }
-    await TppFiles.open(toStandardBase64(item.body), item.filename, item.contentType);
+    await TppFiles.open(await toStandardBase64(item.body), item.filename, item.contentType);
   },
 };

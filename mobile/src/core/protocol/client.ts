@@ -87,6 +87,7 @@ import {
   generateNonce,
   newEntryID,
   openEntry,
+  openEntrySliced,
   openEntryHeader,
   publicKey as derivePublicKey,
   sealEntry,
@@ -177,6 +178,9 @@ export type EntryHint = Pick<EntryMeta, 'size' | 'header'>;
 /** Reconnect bounds. A relay that is down comes back; a phone that hammers it while it does is a second problem. */
 const MIN_BACKOFF_MS = 500;
 const MAX_BACKOFF_MS = 30_000;
+
+/** SLICED_OPEN_MIN_BYTES is the size above which an entry is decrypted in slices. */
+const SLICED_OPEN_MIN_BYTES = 1 << 20;
 
 /** RANGE_RETRIES is how many times a download asks again for a range a dropped socket lost. */
 const RANGE_RETRIES = 3;
@@ -1328,7 +1332,7 @@ export class Client {
       // A large entry lives in the blob backend and is pulled by id.
       return this.read(meta.id, meta);
     }
-    return this.open(meta, response.ciphertext);
+    return await this.open(meta, response.ciphertext);
   }
 
   /**
@@ -1373,7 +1377,7 @@ export class Client {
   private async read(entryId: string, hint?: EntryHint): Promise<Item> {
     const fetched = await this.fetch(entryId, hint);
     try {
-      return this.open(fetched.meta, fetched.ciphertext);
+      return await this.open(fetched.meta, fetched.ciphertext);
     } catch (err) {
       const epochRefusal =
         err instanceof TppError && (err.kind === 'stale-entry' || err.kind === 'epoch-ahead');
@@ -1382,7 +1386,7 @@ export class Client {
       }
       this.forgetEntry(entryId);
       const fresh = await this.fetch(entryId, hint);
-      return this.open(fresh.meta, fresh.ciphertext);
+      return await this.open(fresh.meta, fresh.ciphertext);
     }
   }
 
@@ -1711,17 +1715,22 @@ export class Client {
 
     const fetched: Fetched = { ...got, source: 'relay' };
     if (limits.chunkBytes > 0 && got.ciphertext.length > limits.chunkBytes) {
-      // Large: worth keeping on disk. A cache that cannot be written is only
-      // a cache that does not help; the download itself has succeeded.
-      await this.cache?.put(got).catch(() => undefined);
+      // Large: worth keeping on disk. Written in the background — the caller
+      // is waiting for this entry, not for its copy — and a cache that cannot
+      // be written is only a cache that does not help.
+      void this.cache?.put(got).catch(() => undefined);
     } else {
       this.recent = { entry: fetched, at: now };
     }
     return fetched;
   }
 
-  /** open applies the epoch rules and decrypts. */
-  private open(meta: EntryMeta, ciphertext: Uint8Array): Item {
+  /**
+   * open applies the epoch rules and decrypts. A large container is decrypted
+   * a slice at a time (`openEntrySliced`), so the app keeps answering taps
+   * through the seconds a big entry takes on the phone.
+   */
+  private async open(meta: EntryMeta, ciphertext: Uint8Array): Promise<Item> {
     if (meta.epoch < this.state.epoch) {
       throw new TppError(
         'stale-entry',
@@ -1737,7 +1746,11 @@ export class Client {
     // The epoch and the entry id used here are the ones the relay reports. A
     // client must never try other epochs, or other ids, to make an entry
     // decrypt: at its own epoch a failure is corruption or tampering.
-    const frame = decodeFrame(openEntry(this.state.groupKey, ciphertext, meta.epoch, meta.id));
+    const plain =
+      ciphertext.length > SLICED_OPEN_MIN_BYTES
+        ? await openEntrySliced(this.state.groupKey, ciphertext, meta.epoch, meta.id)
+        : openEntry(this.state.groupKey, ciphertext, meta.epoch, meta.id);
+    const frame = decodeFrame(plain);
     return {
       contentType: frame.contentType,
       filename: frame.filename,

@@ -55,6 +55,25 @@ binary blobs, and the same rule keeps the launcher icon and the tile icon as
 vector drawables and the debug keystore as the one Gradle generates on the
 machine that builds.
 
+## Keeping the app responsive with large entries
+
+The phone's JavaScript engine has no JIT, so byte work on a 50 MB entry takes
+seconds, and the JavaScript thread is also the one that answers taps. Three
+rules keep the app usable:
+
+- **Ask before downloading.** An entry's sealed header says whether it is a
+  file the clipboard cannot hold, so the save-or-open question comes first,
+  names the file (type, size, time), and the download runs after the answer.
+  On History each such row is its own job: several can run, and the screen
+  stays usable meanwhile.
+- **Decrypt in slices.** Entries over 1 MiB are authenticated and then
+  decrypted 256 KiB at a time with the event loop let run in between
+  (`openEntrySliced`, checked byte for byte against `openEntry` and the
+  shared vectors).
+- **Cross the bridge in slices, and off the critical path.** Base64 for the
+  native modules is encoded and decoded a few hundred KiB at a time, and the
+  cache copy of a download is written after the caller has its entry.
+
 ## Downloads: one at a time, read once
 
 - **One large download at a time.** The relay answers one device's requests
