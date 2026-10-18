@@ -12,7 +12,7 @@
  * that copying the entry would.
  */
 
-import type { EntryHeaderView, Item } from '../core';
+import type { EntryHeaderView, Item, Progress } from '../core';
 import { fromUTF8 } from '../core';
 
 /** PREVIEW_CHARS bounds a text preview. The desktop uses the same number. */
@@ -63,6 +63,70 @@ export function headerPreviewable(header: EntryHeaderView | null): boolean {
     return false;
   }
   return header.contentType.startsWith('text/') || header.contentType.startsWith('image/');
+}
+
+const SIZE_UNITS = ['KB', 'MB', 'GB'];
+
+/**
+ * formatSize renders a byte count for people: "512 B", "3.4 KB", "12 MB".
+ *
+ * Units are binary (1 KB = 1024 bytes), like the desktop's. One decimal below
+ * 10 of a unit and whole numbers above, so a list of sizes stays short and
+ * still tells 1.2 MB from 1.8 MB.
+ */
+export function formatSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 1024) {
+    return `${Math.max(0, Math.round(bytes) || 0)} B`;
+  }
+  let value = bytes;
+  let unit = -1;
+  while (value >= 1024 && unit < SIZE_UNITS.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  // 1023.96 KB rounds to "1024 KB"; say "1.0 MB" instead.
+  if (value >= 1023.5 && unit < SIZE_UNITS.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  const text = value < 10 ? value.toFixed(1) : Math.round(value).toString();
+  return `${text} ${SIZE_UNITS[unit]}`;
+}
+
+/**
+ * transferText is what the progress bar says: what is moving, which way, and
+ * how far — or that it is queued behind another transfer — "Downloading report.pdf" over "4.0 MB of 20 MB · 20%". An entry
+ * with no filename is named by its kind, and one whose header could not be
+ * opened is just "a large entry".
+ */
+export function transferText(p: Progress): { title: string; detail: string; percent: number } {
+  const percent = p.total > 0 ? Math.min(100, Math.floor((p.done / p.total) * 100)) : 0;
+  const what =
+    p.filename !== ''
+      ? p.filename
+      : p.contentType.startsWith('image/')
+        ? 'an image'
+        : p.contentType.startsWith('text/')
+          ? 'text'
+          : p.contentType !== ''
+            ? p.contentType.split(';')[0].trim()
+            : 'a large entry';
+  const verb = p.direction === 'upload' ? 'upload' : 'download';
+  if (p.waiting) {
+    return {
+      title: `Waiting to ${verb} ${what}`,
+      detail:
+        p.done > 0
+          ? `Queued behind another transfer · ${formatSize(p.done)} of ${formatSize(p.total)}`
+          : `Queued behind another transfer · ${formatSize(p.total)}`,
+      percent,
+    };
+  }
+  return {
+    title: `${verb === 'upload' ? 'Uploading' : 'Downloading'} ${what}`,
+    detail: `${formatSize(p.done)} of ${formatSize(p.total)} · ${percent}%`,
+    percent,
+  };
 }
 
 /** describeHeader names an entry from its header: its filename, else its type. */

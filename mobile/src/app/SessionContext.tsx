@@ -12,7 +12,7 @@ import React, { createContext, useContext, useMemo, useSyncExternalStore } from 
 
 import type { Client, Progress } from '../core';
 import {
-  answerDirection,
+  answerQuestion,
   claimPendingCode,
   clearError,
   forget,
@@ -22,7 +22,7 @@ import {
   setError,
   setNotice,
   subscribe,
-  type DirectionChoice,
+  type Answer,
   type Question,
 } from './sessionStore';
 
@@ -40,14 +40,14 @@ export interface SessionState {
   probablyRevoked: boolean;
   /** syncing is true while a sync the store started — a tile tap — is running. */
   syncing: boolean;
-  /** question is a sync waiting on the user to pick a direction. */
+  /** question is a sync waiting on the user: a direction to pick, or what to do with a file. */
   question: Question | null;
   /** error is the last failure, for a screen to render and then clear. */
   error: string;
   /** pendingCode is a pairing code that arrived through a scanned link. */
   pendingCode: string;
-  /** transfer is a large entry moving in chunks right now, or null. */
-  transfer: Progress | null;
+  /** transfers are the large entries moving in chunks right now, or waiting to. */
+  transfers: readonly Progress[];
   /** evicted is the last entry the relay removed early; seq changes with each one. */
   evicted: { id: string; seq: number } | null;
   setError(message: string): void;
@@ -55,7 +55,7 @@ export interface SessionState {
   /** claimPendingCode hands the deep-linked code to exactly one screen. */
   claimPendingCode(): string;
   /** answer resolves that question. Dismissing is an answer: nothing is synced. */
-  answer(id: number, choice: DirectionChoice | null): void;
+  answer(id: number, choice: Answer | null): void;
   /** refresh re-reads the client's own state after a flow changed it. */
   refresh(): void;
   setNotice(message: string): void;
@@ -97,9 +97,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
       question: snapshot.question,
       error: snapshot.error,
       pendingCode: snapshot.pendingCode,
-      transfer: snapshot.transfer,
+      transfers: snapshot.transfers,
       evicted: snapshot.evicted,
-      answer: answerDirection,
+      answer: answerQuestion,
       setError,
       clearError,
       claimPendingCode,

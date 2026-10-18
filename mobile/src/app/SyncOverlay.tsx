@@ -9,8 +9,9 @@
  * underneath is the same session the app uses, not a second copy of it.
  *
  * The panel has three states and no navigation: it is working, it is asking
- * which way the sync should go, or it is saying what happened just before it
- * closes itself. There is nothing to tap through, because a tile tap is one
+ * the user something — which way the sync should go, or whether a received
+ * file should be saved or opened — or it is saying what happened just before
+ * it closes itself. There is nothing to tap through, because a tile tap is one
  * action and this is the whole of it.
  */
 
@@ -19,7 +20,7 @@ import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
 import { tile } from '../platform';
 import { SessionProvider, useSession } from './SessionContext';
-import { Button, Choice, Notice, TransferBar } from './ui';
+import { Button, Choice, FileChoices, Notice, TransferList } from './ui';
 import { colors, styles } from './theme';
 
 function Panel(): React.JSX.Element {
@@ -45,7 +46,16 @@ function Panel(): React.JSX.Element {
       onPress={dismiss}
     >
       <Pressable style={styles.sheet} onPress={() => undefined}>
-        {question !== null ? (
+        {question !== null && question.kind === 'file' ? (
+          <>
+            <Text style={styles.sheetTitle}>Save or open?</Text>
+            <FileChoices
+              name={question.name}
+              detail={question.detail}
+              onChoose={(c) => session.answer(question.id, c)}
+            />
+          </>
+        ) : question !== null ? (
           <>
             <Text style={styles.sheetTitle}>Which way should this sync go?</Text>
             <Text style={styles.muted}>
@@ -76,8 +86,8 @@ function Panel(): React.JSX.Element {
             <Button label="Close" variant="secondary" onPress={dismiss} />
           </>
         ) : session.syncing || !session.ready ? (
-          session.transfer !== null ? (
-            <TransferBar transfer={session.transfer} />
+          session.transfers.length > 0 ? (
+            <TransferList transfers={session.transfers} />
           ) : (
             <View style={[styles.rowInline, { paddingVertical: 4 }]}>
               <ActivityIndicator color={colors.accent} />

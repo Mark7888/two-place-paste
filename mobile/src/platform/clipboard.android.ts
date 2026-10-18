@@ -25,7 +25,7 @@ import Clipboard from '@react-native-clipboard/clipboard';
 
 import { TppClipboard } from './native';
 
-import { fromBase64URL, toBase64URL, utf8, fromUTF8 } from '../core/bytes';
+import { decodeBase64StdAsync, encodeBase64StdAsync, utf8, fromUTF8 } from '../core/bytes';
 import type { ClipboardItem, ClipboardPort } from './types';
 
 /** TEXT_CONTENT_TYPE is what a text entry is written as. */
@@ -35,12 +35,8 @@ export const TEXT_CONTENT_TYPE = 'text/plain; charset=utf-8';
 export const PNG_CONTENT_TYPE = 'image/png';
 
 /** base64 (standard alphabet) is what the native module speaks; the core speaks bytes. */
-const fromStandardBase64 = (s: string): Uint8Array => fromBase64URL(s);
-const toStandardBase64 = (b: Uint8Array): string => {
-  const url = toBase64URL(b);
-  const padding = url.length % 4 === 0 ? '' : '='.repeat(4 - (url.length % 4));
-  return url.replace(/-/g, '+').replace(/_/g, '/') + padding;
-};
+const fromStandardBase64 = (s: string): Promise<Uint8Array> => decodeBase64StdAsync(s);
+export const toStandardBase64 = (b: Uint8Array): Promise<string> => encodeBase64StdAsync(b);
 
 export const clipboard: ClipboardPort = {
   async writeText(text: string): Promise<void> {
@@ -63,7 +59,7 @@ export const clipboard: ClipboardPort = {
         return {
           contentType: PNG_CONTENT_TYPE,
           filename: '',
-          body: fromStandardBase64(png),
+          body: await fromStandardBase64(png),
         };
       }
     }
@@ -72,6 +68,20 @@ export const clipboard: ClipboardPort = {
       return null;
     }
     return { contentType: TEXT_CONTENT_TYPE, filename: '', body: utf8(text) };
+  },
+
+  canWrite(item: ClipboardItem): boolean {
+    // A filename makes it a file, whatever its type (the same rule the history
+    // uses to describe it): a document copied on a desktop is a file to keep
+    // or open here, not its bytes pasted as text.
+    if (item.filename !== '') {
+      return false;
+    }
+    return (
+      item.contentType.startsWith('image/') ||
+      item.contentType.startsWith('text/') ||
+      item.contentType.startsWith('application/json')
+    );
   },
 
   async write(item: ClipboardItem): Promise<void> {
@@ -83,7 +93,7 @@ export const clipboard: ClipboardPort = {
       if (TppClipboard === null) {
         throw new Error('this build cannot place an image on the clipboard');
       }
-      await TppClipboard.setImagePNG(toStandardBase64(item.body));
+      await TppClipboard.setImagePNG(await toStandardBase64(item.body));
       return;
     }
     if (item.contentType.startsWith('text/') || item.contentType.startsWith('application/json')) {
@@ -91,8 +101,8 @@ export const clipboard: ClipboardPort = {
       return;
     }
     // Anything else — a PDF, an archive, a file entry from a desktop — has no
-    // representation this client can put on an Android clipboard. The history
-    // screen says so rather than writing bytes that would paste as mojibake.
+    // representation this client can put on an Android clipboard. Callers
+    // check `canWrite` first and offer to save or open it instead.
     throw new Error(`${item.contentType} cannot be placed on the Android clipboard`);
   },
 };

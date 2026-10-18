@@ -43,13 +43,48 @@ export interface TppClipboardModule {
   primaryClipTimestamp(): Promise<number>;
 }
 
+/** TppFilesModule is implemented by `android/app/src/main/java/.../FileModule.kt`. */
+export interface TppFilesModule {
+  /**
+   * saveToDownloads writes the file to Downloads/TwoPlacePaste and resolves
+   * with the name it was saved under and a content URI to open it by.
+   */
+  saveToDownloads(
+    base64: string,
+    filename: string,
+    contentType: string,
+  ): Promise<{ name: string; uri: string }>;
+
+  /** openSaved opens a file saveToDownloads saved, by the URI it returned. */
+  openSaved(uri: string, contentType: string, filename: string): Promise<void>;
+
+  /**
+   * open hands the file to an app that opens its type, staged in this app's
+   * cache rather than saved anywhere. It rejects when no app opens the type.
+   */
+  open(base64: string, filename: string, contentType: string): Promise<void>;
+}
+
+/** TppCacheModule is implemented by `android/app/src/main/java/.../CacheModule.kt`. */
+export interface TppCacheModule {
+  /** read resolves with a cache file as base64, or null when there is none. */
+  read(name: string): Promise<string | null>;
+  write(name: string, base64: string): Promise<void>;
+  remove(name: string): Promise<void>;
+  list(): Promise<{ name: string; size: number }[]>;
+}
+
 const modules = NativeModules as {
+  TppCache?: TppCacheModule;
   TppTile?: TppTileModule;
   TppClipboard?: TppClipboardModule;
+  TppFiles?: TppFilesModule;
 };
 
 export const TppTile: TppTileModule | null = modules.TppTile ?? null;
 export const TppClipboard: TppClipboardModule | null = modules.TppClipboard ?? null;
+export const TppFiles: TppFilesModule | null = modules.TppFiles ?? null;
+export const TppCache: TppCacheModule | null = modules.TppCache ?? null;
 
 /** TILE_REQUEST_EVENT is emitted by the native tile bridge when a tap reaches a running app. */
 export const TILE_REQUEST_EVENT = 'TppTileSyncRequested';

@@ -17,6 +17,8 @@ import { sha256 } from '@noble/hashes/sha2.js';
 
 import {
   Client,
+  EntryCache,
+  type CacheStore,
   TppError,
   fromUTF8,
   toHex,
@@ -40,6 +42,33 @@ class InMemoryStore implements SecureStore {
   }
 }
 
+/** MemoryCacheStore stands in for the app's cache directory. */
+class MemoryCacheStore implements CacheStore {
+  readonly files = new Map<string, Uint8Array>();
+  async read(name: string) {
+    return this.files.get(name) ?? null;
+  }
+  async write(name: string, data: Uint8Array) {
+    this.files.set(name, data.slice());
+  }
+  async remove(name: string) {
+    this.files.delete(name);
+  }
+  async list() {
+    return [...this.files].map(([name, data]) => ({ name, size: data.length }));
+  }
+}
+
+/** pattern is the body `put-large` writes, so a test can check every byte. */
+function matchesPattern(body: Uint8Array): boolean {
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] !== ((i * 31 + 7) & 0xff)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 const skip = missingTool();
 const describeInterop = skip === null ? describe : describe.skip;
 
@@ -55,6 +84,9 @@ describeInterop('the phone and the Go client are one implementation of one contr
   let go: GoPeer;
   let phone: Client;
   const progress: Progress[] = [];
+  // onProgress lets a test act in the middle of a transfer.
+  let onProgress: ((p: Progress) => void) | null = null;
+  const cacheStore = new MemoryCacheStore();
 
   beforeAll(async () => {
     relay = await Relay.start();
@@ -62,7 +94,13 @@ describeInterop('the phone and the Go client are one implementation of one contr
     phone = await Client.open({
       store: new InMemoryStore(),
       deviceName: 'Anna — phone',
-      handlers: { onProgress: (p) => progress.push(p) },
+      cache: new EntryCache(cacheStore),
+      handlers: {
+        onProgress: (p) => {
+          progress.push(p);
+          onProgress?.(p);
+        },
+      },
     });
   });
 
@@ -167,7 +205,145 @@ describeInterop('the phone and the Go client are one implementation of one contr
     expect(same).toBe(true);
     const downloads = progress.filter((p) => p.direction === 'download');
     expect(downloads.length).toBeGreaterThanOrEqual(3);
+    // The size is known from the latest-entry answer, so the bar starts at
+    // zero rather than appearing only once the first chunk has arrived.
+    expect(downloads[0].done).toBe(0);
+    // The bar can say what is downloading, from the sealed header.
+    expect(downloads.every((p) => p.filename === 'large.bin')).toBe(true);
     expect(downloads[downloads.length - 1].done).toBe(downloads[downloads.length - 1].total);
+  });
+
+  test('an entry under one frame but over one chunk still reports download progress', async () => {
+    // Past the relay's 8 MiB chunk and under the 10 MiB frame cap: it is read
+    // in two ranges, and used to be read with no progress at all.
+    const size = 9 << 20;
+    const written = await go.send(`put-large ${size}`);
+    progress.length = 0;
+    const item = await phone.getLatest();
+
+    expect(item.meta?.id).toBe(written.entry_id);
+    expect(item.body.length).toBe(size);
+    const downloads = progress.filter((p) => p.direction === 'download');
+    expect(downloads.length).toBeGreaterThanOrEqual(2);
+    expect(downloads[0].done).toBe(0);
+    expect(downloads[downloads.length - 1].done).toBe(downloads[downloads.length - 1].total);
+  });
+
+  test('a download carries on when the app goes to the background part-way through', async () => {
+    const size = 20 << 20;
+    const written = await go.send(`put-large ${size}`);
+    progress.length = 0;
+    let backgrounded = false;
+    onProgress = (p) => {
+      if (!backgrounded && p.direction === 'download' && p.done > 0) {
+        backgrounded = true;
+        // What the app does when the user switches to another app.
+        phone.disconnect();
+      }
+    };
+    try {
+      const item = await phone.getLatest();
+      expect(backgrounded).toBe(true);
+      expect(item.meta?.id).toBe(written.entry_id);
+      expect(item.body.length).toBe(size);
+      // The socket was kept for the transfer only, and closed once it ended.
+      expect(phone.connected).toBe(false);
+    } finally {
+      onProgress = null;
+      await phone.connect();
+    }
+  });
+
+  test('a download whose socket drops in the background resumes where it was when the app returns', async () => {
+    const size = 20 << 20;
+    const written = await go.send(`put-large ${size}`);
+    progress.length = 0;
+    let dropped = false;
+    onProgress = (p) => {
+      if (!dropped && p.direction === 'download' && p.done > 0) {
+        dropped = true;
+        phone.disconnect();
+        // The OS kills the socket while the app is away.
+        (phone as unknown as { conn: { close(reason: string): void } }).conn.close('simulated drop');
+        setTimeout(() => void phone.connect(), 200);
+      }
+    };
+    try {
+      const item = await phone.getLatest();
+      expect(dropped).toBe(true);
+      expect(item.meta?.id).toBe(written.entry_id);
+      expect(item.body.length).toBe(size);
+      let same = true;
+      for (let i = 0; i < size; i++) {
+        if (item.body[i] !== ((i * 31 + 7) & 0xff)) {
+          same = false;
+          break;
+        }
+      }
+      expect(same).toBe(true);
+      // It picked up from the range it had, rather than starting over.
+      const downloads = progress.filter((x) => x.direction === 'download');
+      const done = downloads.map((x) => x.done);
+      expect(done).toEqual([...done].sort((a, b) => a - b));
+    } finally {
+      onProgress = null;
+    }
+  });
+
+  test('two large downloads take turns rather than splitting the link', async () => {
+    const a = String((await go.send(`put-large ${12 << 20}`)).entry_id);
+    const b = String((await go.send(`put-large ${12 << 20}`)).entry_id);
+    progress.length = 0;
+    const [ia, ib] = await Promise.all([phone.getEntry(a), phone.getEntry(b)]);
+    expect(matchesPattern(ia.body)).toBe(true);
+    expect(matchesPattern(ib.body)).toBe(true);
+
+    const downloads = progress.filter((p) => p.direction === 'download');
+    // One of them was told to wait…
+    expect(downloads.some((p) => p.waiting)).toBe(true);
+    // …and while one was moving, the other never was: no running report for
+    // one entry falls between two unfinished running reports of the other.
+    let active: string | null = null;
+    for (const p of downloads.filter((x) => !x.waiting)) {
+      if (active !== null && active !== p.entryId) {
+        throw new Error(`${p.entryId} moved while ${active} was still running`);
+      }
+      active = p.done < p.total ? p.entryId : null;
+    }
+  });
+
+  test('reading an entry that is already being read joins that download', async () => {
+    const id = String((await go.send(`put-large ${20 << 20}`)).entry_id);
+    progress.length = 0;
+    const [one, two] = await Promise.all([phone.getEntry(id), phone.getEntry(id)]);
+    expect(matchesPattern(one.body)).toBe(true);
+    // Compared as bytes: Jest's deep equality takes over a minute on 20 MB.
+    expect(matchesPattern(two.body)).toBe(true);
+    expect(two.body.length).toBe(one.body.length);
+    const done = progress.filter((p) => p.direction === 'download' && !p.waiting).map((p) => p.done);
+    // Each range was read once.
+    expect(new Set(done).size).toBe(done.length);
+  });
+
+  test('a large entry read again within the hour comes from the cache, not the relay', async () => {
+    const id = String((await go.send(`put-large ${20 << 20}`)).entry_id);
+    await phone.getEntry(id);
+    expect(cacheStore.files.has(`${id}.bin`)).toBe(true);
+
+    progress.length = 0;
+    const again = await phone.getEntry(id);
+    expect(matchesPattern(again.body)).toBe(true);
+    expect(progress.filter((p) => p.direction === 'download')).toEqual([]);
+
+    // A cached copy that no longer opens is dropped and read from the relay.
+    const bin = cacheStore.files.get(`${id}.bin`);
+    if (bin === undefined) {
+      throw new Error('the entry left the cache');
+    }
+    bin[100] ^= 0xff;
+    const repaired = await phone.getEntry(id);
+    expect(matchesPattern(repaired.body)).toBe(true);
+    expect(progress.some((p) => p.direction === 'download')).toBe(true);
   });
 
   test('an entry larger than one frame, written by the phone, uploads in chunks and reads in Go', async () => {
@@ -190,6 +366,7 @@ describeInterop('the phone and the Go client are one implementation of one contr
     const uploads = progress.filter((p) => p.direction === 'upload');
     expect(uploads.length).toBeGreaterThanOrEqual(4);
     expect(uploads[uploads.length - 1].done).toBe(meta.size);
+    expect(uploads.every((p) => p.filename === 'from-the-phone.bin')).toBe(true);
   });
 
   test('a second phone pairs the other way round: it shows, the Go client accepts', async () => {

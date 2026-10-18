@@ -1,4 +1,4 @@
-import { describeHeader, headerPreviewable, kindOf, previewOf, toBase64, PREVIEW_CHARS } from '../preview';
+import { describeHeader, formatSize, headerPreviewable, transferText, kindOf, previewOf, toBase64, PREVIEW_CHARS } from '../preview';
 import { utf8, type Item } from '../../core';
 
 function item(contentType: string, body: Uint8Array, filename = ''): Item {
@@ -113,5 +113,75 @@ describe('headerPreviewable', () => {
     expect(describeHeader(h('application/pdf', 'a.pdf'))).toBe('a.pdf');
     expect(describeHeader(h('text/plain'))).toBe('text/plain');
     expect(describeHeader(null)).toBe('type unknown');
+  });
+});
+
+describe('formatSize', () => {
+  it('keeps small sizes in bytes', () => {
+    expect(formatSize(0)).toBe('0 B');
+    expect(formatSize(512)).toBe('512 B');
+    expect(formatSize(1023)).toBe('1023 B');
+  });
+
+  it('uses one decimal below ten of a unit and whole numbers above', () => {
+    expect(formatSize(1024)).toBe('1.0 KB');
+    expect(formatSize(3482)).toBe('3.4 KB');
+    expect(formatSize(20 * 1024)).toBe('20 KB');
+    expect(formatSize(1.5 * 1024 * 1024)).toBe('1.5 MB');
+    expect(formatSize(50 * 1024 * 1024)).toBe('50 MB');
+    expect(formatSize(3 * 1024 * 1024 * 1024)).toBe('3.0 GB');
+  });
+
+  it('never says 1024 of a unit', () => {
+    expect(formatSize(1024 * 1024 - 1)).toBe('1.0 MB');
+  });
+});
+
+describe('transferText', () => {
+  const p = (over: Partial<Parameters<typeof transferText>[0]>) => ({
+    entryId: 'e',
+    direction: 'download' as const,
+    done: 4 << 20,
+    total: 20 << 20,
+    filename: '',
+    contentType: '',
+    waiting: false,
+    ...over,
+  });
+
+  it('names a file by its filename and says how far it is', () => {
+    expect(transferText(p({ filename: 'report.pdf', contentType: 'application/pdf' }))).toEqual({
+      title: 'Downloading report.pdf',
+      detail: '4.0 MB of 20 MB · 20%',
+      percent: 20,
+    });
+  });
+
+  it('names an entry with no filename by its kind', () => {
+    expect(transferText(p({ contentType: 'image/png', direction: 'upload' })).title).toBe('Uploading an image');
+    expect(transferText(p({ contentType: 'text/plain; charset=utf-8' })).title).toBe('Downloading text');
+    expect(transferText(p({ contentType: 'application/zip' })).title).toBe('Downloading application/zip');
+    expect(transferText(p({})).title).toBe('Downloading a large entry');
+  });
+
+  it('does not reach 100% before the last byte', () => {
+    expect(transferText(p({ done: (20 << 20) - 1 })).percent).toBe(99);
+    expect(transferText(p({ done: 0, total: 0 })).percent).toBe(0);
+  });
+});
+
+describe('transferText for a queued transfer', () => {
+  it('says it is waiting, not how fast it is going', () => {
+    const t = transferText({
+      entryId: 'e',
+      direction: 'download',
+      done: 0,
+      total: 20 << 20,
+      filename: 'report.pdf',
+      contentType: 'application/pdf',
+      waiting: true,
+    });
+    expect(t.title).toBe('Waiting to download report.pdf');
+    expect(t.detail).toBe('Queued behind another transfer · 20 MB');
   });
 });

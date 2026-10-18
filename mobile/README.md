@@ -55,6 +55,55 @@ binary blobs, and the same rule keeps the launcher icon and the tile icon as
 vector drawables and the debug keystore as the one Gradle generates on the
 machine that builds.
 
+## Keeping the app responsive with large entries
+
+The phone's JavaScript engine has no JIT, so byte work on a 50 MB entry takes
+seconds, and the JavaScript thread is also the one that answers taps. Three
+rules keep the app usable:
+
+- **Ask before downloading.** An entry's sealed header says whether it is a
+  file the clipboard cannot hold, so the save-or-open question comes first,
+  names the file (type, size, time), and the download runs after the answer.
+  On History each such row is its own job: several can run, and the screen
+  stays usable meanwhile.
+- **Decrypt in slices.** Entries over 1 MiB are authenticated and then
+  decrypted 256 KiB at a time with the event loop let run in between
+  (`openEntrySliced`, checked byte for byte against `openEntry` and the
+  shared vectors).
+- **Cross the bridge in slices, and off the critical path.** Base64 for the
+  native modules is encoded and decoded a few hundred KiB at a time, and the
+  cache copy of a download is written after the caller has its entry.
+
+## Downloads: one at a time, read once
+
+- **One large download at a time.** The relay answers one device's requests
+  in order, so two chunked downloads at once only make each chunk wait behind
+  the other's. They take turns; one that is queued shows "Waiting to download
+  …" on its own bar. A small entry (one range) never queues.
+- **The same entry is never downloaded twice at once.** A preview and a copy
+  of the same row, or a sync and a copy, join the read already running.
+- **Chunks get time for their size.** Each chunk request gets the usual 20 s
+  plus its bytes at 128 KiB/s (an 8 MiB chunk: 84 s), the same floor the Go
+  client uses, so a slow link is slow rather than failed.
+- **Large entries are cached for an hour.** A chunked download is kept in the
+  app's cache directory (`CacheModule.kt`, rules in
+  `src/core/protocol/entryCache.ts`): still encrypted, for at most an hour and
+  never past the relay's expiry, 200 MiB in all, oldest out first. Reading it
+  back goes through the same decryption and epoch checks as a download, and a
+  copy that does not open is dropped and read from the relay again. An evicted
+  entry leaves the cache, and leaving the group clears it. The last small
+  entry read is kept in memory the same way, so preview-then-copy is one read.
+
+## Leaving the app mid-transfer
+
+The socket follows the foreground (SPEC §5.2), with one exception: a chunked
+upload or download the user started is let finish. Going to the background
+during one keeps the socket open until the transfer ends, then closes it. If
+the OS drops the socket anyway, a download asks again for the range it lost
+once the app is back, and carries on from there. An upload cannot resume that
+way (the relay rejects a chunk index it has already taken), so it relies on the
+socket staying up.
+
 ## The quick-settings tile
 
 Android 10 blocked clipboard reads from apps that are not focused and are not
@@ -131,6 +180,25 @@ not fill cannot decide how much memory it takes.
 `setImagePNG` is the other half: it stages the PNG in the app's cache and puts a
 FileProvider URI on the clipboard with a read grant attached to the clip. The
 provider is not exported, so without that grant nothing can read the file.
+
+## Received files
+
+The Android clipboard cannot hold a file, so a received entry with a filename
+(or a type the clipboard cannot carry, like a PDF) is not copied. The app asks
+instead — on the tile's panel, the Sync screen or the History screen — whether
+to **save it to Downloads** or **open it**. Both go through `FileModule`
+(`TppFiles`):
+
+- `saveToDownloads` writes into `Downloads/TwoPlacePaste`, through MediaStore on Android 10+, which needs no
+  permission. On 9 and older it is a plain file write, and the app asks for
+  `WRITE_EXTERNAL_STORAGE` (declared with `maxSdkVersion="28"`) at that moment.
+  It returns the saved file's URI (MediaStore on 10+, the FileProvider's
+  `downloads` path on 9 and older), so the green "Saved" notice can carry an
+  **Open** button that opens that saved file through `openSaved`.
+- `open` does not touch Downloads. The file is staged in the app's cache under
+  its own name and handed to the opening app as a FileProvider URI with a
+  one-off read grant. Each open replaces the last staged file. If no installed
+  app opens the type, the user is told and can save it instead.
 
 ## Sync direction
 

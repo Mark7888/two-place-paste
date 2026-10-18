@@ -12,16 +12,41 @@ import React, { useState } from 'react';
 import { Text, View } from 'react-native';
 
 import { useSession } from '../SessionContext';
-import { download, failureMessage, sync, upload } from '../session';
-import { Button, Choice, Notice, Screen, Section, Sheet, Status, TransferBar } from '../ui';
+import type { SavedFile } from '../../platform';
+import {
+  download,
+  failureMessage,
+  handleFile,
+  sync,
+  upload,
+  type FileChoice,
+  type PendingFile,
+} from '../session';
+import {
+  Button,
+  Choice,
+  FileChoices,
+  Notice,
+  OutcomeNotice,
+  Screen,
+  Section,
+  Sheet,
+  Status,
+  TransferList,
+} from '../ui';
 import { colors, styles } from '../theme';
 
 export function SyncScreen(): React.JSX.Element {
   const session = useSession();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  // saved is the file the last outcome saved, which its notice offers to open.
+  const [saved, setSaved] = useState<SavedFile | null>(null);
   const [ok, setOk] = useState(true);
   const [asking, setAsking] = useState(false);
+  // A file the clipboard cannot hold, waiting for save-or-open. It is asked
+  // before the download, so the sheet appears at once and names the file.
+  const [file, setFile] = useState<PendingFile | null>(null);
 
   const run = (action: 'sync' | 'up' | 'down') => {
     const client = session.client;
@@ -30,6 +55,7 @@ export function SyncScreen(): React.JSX.Element {
     }
     setBusy(true);
     setMessage('');
+    setSaved(null);
     void (async () => {
       try {
         await client.connect();
@@ -45,14 +71,51 @@ export function SyncScreen(): React.JSX.Element {
           return;
         }
         setAsking(false);
+        if (result.direction === 'file' && result.file !== undefined) {
+          setFile(result.file);
+          return;
+        }
         setOk(true);
         setMessage(result.message);
       } catch (err) {
         setOk(false);
         setMessage(failureMessage(err));
+        setSaved(null);
       } finally {
         setBusy(false);
         session.refresh();
+      }
+    })();
+  };
+
+  const choose = (choice: FileChoice) => {
+    const pending = file;
+    const client = session.client;
+    if (pending === null || client === null || busy) {
+      return;
+    }
+    // The sheet closes at once; the download shows on the progress bar, and
+    // the screen stays usable while it runs.
+    setFile(null);
+    setBusy(true);
+    setMessage('');
+    setSaved(null);
+    void (async () => {
+      try {
+        const result = await handleFile(client, pending, choice);
+        setOk(true);
+        setMessage(result.message);
+        setSaved(result.saved ?? null);
+      } catch (err) {
+        // The question comes back with the reason, so the other option is
+        // one tap away — "no app opens this" is exactly when Save is the
+        // answer, and by now the entry is downloaded and cached.
+        setOk(false);
+        setMessage(failureMessage(err));
+        setSaved(null);
+        setFile(pending);
+      } finally {
+        setBusy(false);
       }
     })();
   };
@@ -98,8 +161,19 @@ export function SyncScreen(): React.JSX.Element {
           has since closed — which would otherwise have existed only as a toast
           nobody was looking at; `session.notice` is what merely happened.
         */}
-        <TransferBar transfer={session.transfer} />
-        {message !== '' && <Notice message={message} tone={ok ? 'ok' : 'error'} />}
+        <TransferList transfers={session.transfers} />
+        {message !== '' && (
+          <OutcomeNotice
+            message={message}
+            ok={ok}
+            saved={saved}
+            onError={(m) => {
+              setOk(false);
+              setMessage(m);
+              setSaved(null);
+            }}
+          />
+        )}
         {session.error !== '' && (
           <View style={{ gap: 8 }}>
             <Notice message={session.error} tone="error" />
@@ -144,6 +218,16 @@ export function SyncScreen(): React.JSX.Element {
         <Text style={[styles.small, { color: colors.faint }]}>
           Nothing has been read or written yet.
         </Text>
+      </Sheet>
+
+      <Sheet visible={file !== null} title="Save or open?" onClose={() => setFile(null)}>
+        <FileChoices
+          name={file?.name ?? ''}
+          detail={file?.detail ?? ''}
+          disabled={busy}
+          onChoose={choose}
+        />
+        {!ok && message !== '' && <Notice message={message} tone="error" />}
       </Sheet>
     </>
   );

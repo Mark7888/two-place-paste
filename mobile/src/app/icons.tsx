@@ -24,7 +24,8 @@ export type IconName =
   | 'download'
   | 'check'
   | 'alert'
-  | 'close';
+  | 'close'
+  | 'open';
 
 const paths: Record<IconName, string> = {
   sync: 'M3 12a9 9 0 0 1 15.5-6.2M21 12a9 9 0 0 1-15.5 6.2M18 3v3h-3M6 21v-3h3',
@@ -38,6 +39,7 @@ const paths: Record<IconName, string> = {
   check: 'M4 12.5 9 18 20 6',
   alert: 'M12 8v5M12 17h.01M10.3 3.9 2.4 17.5A2 2 0 0 0 4.1 20.5h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z',
   close: 'M6 6l12 12M18 6 6 18',
+  open: 'M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5',
 };
 
 export function Icon({

@@ -5,6 +5,10 @@
 
 import {
   concat,
+  decodeBase64Std,
+  decodeBase64StdAsync,
+  encodeBase64Std,
+  encodeBase64StdAsync,
   fromBase64URL,
   fromHex,
   fromUTF8,
@@ -81,5 +85,37 @@ describe('concat', () => {
     expect(toHex(concat(Uint8Array.of(1), new Uint8Array(0), Uint8Array.of(2, 3)))).toBe(
       '010203',
     );
+  });
+});
+
+describe('standard base64 for the native bridge', () => {
+  const sample = (n: number) => Uint8Array.from({ length: n }, (_, i) => (i * 131 + 7) & 0xff);
+
+  it('matches Node for every length around a block boundary and padding case', () => {
+    for (const n of [0, 1, 2, 3, 4, 5, 24575, 24576, 24577, 100_000]) {
+      const b = sample(n);
+      const expected = Buffer.from(b).toString('base64');
+      expect(encodeBase64Std(b)).toBe(expected);
+      expect(decodeBase64Std(expected)).toEqual(b);
+      // Unpadded input decodes too.
+      expect(decodeBase64Std(expected.replace(/=+$/, ''))).toEqual(b);
+    }
+  });
+
+  it('rejects what is not base64', () => {
+    expect(() => decodeBase64Std('ab-c')).toThrow();
+    expect(() => decodeBase64Std('abcde')).toThrow();
+  });
+});
+
+describe('the yielding base64 codec', () => {
+  it('agrees with Node across several yield steps and every padding case', async () => {
+    const none = () => Promise.resolve();
+    for (const n of [0, 1, 2, 245759, 245760, 245761, 1_000_001]) {
+      const b = Uint8Array.from({ length: n }, (_, i) => (i * 29 + 1) & 0xff);
+      const expected = Buffer.from(b).toString('base64');
+      expect(await encodeBase64StdAsync(b, none)).toBe(expected);
+      expect(Buffer.from(await decodeBase64StdAsync(expected, none)).equals(Buffer.from(b))).toBe(true);
+    }
   });
 });

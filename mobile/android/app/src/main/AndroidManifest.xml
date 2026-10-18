@@ -10,6 +10,15 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <!--
+      Saving a received file to Downloads. Android 10+ does that through
+      MediaStore with no permission at all, so this is only requested on 9 and
+      older, and only at the moment the user taps "Save to Downloads".
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+    <!--
       There is no FOREGROUND_SERVICE, no accessibility service and no
       BIND_ACCESSIBILITY_SERVICE. Background clipboard access is not attempted
       at all (SPEC §7.1): the quick-settings tile foregrounds the app, which is
@@ -104,8 +113,9 @@
         <!--
           An image arriving from another device is staged in this app's cache
           and put on the clipboard as a content URI, with a read grant attached
-          to the clip. The provider is not exported: only the grant lets the
-          pasting app read it.
+          to the clip; a file the user chose to open is staged the same way and
+          handed to the opening app. The provider is not exported: only the
+          grant lets the other app read it.
         -->
         <provider
             android:name="androidx.core.content.FileProvider"
