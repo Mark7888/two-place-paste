@@ -92,7 +92,10 @@ func (d *Disk) Put(ctx context.Context, entryID string, expiresAt time.Time, r i
 	// existing file would let one client destroy another's ciphertext. The
 	// entry record is refused for a duplicate id too; this is the half that
 	// protects the bytes.
-	path := filepath.Join(dir, entryID+".bin")
+	path, err := d.blobPath(bucket, entryID)
+	if err != nil {
+		return "", err
+	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, fs.ErrExist) {
 		return "", fmt.Errorf("create blob for entry %s: %w", entryID, ErrExists)
@@ -279,11 +282,14 @@ func (u *diskUpload) Complete(context.Context) (ref string, err error) {
 	if err := u.f.Close(); err != nil {
 		return "", fmt.Errorf("complete upload for entry %s: %w", u.entryID, err)
 	}
-	dir := filepath.Join(u.d.root, u.bucket)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	dst, err := u.d.blobPath(u.bucket, u.entryID)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return "", fmt.Errorf("create blob bucket %s: %w", u.bucket, err)
 	}
-	err = os.Link(u.f.Name(), filepath.Join(dir, u.entryID+".bin"))
+	err = os.Link(u.f.Name(), dst)
 	if errors.Is(err, fs.ErrExist) {
 		return "", fmt.Errorf("complete upload for entry %s: %w", u.entryID, ErrExists)
 	}
@@ -368,7 +374,19 @@ func (d *Disk) path(ref string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(d.root, bucket, entryID+".bin"), nil
+	return d.blobPath(bucket, entryID)
+}
+
+// blobPath is the one place a blob's filesystem path is built. Its parts are
+// already validated by the callers (validEntryID, BucketEnd); this repeats the
+// check on the joined name so that no path outside the root is ever opened,
+// whatever a future caller forgets.
+func (d *Disk) blobPath(bucket, entryID string) (string, error) {
+	name := filepath.Join(bucket, entryID+".bin")
+	if strings.Contains(name, "..") || !filepath.IsLocal(name) {
+		return "", fmt.Errorf("%w: %q", ErrInvalidRef, name)
+	}
+	return filepath.Join(d.root, name), nil
 }
 
 // parseRef splits a reference into its hour bucket and entry id, rejecting
