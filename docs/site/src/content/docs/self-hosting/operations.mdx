@@ -1,0 +1,84 @@
+---
+title: Operations
+description: Logs, upgrades, backups, Redis settings and blob store checks.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Everyday commands
+
+```sh
+docker compose logs -f server                    # JSON, one object per line
+docker compose pull && docker compose up -d      # upgrade (add --build when building from source)
+```
+
+A restart only drops WebSocket connections — devices reconnect on their own — and admin sign-ins,
+which are kept in memory. Shutdown is graceful: the relay stops accepting connections, gives
+requests in flight 15 seconds, and exits.
+
+**Logs** go to stderr as JSON at `TPP_LOG_LEVEL`. They contain group and device ids, epochs, sizes
+and timestamps — and by design never clipboard content, content types, filenames, keys, tokens or
+session cookies.
+
+## Redis settings that are not tuning
+
+Two Redis settings are required. The compose file and `deploy/redis.conf` set both:
+
+- **`appendonly yes`** — groups must survive a restart. With snapshots alone, every group created
+  since the last save is lost on a crash, and a lost group cannot be recovered.
+- **`maxmemory-policy volatile-lru`** — only keys with an expiry (entries) may be evicted.
+
+<Aside type="danger" title="Never use allkeys-lru">
+	`allkeys-lru` would silently evict group, device and key records under memory pressure,
+	destroying groups with no error anywhere.
+</Aside>
+
+Size `maxmemory` for the last day of small entries (up to 256 KB each). 512 MB is plenty for
+personal use.
+
+## Backup and restore
+
+Back up both volumes. **Redis is the one that cannot be rebuilt.**
+
+```sh
+# Redis: flush a consistent append-only file, then copy the data directory.
+docker compose exec redis redis-cli BGREWRITEAOF
+docker run --rm -v tpp_redis-data:/data -v "$PWD":/backup alpine \
+    tar czf /backup/redis-$(date -u +%Y%m%d).tar.gz -C /data .
+
+# Blobs: at most 24 hours of ciphertext, so this is optional.
+docker run --rm -v tpp_blob-data:/blobs -v "$PWD":/backup alpine \
+    tar czf /backup/blobs-$(date -u +%Y%m%d).tar.gz -C /blobs .
+```
+
+To restore, stop the stack and unpack into the volumes the same way in reverse. Then:
+
+```sh
+docker compose up -d
+docker compose exec server tpp gc --rebuild-accounting
+docker compose exec server tpp gc --verify
+```
+
+If you restored Redis without its blobs, `--verify` reports *dangling entries* for anything larger
+than 256 KB. They expire within a day.
+
+## Checking the blob store
+
+```sh
+docker compose exec server tpp gc --verify
+```
+
+Cross-checks stored blobs against entries and **deletes nothing**. It reports:
+
+- **orphans** — blobs no entry refers to. A few are normal: an entry that expired within the last
+  hour keeps its blob until cleanup reaches that hour.
+- **dangling entries** — entries whose blob is missing. These are listed but unreadable.
+- the storage accounting against the entries. A small difference while uploads are running is
+  normal.
+
+```sh
+docker compose exec server tpp gc --rebuild-accounting
+```
+
+Recomputes the storage accounting from the entries in Redis. It deletes nothing. Uploads in flight
+while it runs are not counted until they expire, so run it when the relay is quiet.

@@ -1,0 +1,21 @@
+---
+title: History
+description: Browse the group's recent entries and copy an older one back.
+---
+
+import { Image } from 'astro:assets';
+import history from '../../../assets/screenshots/desktop-history.webp';
+
+The **History** tab lists everything the group wrote in the last 24 hours, newest first.
+
+<Image src={history} alt="The History tab listing text, image and file entries" class="screenshot" />
+
+- Each row shows when the entry was written, its type and its size. These come from the entry's
+  small encrypted header, so listing History downloads none of the entries themselves.
+- **Preview** downloads and decrypts the entry to show it here, without touching your clipboard.
+  Files are not previewed.
+- **Copy** downloads and decrypts the entry and puts it on this computer's clipboard.
+- **Refresh** reloads the list.
+
+Entries disappear on their own 24 hours after they were written. On a busy relay with tight storage
+limits, an older entry can be removed earlier to make room; it then simply disappears from the list.

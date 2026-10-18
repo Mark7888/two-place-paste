@@ -1,0 +1,43 @@
+---
+title: Create a group
+description: Turn your first device into a group with a creation link from the relay.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+import { Image } from 'astro:assets';
+import token from '../../../assets/screenshots/admin-token-created.webp';
+import pairing from '../../../assets/screenshots/desktop-pairing-new.webp';
+
+You do this **once**, on your first device. Every other device then
+[joins the group](/two-place-paste/guides/add-a-device/) instead.
+
+<Steps>
+
+1. **Get a creation link from the relay.**
+   Sign in to the relay's admin page — `https://tpp.example.com/admin/` — with the admin password.
+   Open **Tokens**, type a name you will recognise (for example *Work laptop*) and press
+   **Generate token**.
+
+   <Image src={token} alt="The relay's Tokens page with a new token's QR code and creation link" class="screenshot" />
+
+   If someone else runs the relay, ask them for this link instead.
+
+2. **Paste it into the app.**
+   In the desktop app, open **Pairing**. Under **Create a group**, paste the link into
+   **Creation link** and press **Create**.
+
+   <Image src={pairing} alt="The Pairing tab of a device with no group, with a creation link pasted in" class="screenshot" />
+
+3. **Done.** The app says *Group created* and the badge in the top right turns to **connected**.
+
+</Steps>
+
+The device generates the group key itself and only ever sends the relay a copy wrapped to its own
+public key.
+
+<Aside title="About creation links">
+	- One link creates exactly one group. Using it again gets an error.
+	- Opening the link in a browser shows *404 Not Found* on purpose: link previews and mail scanners
+	  cannot use it up. Only the app can.
+	- An unused link can be revoked on the **Tokens** page.
+</Aside>

@@ -1,0 +1,124 @@
+---
+title: Docker Compose
+description: Run the published relay image with Docker Compose.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+The relay is published to the GitHub Container Registry as
+`ghcr.io/mark7888/two-place-paste-server`, for `linux/amd64` and `linux/arm64`. You need no clone
+and no build — just a `docker-compose.yml` and a `.env`.
+
+<Steps>
+
+1. **Make a directory and fetch the example settings.**
+
+   ```sh
+   mkdir tpp && cd tpp
+   curl -fsSL -o .env https://raw.githubusercontent.com/Mark7888/two-place-paste/master/deploy/.env.example
+   ```
+
+2. **Edit `.env`.** Two values are required:
+
+   ```sh title=".env"
+   TPP_PUBLIC_BASE_URL=https://tpp.example.com   # your domain, with https://, no trailing path
+   ADMIN_PASSWORD=pick-a-long-random-password
+   ```
+
+   Everything else has a sensible default. See [Configuration](/two-place-paste/self-hosting/configuration/).
+
+3. **Create `docker-compose.yml`:**
+
+   ```yaml title="docker-compose.yml"
+   name: tpp
+
+   services:
+     redis:
+       image: redis:7-alpine
+       restart: unless-stopped
+       # volatile-lru is not optional: allkeys-lru would silently evict
+       # group records and destroy pairings.
+       command: >-
+         redis-server --appendonly yes --appendfsync everysec
+         --maxmemory 512mb --maxmemory-policy volatile-lru --protected-mode no
+       volumes:
+         - redis-data:/data
+       healthcheck:
+         test: ["CMD", "redis-cli", "ping"]
+         interval: 10s
+         timeout: 3s
+         retries: 5
+         start_period: 5s
+
+     server:
+       image: ghcr.io/mark7888/two-place-paste-server:latest
+       restart: unless-stopped
+       env_file: .env
+       environment:
+         TPP_REDIS_ADDR: redis:6379
+         TPP_BLOB_ROOT: /var/lib/tpp/blobs
+         TPP_HTTP_ADDR: ":8080"
+       ports:
+         # Loopback only: the reverse proxy is the one thing that should reach it.
+         - "127.0.0.1:8080:8080"
+       volumes:
+         - blob-data:/var/lib/tpp/blobs
+       user: "10001:10001"
+       read_only: true
+       security_opt:
+         - no-new-privileges:true
+       cap_drop:
+         - ALL
+       tmpfs:
+         - /tmp
+       depends_on:
+         redis:
+           condition: service_healthy
+       healthcheck:
+         test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/healthz"]
+         interval: 30s
+         timeout: 3s
+         retries: 3
+         start_period: 5s
+
+   volumes:
+     redis-data:
+     blob-data:
+   ```
+
+4. **Start it and check it.**
+
+   ```sh
+   docker compose up -d
+   curl -fsS http://127.0.0.1:8080/healthz      # → ok
+   ```
+
+5. **Put a reverse proxy in front of it** — see [Reverse proxy](/two-place-paste/self-hosting/reverse-proxy/).
+   Then open `https://tpp.example.com/admin/` and [hand out a group](/two-place-paste/self-hosting/admin/).
+
+</Steps>
+
+<Aside>
+	The port is published on `127.0.0.1` on purpose. The relay speaks plain HTTP, so it should only
+	be reachable through your reverse proxy. If the proxy runs on another machine, see
+	[`TPP_HOST_BIND_ADDR`](/two-place-paste/self-hosting/configuration/#server).
+</Aside>
+
+## Image tags
+
+| Tag | What it is |
+|---|---|
+| `latest` | The newest full release. |
+| `1.2.3`, `1.2`, `1` | A release, and the newest release of that minor and major version. Kept forever — pin one of these to upgrade only when you choose. |
+| `1.3.0-rc.1` | A pre-release. Kept forever, never `latest`. |
+| `beta` | The newest build of the main branch — the server side of the apps' Beta channel. |
+| `sha-abc1234` | The build of one commit. Deleted a week after it was built. |
+
+## Upgrading
+
+```sh
+docker compose pull && docker compose up -d
+```
+
+A restart only drops the WebSocket connections, which clients re-open on their own, and signs you
+out of the admin page.

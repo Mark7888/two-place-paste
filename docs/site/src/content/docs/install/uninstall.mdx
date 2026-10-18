@@ -1,0 +1,35 @@
+---
+title: Uninstall
+description: Remove the desktop app and, if you want, its settings and keys.
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+<Aside type="tip">
+	Before uninstalling a device for good, **revoke it from another device** in the
+	[Devices tab](/two-place-paste/guides/devices/). Uninstalling only removes it locally; the
+	group still lists it and its old key still works until it is revoked.
+</Aside>
+
+<Tabs syncKey="os">
+	<TabItem label="Windows" icon="seti:windows">
+		1. Quit TwoPlacePaste from its tray menu.
+		2. Open **Settings → Apps → Installed apps**, find **TwoPlacePaste** and choose **Uninstall**.
+
+		The uninstaller removes the program, its Start menu shortcut and its login item. It leaves
+		your settings and keys. To remove those too, delete `%APPDATA%\TwoPlacePaste\`.
+	</TabItem>
+	<TabItem label="macOS" icon="apple">
+		1. Quit TwoPlacePaste from its menu bar icon.
+		2. Turn off **Start at login** first if you turned it on — or delete
+		   `~/Library/LaunchAgents/com.twoplacepaste.desktop.plist` afterwards.
+		3. Move `TwoPlacePaste.app` from Applications to the Bin.
+
+		To remove settings and keys too:
+
+		```sh
+		rm -rf ~/Library/Application\ Support/TwoPlacePaste
+		security delete-generic-password -s TwoPlacePaste   # repeat until it says "could not be found"
+		```
+	</TabItem>
+</Tabs>

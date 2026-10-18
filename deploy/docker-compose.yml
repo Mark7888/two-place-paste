@@ -12,7 +12,7 @@
 # modules; run compose from this directory and it resolves.
 #
 # TLS is NOT terminated here. Put a reverse proxy in front of the published
-# port — see docs/deployment.md.
+# port — see https://mark7888.github.io/two-place-paste/self-hosting/reverse-proxy/
 
 name: tpp
 
@@ -116,7 +116,8 @@ services:
 
 volumes:
   # Named, not bind-mounted: all of them survive `docker compose down` and are
-  # what a backup copies (docs/deployment.md).
+  # what a backup copies (see
+  # https://mark7888.github.io/two-place-paste/self-hosting/operations/).
   redis-data:
   blob-data:
   minio-data:

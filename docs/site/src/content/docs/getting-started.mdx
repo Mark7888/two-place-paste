@@ -1,0 +1,46 @@
+---
+title: Getting started
+description: From nothing to your first shared paste in about ten minutes.
+---
+
+import { Steps, Aside, LinkCard, CardGrid } from '@astrojs/starlight/components';
+
+TwoPlacePaste has two parts: a **relay server** that you (or someone you trust) runs, and the
+**desktop app** on each of your computers. Your devices form a **group** that shares one
+encryption key. Whatever one device uploads, the others can paste.
+
+<Aside type="tip" title="Already have a relay?">
+	If someone already runs a relay for you and gave you a link, skip step 1.
+</Aside>
+
+<Steps>
+
+1. **Run a relay server.**
+   You need a machine with Docker and a domain name. The
+   [Docker guide](/two-place-paste/self-hosting/docker/) takes about five minutes, plus however long
+   your reverse proxy takes to get a certificate.
+
+2. **Install the desktop app** on your first computer.
+
+   <CardGrid>
+   	<LinkCard title="Windows" href="/two-place-paste/install/windows/" />
+   	<LinkCard title="macOS" href="/two-place-paste/install/macos/" />
+   </CardGrid>
+
+3. **Create a group.**
+   Sign in to the relay's admin page, generate a creation link, and paste it into the app's
+   **Pairing** tab. → [Create a group](/two-place-paste/guides/create-a-group/)
+
+4. **Add your other devices.**
+   Install the app on the second computer, then pair it with a code shown by the first one.
+   → [Add a device](/two-place-paste/guides/add-a-device/)
+
+5. **Copy, sync, paste.**
+   Copy something on one computer and press **Sync now** on the **Sync** tab (or in the tray
+   menu). Press it on the other computer and paste.
+   → [Syncing the clipboard](/two-place-paste/guides/sync/)
+
+</Steps>
+
+Want it hands-free? Turn on **Watch the clipboard** on one device and **Take what other devices
+upload** on the other in [Settings](/two-place-paste/guides/settings/).

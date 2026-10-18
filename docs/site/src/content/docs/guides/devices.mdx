@@ -1,0 +1,45 @@
+---
+title: Devices and revoking
+description: See which devices are in your group, and remove one.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+import { Image } from 'astro:assets';
+import devices from '../../../assets/screenshots/desktop-devices.webp';
+import revoke from '../../../assets/screenshots/desktop-revoke.webp';
+
+The **Devices** tab lists every device that holds the group's key, with the current key
+generation (*epoch*).
+
+<Image src={devices} alt="The Devices tab listing Work laptop and Home desktop" class="screenshot" />
+
+## Revoke a device
+
+Do this when a computer is lost, sold, or simply no longer yours to sync with.
+
+<Steps>
+
+1. On any other device in the group, open **Devices** and press **Revoke** next to the device.
+
+2. Read the dialog. It names the device you are removing and lists the devices that keep access.
+
+   <Image src={revoke} alt="The dialog confirming the revocation of Home desktop" class="screenshot" />
+
+3. Press **Revoke …**.
+
+</Steps>
+
+What happens:
+
+- A **new group key** is generated and given to the remaining devices. The epoch goes up by one.
+- The revoked device **loses access immediately**. It cannot read anything written from now on and
+  cannot rejoin without being paired again.
+- Entries written **before** the revocation stay readable to whoever already had them, and expire
+  within 24 hours.
+- Your clipboard is not touched.
+
+<Aside>
+	**Leave the group** in Settings is different: it only deletes the keys on *this* device. The
+	group still lists it, and its old key would still work. To shut a device out for good, revoke it
+	from another device.
+</Aside>

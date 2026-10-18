@@ -1,0 +1,50 @@
+---
+title: Install on Windows
+description: Install the TwoPlacePaste desktop app on Windows 10 or 11.
+sidebar:
+  label: Windows
+---
+
+import { Steps, Aside, LinkButton } from '@astrojs/starlight/components';
+
+The Windows app is a per-user install: it needs **no administrator rights** and only affects your
+own account.
+
+<LinkButton href="https://github.com/Mark7888/two-place-paste/releases/latest/download/TwoPlacePaste-Setup.exe" icon="download">
+	Download TwoPlacePaste-Setup.exe
+</LinkButton>
+
+<Steps>
+
+1. Download `TwoPlacePaste-Setup.exe` from the button above or from the
+   [latest release](https://github.com/Mark7888/two-place-paste/releases/latest).
+
+2. Run it. If SmartScreen says *Windows protected your PC*, choose **More info → Run anyway** — the
+   installer is not code-signed yet.
+
+3. Keep the suggested folder (`%LOCALAPPDATA%\Programs\TwoPlacePaste`) and press **Install**.
+
+4. Start **TwoPlacePaste** from the Start menu. A tray icon appears near the clock and, because
+   this device is not in a group yet, the app opens in your browser.
+
+</Steps>
+
+<Aside>
+	The app's window is a page in your browser at `http://127.0.0.1:47821`. It is served by the app
+	itself and only reachable from this computer. Once the device is paired, the app starts quietly
+	into the tray; use **Open TwoPlacePaste** in the tray menu to get back to it.
+</Aside>
+
+## Next
+
+- [Create a group](/two-place-paste/guides/create-a-group/) if this is your first device, or
+- [add it to your group](/two-place-paste/guides/add-a-device/) if you already have one.
+- Turn on **Start at login** in [Settings](/two-place-paste/guides/settings/) so it is always there.
+
+## Where things are kept
+
+| What | Where |
+|---|---|
+| The program | `%LOCALAPPDATA%\Programs\TwoPlacePaste\` |
+| Settings (`desktop.json`) and the log (`tppdesktop.log`) | `%APPDATA%\TwoPlacePaste\` |
+| Keys | `%APPDATA%\TwoPlacePaste\*.secret`, sealed with Windows DPAPI to your account |

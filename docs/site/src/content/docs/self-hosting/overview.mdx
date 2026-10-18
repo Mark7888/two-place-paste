@@ -1,0 +1,46 @@
+---
+title: Run your own server
+description: What the TwoPlacePaste relay is, what it needs, and which way to install it.
+sidebar:
+  label: Overview
+---
+
+import { CardGrid, LinkCard, Aside } from '@astrojs/starlight/components';
+
+The relay is the one piece of TwoPlacePaste that runs on a server. Devices keep a WebSocket open to
+it; it stores encrypted entries for 24 hours and tells the other devices when one arrives. It
+cannot read anything it stores.
+
+## What runs
+
+| Part | What it is | What it holds |
+|---|---|---|
+| `tpp` | One static Go binary: the relay (`/ws`), the admin page (`/admin/`), group creation and a health check (`/healthz`). | Nothing on its own. |
+| Redis 7 | The only database. | Groups, devices, public keys, wrapped group keys, creation tokens — and entries up to 256 KB. |
+| Blob store | A disk directory or an S3 bucket. | Entries larger than 256 KB, at most 24 hours' worth. |
+
+## What you need
+
+- A Linux host with **Docker** (or Go 1.26 and a Redis 7 if you prefer to build it yourself).
+- A **domain name** pointing at the host, for example `tpp.example.com`.
+- A **reverse proxy** that terminates TLS — Caddy, nginx, Traefik or similar. The relay speaks
+  plain HTTP and expects TLS in front of it.
+
+It is light: an idle relay uses about 20 MB of memory and Redis under 10 MB. Redis needs room only
+for the last day of small entries.
+
+<Aside type="caution">
+	**Back up Redis.** It holds your groups. A lost group cannot be recovered — the server never had
+	its key — and every device would have to be set up again. See
+	[Backup and restore](/two-place-paste/self-hosting/operations/#backup-and-restore).
+</Aside>
+
+## Pick a way to install
+
+<CardGrid>
+	<LinkCard title="Docker Compose" description="The published image. Recommended." href="/two-place-paste/self-hosting/docker/" />
+	<LinkCard title="From source" description="Build with Go and run under systemd, or build the image yourself." href="/two-place-paste/self-hosting/from-source/" />
+</CardGrid>
+
+Then put a [reverse proxy](/two-place-paste/self-hosting/reverse-proxy/) in front of it and
+[hand out a group](/two-place-paste/self-hosting/admin/).

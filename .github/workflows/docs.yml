@@ -1,0 +1,70 @@
+# Builds the documentation site (docs/site, Starlight) on every change to it,
+# and publishes it to GitHub Pages from the default branch.
+#
+# The build also checks every internal link and anchor, so a pull request
+# that breaks one fails here rather than on the published site.
+#
+# One-time setup: Settings → Pages → Build and deployment → Source: GitHub Actions.
+name: Docs
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "docs/site/**"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/site/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs/site
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Starlight's "Last updated" date comes from git history.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Build (and check links)
+        run: npm run build
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs/site/dist
+
+  deploy:
+    # Pull requests only build; the default branch publishes.
+    if: github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

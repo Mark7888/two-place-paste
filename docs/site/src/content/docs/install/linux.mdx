@@ -1,0 +1,24 @@
+---
+title: Linux
+description: The state of the Linux desktop app.
+sidebar:
+  badge:
+    text: Not supported
+    variant: caution
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="caution">
+	There is no supported Linux desktop app yet. It is on the list, but deferred.
+</Aside>
+
+The desktop app does compile and run on Linux, which is useful for development, but that build has:
+
+- **no clipboard access** — so it cannot upload or apply entries,
+- **no tray icon** — it prints the address of its window to the terminal instead,
+- **no login item**.
+
+If you want to try it anyway, [build it from source](/two-place-paste/contributing/development/#run-the-desktop-app-from-a-checkout).
+
+The **relay server** runs on Linux, of course — see [Run your own server](/two-place-paste/self-hosting/overview/).

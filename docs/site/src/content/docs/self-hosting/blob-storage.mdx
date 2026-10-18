@@ -1,0 +1,125 @@
+---
+title: Blob storage
+description: Where large entries are stored — a disk volume or S3 — and how the relay cleans up and stays within its limits.
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+Entries up to 256 KB of ciphertext are kept in Redis. Larger ones go to the **blob store**: a
+directory on disk (the default) or an S3-compatible bucket. Either way it holds at most a day of
+ciphertext.
+
+<Tabs>
+<TabItem label="Disk (default)">
+
+```sh title=".env"
+TPP_BLOB_BACKEND=disk
+TPP_BLOB_ROOT=/var/lib/tpp/blobs
+```
+
+In the compose file this is the `blob-data` volume. Set `TPP_BLOB_MIN_FREE_BYTES` to stop the relay
+writing when the disk is nearly full, whatever else fills it.
+
+</TabItem>
+<TabItem label="MinIO with compose">
+
+The repository's `deploy/docker-compose.yml` has a `minio` service behind the `minio` profile. The
+key pair in `.env` becomes MinIO's root credentials too, so there is nothing to set up inside MinIO:
+
+```sh title=".env"
+TPP_BLOB_BACKEND=s3
+TPP_S3_ENDPOINT=http://minio:9000
+TPP_S3_BUCKET=tpp
+TPP_S3_ACCESS_KEY_ID=tpp
+TPP_S3_SECRET_ACCESS_KEY=change-me-to-at-least-8-chars
+TPP_S3_CREATE_BUCKET=true
+```
+
+```sh
+docker compose --profile minio up -d --build
+```
+
+MinIO's data is the `minio-data` volume. MinIO no longer publishes new community images, so the
+service uses `minio/minio:latest`; set `TPP_MINIO_IMAGE` to pin a release or use your own mirror.
+
+For a key scoped to the bucket instead of the root pair, create a user and policy in MinIO, put
+that user's keys in `TPP_S3_ACCESS_KEY_ID` / `TPP_S3_SECRET_ACCESS_KEY`, and set MinIO's own
+`MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` in an override file.
+
+</TabItem>
+<TabItem label="AWS S3">
+
+Leave the endpoint empty:
+
+```sh title=".env"
+TPP_BLOB_BACKEND=s3
+TPP_S3_REGION=eu-central-1
+TPP_S3_BUCKET=my-tpp-blobs
+# Leave both empty to use the instance or task role:
+TPP_S3_ACCESS_KEY_ID=
+TPP_S3_SECRET_ACCESS_KEY=
+```
+
+The relay needs only this on its bucket (plus `s3:CreateBucket` if you set
+`TPP_S3_CREATE_BUCKET=true`):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": "arn:aws:s3:::my-tpp-blobs" },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::my-tpp-blobs/*"
+    }
+  ]
+}
+```
+
+A lifecycle rule that expires objects after **2 days** is a good backstop for a relay that stays
+down; the relay's own cleanup removes expired objects every hour.
+
+</TabItem>
+</Tabs>
+
+With S3, the relay checks at startup that the bucket exists and that it can write, read and delete
+a test object (under `.tpp-probe/`). If anything fails it stops, says why, and does not fall back to
+disk. The bucket is never exposed to devices — every byte goes through the relay — so keep it on a
+private network.
+
+**Switching backends** is a config change and a restart. Entries already written stay in the old
+backend and read as gone; nothing needs migrating, because nothing lives longer than a day.
+
+## How cleanup works
+
+Blobs are stored as `<YYYYMMDDHH>/<entry_id>.bin`, where the directory is the UTC hour in which they
+expire. Cleanup lists the top-level directories and deletes the ones fully in the past — no
+database lookups, no per-file checks. It runs at startup and then every `TPP_BLOB_SWEEP_INTERVAL`,
+so a relay that was off for a week cleans up the whole week in its first pass.
+
+If a blob goes missing (deleted by hand, or by a lifecycle rule shorter than a day), the first
+device to read that entry gets "not found", and the relay drops the entry there and then.
+
+## Storage limits and eviction
+
+`TPP_BLOB_MAX_TOTAL_BYTES` caps all blob storage, and `TPP_BLOB_MAX_GROUP_BYTES` (1 GiB by default)
+caps each group. Only blobs count; small entries in Redis are bounded by Redis's `maxmemory`.
+
+When a new entry would not fit, the relay **evicts the oldest entries** to make room, even inside
+their 24 hours: first the writing group's own entries, down to its group limit, then the oldest
+anywhere, down to the total limit. Online devices are told, so their History updates. Each eviction
+is logged at `info`.
+
+A write is refused only when:
+
+- `TOO_LARGE` — the entry alone is bigger than a limit, or
+- `QUOTA_EXCEEDED` — the room it needs is held by uploads still in progress.
+
+<Aside>
+	If the dashboard often shows evictions, the limits are too tight for how the relay is used.
+</Aside>
+
+The storage accounting lives in Redis and corrects itself within a day of any crash. After
+restoring Redis from a backup, rebuild it at once — see
+[Operations](/two-place-paste/self-hosting/operations/#checking-the-blob-store).

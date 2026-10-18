@@ -1,0 +1,27 @@
+/* The desktop app's accent blue, so the docs and the app look related. */
+:root {
+	--sl-color-accent-low: #0f2350;
+	--sl-color-accent: #2f6df6;
+	--sl-color-accent-high: #c9d9ff;
+}
+
+:root[data-theme='light'] {
+	--sl-color-accent-low: #d8e4ff;
+	--sl-color-accent: #2f6df6;
+	--sl-color-accent-high: #0f2a66;
+}
+
+/* Screenshots get a frame so a white UI does not melt into a white page. */
+.sl-markdown-content img.screenshot,
+.sl-markdown-content figure img {
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.5rem;
+	box-shadow: var(--sl-shadow-md);
+}
+
+.sl-markdown-content figure figcaption {
+	font-size: var(--sl-text-sm);
+	color: var(--sl-color-gray-3);
+	text-align: center;
+	margin-top: 0.5rem;
+}
