@@ -145,6 +145,7 @@ describe('transferText', () => {
     total: 20 << 20,
     filename: '',
     contentType: '',
+    waiting: false,
     ...over,
   });
 
@@ -166,5 +167,21 @@ describe('transferText', () => {
   it('does not reach 100% before the last byte', () => {
     expect(transferText(p({ done: (20 << 20) - 1 })).percent).toBe(99);
     expect(transferText(p({ done: 0, total: 0 })).percent).toBe(0);
+  });
+});
+
+describe('transferText for a queued transfer', () => {
+  it('says it is waiting, not how fast it is going', () => {
+    const t = transferText({
+      entryId: 'e',
+      direction: 'download',
+      done: 0,
+      total: 20 << 20,
+      filename: 'report.pdf',
+      contentType: 'application/pdf',
+      waiting: true,
+    });
+    expect(t.title).toBe('Waiting to download report.pdf');
+    expect(t.detail).toBe('Queued behind another transfer · 20 MB');
   });
 });

@@ -20,7 +20,7 @@ import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
 import { tile } from '../platform';
 import { SessionProvider, useSession } from './SessionContext';
-import { Button, Choice, FileChoices, Notice, TransferBar } from './ui';
+import { Button, Choice, FileChoices, Notice, TransferList } from './ui';
 import { colors, styles } from './theme';
 
 function Panel(): React.JSX.Element {
@@ -82,8 +82,8 @@ function Panel(): React.JSX.Element {
             <Button label="Close" variant="secondary" onPress={dismiss} />
           </>
         ) : session.syncing || !session.ready ? (
-          session.transfer !== null ? (
-            <TransferBar transfer={session.transfer} />
+          session.transfers.length > 0 ? (
+            <TransferList transfers={session.transfers} />
           ) : (
             <View style={[styles.rowInline, { paddingVertical: 4 }]}>
               <ActivityIndicator color={colors.accent} />

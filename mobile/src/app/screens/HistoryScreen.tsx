@@ -20,12 +20,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, Image, Pressable, RefreshControl, Text, View } from 'react-native';
 
-import type { EntryMeta } from '../../core';
+import type { EntryMeta, Progress } from '../../core';
 import type { ClipboardItem, SavedFile } from '../../platform';
 import { useSession } from '../SessionContext';
 import { deliver, failureMessage, handleFile, toClipboardItem, type FileChoice } from '../session';
 import { describeHeader, formatSize, headerPreviewable, previewOf, type Preview } from '../preview';
-import { Button, FileChoices, Notice, OutcomeNotice, Sheet, Shimmer, TransferBar } from '../ui';
+import { Button, FileChoices, Notice, OutcomeNotice, Sheet, Shimmer, TransferList } from '../ui';
 import { colors, styles } from '../theme';
 
 /** Loaded is a preview that arrived, or the reason one could not. */
@@ -194,7 +194,7 @@ export function HistoryScreen(): React.JSX.Element {
         <Text style={styles.lede}>
           Newest first. Entries expire within 24 hours. Tap one to see what is in it.
         </Text>
-        <TransferBar transfer={session.transfer} />
+        <TransferList transfers={session.transfers} />
         {message !== '' && (
           <OutcomeNotice
             message={message}
@@ -240,10 +240,7 @@ export function HistoryScreen(): React.JSX.Element {
           return (
             <View style={[styles.card, { overflow: 'hidden' }, !canOpen && { opacity: 0.6 }]}>
               <Shimmer
-                active={
-                  downloading.has(item.id) ||
-                  (session.transfer?.direction === 'download' && session.transfer.entryId === item.id)
-                }
+                active={downloadingNow(item.id, downloading, session.transfers)}
               />
               <Pressable
                 accessibilityRole="button"
@@ -303,6 +300,24 @@ export function HistoryScreen(): React.JSX.Element {
       </Sheet>
     </View>
   );
+}
+
+/**
+ * downloadingNow says whether an entry's row shows the sweeping light: it is
+ * being read right now, and not merely queued behind another download. A
+ * small entry has no progress reports, so this screen's own fetch is what
+ * says it is moving.
+ */
+function downloadingNow(
+  id: string,
+  fetching: ReadonlySet<string>,
+  transfers: readonly Progress[],
+): boolean {
+  const t = transfers.find((x) => x.direction === 'download' && x.entryId === id);
+  if (t !== undefined) {
+    return !t.waiting;
+  }
+  return fetching.has(id);
 }
 
 /** isFile says, from the sealed header alone, whether an entry is a file rather than clipboard content. */

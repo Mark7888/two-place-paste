@@ -13,6 +13,7 @@ import {
   clipboard,
   clipboardTimestamp,
   deviceInfo,
+  entryCache,
   files,
   secureStore,
   type ClipboardItem,
@@ -51,6 +52,7 @@ export async function openSession(handlers: Handlers): Promise<Client> {
     store: secureStore,
     deviceName: deviceInfo.defaultName(),
     handlers,
+    cache: entryCache ?? undefined,
   });
 }
 

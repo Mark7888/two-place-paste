@@ -94,7 +94,8 @@ import {
   unwrap,
   wrap,
 } from '../crypto';
-import { Connection, SocketFactory, webSocketFactory } from './connection';
+import { Connection, REQUEST_TIMEOUT_MS, SocketFactory, webSocketFactory } from './connection';
+import { DEFAULT_TTL_MS, type EntryCache } from './entryCache';
 import { ProtocolError, TppError, isCode } from './errors';
 import {
   decodePairingOffer,
@@ -159,7 +160,16 @@ export interface Progress {
    */
   filename: string;
   contentType: string;
+  /**
+   * waiting is true while a download is queued behind another one: large
+   * downloads run one at a time, so the relay's bandwidth goes to one entry
+   * rather than splitting until every chunk times out.
+   */
+  waiting: boolean;
 }
+
+/** Fetched is an entry's sealed container and metadata, and where they were read from. */
+type Fetched = { meta: EntryMeta; ciphertext: Uint8Array; source: 'relay' | 'cache' | 'memory' };
 
 /** EntryHint is what a caller already knows about an entry it is about to read. */
 export type EntryHint = Pick<EntryMeta, 'size' | 'header'>;
@@ -170,6 +180,19 @@ const MAX_BACKOFF_MS = 30_000;
 
 /** RANGE_RETRIES is how many times a download asks again for a range a dropped socket lost. */
 const RANGE_RETRIES = 3;
+
+/**
+ * MIN_TRANSFER_BYTES_PER_SEC is the slowest link a chunk is given time for,
+ * the same floor the Go client uses: each chunk request gets the usual
+ * request timeout plus its bytes at this rate, so a slow link is slow rather
+ * than failed. An 8 MiB chunk gets 20 s + 64 s.
+ */
+const MIN_TRANSFER_BYTES_PER_SEC = 128 * 1024;
+
+/** chunkTimeoutMs is how long one chunk request of `bytes` may take. */
+function chunkTimeoutMs(bytes: number): number {
+  return REQUEST_TIMEOUT_MS + Math.ceil((bytes / MIN_TRANSFER_BYTES_PER_SEC) * 1000);
+}
 
 /** PAIRING_WRAP_TIMEOUT_MS bounds a joiner's wait for the inviter to hand over the group key. */
 export const PAIRING_WRAP_TIMEOUT_MS = 120_000;
@@ -280,6 +303,11 @@ export interface ClientOptions {
   handlers?: Handlers;
   /** healthCheck reports whether the relay answers /healthz, used to tell "revoked" from "offline". */
   healthCheck?: (baseUrl: string) => Promise<boolean>;
+  /**
+   * cache keeps large downloaded entries for a while, still encrypted, so
+   * opening one twice downloads it once. Without one, nothing is kept.
+   */
+  cache?: EntryCache;
 }
 
 /** Invitation is a pairing in progress on the inviting device (SPEC §3.2 step 1). */
@@ -406,6 +434,16 @@ export class Client {
   /** limitsCache is the relay's entry limits as stated on one connection; a new connection asks again. */
   private limitsCache: { conn: Connection; limits: Limits } | null = null;
   private readonly healthCheck: (baseUrl: string) => Promise<boolean>;
+  private readonly cache: EntryCache | null;
+  /** downloads are the entry reads in flight, by id: a second read of one joins the first. */
+  private readonly downloads = new Map<string, Promise<Fetched>>();
+  /**
+   * recent is the last small entry read, kept in memory so opening a preview
+   * and then copying it reads it once. Large ones go to `cache` instead.
+   */
+  private recent: { entry: Fetched; at: number } | null = null;
+  /** rangeQueue makes large downloads take turns; see `acquireRanges`. */
+  private rangeQueue: Promise<void> = Promise.resolve();
 
   private conn: Connection | null = null;
   private dialling: Promise<Connection> | null = null;
@@ -428,6 +466,7 @@ export class Client {
     this.now = options.now ?? (() => new Date());
     this.handlers = options.handlers ?? {};
     this.healthCheck = options.healthCheck ?? defaultHealthCheck;
+    this.cache = options.cache ?? null;
   }
 
   /**
@@ -679,6 +718,7 @@ export class Client {
       }
       case MessageType.MESSAGE_TYPE_ENTRY_EVICTED: {
         const event = EntryEvicted.decode(env.payload);
+        this.forgetEntry(event.entryId);
         this.handlers.onEntryEvicted?.(event.entryId);
         break;
       }
@@ -1092,6 +1132,9 @@ export class Client {
   async forget(): Promise<void> {
     this.disconnect();
     this.invitations.clear();
+    // Entries of a group this device has left are no business of its cache.
+    this.recent = null;
+    await this.cache?.clear().catch(() => undefined);
     this.refusals = 0;
     this.state = newState(this.state.deviceName);
     await saveState(this.store, this.state);
@@ -1280,15 +1323,12 @@ export class Client {
     if (!response.meta) {
       throw new TppError('no-entry', 'the group has no entry');
     }
-    let meta = this.entryMeta(response.meta);
-    let ciphertext = response.ciphertext;
+    const meta = this.entryMeta(response.meta);
     if (!meta.inline) {
       // A large entry lives in the blob backend and is pulled by id.
-      const fetched = await this.fetch(meta.id, meta);
-      meta = fetched.meta;
-      ciphertext = fetched.ciphertext;
+      return this.read(meta.id, meta);
     }
-    return this.open(meta, ciphertext);
+    return this.open(meta, response.ciphertext);
   }
 
   /**
@@ -1321,8 +1361,37 @@ export class Client {
   /** getEntry fetches one entry by id and decrypts it — what the history tab does when the user taps an entry. */
   async getEntry(entryId: string, hint?: EntryHint): Promise<Item> {
     this.requireGroup();
-    const { meta, ciphertext } = await this.fetch(entryId, hint);
-    return this.open(meta, ciphertext);
+    return this.read(entryId, hint);
+  }
+
+  /**
+   * read fetches and decrypts one entry. A copy from the cache that does not
+   * open — damaged on disk, say — is dropped and the entry read again from
+   * the relay, once. An epoch refusal is not retried: the relay's copy is the
+   * same entry at the same epoch, and would be refused the same way.
+   */
+  private async read(entryId: string, hint?: EntryHint): Promise<Item> {
+    const fetched = await this.fetch(entryId, hint);
+    try {
+      return this.open(fetched.meta, fetched.ciphertext);
+    } catch (err) {
+      const epochRefusal =
+        err instanceof TppError && (err.kind === 'stale-entry' || err.kind === 'epoch-ahead');
+      if (fetched.source === 'relay' || epochRefusal) {
+        throw err;
+      }
+      this.forgetEntry(entryId);
+      const fresh = await this.fetch(entryId, hint);
+      return this.open(fresh.meta, fresh.ciphertext);
+    }
+  }
+
+  /** forgetEntry drops an entry from memory and the cache: it was evicted, or its copy did not open. */
+  private forgetEntry(entryId: string): void {
+    if (this.recent?.entry.meta.id === entryId) {
+      this.recent = null;
+    }
+    void this.cache?.remove(entryId).catch(() => undefined);
   }
 
   /**
@@ -1400,7 +1469,7 @@ export class Client {
     };
 
     const progress = (done: number) =>
-      this.handlers.onProgress?.({ entryId, direction: 'upload', done, total: size, ...what });
+      this.handlers.onProgress?.({ entryId, direction: 'upload', done, total: size, waiting: false, ...what });
     progress(0);
     try {
       for (let index = 0, off = 0; off < size; index++, off += chunk) {
@@ -1414,6 +1483,7 @@ export class Client {
             message: { uploadHandle: handle, index, data: container.subarray(off, end) },
           },
           EntryUploadChunkResponse,
+          chunkTimeoutMs(end - off),
         );
         progress(end);
       }
@@ -1456,6 +1526,23 @@ export class Client {
   }
 
   /**
+   * acquireRanges waits for this download's turn and returns the function that
+   * hands the turn on. Large downloads run one at a time: the relay serves one
+   * device's requests in order, so two at once only means each chunk waits
+   * behind the other's, and both get slower until they time out. A small entry
+   * — one range — never queues.
+   */
+  private acquireRanges(): Promise<() => void> {
+    let release!: () => void;
+    const turn = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const previous = this.rangeQueue;
+    this.rangeQueue = previous.then(() => turn);
+    return previous.then(() => release);
+  }
+
+  /**
    * readRanges is the body of `fetchRanges`.
    *
    * A range lost to a dropped socket is asked for again from the same offset
@@ -1473,8 +1560,9 @@ export class Client {
     let meta: EntryMeta | null = null;
     let buf = new Uint8Array(0);
     let filled = 0;
+    let release: (() => void) | null = null;
     const chunked = (size: number) => size > limits.chunkBytes;
-    const report = (done: number, total: number, header: EntryHeaderView | null) =>
+    const report = (done: number, total: number, header: EntryHeaderView | null, waiting = false) =>
       this.handlers.onProgress?.({
         entryId,
         direction: 'download',
@@ -1482,90 +1570,154 @@ export class Client {
         total,
         filename: header?.filename ?? '',
         contentType: header?.contentType ?? '',
+        waiting,
       });
-    if (hint !== undefined && hint.size > 0 && chunked(hint.size)) {
-      report(0, hint.size, hint.header);
-    }
-    for (;;) {
-      let resp: EntryFetchChunkResponse;
-      try {
-        resp = await (await this.connection()).call(
-          MessageType.MESSAGE_TYPE_ENTRY_FETCH_CHUNK_REQUEST,
-          {
-            codec: EntryFetchChunkRequest,
-            message: { entryId, offset: filled.toString(), length: limits.chunkBytes.toString() },
-          },
-          EntryFetchChunkResponse,
-        );
-      } catch (err) {
-        if (!(err instanceof TppError && err.kind === 'disconnected')) {
-          throw err;
-        }
-        if (!this.wanted) {
-          // Lost while the app was away: carry on when it comes back.
-          await this.whenWanted();
+    // takeTurn queues this download behind any other large one (see
+    // `acquireRanges`), saying so on the progress bar while it waits.
+    const takeTurn = async (total: number, header: EntryHeaderView | null) => {
+      report(filled, total, header, true);
+      release = await this.acquireRanges();
+      report(filled, total, header);
+    };
+
+    try {
+      if (hint !== undefined && hint.size > 0 && chunked(hint.size)) {
+        await takeTurn(hint.size, hint.header);
+      }
+      for (;;) {
+        let resp: EntryFetchChunkResponse;
+        try {
+          resp = await (await this.connection()).call(
+            MessageType.MESSAGE_TYPE_ENTRY_FETCH_CHUNK_REQUEST,
+            {
+              codec: EntryFetchChunkRequest,
+              message: { entryId, offset: filled.toString(), length: limits.chunkBytes.toString() },
+            },
+            EntryFetchChunkResponse,
+            chunkTimeoutMs(limits.chunkBytes),
+          );
+        } catch (err) {
+          if (!(err instanceof TppError && err.kind === 'disconnected')) {
+            throw err;
+          }
+          if (!this.wanted) {
+            // Lost while the app was away: carry on when it comes back.
+            await this.whenWanted();
+            continue;
+          }
+          if (retries >= RANGE_RETRIES) {
+            throw err;
+          }
+          retries++;
+          await new Promise((resolve) => setTimeout(resolve, jitter(MIN_BACKOFF_MS * 2 ** retries)));
           continue;
         }
-        if (retries >= RANGE_RETRIES) {
-          throw err;
+        retries = 0;
+        if (!resp.meta) {
+          throw new TppError('no-entry', `the relay returned no metadata for entry ${entryId}`);
         }
-        retries++;
-        await new Promise((resolve) => setTimeout(resolve, jitter(MIN_BACKOFF_MS * 2 ** retries)));
-        continue;
-      }
-      retries = 0;
-      if (!resp.meta) {
-        throw new TppError('no-entry', `the relay returned no metadata for entry ${entryId}`);
-      }
-      const m = this.entryMeta(resp.meta);
-      const size = Number(m.size);
-      if (meta === null) {
-        if (!(size > 0 && size <= Math.max(limits.maxEntryBytes, SINGLE_FRAME_MAX_BYTES))) {
-          throw new TppError('invalid', `entry ${entryId} reports ${size} bytes, outside the relay's limits`);
+        const m = this.entryMeta(resp.meta);
+        const size = Number(m.size);
+        if (meta === null) {
+          if (!(size > 0 && size <= Math.max(limits.maxEntryBytes, SINGLE_FRAME_MAX_BYTES))) {
+            throw new TppError('invalid', `entry ${entryId} reports ${size} bytes, outside the relay's limits`);
+          }
+          meta = m;
+          buf = new Uint8Array(size);
+        } else if (m.id !== meta.id || m.size !== meta.size) {
+          throw new TppError('invalid', `entry ${entryId} changed while it was being read`);
         }
-        meta = m;
-        buf = new Uint8Array(size);
-      } else if (m.id !== meta.id || m.size !== meta.size) {
-        throw new TppError('invalid', `entry ${entryId} changed while it was being read`);
+        const data = resp.data;
+        if (Number(resp.offset) !== filled || data.length === 0 || filled + data.length > size) {
+          throw new TppError('invalid', `entry ${entryId}: the relay returned a range that does not continue the entry`);
+        }
+        buf.set(data, filled);
+        filled += data.length;
+        if (filled === size) {
+          if (chunked(size)) {
+            report(filled, size, meta.header ?? hint?.header ?? null);
+          }
+          return { meta, ciphertext: buf };
+        }
+        if (chunked(size)) {
+          if (release === null) {
+            // No size was known up front, so the first range is what showed
+            // this is a large entry. It takes its turn before the rest.
+            await takeTurn(size, meta.header ?? hint?.header ?? null);
+          } else {
+            report(filled, size, meta.header ?? hint?.header ?? null);
+          }
+        }
       }
-      const data = resp.data;
-      if (Number(resp.offset) !== filled || data.length === 0 || filled + data.length > size) {
-        throw new TppError('invalid', `entry ${entryId}: the relay returned a range that does not continue the entry`);
-      }
-      buf.set(data, filled);
-      filled += data.length;
-      if (chunked(size)) {
-        report(filled, size, meta.header ?? hint?.header ?? null);
-      }
-      if (filled === size) {
-        return { meta, ciphertext: buf };
-      }
+    } finally {
+      (release as (() => void) | null)?.();
     }
   }
 
   /**
-   * fetch pulls one entry's ciphertext: in ranges from a relay that can serve
-   * them, which is the only way to read an entry larger than one frame, and in
-   * one frame from a relay that predates them.
+   * fetch pulls one entry's ciphertext. A read of an entry that is already
+   * being read joins that one rather than downloading it a second time — a
+   * preview and a copy of the same row are one download.
    */
-  private async fetch(
-    entryId: string,
-    hint?: EntryHint,
-  ): Promise<{ meta: EntryMeta; ciphertext: Uint8Array }> {
+  private fetch(entryId: string, hint?: EntryHint): Promise<Fetched> {
+    const running = this.downloads.get(entryId);
+    if (running !== undefined) {
+      return running;
+    }
+    const download = this.fetchOnce(entryId, hint).finally(() => {
+      this.downloads.delete(entryId);
+    });
+    this.downloads.set(entryId, download);
+    return download;
+  }
+
+  /**
+   * fetchOnce reads an entry from wherever it is nearest: the last small entry
+   * read, then the cache of large ones, then the relay — in ranges from a relay
+   * that can serve them, which is the only way to read an entry larger than
+   * one frame, and in one frame from a relay that predates them.
+   */
+  private async fetchOnce(entryId: string, hint?: EntryHint): Promise<Fetched> {
+    const now = this.now().getTime();
+    if (this.recent !== null && this.recent.entry.meta.id === entryId) {
+      if (now - this.recent.at < DEFAULT_TTL_MS) {
+        return { ...this.recent.entry, source: 'memory' };
+      }
+      this.recent = null;
+    }
+    if (this.cache !== null) {
+      const cached = await this.cache.get(entryId).catch(() => null);
+      if (cached !== null) {
+        return { ...cached, source: 'cache' };
+      }
+    }
+
     const limits = await this.limits();
+    let got: { meta: EntryMeta; ciphertext: Uint8Array };
     if (limits.chunkBytes > 0) {
-      return this.fetchRanges(entryId, limits, hint);
+      got = await this.fetchRanges(entryId, limits, hint);
+    } else {
+      const conn = await this.connection();
+      const response = await conn.call(
+        MessageType.MESSAGE_TYPE_ENTRY_FETCH_REQUEST,
+        { codec: EntryFetchRequest, message: { entryId } },
+        EntryFetchResponse,
+      );
+      if (!response.meta) {
+        throw new TppError('no-entry', `the relay returned no metadata for entry ${entryId}`);
+      }
+      got = { meta: this.entryMeta(response.meta), ciphertext: response.ciphertext };
     }
-    const conn = await this.connection();
-    const response = await conn.call(
-      MessageType.MESSAGE_TYPE_ENTRY_FETCH_REQUEST,
-      { codec: EntryFetchRequest, message: { entryId } },
-      EntryFetchResponse,
-    );
-    if (!response.meta) {
-      throw new TppError('no-entry', `the relay returned no metadata for entry ${entryId}`);
+
+    const fetched: Fetched = { ...got, source: 'relay' };
+    if (limits.chunkBytes > 0 && got.ciphertext.length > limits.chunkBytes) {
+      // Large: worth keeping on disk. A cache that cannot be written is only
+      // a cache that does not help; the download itself has succeeded.
+      await this.cache?.put(got).catch(() => undefined);
+    } else {
+      this.recent = { entry: fetched, at: now };
     }
-    return { meta: this.entryMeta(response.meta), ciphertext: response.ciphertext };
+    return fetched;
   }
 
   /** open applies the epoch rules and decrypts. */

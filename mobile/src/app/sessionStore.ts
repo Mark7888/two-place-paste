@@ -89,8 +89,11 @@ export interface Snapshot {
    * may still have been starting when the link arrived.
    */
   pendingCode: string;
-  /** transfer is the chunked upload or download in flight — an entry larger than one frame — or null. */
-  transfer: Progress | null;
+  /**
+   * transfers are the chunked uploads and downloads in flight, oldest first:
+   * one running, and any others waiting their turn (`Progress.waiting`).
+   */
+  transfers: readonly Progress[];
   /**
    * evicted is the last entry the relay removed early to stay within its
    * storage limit; seq changes with each one, so a screen can act on every
@@ -109,7 +112,8 @@ let syncing = false;
 let question: Question | null = null;
 let lastError = '';
 let pendingCode = '';
-let transfer: Progress | null = null;
+/** transfers is keyed by direction and entry id, so an entry's progress replaces its own last report. */
+const transfers = new Map<string, Progress>();
 let evicted: { id: string; seq: number } | null = null;
 let answer: ((choice: Answer | null) => void) | null = null;
 let nextQuestionId = 1;
@@ -132,7 +136,7 @@ let snapshot: Snapshot = {
   question: null,
   error: '',
   pendingCode: '',
-  transfer: null,
+  transfers: [],
   evicted: null,
 };
 
@@ -149,7 +153,7 @@ function emit(): void {
     question,
     error: lastError,
     pendingCode,
-    transfer,
+    transfers: [...transfers.values()],
     evicted,
   };
   for (const listener of listeners) {
@@ -286,7 +290,12 @@ export function init(): void {
           emit();
         },
         onProgress: (p) => {
-          transfer = p.done < p.total ? p : null;
+          const key = `${p.direction}:${p.entryId}`;
+          if (p.done < p.total) {
+            transfers.set(key, p);
+          } else {
+            transfers.delete(key);
+          }
           emit();
         },
       });

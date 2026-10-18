@@ -95,7 +95,7 @@ export function formatSize(bytes: number): string {
 
 /**
  * transferText is what the progress bar says: what is moving, which way, and
- * how far — "Downloading report.pdf" over "4.0 MB of 20 MB · 20%". An entry
+ * how far — or that it is queued behind another transfer — "Downloading report.pdf" over "4.0 MB of 20 MB · 20%". An entry
  * with no filename is named by its kind, and one whose header could not be
  * opened is just "a large entry".
  */
@@ -111,8 +111,19 @@ export function transferText(p: Progress): { title: string; detail: string; perc
           : p.contentType !== ''
             ? p.contentType.split(';')[0].trim()
             : 'a large entry';
+  const verb = p.direction === 'upload' ? 'upload' : 'download';
+  if (p.waiting) {
+    return {
+      title: `Waiting to ${verb} ${what}`,
+      detail:
+        p.done > 0
+          ? `Queued behind another transfer · ${formatSize(p.done)} of ${formatSize(p.total)}`
+          : `Queued behind another transfer · ${formatSize(p.total)}`,
+      percent,
+    };
+  }
   return {
-    title: `${p.direction === 'upload' ? 'Uploading' : 'Downloading'} ${what}`,
+    title: `${verb === 'upload' ? 'Uploading' : 'Downloading'} ${what}`,
     detail: `${formatSize(p.done)} of ${formatSize(p.total)} · ${percent}%`,
     percent,
   };

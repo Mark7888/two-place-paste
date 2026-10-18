@@ -24,7 +24,7 @@ import {
   Section,
   Sheet,
   Status,
-  TransferBar,
+  TransferList,
 } from '../ui';
 import { colors, styles } from '../theme';
 
@@ -145,7 +145,7 @@ export function SyncScreen(): React.JSX.Element {
           has since closed — which would otherwise have existed only as a toast
           nobody was looking at; `session.notice` is what merely happened.
         */}
-        <TransferBar transfer={session.transfer} />
+        <TransferList transfers={session.transfers} />
         {message !== '' && (
           <OutcomeNotice
             message={message}

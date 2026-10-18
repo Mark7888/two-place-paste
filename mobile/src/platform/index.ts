@@ -10,6 +10,7 @@
 
 export { clipboard } from './clipboard';
 export { files } from './files';
+export { entryCache } from './entryCache';
 export { secureStore } from './secureStore';
 export { deviceInfo } from './deviceInfo';
 export { tile } from './tile';

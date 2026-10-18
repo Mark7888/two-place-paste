@@ -25,7 +25,7 @@ import Clipboard from '@react-native-clipboard/clipboard';
 
 import { TppClipboard } from './native';
 
-import { fromBase64URL, toBase64URL, utf8, fromUTF8 } from '../core/bytes';
+import { decodeBase64Std, encodeBase64Std, utf8, fromUTF8 } from '../core/bytes';
 import type { ClipboardItem, ClipboardPort } from './types';
 
 /** TEXT_CONTENT_TYPE is what a text entry is written as. */
@@ -35,12 +35,8 @@ export const TEXT_CONTENT_TYPE = 'text/plain; charset=utf-8';
 export const PNG_CONTENT_TYPE = 'image/png';
 
 /** base64 (standard alphabet) is what the native module speaks; the core speaks bytes. */
-const fromStandardBase64 = (s: string): Uint8Array => fromBase64URL(s);
-export const toStandardBase64 = (b: Uint8Array): string => {
-  const url = toBase64URL(b);
-  const padding = url.length % 4 === 0 ? '' : '='.repeat(4 - (url.length % 4));
-  return url.replace(/-/g, '+').replace(/_/g, '/') + padding;
-};
+const fromStandardBase64 = (s: string): Uint8Array => decodeBase64Std(s);
+export const toStandardBase64 = (b: Uint8Array): string => encodeBase64Std(b);
 
 export const clipboard: ClipboardPort = {
   async writeText(text: string): Promise<void> {

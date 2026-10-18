@@ -55,6 +55,26 @@ binary blobs, and the same rule keeps the launcher icon and the tile icon as
 vector drawables and the debug keystore as the one Gradle generates on the
 machine that builds.
 
+## Downloads: one at a time, read once
+
+- **One large download at a time.** The relay answers one device's requests
+  in order, so two chunked downloads at once only make each chunk wait behind
+  the other's. They take turns; one that is queued shows "Waiting to download
+  …" on its own bar. A small entry (one range) never queues.
+- **The same entry is never downloaded twice at once.** A preview and a copy
+  of the same row, or a sync and a copy, join the read already running.
+- **Chunks get time for their size.** Each chunk request gets the usual 20 s
+  plus its bytes at 128 KiB/s (an 8 MiB chunk: 84 s), the same floor the Go
+  client uses, so a slow link is slow rather than failed.
+- **Large entries are cached for an hour.** A chunked download is kept in the
+  app's cache directory (`CacheModule.kt`, rules in
+  `src/core/protocol/entryCache.ts`): still encrypted, for at most an hour and
+  never past the relay's expiry, 200 MiB in all, oldest out first. Reading it
+  back goes through the same decryption and epoch checks as a download, and a
+  copy that does not open is dropped and read from the relay again. An evicted
+  entry leaves the cache, and leaving the group clears it. The last small
+  entry read is kept in memory the same way, so preview-then-copy is one read.
+
 ## Leaving the app mid-transfer
 
 The socket follows the foreground (SPEC §5.2), with one exception: a chunked

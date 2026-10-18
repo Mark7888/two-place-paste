@@ -46,8 +46,8 @@ export interface SessionState {
   error: string;
   /** pendingCode is a pairing code that arrived through a scanned link. */
   pendingCode: string;
-  /** transfer is a large entry moving in chunks right now, or null. */
-  transfer: Progress | null;
+  /** transfers are the large entries moving in chunks right now, or waiting to. */
+  transfers: readonly Progress[];
   /** evicted is the last entry the relay removed early; seq changes with each one. */
   evicted: { id: string; seq: number } | null;
   setError(message: string): void;
@@ -97,7 +97,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
       question: snapshot.question,
       error: snapshot.error,
       pendingCode: snapshot.pendingCode,
-      transfer: snapshot.transfer,
+      transfers: snapshot.transfers,
       evicted: snapshot.evicted,
       answer: answerQuestion,
       setError,

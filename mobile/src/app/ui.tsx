@@ -193,6 +193,28 @@ export function TransferBar({ transfer }: { transfer: Progress | null }): React.
   );
 }
 
+/**
+ * TransferList shows every chunked transfer in flight, one bar each: the one
+ * running and any queued behind it, so a second download does not make the
+ * first one's bar jump or vanish.
+ */
+export function TransferList({
+  transfers,
+}: {
+  transfers: readonly Progress[];
+}): React.JSX.Element | null {
+  if (transfers.length === 0) {
+    return null;
+  }
+  return (
+    <View style={{ gap: 8 }}>
+      {transfers.map((t) => (
+        <TransferBar key={`${t.direction}:${t.entryId}`} transfer={t} />
+      ))}
+    </View>
+  );
+}
+
 /** Status is the one line a screen reports through, kept for the places that
  *  want text with no block around it. */
 export function Status({
