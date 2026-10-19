@@ -47,10 +47,20 @@ export interface EntryView {
   filename?: string;
   /** The plaintext size, when the type is known. */
   bytes?: number;
-  /** Text or an image within the auto-download limit; no_preview says why not. */
+  /** A format the service can draw, within the auto-download limit;
+   *  no_preview says why not. */
   previewable: boolean;
   no_preview?: string;
+  /** How a previewable entry is drawn. */
+  render?: Render;
 }
+
+/**
+ * Render is how the service says an entry is drawn. Each value has a
+ * component in src/preview; `kind` is separate, and says what the entry
+ * becomes when copied.
+ */
+export type Render = "text" | "image";
 
 /** SkippedView is an automatic transfer the user's size limit held back. */
 export interface SkippedView {
@@ -121,6 +131,9 @@ export interface EntryPreview {
   filename?: string;
   bytes: number;
   kind: "text" | "image" | "file";
+  render: Render;
+  /** The format's name for the screen, from the service's preview table. */
+  format: string;
   text?: string;
   truncated?: boolean;
   image_data_url?: string;

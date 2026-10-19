@@ -98,10 +98,17 @@ type EntryView struct {
 	// Bytes is the plaintext size; absent when the type is unknown.
 	Bytes *int64 `json:"bytes,omitempty"`
 
-	// Previewable says the history offers a preview: a text or an image no
-	// larger than the auto-download limit. NoPreview says why not, when not.
+	// Previewable says the history offers a preview: a format the preview
+	// table knows, no larger than the auto-download limit. NoPreview says why
+	// not, when not.
 	Previewable bool   `json:"previewable"`
 	NoPreview   string `json:"no_preview,omitempty"`
+
+	// Render is how a previewable entry is drawn — "text", "image", "audio"
+	// or "video" — so the row can say so before it is opened. Kind stays the
+	// clipboard's word for it: a song is a file when copied, and audio when
+	// played.
+	Render string `json:"render,omitempty"`
 }
 
 // Optional reports a timestamp that may not exist. A zero time.Time marshals
@@ -163,9 +170,15 @@ type EntryPreview struct {
 	Bytes       int    `json:"bytes"`
 
 	// Kind is "text", "image" or "file", matching the clipboard's own
-	// vocabulary. A file has no preview body: rendering its bytes helps
-	// nobody, and its name and size are already in the listing.
+	// vocabulary: what the entry becomes when copied.
 	Kind string `json:"kind"`
+
+	// Render is how the entry is drawn: "text", "image", "audio" or "video".
+	// It comes from the preview table, which is also where Format, the
+	// format's name for the screen, comes from. Audio and video carry no body
+	// here; the page fetches it from the content endpoint to play it.
+	Render string `json:"render"`
+	Format string `json:"format"`
 
 	// Text is a bounded rendering of a text entry, and Truncated says whether
 	// there was more of it.

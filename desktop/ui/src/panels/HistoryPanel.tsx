@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type EntryPreview, type EntryView, type ServiceEvent } from "../api";
 import { bytes, relative, useNow, when } from "../format";
 import { Icon } from "../components/Icon";
+import { PreviewBody, entryIcon } from "../preview";
 
 /**
  * History: the group's entry metadata, and a look inside the ones this device
@@ -14,9 +15,10 @@ import { Icon } from "../components/Icon";
  * row. The listing is metadata the relay holds — a size, an epoch, two
  * timestamps — plus each entry's sealed header, opened here, which says what
  * the entry is without fetching it (SPEC §2.3, /spec/crypto.md §5.5). Only
- * text and images within the auto-download limit offer a preview: anything
- * else would be a download the user did not ask for, of something there is
- * nothing useful to draw.
+ * formats the service can draw, within the auto-download limit, offer a
+ * preview: anything else would be a download the user did not ask for, of
+ * something there is nothing useful to draw. How each one is drawn lives in
+ * src/preview.
  */
 export function HistoryPanel({
   inGroup,
@@ -174,7 +176,7 @@ export function HistoryPanel({
                         {relative(e.created_at)}
                       </div>
                       <div className="muted small row tight">
-                        <Icon name={e.kind ?? "file"} size={14} />
+                        <Icon name={entryIcon(e)} size={14} />
                         <span>
                           {describe(e)} · {bytes(e.bytes ?? e.size)}
                           {readable ? "" : " · predates the last re-key"}
@@ -228,7 +230,7 @@ export function HistoryPanel({
                           <span>{preview.error}</span>
                         </div>
                       ) : (
-                        <EntryBody preview={preview} />
+                        <PreviewBody preview={preview} />
                       )}
                     </div>
                   ) : null}
@@ -256,47 +258,4 @@ function describe(e: EntryView): string {
   if (e.filename) return e.filename;
   if (e.content_type) return e.content_type;
   return "type unknown";
-}
-
-/** EntryBody renders what a preview turned out to be. A file gets no body: its
- *  name and size are already in the row above, and drawing its bytes helps
- *  nobody. */
-function EntryBody({ preview }: { preview: EntryPreview }) {
-  if (preview.kind === "image") {
-    if (preview.image_too_large || !preview.image_data_url) {
-      return (
-        <p className="muted small">
-          {preview.content_type} · {bytes(preview.bytes)} — too large to show here. Copy it to see
-          it.
-        </p>
-      );
-    }
-    return (
-      <>
-        <img className="preview-image" src={preview.image_data_url} alt="The entry's image" />
-        <p className="muted small">
-          {preview.content_type} · {bytes(preview.bytes)}
-        </p>
-      </>
-    );
-  }
-
-  if (preview.kind === "file") {
-    return (
-      <p className="muted small row tight">
-        <Icon name="file" size={15} />
-        {preview.filename || "file"} · {preview.content_type} · {bytes(preview.bytes)}
-      </p>
-    );
-  }
-
-  return (
-    <>
-      <pre className="preview mono">{preview.text}</pre>
-      <p className="muted small">
-        {preview.truncated ? "Shown in part · " : ""}
-        {preview.content_type} · {bytes(preview.bytes)}
-      </p>
-    </>
-  );
 }
