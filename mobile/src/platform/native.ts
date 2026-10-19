@@ -74,8 +74,15 @@ export interface TppCacheModule {
   list(): Promise<{ name: string; size: number }[]>;
 }
 
+/** TppNoticesModule is implemented by `android/app/src/main/java/.../NoticesModule.kt`. */
+export interface TppNoticesModule {
+  /** read resolves with the notices the build put in the APK, or null when there are none. */
+  read(): Promise<string | null>;
+}
+
 const modules = NativeModules as {
   TppCache?: TppCacheModule;
+  TppNotices?: TppNoticesModule;
   TppTile?: TppTileModule;
   TppClipboard?: TppClipboardModule;
   TppFiles?: TppFilesModule;
@@ -85,6 +92,7 @@ export const TppTile: TppTileModule | null = modules.TppTile ?? null;
 export const TppClipboard: TppClipboardModule | null = modules.TppClipboard ?? null;
 export const TppFiles: TppFilesModule | null = modules.TppFiles ?? null;
 export const TppCache: TppCacheModule | null = modules.TppCache ?? null;
+export const TppNotices: TppNoticesModule | null = modules.TppNotices ?? null;
 
 /** TILE_REQUEST_EVENT is emitted by the native tile bridge when a tap reaches a running app. */
 export const TILE_REQUEST_EVENT = 'TppTileSyncRequested';

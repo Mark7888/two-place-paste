@@ -679,3 +679,6 @@ dialog::backdrop { background: rgba(10, 12, 16, 0.45); }
   white-space: nowrap;
   border: 0;
 }
+
+/* The "Source code" link sits in muted text and should read as part of it. */
+footer a { color: inherit; }

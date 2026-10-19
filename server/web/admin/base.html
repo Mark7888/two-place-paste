@@ -29,11 +29,12 @@
 {{if .Error}}<p class="notice error" role="alert">{{.Error}}</p>{{end}}
 {{template "content" .}}
 </main>
-{{if .Authenticated}}
 <footer>
-  The server relays ciphertext only. These screens show creation tokens and
-  sizes and counts — there is no content access here by construction (SPEC §4.4).
+  {{if .Authenticated}}
+  <p>The server relays ciphertext only. These screens show creation tokens and
+  sizes and counts — there is no content access here by construction (SPEC §4.4).</p>
+  {{end}}
+  <p><a href="/source">Source code</a> — this relay is free software under the AGPL-3.0.</p>
 </footer>
-{{end}}
 </body>
 </html>{{end}}

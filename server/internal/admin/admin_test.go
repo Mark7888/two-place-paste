@@ -559,6 +559,25 @@ func TestWildcardDoesNotShadowOtherRoutes(t *testing.T) {
 	}
 }
 
+// TestPagesLinkToSource covers the AGPL "Source code" link, which every
+// admin page shows, signed in or not.
+func TestPagesLinkToSource(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, "https://tpp.example.com")
+	c := f.client()
+
+	if body := readBody(t, f.get(c, "/admin/login")); !strings.Contains(body, `href="/source"`) {
+		t.Error("the login page has no link to /source")
+	}
+	f.login(c)
+	for _, path := range []string{"/admin/", "/admin/tokens"} {
+		if body := readBody(t, f.get(c, path)); !strings.Contains(body, `href="/source"`) {
+			t.Errorf("GET %s has no link to /source", path)
+		}
+	}
+}
+
 func (f *fixture) postJSON(c *http.Client, path, body string) *http.Response {
 	f.t.Helper()
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, f.srv.URL+path, strings.NewReader(body))

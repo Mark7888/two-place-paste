@@ -2,6 +2,7 @@
   "name": "two-place-paste-mobile",
   "version": "0.1.0",
   "private": true,
+  "license": "MPL-2.0",
   "description": "TwoPlacePaste Android client (ROADMAP P7). React Native, structured so iOS stays addable (SPEC \u00a77.3).",
   "scripts": {
     "start": "react-native start",

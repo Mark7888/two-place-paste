@@ -5,10 +5,16 @@ import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
 
-/** The app's own native modules: the tile bridge, the clipboard gap-fillers, saving or opening received files, and the downloaded-entry cache. */
+/** The app's own native modules: the tile bridge, the clipboard gap-fillers, saving or opening received files, the downloaded-entry cache and the third-party notices. */
 class TppPackage : ReactPackage {
     override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> =
-        listOf(TileModule(reactContext), ClipboardModule(reactContext), FileModule(reactContext), CacheModule(reactContext))
+        listOf(
+            TileModule(reactContext),
+            ClipboardModule(reactContext),
+            FileModule(reactContext),
+            CacheModule(reactContext),
+            NoticesModule(reactContext),
+        )
 
     override fun createViewManagers(
         reactContext: ReactApplicationContext,

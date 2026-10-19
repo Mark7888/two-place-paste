@@ -1,6 +1,7 @@
 {
   "name": "@two-place-paste/proto",
   "private": true,
+  "license": "MPL-2.0",
   "description": "Pinned TypeScript codegen toolchain for the TwoPlacePaste wire protocol (ROADMAP P1).",
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

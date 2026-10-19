@@ -18,7 +18,7 @@ name: tpp
 
 services:
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     restart: unless-stopped
     # The config file carries the two settings this deployment cannot do
     # without: AOF persistence and maxmemory-policy volatile-lru. See

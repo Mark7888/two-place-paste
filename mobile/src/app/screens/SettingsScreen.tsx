@@ -10,10 +10,11 @@
  */
 
 import React, { useState } from 'react';
-import { Alert, Text, View } from 'react-native';
+import { Alert, Linking, Text, View } from 'react-native';
 
 import { publicKey, toHex } from '../../core';
 import { tile } from '../../platform';
+import { LicensesScreen } from '../LicensesScreen';
 import { useSession } from '../SessionContext';
 import { failureMessage } from '../session';
 import { Button, Notice, Screen, Section } from '../ui';
@@ -22,6 +23,7 @@ import { styles } from '../theme';
 export function SettingsScreen(): React.JSX.Element {
   const session = useSession();
   const [message, setMessage] = useState('');
+  const [showLicenses, setShowLicenses] = useState(false);
   const client = session.client;
   const state = client?.snapshot();
 
@@ -94,10 +96,34 @@ export function SettingsScreen(): React.JSX.Element {
         </View>
       </Section>
 
+      <Section title="About">
+        <View style={{ gap: 10 }}>
+          <Text style={styles.muted}>
+            TwoPlacePaste is open source under the Mozilla Public License 2.0, and is built on other
+            open-source software.
+          </Text>
+          <Button
+            label="Source code"
+            variant="secondary"
+            onPress={() => void Linking.openURL(SOURCE_URL)}
+          />
+          <Button
+            label="Open-source licenses"
+            variant="secondary"
+            onPress={() => setShowLicenses(true)}
+          />
+        </View>
+      </Section>
+
       {message !== '' && <Notice message={message} tone="error" />}
+
+      <LicensesScreen visible={showLicenses} onClose={() => setShowLicenses(false)} />
     </Screen>
   );
 }
+
+/** SOURCE_URL is where the app's source code is published. */
+const SOURCE_URL = 'https://github.com/Mark7888/two-place-paste';
 
 /** Fact is one label-and-value row. */
 function Fact({

@@ -48,3 +48,19 @@ Not yet. The Android app is in development; Linux desktop and iOS are deferred. 
 
 50 MB of ciphertext by default (`TPP_ENTRY_MAX_BYTES`). The desktop app's automatic syncing stops
 at 25 MB unless you change it; manual **Upload** and **Download** are not limited.
+
+### Is TwoPlacePaste open source? Under which license?
+
+Yes. The relay server is licensed under the
+[GNU Affero General Public License v3.0 or later](https://github.com/Mark7888/two-place-paste/blob/master/server/LICENSE),
+and everything else — the desktop and Android apps, the client library, the wire schema and these
+docs — under the
+[Mozilla Public License 2.0](https://github.com/Mark7888/two-place-paste/blob/master/LICENSE).
+The TwoPlacePaste name and logo are not covered by either license.
+[`LICENSING.md`](https://github.com/Mark7888/two-place-paste/blob/master/LICENSING.md) has the
+details. If you run your own relay, see
+[License](/two-place-paste/self-hosting/overview/#license) for what that means for you.
+
+The open-source libraries each app is built from are listed, with their licenses, under
+**Settings → About → Open-source licenses** in the desktop and Android apps, and in
+`/usr/share/doc/tpp/` in the relay's Docker image.

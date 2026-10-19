@@ -104,3 +104,15 @@ func TestPageCarriesNoCode(t *testing.T) {
 		t.Error("the page echoed a value from the request")
 	}
 }
+
+// The relay is AGPL-3.0, so the one page it serves to people links to its
+// source (internal/sourcelink serves the redirect).
+func TestPageLinksToSource(t *testing.T) {
+	t.Parallel()
+	srv := serve(t)
+
+	_, body := get(t, srv, "/pair")
+	if !strings.Contains(body, `href="/source"`) {
+		t.Error("the pairing page has no link to /source")
+	}
+}

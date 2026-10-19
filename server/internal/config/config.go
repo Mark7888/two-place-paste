@@ -49,6 +49,10 @@ const (
 	DefaultChunk         = 8 << 20   // 8 MiB: under the frame cap, over S3's 5 MiB part floor
 	DefaultUploadTTL     = 10 * time.Minute
 
+	// DefaultSourceURL is where the relay's "Source code" link points unless
+	// the operator sets TPP_SOURCE_URL.
+	DefaultSourceURL = "https://github.com/Mark7888/two-place-paste"
+
 	// DefaultGroupMax is the per-group blob storage limit. The total limit
 	// defaults to unlimited: only the operator knows how big the volume or
 	// bucket is.
@@ -65,6 +69,11 @@ type Config struct {
 	// "https://tpp.example.com". Creation-token URLs and their QR codes are
 	// built from it (SPEC §3.1, §4.4), so it must not include a path.
 	PublicBaseURL string
+
+	// SourceURL is where the relay's "Source code" link points. The server is
+	// AGPL-3.0: whoever runs a modified relay for other people has to offer
+	// them its source, and pointing this at their fork is how they do it.
+	SourceURL string
 
 	LogLevel slog.Level
 
@@ -234,6 +243,7 @@ func Load(opts Options) (*Config, error) {
 	cfg := &Config{
 		HTTPAddr:      r.str("TPP_HTTP_ADDR", DefaultHTTPAddr),
 		PublicBaseURL: strings.TrimRight(r.str("TPP_PUBLIC_BASE_URL", ""), "/"),
+		SourceURL:     r.str("TPP_SOURCE_URL", DefaultSourceURL),
 		LogLevel:      r.logLevel("TPP_LOG_LEVEL", slog.LevelInfo),
 		Redis: RedisConfig{
 			Addr:     r.str("TPP_REDIS_ADDR", DefaultRedisAddr),
@@ -279,6 +289,9 @@ func (c *Config) Validate() error {
 		errs = append(errs, errors.New("TPP_PUBLIC_BASE_URL is required (creation-token URLs and QR codes are built from it)"))
 	} else if !strings.HasPrefix(c.PublicBaseURL, "http://") && !strings.HasPrefix(c.PublicBaseURL, "https://") {
 		errs = append(errs, fmt.Errorf("TPP_PUBLIC_BASE_URL must start with http:// or https://, got %q", c.PublicBaseURL))
+	}
+	if !strings.HasPrefix(c.SourceURL, "http://") && !strings.HasPrefix(c.SourceURL, "https://") {
+		errs = append(errs, fmt.Errorf("TPP_SOURCE_URL must start with http:// or https://, got %q", c.SourceURL))
 	}
 	if c.Redis.Addr == "" {
 		errs = append(errs, errors.New("TPP_REDIS_ADDR must not be empty"))

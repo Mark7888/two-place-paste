@@ -97,6 +97,9 @@ android {
     }
 }
 
+// The third-party notices the APK carries (LICENSING.md); see notices.gradle.
+apply from: "notices.gradle"
+
 dependencies {
     implementation("com.facebook.react:react-android")
     implementation("com.facebook.react:hermes-android")

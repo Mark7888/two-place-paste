@@ -93,6 +93,15 @@ export interface DeviceInfoPort {
   defaultName(): string;
 }
 
+/**
+ * NoticesPort reads the third-party notices this build ships with
+ * (LICENSING.md): the license text of every library the app is built from.
+ */
+export interface NoticesPort {
+  /** read resolves with the notices text, or null when this build carries none. */
+  read(): Promise<string | null>;
+}
+
 /** TilePort is the quick-settings tile (SPEC §7.1). It exists on Android and is a no-op elsewhere. */
 export interface TilePort {
   /** available reports whether this platform has a quick-settings tile at all. */

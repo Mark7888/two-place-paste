@@ -89,3 +89,6 @@ footer { width: min(26rem, 100%); text-align: center; margin: 0; }
 }
 
 .status { min-height: 1.3em; margin: 0.5rem 0 0; font-size: 0.85rem; color: var(--muted); }
+
+/* The "Source code" link sits in muted text and should read as part of it. */
+footer a { color: inherit; }

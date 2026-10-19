@@ -17,6 +17,10 @@ ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src
 
+# Node runs scripts/notices, which writes the third-party notices the image
+# ships. It stays in this stage; the runtime image has no Node.
+RUN apk add --no-cache nodejs
+
 # Dependency layer: the module files change far less often than the code, so a
 # code edit does not re-download the module cache.
 COPY go.work ./
@@ -32,6 +36,14 @@ COPY . .
 # runtime below without a libc.
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -C server -trimpath -ldflags="-s -w" -o /out/tpp ./cmd/tpp
 
+# The binary carries the code of every Go module it was built from, and their
+# licenses ask that a binary distribution carry their notices too (LICENSING.md).
+RUN node scripts/notices/notices.mjs \
+      --title "TwoPlacePaste relay (tpp): third-party notices" \
+      --intro "The relay is licensed under the GNU Affero General Public License v3.0 or later (LICENSE in this directory) and includes code from pkg/tppclient, licensed under the Mozilla Public License 2.0 (LICENSE.MPL-2.0). Its source code is at https://github.com/Mark7888/two-place-paste. It also includes the third-party software below." \
+      --go server=./cmd/tpp --goos "$TARGETOS" \
+      --out /out/THIRD_PARTY_NOTICES.txt
+
 FROM alpine:3.21
 # wget comes from busybox and is what the compose healthcheck calls; there is
 # no other reason for a shell in this image.
@@ -40,6 +52,10 @@ RUN adduser -D -u 10001 -h /var/lib/tpp tpp \
     && chown -R tpp:tpp /var/lib/tpp
 
 COPY --from=build /out/tpp /usr/local/bin/tpp
+# The relay's own licenses and the notices of everything it is built from.
+COPY --from=build /src/server/LICENSE /usr/share/doc/tpp/LICENSE
+COPY --from=build /src/LICENSE /usr/share/doc/tpp/LICENSE.MPL-2.0
+COPY --from=build /out/THIRD_PARTY_NOTICES.txt /usr/share/doc/tpp/THIRD_PARTY_NOTICES.txt
 
 # The container runs unprivileged. The blob volume is mounted at a path this
 # user owns; nothing in the image is writable by it.

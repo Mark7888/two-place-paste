@@ -50,8 +50,25 @@ site:
 
 The roadmap is carried out **one phase per pull request**. Each phase declares the paths it owns,
 and a PR does not touch anything outside them. A change to a shared contract — `proto/`,
-`spec/crypto.md`, `go.work`, the `Makefile` or a CI workflow — goes in its own small PR, opened
+`spec/crypto.md`, `go.work`, the `Makefile`, a CI workflow or a license file — goes in its own small PR, opened
 from an issue tagged `contract-change`.
 
 **Standing rule:** no pin, favourite or extend-TTL feature. Entry lifetimes are immutable, and the
 blob garbage collector depends on it.
+
+## Licensing
+
+The repository is licensed under the Mozilla Public License 2.0, except `server/`, which is
+licensed under the GNU Affero General Public License v3.0 or later. The TwoPlacePaste name and
+logo are not covered by either license.
+[`LICENSING.md`](https://github.com/Mark7888/two-place-paste/blob/master/LICENSING.md) has the
+full map.
+
+A contribution is licensed under the license of the folder it changes; there is no contributor
+license agreement. Don't move or copy code between `server/` and the rest of the repository — that
+would change its license. See
+[`CONTRIBUTING.md`](https://github.com/Mark7888/two-place-paste/blob/master/CONTRIBUTING.md).
+
+Every shipped build carries the licenses of the libraries it is built from, generated at build time
+by `scripts/notices/notices.mjs`. The Docker build, the desktop UI's `npm run build` and the
+Android build run it on their own; nothing about it is maintained by hand.

@@ -1,13 +1,14 @@
 {
   "name": "tpp-desktop-ui",
   "private": true,
+  "license": "MPL-2.0",
   "version": "0.1.0",
   "type": "module",
   "description": "Localhost UI for the TwoPlacePaste desktop service (SPEC \u00a77.2).",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
-    "build": "node scripts/clean-dist.mjs && tsc --noEmit && vite build",
+    "build": "node scripts/clean-dist.mjs && tsc --noEmit && vite build && node scripts/notices.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

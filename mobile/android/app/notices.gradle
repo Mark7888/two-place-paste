@@ -1,0 +1,107 @@
+// Third-party notices (LICENSING.md).
+//
+// The APK carries the code of every Android library and npm package it is
+// built from, and their licenses ask that it carry their notices too. For each
+// variant this resolves the Android libraries it is built from, reads each
+// one's license from its POM (or a parent POM), and has scripts/notices write
+// the file, together with the npm packages, into the variant's assets.
+// NoticesModule reads it from there for Settings.
+//
+// Applied from build.gradle.
+
+// pomLicenses returns [[name:, url:]] for a Maven module, following parent
+// POMs until one declares a license. An artefact whose POM cannot be fetched or
+// declares none returns [], and the notices say so for it.
+ext.tppPomLicenses = { DependencyHandler deps, String group, String module, String version ->
+    def licenses = []
+    def coordinates = [group, module, version]
+    for (int depth = 0; depth < 6 && coordinates != null; depth++) {
+        def result = deps.createArtifactResolutionQuery()
+            .forModule(coordinates[0], coordinates[1], coordinates[2])
+            .withArtifacts(org.gradle.maven.MavenModule, org.gradle.maven.MavenPomArtifact)
+            .execute()
+        File pomFile = null
+        result.resolvedComponents.each { component ->
+            component.getArtifacts(org.gradle.maven.MavenPomArtifact).each { artifact ->
+                if (artifact instanceof org.gradle.api.artifacts.result.ResolvedArtifactResult) {
+                    pomFile = artifact.file
+                }
+            }
+        }
+        if (pomFile == null) {
+            break
+        }
+        def pom = new groovy.xml.XmlSlurper(false, false).parse(pomFile)
+        licenses = pom.licenses.license.collect { [name: it.name.text().trim(), url: it.url.text().trim()] }
+        if (!licenses.isEmpty()) {
+            break
+        }
+        def parent = pom.parent
+        coordinates = parent.size() == 0 ? null
+            : [parent.groupId.text().trim(), parent.artifactId.text().trim(), parent.version.text().trim()]
+    }
+    return licenses
+}
+
+// tppMavenArtefacts lists the external modules a resolved configuration holds,
+// with their licenses, in the shape scripts/notices reads with --maven. Our own
+// Gradle projects — the app and the autolinked React Native libraries — are
+// left out: their code is npm packages, which --npm lists.
+ext.tppMavenArtefacts = { DependencyHandler deps, Configuration configuration ->
+    configuration.incoming.resolutionResult.allComponents
+        .collect { it.id }
+        .findAll { it instanceof org.gradle.api.artifacts.component.ModuleComponentIdentifier }
+        .collect { id ->
+            [
+                coordinates: "${id.group}:${id.module}:${id.version}".toString(),
+                licenses   : tppPomLicenses(deps, id.group, id.module, id.version),
+            ]
+        }
+}
+
+abstract class TppNoticesTask extends DefaultTask {
+    @OutputDirectory
+    abstract DirectoryProperty getOutputDir()
+}
+
+if (plugins.hasPlugin("com.android.application")) {
+    def repo = rootProject.file("../..")
+    def script = new File(repo, "scripts/notices/notices.mjs")
+    def mobile = rootProject.file("..")
+    def deps = dependencies
+    def maven = tppMavenArtefacts
+
+    androidComponents {
+        onVariants(selector().all()) { variant ->
+            def runtime = variant.runtimeConfiguration
+            def scratch = layout.buildDirectory.file("intermediates/tpp-notices/${variant.name}/maven.json")
+            def task = tasks.register("generate${variant.name.capitalize()}ThirdPartyNotices", TppNoticesTask) {
+                outputDir.set(layout.buildDirectory.dir("generated/tpp-notices/${variant.name}"))
+                // The libraries come from the dependency graph and the npm
+                // packages from node_modules; both are cheap to read, so the
+                // task runs every build rather than declaring them all as inputs.
+                outputs.upToDateWhen { false }
+                doLast {
+                    def json = scratch.get().asFile
+                    json.parentFile.mkdirs()
+                    json.text = groovy.json.JsonOutput.toJson(maven(deps, runtime))
+                    def out = new File(outputDir.get().asFile, "third_party_notices.txt")
+                    def command = [
+                        "node", script.path,
+                        "--title", "TwoPlacePaste for Android: third-party notices",
+                        "--intro", "TwoPlacePaste is licensed under the Mozilla Public License 2.0. Its source code is at https://github.com/Mark7888/two-place-paste. The app also includes the third-party software below.",
+                        "--npm", mobile.path,
+                        "--maven", json.path,
+                        "--out", out.path,
+                    ]
+                    def process = command.execute()
+                    process.waitForProcessOutput(System.out, System.err)
+                    if (process.exitValue() != 0) {
+                        throw new GradleException("scripts/notices/notices.mjs failed with exit code ${process.exitValue()}")
+                    }
+                }
+            }
+            variant.sources.assets.addGeneratedSourceDirectory(task, { it.outputDir })
+        }
+    }
+}
