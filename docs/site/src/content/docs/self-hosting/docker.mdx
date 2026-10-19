@@ -34,7 +34,7 @@ and no build — just a `docker-compose.yml` and a `.env`.
 
    services:
      redis:
-       image: redis:7-alpine
+       image: redis:8-alpine
        restart: unless-stopped
        # volatile-lru is not optional: allkeys-lru would silently evict
        # group records and destroy pairings.
