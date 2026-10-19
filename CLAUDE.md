@@ -156,6 +156,10 @@ Copyright (C) 2026 Mark Licsauer. The repository is split between two licenses;
 - Contributions are accepted under the license of the folder they change; there
   is no CLA (`CONTRIBUTING.md`). Copyright notices live in `LICENSING.md` and
   `README.md`, not in every source file.
+- The AGPL asks a modified relay to offer its source to its users. Every page
+  the relay serves to people (admin, pairing) links to `/source`, which
+  redirects to `TPP_SOURCE_URL` (`internal/sourcelink`). A new human-facing
+  page keeps that link; don't remove it.
 
 ## Versioning and releases
 

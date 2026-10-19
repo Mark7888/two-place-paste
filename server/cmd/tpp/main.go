@@ -35,6 +35,7 @@ import (
 	"github.com/Mark7888/two-place-paste/server/internal/httpapi"
 	"github.com/Mark7888/two-place-paste/server/internal/pairlink"
 	"github.com/Mark7888/two-place-paste/server/internal/quota"
+	"github.com/Mark7888/two-place-paste/server/internal/sourcelink"
 	"github.com/Mark7888/two-place-paste/server/internal/store"
 	"github.com/Mark7888/two-place-paste/server/internal/ws"
 )
@@ -206,7 +207,10 @@ func serve(args []string) error {
 	// and never sees a code — the code is in the fragment.
 	pairSrv := pairlink.New(logger)
 
-	handler := httpapi.NewWithOptions(httpapi.Options{Logger: logger}, wsSrv, adminSrv, pairSrv)
+	// The "Source code" link on the admin and pairing pages (AGPL-3.0 §13).
+	sourceSrv := sourcelink.New(cfg.SourceURL)
+
+	handler := httpapi.NewWithOptions(httpapi.Options{Logger: logger}, wsSrv, adminSrv, pairSrv, sourceSrv)
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           handler,

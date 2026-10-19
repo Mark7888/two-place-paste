@@ -26,6 +26,9 @@ pkg.go.dev only looks inside a module's folder for its license.
 
 - **The relay server is AGPL** so that anyone who runs a modified relay as a
   service for other people has to offer those people the modified source.
+  The relay's admin and pairing pages link to its source code for this; an
+  operator running a modified relay points the link at their version with
+  `TPP_SOURCE_URL`.
 - **Everything else is MPL** so the apps can be published in app stores (the
   Apple App Store's terms are incompatible with the GPL family), and so other
   projects can build compatible clients on the wire schema and the client core.

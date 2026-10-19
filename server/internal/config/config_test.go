@@ -64,6 +64,9 @@ func TestLoadDefaults(t *testing.T) {
 		t.Errorf("Blob limits = total %d, group %d, min free %d; want 0, %d, 0",
 			cfg.Blob.MaxTotalBytes, cfg.Blob.MaxGroupBytes, cfg.Blob.MinFreeBytes, DefaultGroupMax)
 	}
+	if cfg.SourceURL != DefaultSourceURL {
+		t.Errorf("SourceURL = %q, want %q", cfg.SourceURL, DefaultSourceURL)
+	}
 	if cfg.LogLevel != slog.LevelInfo {
 		t.Errorf("LogLevel = %s, want info", cfg.LogLevel)
 	}
@@ -190,6 +193,11 @@ func TestLoadValidationErrors(t *testing.T) {
 			name:    "public base url without scheme",
 			env:     map[string]string{"ADMIN_PASSWORD": "pw", "TPP_PUBLIC_BASE_URL": "tpp.example.com"},
 			wantErr: "must start with http:// or https://",
+		},
+		{
+			name:    "source url without scheme",
+			env:     map[string]string{"ADMIN_PASSWORD": "pw", "TPP_PUBLIC_BASE_URL": "https://x.example", "TPP_SOURCE_URL": "github.com/someone/fork"},
+			wantErr: "TPP_SOURCE_URL must start with http:// or https://",
 		},
 		{
 			name:    "unknown blob backend",
