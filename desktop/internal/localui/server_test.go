@@ -86,6 +86,11 @@ func (s *stubAPI) EntryPreview(context.Context, string) (EntryPreview, error) {
 	return EntryPreview{ID: "e1", Kind: "text", ContentType: "text/plain", Bytes: 5, Text: "hello"}, nil
 }
 
+func (s *stubAPI) EntryContent(context.Context, string) (EntryContent, error) {
+	s.record("content")
+	return EntryContent{ContentType: "audio/mpeg", Body: []byte("ID3")}, nil
+}
+
 func (s *stubAPI) Devices(context.Context) (RosterView, error) {
 	s.record("devices")
 	return RosterView{Epoch: 3, Devices: []DeviceView{{ID: "d1", Name: "laptop", This: true}, {ID: "d2", Name: "phone"}}}, nil
@@ -212,6 +217,8 @@ func TestOriginIsValidatedOnEveryRequest(t *testing.T) {
 		{"DELETE", "/api/skipped", ""},
 		{"GET", "/api/history", ""},
 		{"POST", "/api/entries/copy", `{"entry_id":"e1"}`},
+		{"POST", "/api/entries/preview", `{"entry_id":"e1"}`},
+		{"POST", "/api/entries/content", `{"entry_id":"e1"}`},
 		{"GET", "/api/devices", ""},
 		{"POST", "/api/devices/revoke/prepare", `{"device_id":"d2"}`},
 		{"POST", "/api/devices/revoke/confirm", `{"plan_id":"plan-1"}`},
@@ -635,6 +642,56 @@ func do(t *testing.T, srv *Server, method, path, body string, headers map[string
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 	return rec
+}
+
+// TestEntryContentIsNeverAPage pins how decrypted audio and video leave the
+// service: only to the page, only as a POST with the token, and labelled so
+// that no browser will render the bytes as a document on this origin.
+func TestEntryContentIsNeverAPage(t *testing.T) {
+	t.Parallel()
+
+	srv, api := newTestServer(t)
+	origin := fmt.Sprintf("http://127.0.0.1:%d", srv.Port())
+	headers := map[string]string{"Origin": origin, tokenHeader: "test-token"}
+
+	rec := do(t, srv, "POST", "/api/entries/content", `{"entry_id":"e1"}`, headers)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/entries/content = %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body)
+	}
+	if got := rec.Body.String(); got != "ID3" {
+		t.Errorf("POST /api/entries/content body = %q, want the entry's bytes", got)
+	}
+	for header, want := range map[string]string{
+		"Content-Type":            "audio/mpeg",
+		"Content-Length":          "3",
+		"Content-Disposition":     "attachment",
+		"Content-Security-Policy": "sandbox; default-src 'none'",
+		"X-Content-Type-Options":  "nosniff",
+		"Cache-Control":           "no-store",
+	} {
+		if got := rec.Header().Get(header); got != want {
+			t.Errorf("POST /api/entries/content %s = %q, want %q", header, got, want)
+		}
+	}
+
+	api.reset()
+	if rec := do(t, srv, "POST", "/api/entries/content", `{"entry_id":"e1"}`,
+		map[string]string{"Origin": origin}); rec.Code != http.StatusUnauthorized {
+		t.Errorf("POST /api/entries/content without a token = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	if rec := do(t, srv, "POST", "/api/entries/content", `{}`, headers); rec.Code != http.StatusBadRequest {
+		t.Errorf("POST /api/entries/content without an entry = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	do(t, srv, "GET", "/api/entries/content?entry_id=e1", "", headers)
+	if api.called("content") {
+		t.Error("the content endpoint was reached without a token, an entry id, or by a GET")
+	}
+
+	// The page may play only what it built itself.
+	rec = do(t, srv, "GET", "/app", "", nil)
+	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "media-src blob:;") {
+		t.Errorf("GET /app CSP = %q, want media from blob: URLs only", csp)
+	}
 }
 
 // TestForgetIsReachableAndDestructive pins the one endpoint whose whole job is

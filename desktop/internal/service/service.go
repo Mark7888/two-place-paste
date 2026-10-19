@@ -18,6 +18,7 @@ import (
 	"github.com/Mark7888/two-place-paste/desktop/internal/clipboard"
 	"github.com/Mark7888/two-place-paste/desktop/internal/config"
 	"github.com/Mark7888/two-place-paste/desktop/internal/localui"
+	"github.com/Mark7888/two-place-paste/desktop/internal/preview"
 	"github.com/Mark7888/two-place-paste/pkg/tppclient"
 )
 
@@ -36,6 +37,11 @@ const previewRunes = 240
 // URL. Base64 costs a third on top, and everything past this is a thumbnail
 // nobody is squinting at anyway.
 const maxPreviewImageBytes = 4 << 20
+
+// previewFileRunes bounds the preview of a text file. A file is opened to be
+// read, and 240 characters of a source file is its licence header; past this
+// the screen says it is shown in part and Copy has the rest.
+const previewFileRunes = 4000
 
 // requestTimeout bounds one relay round trip made on the UI's behalf.
 const requestTimeout = 30 * time.Second
@@ -425,23 +431,16 @@ func (s *Service) clipboardView(ctx context.Context) localui.ClipboardView {
 	view.Kind = string(c.Kind())
 	view.Filename = c.Filename
 	view.Bytes = len(c.Body)
-	view.Preview = preview(c)
+	view.Preview = clipboardPreview(c)
 	return view
 }
 
-// preview renders at most previewRunes of a text payload. Anything that is not
-// text has no preview: rendering a file's bytes helps nobody, and the UI shows
-// its kind and size instead.
-func preview(c clipboard.Content) string {
-	text := c.Text()
-	if text == "" {
-		return ""
-	}
-	if utf8.RuneCountInString(text) <= previewRunes {
-		return text
-	}
-	runes := []rune(text)
-	return string(runes[:previewRunes]) + "…"
+// clipboardPreview renders at most previewRunes of the local clipboard's text.
+// Anything that is not text has no preview here: the Sync screen shows its
+// kind and size instead.
+func clipboardPreview(c clipboard.Content) string {
+	text, _ := previewText([]byte(c.Text()), previewRunes)
+	return text
 }
 
 // Sync implements localui.API: it moves the latest entry in one direction.
@@ -604,32 +603,19 @@ func (s *Service) CopyEntry(ctx context.Context, entryID string) (localui.SyncRe
 // rekey replaced the key it was written under, so this device cannot read it
 // at all (SPEC §3.3). The UI is told the same thing it would be told for a
 // copy, so a history list can offer previews only for the rows it can honour.
+//
+// Audio and video come back as a description only: the page fetches their
+// bytes from EntryContent when it plays them.
 func (s *Service) EntryPreview(ctx context.Context, entryID string) (localui.EntryPreview, error) {
-	relay, err := s.ready()
+	item, format, err := s.openForPreview(ctx, entryID)
 	if err != nil {
 		return localui.EntryPreview{}, err
-	}
-	item, err := relay.GetEntry(ctx, entryID)
-	switch {
-	case errors.Is(err, tppclient.ErrStaleEntry):
-		return localui.EntryPreview{}, localui.Errorf(http.StatusGone, err,
-			"that entry predates this device's group key and cannot be opened")
-	case err != nil:
-		return localui.EntryPreview{}, s.relayError("fetch that entry", err)
 	}
 
 	c := clipboard.Content{ContentType: item.ContentType, Body: item.Body}
 	if item.Filename != "" {
 		c.Filename = clipboard.SafeName(item.Filename)
 	}
-	// The history offers no preview for anything but text and images, from
-	// the entry's header; this holds the line for an entry with no header, or
-	// one whose header disagreed with what it holds.
-	if headerKind(tppclient.EntryHeader{ContentType: item.ContentType, Filename: item.Filename}) == clipboard.KindFile {
-		return localui.EntryPreview{}, localui.Errorf(http.StatusUnprocessableEntity, nil,
-			"this entry has no preview; copy it instead")
-	}
-
 	view := localui.EntryPreview{
 		ID:          item.Meta.ID,
 		Epoch:       item.Meta.Epoch,
@@ -637,28 +623,95 @@ func (s *Service) EntryPreview(ctx context.Context, entryID string) (localui.Ent
 		Filename:    c.Filename,
 		Bytes:       len(item.Body),
 		Kind:        string(c.Kind()),
+		Render:      string(format.Render),
+		Format:      format.Name,
 	}
 
-	switch c.Kind() {
-	case clipboard.KindText:
-		text := c.Text()
-		view.Text = preview(c)
-		view.Truncated = utf8.RuneCountInString(text) > previewRunes
-	case clipboard.KindImage:
+	switch format.Render {
+	case preview.RenderText:
+		limit := previewRunes
+		if item.Filename != "" {
+			limit = previewFileRunes
+		}
+		view.Text, view.Truncated = previewText(item.Body, limit)
+	case preview.RenderImage:
 		// Inlined as a data URL so the page renders it without a second
 		// request for a decrypted body. Past the bound the screen says how big
 		// it is instead: a browser that has to parse 20 MB of base64 to draw a
-		// thumbnail is a browser that stops answering.
+		// thumbnail is a browser that stops answering. The type is the
+		// table's, not the sender's.
 		if len(item.Body) > maxPreviewImageBytes {
 			view.ImageTooLarge = true
 			break
 		}
-		view.ImageDataURL = "data:" + item.ContentType + ";base64," +
+		view.ImageDataURL = "data:" + format.MIME + ";base64," +
 			base64.StdEncoding.EncodeToString(item.Body)
+	case preview.RenderAudio, preview.RenderVideo:
+		// Nothing inline: see EntryContent.
 	}
 
-	s.logger.DebugContext(ctx, "entry previewed", "entry_id", item.Meta.ID, "kind", view.Kind)
+	s.logger.DebugContext(ctx, "entry previewed", "entry_id", item.Meta.ID, "render", view.Render)
 	return view, nil
+}
+
+// EntryContent implements localui.API: it decrypts one audio or video entry
+// and hands its bytes to the page to play. Anything else is refused — text
+// and images arrive inside EntryPreview, and every other file is copied, not
+// downloaded through the browser.
+func (s *Service) EntryContent(ctx context.Context, entryID string) (localui.EntryContent, error) {
+	item, format, err := s.openForPreview(ctx, entryID)
+	if err != nil {
+		return localui.EntryContent{}, err
+	}
+	if !format.Render.Streamed() {
+		return localui.EntryContent{}, localui.Errorf(http.StatusUnprocessableEntity, nil,
+			"this entry is not audio or video")
+	}
+	s.logger.DebugContext(ctx, "entry played", "entry_id", item.Meta.ID, "render", string(format.Render))
+	return localui.EntryContent{ContentType: format.MIME, Body: item.Body}, nil
+}
+
+// openForPreview fetches and decrypts one entry for a preview, and refuses it
+// unless the table has a format for it and its bytes are what its header says.
+//
+// The history offers previews from the header alone; this holds the line for
+// an entry with no header, one whose header disagrees with what it holds, and
+// a file whose name claims a type its bytes are not.
+func (s *Service) openForPreview(ctx context.Context, entryID string) (tppclient.Item, preview.Format, error) {
+	relay, err := s.ready()
+	if err != nil {
+		return tppclient.Item{}, preview.Format{}, err
+	}
+	item, err := relay.GetEntry(ctx, entryID)
+	switch {
+	case errors.Is(err, tppclient.ErrStaleEntry):
+		return tppclient.Item{}, preview.Format{}, localui.Errorf(http.StatusGone, err,
+			"that entry predates this device's group key and cannot be opened")
+	case err != nil:
+		return tppclient.Item{}, preview.Format{}, s.relayError("fetch that entry", err)
+	}
+
+	format, ok := preview.ForEntry(item.Filename, item.ContentType)
+	if !ok {
+		return tppclient.Item{}, preview.Format{}, localui.Errorf(http.StatusUnprocessableEntity, nil,
+			"this entry has no preview; copy it instead")
+	}
+	if !format.Verify(item.Body) {
+		return tppclient.Item{}, preview.Format{}, localui.Errorf(http.StatusUnprocessableEntity, nil,
+			"this entry's content does not match its type, so it is not previewed; copy it instead")
+	}
+	return item, format, nil
+}
+
+// previewText renders at most limit runes of a text body, without a leading
+// byte-order mark, and says whether there was more.
+func previewText(body []byte, limit int) (string, bool) {
+	text := strings.TrimPrefix(string(body), "\ufeff")
+	if utf8.RuneCountInString(text) <= limit {
+		return text, false
+	}
+	runes := []rune(text)
+	return string(runes[:limit]) + "…", true
 }
 
 // History implements localui.API.
@@ -1676,9 +1729,9 @@ func (s *Service) entryView(m tppclient.EntryMeta) *localui.EntryView {
 
 // entryView describes an entry for the screen. Whether it can be previewed is
 // decided here, from its header, so the history never fetches an entry it
-// would not show: only text and images are previewed, and only within the
-// auto-download limit — a preview is a download, and one the user did not
-// ask for past that limit is the same download the limit holds back.
+// would not show: only formats in the preview table are previewed, and only
+// within the auto-download limit — a preview is a download, and one the user
+// did not ask for past that limit is the same download the limit holds back.
 func entryView(m tppclient.EntryMeta, downloadLimit int64) *localui.EntryView {
 	v := &localui.EntryView{
 		ID:        m.ID,
@@ -1699,13 +1752,15 @@ func entryView(m tppclient.EntryMeta, downloadLimit int64) *localui.EntryView {
 		v.Filename = clipboard.SafeName(h.Filename)
 	}
 	v.Kind = string(headerKind(*h))
+	format, ok := preview.ForEntry(h.Filename, h.ContentType)
 	switch {
-	case v.Kind == string(clipboard.KindFile):
+	case !ok:
 		v.NoPreview = "no preview for this type"
 	case downloadLimit > 0 && size > downloadLimit:
 		v.NoPreview = "larger than the auto-download limit"
 	default:
 		v.Previewable = true
+		v.Render = string(format.Render)
 	}
 	return v
 }

@@ -47,10 +47,20 @@ export interface EntryView {
   filename?: string;
   /** The plaintext size, when the type is known. */
   bytes?: number;
-  /** Text or an image within the auto-download limit; no_preview says why not. */
+  /** A format the service can draw, within the auto-download limit;
+   *  no_preview says why not. */
   previewable: boolean;
   no_preview?: string;
+  /** How a previewable entry is drawn. */
+  render?: Render;
 }
+
+/**
+ * Render is how the service says an entry is drawn. Each value has a
+ * component in src/preview; `kind` is separate, and says what the entry
+ * becomes when copied.
+ */
+export type Render = "text" | "image" | "audio" | "video";
 
 /** SkippedView is an automatic transfer the user's size limit held back. */
 export interface SkippedView {
@@ -121,6 +131,9 @@ export interface EntryPreview {
   filename?: string;
   bytes: number;
   kind: "text" | "image" | "file";
+  render: Render;
+  /** The format's name for the screen, from the service's preview table. */
+  format: string;
   text?: string;
   truncated?: boolean;
   image_data_url?: string;
@@ -292,8 +305,8 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+function send(method: string, path: string, body?: unknown): Promise<Response> {
+  return fetch(path, {
     method,
     headers: {
       [TOKEN_HEADER]: token,
@@ -303,16 +316,35 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     credentials: "omit",
     cache: "no-store",
   });
-  const text = await res.text();
-  const parsed = text ? (JSON.parse(text) as unknown) : {};
-  if (!res.ok) {
-    const message =
-      typeof parsed === "object" && parsed !== null && "error" in parsed
-        ? String((parsed as { error: unknown }).error)
-        : `the service answered ${res.status}`;
-    throw new ApiError(res.status, message);
+}
+
+/** failure turns a refused response's JSON error into an ApiError. */
+function failure(status: number, text: string): ApiError {
+  let parsed: unknown = {};
+  try {
+    parsed = text ? (JSON.parse(text) as unknown) : {};
+  } catch {
+    // Not JSON: fall back to the status below.
   }
-  return parsed as T;
+  const message =
+    typeof parsed === "object" && parsed !== null && "error" in parsed
+      ? String((parsed as { error: unknown }).error)
+      : `the service answered ${status}`;
+  return new ApiError(status, message);
+}
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await send(method, path, body);
+  const text = await res.text();
+  if (!res.ok) throw failure(res.status, text);
+  return (text ? JSON.parse(text) : {}) as T;
+}
+
+/** requestBlob is request for an endpoint that answers with bytes, not JSON. */
+async function requestBlob(method: string, path: string, body?: unknown): Promise<Blob> {
+  const res = await send(method, path, body);
+  if (!res.ok) throw failure(res.status, await res.text());
+  return res.blob();
 }
 
 export const api = {
@@ -329,6 +361,10 @@ export const api = {
   // browser may prefetch, revisit from history or keep in a cache.
   previewEntry: (entryId: string) =>
     request<EntryPreview>("POST", "/api/entries/preview", { entry_id: entryId }),
+  // The decrypted bytes of an audio or video entry, for the page to play from
+  // a blob URL: a media element cannot send the token header itself.
+  entryContent: (entryId: string) =>
+    requestBlob("POST", "/api/entries/content", { entry_id: entryId }),
   devices: () => request<RosterView>("GET", "/api/devices"),
   prepareRevoke: (deviceId: string) =>
     request<RevokePlan>("POST", "/api/devices/revoke/prepare", { device_id: deviceId }),

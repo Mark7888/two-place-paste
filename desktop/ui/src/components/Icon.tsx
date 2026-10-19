@@ -32,6 +32,8 @@ export type IconName =
   | "text"
   | "image"
   | "file"
+  | "audio"
+  | "video"
   | "trash";
 
 // Paths are stroked, never filled, so one set reads correctly on both themes.
@@ -54,6 +56,8 @@ const paths: Record<IconName, string> = {
   text: "M5 6h14M5 11h14M5 16h9",
   image: "M4 5h16v14H4zM4 16l4.5-4.5 4 4L16 12l4 4M9.5 9.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z",
   file: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5",
+  audio: "M9 18V5l11-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM20 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z",
+  video: "M3 6h12v12H3zM15 10l6-3v10l-6-3",
   trash: "M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3",
 };
 

@@ -546,8 +546,11 @@ binary, served from localhost and opened in the user's default browser.
 - Optional applying of entries other devices upload to the local clipboard (toggle, off
   by default; §6)
 - Manual sync, with the direction asked for when it cannot be worked out
-- History browser, listed when the tab is opened, with a preview of text and image
-  entries at the current epoch
+- History browser, listed when the tab is opened, with a preview of entries at the
+  current epoch: text and images, and files of a type in the desktop's preview table
+  (`desktop/internal/preview`) — images and text drawn inline, audio and video played
+  from bytes the page fetches with its token. A file whose bytes do not match its name
+  is not previewed.
 - Device management and pairing (show QR, scan not applicable — paste token)
 
 **Autostart on login:** user setting, **default off**. Implemented via launchd plist on
