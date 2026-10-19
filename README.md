@@ -61,4 +61,11 @@ The documentation site is in [`docs/site/`](docs/site/) (Starlight):
 
 ## License
 
-Not yet chosen.
+Copyright (C) 2026 Mark Licsauer
+
+TwoPlacePaste is licensed under the [Mozilla Public License 2.0](LICENSE),
+except the relay server in [`server/`](server/), which is licensed under the
+[GNU Affero General Public License v3.0 or later](server/LICENSE). The
+TwoPlacePaste name and logo are not covered by either license. See
+[`LICENSING.md`](LICENSING.md) for the details and
+[`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a pull request.
