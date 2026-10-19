@@ -18,10 +18,6 @@ name: tpp
 
 services:
   redis:
-    # Redis 8 is open source again (AGPL-3.0 is one of its licenses); 7.4 is
-    # not. It also reads the data files 7.4 wrote, so an existing deployment
-    # upgrades in place on the next pull. Don't pin an older major: Redis
-    # cannot load data written by a newer version.
     image: redis:8-alpine
     restart: unless-stopped
     # The config file carries the two settings this deployment cannot do

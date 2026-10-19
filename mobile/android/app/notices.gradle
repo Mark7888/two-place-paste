@@ -7,8 +7,7 @@
 // the file, together with the npm packages, into the variant's assets.
 // NoticesModule reads it from there for Settings.
 //
-// Applied from build.gradle. The POM lookup is a closure of its own so it can
-// be run without the Android plugin.
+// Applied from build.gradle.
 
 // pomLicenses returns [[name:, url:]] for a Maven module, following parent
 // POMs until one declares a license. An artefact whose POM cannot be fetched or
