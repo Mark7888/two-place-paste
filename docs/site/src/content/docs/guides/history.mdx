@@ -8,14 +8,39 @@ import history from '../../../assets/screenshots/desktop-history.webp';
 
 The **History** tab lists everything the group wrote in the last 24 hours, newest first.
 
-<Image src={history} alt="The History tab listing text, image and file entries" class="screenshot" />
+<Image src={history} alt="The History tab listing text, audio, image and file entries, with an audio entry open in a player" class="screenshot" />
 
 - Each row shows when the entry was written, its type and its size. These come from the entry's
   small encrypted header, so listing History downloads none of the entries themselves.
 - **Preview** downloads and decrypts the entry to show it here, without touching your clipboard.
-  Files are not previewed.
 - **Copy** downloads and decrypts the entry and puts it on this computer's clipboard.
 - **Refresh** reloads the list.
+
+## What can be previewed
+
+Text and images you copied can always be previewed. Copied files can be previewed when they are one
+of these types:
+
+| Type | Files |
+|---|---|
+| Images | PNG, JPEG, GIF, WebP, BMP, ICO, AVIF, SVG |
+| Text | Plain text, logs, Markdown, CSV, JSON, XML, YAML, TOML, config files, HTML and most source code |
+| Audio | MP3, WAV, Ogg and Opus, FLAC, AAC and M4A |
+| Video | MP4, WebM, MOV |
+
+Anything else, such as a PDF or a Word document, shows **No preview**; use **Copy** to open it. An
+entry larger than **Download automatically up to** in [Settings](/two-place-paste/guides/settings/)
+shows **No preview** too, because a preview downloads the whole entry. **Copy** is never limited.
+
+A few details:
+
+- A text file shows its first 4,000 characters; **Shown in part** means there is more. An HTML file
+  is shown as its source code, not as a web page.
+- Audio and video open in a player and only start when you press play. Which formats actually play
+  depends on your browser: an iPhone `.mov` recorded in HEVC, for example, usually plays only in
+  Safari. When the browser can't play a file, the preview says so; **Copy** still works.
+- A file whose content doesn't match its name (say, a `.png` that isn't really an image) is not
+  previewed. You can still copy it.
 
 Entries disappear on their own 24 hours after they were written. On a busy relay with tight storage
 limits, an older entry can be removed earlier to make room; it then simply disappears from the list.
