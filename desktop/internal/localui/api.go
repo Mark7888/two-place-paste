@@ -27,6 +27,10 @@ type API interface {
 	// two apart is what lets a user look at an entry without replacing what
 	// they have copied.
 	EntryPreview(ctx context.Context, entryID string) (EntryPreview, error)
+	// EntryContent decrypts one audio or video entry and returns its bytes,
+	// for the page to play. It refuses every other kind of entry: it is not
+	// a way to download any decrypted file.
+	EntryContent(ctx context.Context, entryID string) (EntryContent, error)
 
 	// Devices returns the group roster (SPEC §3.3 step 1).
 	Devices(ctx context.Context) (RosterView, error)

@@ -136,6 +136,39 @@ func (s *Server) handleEntryPreview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, view)
 }
 
+// handleEntryContent sends the decrypted bytes of an audio or video entry for
+// the page to play from a blob. A POST for the same reason as a preview, and
+// with the token in a header like every other call: a media element could
+// fetch a URL on its own, but only by putting what unlocks it in that URL.
+//
+// The response is never something the browser will treat as a page: its type
+// is the preview table's, sniffing is off, it is marked as an attachment, and
+// its own CSP sandboxes it with nothing allowed.
+func (s *Server) handleEntryContent(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		EntryID string `json:"entry_id"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.EntryID == "" {
+		writeError(w, http.StatusBadRequest, "entry_id is required")
+		return
+	}
+	content, err := s.api.EntryContent(r.Context(), body.EntryID)
+	if err != nil {
+		s.fail(w, r, "play an entry", err)
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", content.ContentType)
+	h.Set("Content-Length", strconv.Itoa(len(content.Body)))
+	h.Set("Content-Disposition", "attachment")
+	h.Set("Content-Security-Policy", "sandbox; default-src 'none'")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(content.Body)
+}
+
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	roster, err := s.api.Devices(r.Context())
 	if err != nil {

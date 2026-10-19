@@ -13,11 +13,14 @@ import type { ComponentType } from "react";
 import type { EntryPreview, EntryView, Render } from "../api";
 import type { IconName } from "../components/Icon";
 import { ImagePreview } from "./ImagePreview";
+import { MediaPreview } from "./MediaPreview";
 import { TextPreview } from "./TextPreview";
 
 const renderers: Record<Render, ComponentType<{ preview: EntryPreview }>> = {
   text: TextPreview,
   image: ImagePreview,
+  audio: MediaPreview,
+  video: MediaPreview,
 };
 
 /** PreviewBody draws an opened entry with the component for its renderer. */
@@ -29,6 +32,6 @@ export function PreviewBody({ preview }: { preview: EntryPreview }) {
 /** entryIcon picks a row's icon: what the entry previews as when it does,
  *  else what it is on the clipboard. */
 export function entryIcon(e: Pick<EntryView, "kind" | "render">): IconName {
-  if (e.render === "image") return "image";
+  if (e.render === "image" || e.render === "audio" || e.render === "video") return e.render;
   return e.kind ?? "file";
 }

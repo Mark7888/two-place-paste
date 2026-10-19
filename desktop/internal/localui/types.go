@@ -192,6 +192,13 @@ type EntryPreview struct {
 	ImageTooLarge bool   `json:"image_too_large,omitempty"`
 }
 
+// EntryContent is the decrypted body of an audio or video entry, as the page
+// plays it. ContentType comes from the preview table, never from the sender.
+type EntryContent struct {
+	ContentType string
+	Body        []byte
+}
+
 // DeviceView is one group member, by name, as SPEC §3.3 step 2 requires.
 type DeviceView struct {
 	ID        string     `json:"id"`

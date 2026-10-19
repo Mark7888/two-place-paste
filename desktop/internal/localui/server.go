@@ -183,6 +183,7 @@ func (s *Server) routes() http.Handler {
 	api("GET /api/history", s.handleHistory)
 	api("POST /api/entries/copy", s.handleCopyEntry)
 	api("POST /api/entries/preview", s.handleEntryPreview)
+	api("POST /api/entries/content", s.handleEntryContent)
 	api("GET /api/devices", s.handleDevices)
 	api("POST /api/devices/revoke/prepare", s.handlePrepareRevoke)
 	api("POST /api/devices/revoke/confirm", s.handleConfirmRevoke)
@@ -235,10 +236,11 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 
 // handleApp serves the single page. Its CSP is as narrow as a page that talks
 // only to its own origin can be: no remote script, no remote style, no frame,
-// and connections to nowhere but here.
+// and connections to nowhere but here. Media plays only from blob: URLs,
+// which only the page itself can make — from bytes it fetched with its token.
 func (s *Server) handleApp(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Security-Policy",
-		"default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "+
+		"default-src 'self'; img-src 'self' data:; media-src blob:; style-src 'self' 'unsafe-inline'; "+
 			"connect-src 'self' ws://127.0.0.1:"+strconv.Itoa(s.port)+" ws://localhost:"+strconv.Itoa(s.port)+
 			"; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 	r2 := r.Clone(r.Context())

@@ -41,6 +41,7 @@ func TestHistoryShowsTypesAndGatesPreviews(t *testing.T) {
 	other := put(tppclient.Item{ContentType: "application/json", Body: []byte("{}")})
 	pngFile := put(tppclient.Item{ContentType: clipboard.TypeOctetStream, Filename: "shot.png", Body: []byte(pngMagic)})
 	goFile := put(tppclient.Item{ContentType: clipboard.TypeOctetStream, Filename: "main.go", Body: []byte("package main")})
+	mp3File := put(tppclient.Item{ContentType: clipboard.TypeOctetStream, Filename: "song.mp3", Body: []byte("ID3")})
 	bigFile := put(tppclient.Item{ContentType: clipboard.TypeOctetStream, Filename: "big.txt", Body: make([]byte, 101)})
 	f.relay.push(tppclient.Item{ContentType: clipboard.TypeText, Body: []byte("from an older client")})
 
@@ -64,6 +65,7 @@ func TestHistoryShowsTypesAndGatesPreviews(t *testing.T) {
 		{other, "file", "", false},
 		{pngFile, "file", "image", true},
 		{goFile, "file", "text", true},
+		{mp3File, "file", "audio", true},
 		{bigFile, "file", "", false},
 		{"pushed", "", "", false},
 	} {
@@ -158,6 +160,16 @@ func TestEntryPreviewOfFiles(t *testing.T) {
 			},
 		},
 		{
+			name: "audio file comes without its body",
+			item: tppclient.Item{ContentType: clipboard.TypeOctetStream, Filename: "song.mp3", Body: []byte("ID3\x04")},
+			check: func(t *testing.T, v localui.EntryPreview) {
+				t.Helper()
+				if v.Kind != "file" || v.Render != "audio" || v.Format != "MP3 audio" || v.Text != "" || v.ImageDataURL != "" {
+					t.Errorf("EntryPreview() = %+v, want an audio description and no body", v)
+				}
+			},
+		},
+		{
 			name:    "a page named as a picture",
 			item:    tppclient.Item{ContentType: clipboard.TypeOctetStream, Filename: "shot.png", Body: []byte("<html><script>alert(1)</script>")},
 			wantErr: http.StatusUnprocessableEntity,
@@ -197,6 +209,58 @@ func TestEntryPreviewOfFiles(t *testing.T) {
 				t.Fatalf("EntryPreview() error = %v", err)
 			}
 			tt.check(t, view)
+		})
+	}
+}
+
+// TestEntryContentPlaysOnlyAudioAndVideo: the bytes the page plays come under
+// the table's media type, and nothing but audio and video comes out this way.
+func TestEntryContentPlaysOnlyAudioAndVideo(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		item     tppclient.Item
+		wantType string
+		wantErr  int
+	}{
+		{name: "mp3", item: tppclient.Item{ContentType: clipboard.TypeOctetStream, Filename: "song.mp3", Body: []byte("ID3\x04")}, wantType: "audio/mpeg"},
+		{name: "webm", item: tppclient.Item{ContentType: clipboard.TypeOctetStream, Filename: "clip.webm", Body: []byte("\x1a\x45\xdf\xa3\x9f\x42\x82\x84webm")}, wantType: "video/webm"},
+		{name: "unnamed audio", item: tppclient.Item{ContentType: "audio/ogg", Body: []byte("OggS\x00")}, wantType: "audio/ogg"},
+		{name: "text file", item: tppclient.Item{ContentType: clipboard.TypeOctetStream, Filename: "notes.txt", Body: []byte("hi")}, wantErr: http.StatusUnprocessableEntity},
+		{name: "image", item: tppclient.Item{ContentType: clipboard.TypeImagePNG, Body: []byte(pngMagic)}, wantErr: http.StatusUnprocessableEntity},
+		{name: "a page named as a video", item: tppclient.Item{ContentType: clipboard.TypeOctetStream, Filename: "clip.mp4", Body: []byte("<html>")}, wantErr: http.StatusUnprocessableEntity},
+		{name: "unknown file", item: tppclient.Item{ContentType: clipboard.TypeOctetStream, Filename: "film.mkv", Body: []byte("\x1a\x45\xdf\xa3")}, wantErr: http.StatusUnprocessableEntity},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			ctx := context.Background()
+			item := tt.item
+			item.CreatedAt = f.now()
+			meta, err := f.relay.PutEntry(ctx, item)
+			if err != nil {
+				t.Fatalf("PutEntry() error = %v", err)
+			}
+			got, err := f.svc.EntryContent(ctx, meta.ID)
+			if tt.wantErr != 0 {
+				var se *localui.StatusError
+				if !errors.As(err, &se) || se.Code != tt.wantErr {
+					t.Fatalf("EntryContent() error = %v, want %d", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("EntryContent() error = %v", err)
+			}
+			if got.ContentType != tt.wantType || string(got.Body) != string(tt.item.Body) {
+				t.Errorf("EntryContent() = %q, %d bytes, want %q and the entry's bytes", got.ContentType, len(got.Body), tt.wantType)
+			}
+			if f.clip.writes != 0 {
+				t.Errorf("playing an entry wrote the clipboard %d times, want 0", f.clip.writes)
+			}
 		})
 	}
 }

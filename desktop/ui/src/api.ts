@@ -60,7 +60,7 @@ export interface EntryView {
  * component in src/preview; `kind` is separate, and says what the entry
  * becomes when copied.
  */
-export type Render = "text" | "image";
+export type Render = "text" | "image" | "audio" | "video";
 
 /** SkippedView is an automatic transfer the user's size limit held back. */
 export interface SkippedView {
@@ -305,8 +305,8 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+function send(method: string, path: string, body?: unknown): Promise<Response> {
+  return fetch(path, {
     method,
     headers: {
       [TOKEN_HEADER]: token,
@@ -316,16 +316,35 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     credentials: "omit",
     cache: "no-store",
   });
-  const text = await res.text();
-  const parsed = text ? (JSON.parse(text) as unknown) : {};
-  if (!res.ok) {
-    const message =
-      typeof parsed === "object" && parsed !== null && "error" in parsed
-        ? String((parsed as { error: unknown }).error)
-        : `the service answered ${res.status}`;
-    throw new ApiError(res.status, message);
+}
+
+/** failure turns a refused response's JSON error into an ApiError. */
+function failure(status: number, text: string): ApiError {
+  let parsed: unknown = {};
+  try {
+    parsed = text ? (JSON.parse(text) as unknown) : {};
+  } catch {
+    // Not JSON: fall back to the status below.
   }
-  return parsed as T;
+  const message =
+    typeof parsed === "object" && parsed !== null && "error" in parsed
+      ? String((parsed as { error: unknown }).error)
+      : `the service answered ${status}`;
+  return new ApiError(status, message);
+}
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await send(method, path, body);
+  const text = await res.text();
+  if (!res.ok) throw failure(res.status, text);
+  return (text ? JSON.parse(text) : {}) as T;
+}
+
+/** requestBlob is request for an endpoint that answers with bytes, not JSON. */
+async function requestBlob(method: string, path: string, body?: unknown): Promise<Blob> {
+  const res = await send(method, path, body);
+  if (!res.ok) throw failure(res.status, await res.text());
+  return res.blob();
 }
 
 export const api = {
@@ -342,6 +361,10 @@ export const api = {
   // browser may prefetch, revisit from history or keep in a cache.
   previewEntry: (entryId: string) =>
     request<EntryPreview>("POST", "/api/entries/preview", { entry_id: entryId }),
+  // The decrypted bytes of an audio or video entry, for the page to play from
+  // a blob URL: a media element cannot send the token header itself.
+  entryContent: (entryId: string) =>
+    requestBlob("POST", "/api/entries/content", { entry_id: entryId }),
   devices: () => request<RosterView>("GET", "/api/devices"),
   prepareRevoke: (deviceId: string) =>
     request<RevokePlan>("POST", "/api/devices/revoke/prepare", { device_id: deviceId }),

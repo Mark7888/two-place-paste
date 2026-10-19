@@ -654,6 +654,23 @@ func (s *Service) EntryPreview(ctx context.Context, entryID string) (localui.Ent
 	return view, nil
 }
 
+// EntryContent implements localui.API: it decrypts one audio or video entry
+// and hands its bytes to the page to play. Anything else is refused — text
+// and images arrive inside EntryPreview, and every other file is copied, not
+// downloaded through the browser.
+func (s *Service) EntryContent(ctx context.Context, entryID string) (localui.EntryContent, error) {
+	item, format, err := s.openForPreview(ctx, entryID)
+	if err != nil {
+		return localui.EntryContent{}, err
+	}
+	if !format.Render.Streamed() {
+		return localui.EntryContent{}, localui.Errorf(http.StatusUnprocessableEntity, nil,
+			"this entry is not audio or video")
+	}
+	s.logger.DebugContext(ctx, "entry played", "entry_id", item.Meta.ID, "render", string(format.Render))
+	return localui.EntryContent{ContentType: format.MIME, Body: item.Body}, nil
+}
+
 // openForPreview fetches and decrypts one entry for a preview, and refuses it
 // unless the table has a format for it and its bytes are what its header says.
 //
