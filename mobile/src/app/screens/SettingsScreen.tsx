@@ -14,7 +14,7 @@ import { Alert, Linking, Text, View } from 'react-native';
 
 import { publicKey, toHex } from '../../core';
 import { tile } from '../../platform';
-import { LicensesSheet } from '../LicensesSheet';
+import { LicensesScreen } from '../LicensesScreen';
 import { useSession } from '../SessionContext';
 import { failureMessage } from '../session';
 import { Button, Notice, Screen, Section } from '../ui';
@@ -117,7 +117,7 @@ export function SettingsScreen(): React.JSX.Element {
 
       {message !== '' && <Notice message={message} tone="error" />}
 
-      <LicensesSheet visible={showLicenses} onClose={() => setShowLicenses(false)} />
+      <LicensesScreen visible={showLicenses} onClose={() => setShowLicenses(false)} />
     </Screen>
   );
 }
