@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
-    "build": "node scripts/clean-dist.mjs && tsc --noEmit && vite build",
+    "build": "node scripts/clean-dist.mjs && tsc --noEmit && vite build && node scripts/notices.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

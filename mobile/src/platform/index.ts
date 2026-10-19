@@ -14,5 +14,6 @@ export { entryCache } from './entryCache';
 export { secureStore } from './secureStore';
 export { deviceInfo } from './deviceInfo';
 export { tile } from './tile';
+export { notices } from './notices';
 export { clipboardTimestamp } from './clipboardTimestamp';
 export * from './types';

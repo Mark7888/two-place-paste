@@ -68,3 +68,7 @@ A contribution is licensed under the license of the folder it changes; there is 
 license agreement. Don't move or copy code between `server/` and the rest of the repository — that
 would change its license. See
 [`CONTRIBUTING.md`](https://github.com/Mark7888/two-place-paste/blob/master/CONTRIBUTING.md).
+
+Every shipped build carries the licenses of the libraries it is built from, generated at build time
+by `scripts/notices/notices.mjs`. The Docker build, the desktop UI's `npm run build` and the
+Android build run it on their own; nothing about it is maintained by hand.

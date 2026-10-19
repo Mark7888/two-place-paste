@@ -54,6 +54,17 @@ can tell it apart from the official one.
 Dependencies keep their own licenses. Generated and vendored code follows the
 license of the folder it is generated into.
 
+Most of those licenses (MIT, BSD, ISC, Apache-2.0) ask that a binary
+distribution carry their copyright notices and license texts. Every build does
+that with a notices file written by [`scripts/notices`](scripts/notices/notices.mjs)
+from what the build actually used:
+
+| Build | Where the notices are |
+|---|---|
+| Relay (Docker image) | `/usr/share/doc/tpp/THIRD_PARTY_NOTICES.txt`, next to the relay's `LICENSE` and `LICENSE.MPL-2.0` |
+| Desktop app | Embedded; **Settings → About → Open-source licenses** |
+| Android app | In the APK's assets; **Settings → About → Open-source licenses** |
+
 ## Contributions
 
 Contributions are accepted under the license of the folder they change: MPL-2.0

@@ -60,3 +60,7 @@ The TwoPlacePaste name and logo are not covered by either license.
 [`LICENSING.md`](https://github.com/Mark7888/two-place-paste/blob/master/LICENSING.md) has the
 details. If you run your own relay, see
 [License](/two-place-paste/self-hosting/overview/#license) for what that means for you.
+
+The open-source libraries each app is built from are listed, with their licenses, under
+**Settings → About → Open-source licenses** in the desktop and Android apps, and in
+`/usr/share/doc/tpp/` in the relay's Docker image.

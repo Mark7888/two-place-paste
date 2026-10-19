@@ -288,6 +288,29 @@ export function SettingsPanel({
         </div>
       </section>
 
+      {/*
+        The notices file is written by the UI build next to these assets
+        (scripts/notices.mjs), so it is served like them, without the token.
+      */}
+      <section className="group">
+        <h2>About</h2>
+        <div className="card stack" style={{ gap: "0.85rem" }}>
+          <p className="muted">
+            TwoPlacePaste is open source under the Mozilla Public License 2.0, and is built on other
+            open-source software.
+          </p>
+          <p>
+            <a href="https://github.com/Mark7888/two-place-paste" target="_blank" rel="noreferrer">
+              Source code
+            </a>
+            {" · "}
+            <a href="/THIRD_PARTY_NOTICES.txt" target="_blank" rel="noreferrer">
+              Open-source licenses
+            </a>
+          </p>
+        </div>
+      </section>
+
       <Modal
         open={confirmingLeave}
         title="Leave the group?"
