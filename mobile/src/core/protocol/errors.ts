@@ -23,6 +23,8 @@ export type TppErrorKind =
   | 'epoch-ahead'
   /** The relay no longer knows this device: it was revoked while away (SPEC §3.3 step 5). */
   | 'revoked'
+  /** The server admin deleted this device's group. Like 'revoked', nothing more can be done in it. */
+  | 'group-deleted'
   /** The connection is gone. */
   | 'disconnected'
   /** The client was closed. */

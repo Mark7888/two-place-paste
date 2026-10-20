@@ -41,6 +41,10 @@ type State struct {
 	// GroupKey is the current group key, unwrapped. Empty until this device
 	// joins a group.
 	GroupKey []byte `json:"group_key"`
+
+	// GroupName is the group's display name as the server admin set it, kept
+	// so a shell can show it before the first connection. Not a secret.
+	GroupName string `json:"group_name,omitempty"`
 }
 
 // InGroup reports whether this state can talk to a group.

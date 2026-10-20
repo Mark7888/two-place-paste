@@ -72,6 +72,10 @@ export interface Snapshot {
   notice: string;
   /** probablyRevoked is set when the relay is up but refuses this device's socket (SPEC §3.3 step 5). */
   probablyRevoked: boolean;
+  /** groupDeleted is set when the relay has said the server admin deleted this device's group. */
+  groupDeleted: boolean;
+  /** groupName is the group's display name as the server admin set it, or "". */
+  groupName: string;
   /** syncing is true while a sync this store started is running. */
   syncing: boolean;
   /** question is a direction the user has to choose before a sync can go on. */
@@ -132,6 +136,8 @@ let snapshot: Snapshot = {
   epoch: 0n,
   notice: '',
   probablyRevoked: false,
+  groupDeleted: false,
+  groupName: '',
   syncing: false,
   question: null,
   error: '',
@@ -149,6 +155,8 @@ function emit(): void {
     epoch: client?.epoch ?? 0n,
     notice,
     probablyRevoked,
+    groupDeleted: client?.groupDeleted ?? false,
+    groupName: client?.inGroup ? client.groupName : '',
     syncing,
     question,
     error: lastError,
@@ -285,6 +293,11 @@ export function init(): void {
           probablyRevoked = true;
           emit();
         },
+        onGroupDeleted: () => {
+          notice = 'The server admin deleted this group.';
+          emit();
+        },
+        onGroupName: () => emit(),
         onEntryEvicted: (id) => {
           evicted = { id, seq: (evicted?.seq ?? 0) + 1 };
           emit();

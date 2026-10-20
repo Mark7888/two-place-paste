@@ -137,6 +137,16 @@ body {
 .pill.off { color: var(--danger); background: var(--danger-soft); border-color: transparent; }
 .pill.off .dot { background: var(--danger); }
 
+/* The group's name, as the server admin set it, ahead of the device's own. */
+.group-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  max-width: 20ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .device-name {
   color: var(--muted);
   font-size: 0.85rem;

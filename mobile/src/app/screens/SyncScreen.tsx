@@ -124,10 +124,13 @@ export function SyncScreen(): React.JSX.Element {
     <>
       <Screen>
         <Text style={styles.title}>Sync</Text>
+        {session.groupName !== '' && <Text style={styles.muted}>{session.groupName}</Text>}
         <Text style={styles.lede}>
-          {session.connected
-            ? `Connected · epoch ${session.epoch}`
-            : 'Not connected. The app holds a connection only while it is open.'}
+          {session.groupDeleted
+            ? 'This group was deleted.'
+            : session.connected
+              ? `Connected · epoch ${session.epoch}`
+              : 'Not connected. The app holds a connection only while it is open.'}
         </Text>
 
         <View style={{ gap: 10 }}>
@@ -182,7 +185,16 @@ export function SyncScreen(): React.JSX.Element {
         )}
         <Status message={session.notice} />
 
-        {session.probablyRevoked && (
+        {session.groupDeleted && (
+          <Section title="The group was deleted">
+            <Text style={styles.text}>
+              The server admin deleted this device’s group, so nothing more syncs here. Leave the
+              group in Settings, then create a new group with a fresh link or pair with a device in
+              another group.
+            </Text>
+          </Section>
+        )}
+        {!session.groupDeleted && session.probablyRevoked && (
           <Section title="This device may have been removed">
             <Text style={styles.text}>
               The relay is answering but is refusing this device’s connection. That is what a

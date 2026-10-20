@@ -32,6 +32,14 @@ type Status struct {
 	LastSync   *time.Time `json:"last_sync,omitempty"`
 	LastError  string     `json:"last_error,omitempty"`
 
+	// GroupDeleted is set with Revoked when the server admin deleted the
+	// group, so the screen can say that rather than "revoked".
+	GroupDeleted bool `json:"group_deleted"`
+
+	// GroupName is the group's display name as the server admin set it, or
+	// empty.
+	GroupName string `json:"group_name,omitempty"`
+
 	// Clipboard describes what is on the local clipboard right now, for the
 	// direction the user is about to choose. It is never sent anywhere else.
 	Clipboard ClipboardView `json:"clipboard"`
@@ -371,6 +379,14 @@ const (
 	// EventProgress reports a chunked transfer of an entry larger than one
 	// frame, once per chunk.
 	EventProgress = "progress"
+
+	// EventGroupDeleted says the server admin deleted this device's group.
+	// Like EventRevoked, the device can do nothing more in it.
+	EventGroupDeleted = "group_deleted"
+
+	// EventGroupName says the group's display name was learned or changed;
+	// Name carries it.
+	EventGroupName = "group_name"
 )
 
 // UpdateView is the updates section's model

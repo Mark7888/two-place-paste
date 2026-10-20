@@ -155,8 +155,11 @@ func run(logger *slog.Logger) error {
 		KeystoreBackend: string(store.Backend()),
 		WatchPaused:     power.ScreenLocked,
 		Updates:         updater,
-		OnActivity:      func(a service.Activity) { tr.SetStatus(trayStatus(a)) },
-		Logger:          logger,
+		OnActivity: func(a service.Activity) {
+			tr.SetGroupName(a.GroupName)
+			tr.SetStatus(trayStatus(a))
+		},
+		Logger: logger,
 	})
 	if err != nil {
 		return fmt.Errorf("build the service: %w", err)

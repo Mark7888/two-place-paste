@@ -685,6 +685,39 @@ func TestRevokedDeviceStopsOperating(t *testing.T) {
 	}
 }
 
+// TestDeletedGroupIsSaidPlainly: when the server admin deletes the group, the
+// UI says that, not "revoked", and the device stops operating all the same.
+func TestDeletedGroupIsSaidPlainly(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	events, stop := f.svc.Subscribe()
+	defer stop()
+	f.svc.ClientHandlers().OnGroupDeleted()
+
+	select {
+	case ev := <-events:
+		if ev.Kind != localui.EventGroupDeleted || !strings.Contains(ev.Message, "deleted") {
+			t.Errorf("event = %+v, want a group-deleted event", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no event arrived")
+	}
+
+	status := f.svc.Status(context.Background())
+	if !status.Revoked || !status.GroupDeleted {
+		t.Errorf("Status() = revoked %v, group deleted %v; want both", status.Revoked, status.GroupDeleted)
+	}
+	_, err := f.svc.Sync(context.Background(), localui.DirectionUpload)
+	var se *localui.StatusError
+	if !errors.As(err, &se) || se.Code != http.StatusForbidden || !strings.Contains(se.Message, "deleted") {
+		t.Errorf("Sync() after deletion = %v, want a 403 that says the group was deleted", err)
+	}
+	if !f.svc.Activity().GroupDeleted {
+		t.Error("Activity() does not report the deletion")
+	}
+}
+
 func TestEventsReachSubscribers(t *testing.T) {
 	t.Parallel()
 

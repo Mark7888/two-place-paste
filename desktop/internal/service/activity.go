@@ -24,6 +24,14 @@ type Activity struct {
 	// Revoked is set once the relay has said this device is out of the group.
 	Revoked bool
 
+	// GroupDeleted is set with Revoked when the reason is that the server
+	// admin deleted the group.
+	GroupDeleted bool
+
+	// GroupName is the group's display name as the server admin set it, or
+	// empty.
+	GroupName string
+
 	// Uploading and Downloading are true while an entry is moving that way.
 	// Both can be: an upload of this device's own does not wait for a
 	// download already running to finish.
@@ -59,6 +67,7 @@ func (s *Service) Activity() Activity {
 		Connected:     s.connected,
 		EverConnected: s.everConnected,
 		Revoked:       s.revoked,
+		GroupDeleted:  s.groupDeleted,
 		Uploading:     s.uploads > 0,
 		Downloading:   s.downloads > 0,
 	}
@@ -70,6 +79,9 @@ func (s *Service) Activity() Activity {
 	// Outside the lock: the relay has a lock of its own, and nothing here
 	// needs the two to agree to the instant.
 	a.InGroup = relay != nil && relay.InGroup()
+	if a.InGroup {
+		a.GroupName = relay.State().GroupName
+	}
 	return a
 }
 
