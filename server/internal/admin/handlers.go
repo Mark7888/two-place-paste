@@ -4,12 +4,14 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"rsc.io/qr"
 
@@ -93,6 +95,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// never logged, here or anywhere (docs/internal/conventions.md §2).
 		s.logger.WarnContext(r.Context(), "admin login rate limited",
 			slog.String("client_ip", ip), slog.String("scope", scope))
+		s.audit(r, "login.limited", "", scope)
 		w.Header().Set("Retry-After", "60")
 		s.render(w, r, http.StatusTooManyRequests, "login.html", pageData{
 			Title:    "Sign in",
@@ -114,6 +117,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	if subtle.ConstantTimeCompare([]byte(r.PostFormValue("password")), s.password) != 1 {
 		s.logger.WarnContext(r.Context(), "admin login failed", slog.String("client_ip", ip))
+		s.audit(r, "login.failed", "", "")
 		s.render(w, r, http.StatusUnauthorized, "login.html", pageData{
 			Title:    "Sign in",
 			Centered: true,
@@ -136,6 +140,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   int(s.sessions.ttl.Seconds()),
 	})
 	s.logger.InfoContext(r.Context(), "admin signed in", slog.String("client_ip", ip))
+	s.audit(r, "login", "", "")
 	s.redirect(w, r, "/admin/")
 }
 
@@ -147,6 +152,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.sessions.destroy(sess.id)
+		s.audit(r, "logout", "", "")
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
@@ -167,7 +173,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		s.redirect(w, r, "/admin/login")
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBodyBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBodyBytes)
 	if err := r.ParseForm(); err != nil {
 		s.renderTokens(w, r, sess, http.StatusBadRequest, "That request could not be read.")
 		return
@@ -176,16 +182,38 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := strings.TrimSpace(r.PostFormValue("name"))
-	if name == "" {
+	name, ok := validName(r.PostFormValue("name"), maxTokenNameLen)
+	if !ok {
 		s.renderTokens(w, r, sess, http.StatusBadRequest, "Give the token a name so you can tell it apart later.")
 		return
 	}
-	if len(name) > maxTokenNameLen {
-		name = name[:maxTokenNameLen]
+	note := strings.TrimSpace(r.PostFormValue("note"))
+	if len(note) > maxNoteLen {
+		s.renderTokens(w, r, sess, http.StatusBadRequest, fmt.Sprintf("Keep the note under %d characters.", maxNoteLen))
+		return
+	}
+	tag := r.PostFormValue("tag")
+	if tag != "" {
+		if _, err := s.store.GetTag(r.Context(), tag); err != nil {
+			s.renderTokens(w, r, sess, http.StatusBadRequest, "That tag no longer exists.")
+			return
+		}
+	}
+	var expires time.Time
+	switch r.PostFormValue("expires") {
+	case "", "never":
+	case "1":
+		expires = s.now().Add(24 * time.Hour)
+	case "7":
+		expires = s.now().Add(7 * 24 * time.Hour)
+	case "30":
+		expires = s.now().Add(30 * 24 * time.Hour)
+	default:
+		s.renderTokens(w, r, sess, http.StatusBadRequest, "Choose when the token expires from the list.")
+		return
 	}
 
-	tok, err := s.store.CreateToken(r.Context(), name)
+	tok, err := s.store.CreateTokenWith(r.Context(), store.NewToken{Name: name, Note: note, Tag: tag, ExpiresAt: expires})
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "create token", "error", err)
 		s.renderTokens(w, r, sess, http.StatusInternalServerError, "The token could not be created.")
@@ -194,6 +222,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	// The token value itself is a credential and is never logged
 	// (docs/internal/conventions.md §2).
 	s.logger.InfoContext(r.Context(), "creation token issued", slog.String("token_name", tok.Name))
+	s.audit(r, "token.create", tok.Name, expiryText(tok.ExpiresAt))
 	// Remember which token this redirect is carrying the user back to see, so
 	// the listing opens its code straight away. It is held on the session for
 	// one render rather than put in the query string: a creation URL in a
@@ -241,6 +270,7 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	}
 	// Logged by name only: the value is a credential (docs/internal/conventions.md §2).
 	s.logger.InfoContext(r.Context(), "creation token revoked", slog.String("token_name", tok.Name))
+	s.audit(r, "token.revoke", tok.Name, "")
 	s.redirect(w, r, "/admin/tokens")
 }
 
@@ -262,9 +292,9 @@ func (s *Server) handleTokenQR(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-	if tok.Used {
-		// A consumed token creates nothing; rendering it as a scannable code
-		// would only invite someone to try.
+	if tok.Used || tok.Expired(s.now()) {
+		// A consumed or expired token creates nothing; rendering it as a
+		// scannable code would only invite someone to try.
 		http.NotFound(w, r)
 		return
 	}
@@ -356,9 +386,23 @@ func (s *Server) handleTokenPost(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// expiryText says when a token expires, for the audit log and the listing.
+func expiryText(t time.Time) string {
+	if t.IsZero() {
+		return "never expires"
+	}
+	return "expires " + t.UTC().Format("2006-01-02 15:04 UTC")
+}
+
 // renderTokens renders the token screen for an authenticated session.
 func (s *Server) renderTokens(w http.ResponseWriter, r *http.Request, sess session, status int, msg string) {
-	data := pageData{Title: "Creation tokens", Authenticated: true, CSRF: sess.csrf, Error: msg, Nav: "tokens"}
+	data := s.page(sess, "Creation tokens", "tokens")
+	data.Error = msg
+	if tags, err := s.store.ListTags(r.Context()); err == nil {
+		for _, t := range tags {
+			data.TagNames = append(data.TagNames, t.Name)
+		}
+	}
 
 	tokens, err := s.store.ListTokens(r.Context())
 	if err != nil {
@@ -372,24 +416,78 @@ func (s *Server) renderTokens(w http.ResponseWriter, r *http.Request, sess sessi
 	// did not ask to see again.
 	fresh := s.sessions.takeFlash(sess.id)
 
+	now := s.now()
 	data.Tokens = make([]tokenView, 0, len(tokens))
-	for _, t := range tokens {
+	for i, t := range tokens {
 		v := tokenView{
 			Value:   t.Value,
 			Name:    t.Name,
+			Note:    t.Note,
+			Tag:     t.Tag,
 			Created: t.CreatedAt.UTC().Format("2006-01-02 15:04 UTC"),
 			Used:    t.Used,
 			GroupID: t.GroupID,
+			Index:   i,
 		}
-		if !t.Used {
+		switch {
+		case t.Used && t.GroupDeleted:
+			v.Status, v.StatusClass = "group deleted", "used"
+		case t.Used:
+			v.Status, v.StatusClass = "used", "used"
+			v.GroupPath = groupPath(t.GroupID)
+		case t.Expired(now):
+			v.Status, v.StatusClass = "expired", "bad"
+			v.Expired = true
+			v.RevokePath = "/admin/tokens/" + url.PathEscape(t.Value) + "/revoke"
+		default:
+			v.Status, v.StatusClass = "unused", "open"
 			v.URL = s.creationURL(t.Value)
 			v.QRPath = "/admin/tokens/" + url.PathEscape(t.Value) + "/qr.png"
 			v.RevokePath = "/admin/tokens/" + url.PathEscape(t.Value) + "/revoke"
 			v.Fresh = fresh != "" && subtle.ConstantTimeCompare([]byte(fresh), []byte(t.Value)) == 1
 		}
+		if !t.Used && !t.ExpiresAt.IsZero() {
+			if v.Expired {
+				v.Expires = "expired " + ago(now, t.ExpiresAt, "")
+			} else {
+				v.Expires = "expires " + t.ExpiresAt.UTC().Format("2006-01-02 15:04 UTC")
+			}
+		}
 		data.Tokens = append(data.Tokens, v)
 	}
 	s.render(w, r, status, "tokens.html", data)
+}
+
+// page starts the data for an authenticated page, taking the session's
+// pending confirmation with it.
+func (s *Server) page(sess session, title, nav string) pageData {
+	return pageData{
+		Title:         title,
+		Authenticated: true,
+		CSRF:          sess.csrf,
+		Nav:           nav,
+		Notice:        s.sessions.takeNotice(sess.id),
+	}
+}
+
+// formSession is the preamble of every admin form POST: a live session, a
+// bounded body, and a matching CSRF token. On false a response has already
+// been written.
+func (s *Server) formSession(w http.ResponseWriter, r *http.Request) (session, bool) {
+	sess, ok := s.session(r)
+	if !ok {
+		s.redirect(w, r, "/admin/login")
+		return session{}, false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBodyBytes)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return session{}, false
+	}
+	if !s.checkCSRF(w, r, sess) {
+		return session{}, false
+	}
+	return sess, true
 }
 
 // session returns the request's session, if it has a live one.

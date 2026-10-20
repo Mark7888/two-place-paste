@@ -2,8 +2,8 @@
 {{with .Dashboard}}
 <h1>Dashboard</h1>
 <p class="lede">
-  What the relay can see without seeing anything: sizes, counts and the state of
-  its storage. Entry contents, types and filenames are encrypted and never reach
+  What the relay can see without seeing anything: sizes, counts and the state
+  of its storage. Entry contents, types and filenames are encrypted and never reach
   this server.
 </p>
 
@@ -40,29 +40,76 @@
   {{end}}
 </div>
 
+{{if .Tags}}
 <div class="section-head">
-  <h2>Groups</h2>
-  {{if .Groups}}<span class="count">heaviest first</span>{{end}}
+  <h2>Tags</h2>
+  <a class="count" href="/admin/tags">Manage tags</a>
+</div>
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Tag</th><th>Groups</th><th>Devices</th><th>Blob storage</th><th>Storage limit</th></tr>
+    </thead>
+    <tbody>
+    {{range .Tags}}
+      <tr{{if .Current}} class="current"{{end}}>
+        <td class="name" data-label="Tag"><a href="/admin/?tag={{.Filter}}">{{.Name}}</a></td>
+        <td data-label="Groups">{{.Groups}}</td>
+        <td data-label="Devices">{{.Devices}}</td>
+        <td data-label="Blob storage">{{.Used}}</td>
+        <td data-label="Storage limit">{{.Limit}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+
+<div class="section-head">
+  <h2>Groups{{if .FilterName}} <span class="muted">· {{.FilterName}}</span>{{end}}</h2>
+  <span class="count">
+    {{if .Filter}}<a href="/admin/">Show all</a> · {{end}}
+    {{if .Groups}}heaviest first{{end}}
+  </span>
 </div>
 
+{{if gt .StaleCount 0}}
+<p class="notice warn">
+  {{.StaleCount}} {{if eq .StaleCount 1}}group has{{else}}groups have{{end}} had no device connect for more than {{.StaleAfter}}.
+  <a href="/admin/groups/delete?stale=1">Review stale groups</a>
+</p>
+{{end}}
+
 {{if .Groups}}
+<form method="get" action="/admin/groups/delete">
 <div class="table-wrap">
   <table>
     <thead>
       <tr>
+        <th><span class="sr-only">Select</span></th>
         <th>Group</th>
         <th>Devices</th>
         <th>Last active</th>
         <th>Entries</th>
         <th>Oldest</th>
-        {{if .Storage}}<th>Blob storage</th>{{end}}
+        {{if $.Dashboard.Storage}}<th>Blob storage</th>{{end}}
       </tr>
     </thead>
     <tbody>
     {{range .Groups}}
       <tr>
+        <td class="select" data-label="Select">
+          <input type="checkbox" name="id" value="{{.ID}}" aria-label="Select {{.Name}}">
+        </td>
         <td class="name" data-label="Group">
-          <span class="stack">{{.Name}}<code class="muted">{{.ShortID}} · {{.Created}}</code></span>
+          <span class="stack">
+            <span><a href="{{.Path}}">{{.Name}}</a>
+              {{if .Tag}}<span class="tag open">{{.Tag}}</span>{{end}}
+              {{if .Stale}}<span class="tag warn">stale</span>{{end}}
+              {{if .OverLimit}}<span class="tag bad">over limit</span>{{end}}
+            </span>
+            <code class="muted">{{.ShortID}} · {{.Created}}</code>
+          </span>
         </td>
         <td data-label="Devices">{{.Devices}}</td>
         <td data-label="Last active">{{.LastSeen}}</td>
@@ -84,13 +131,52 @@
     </tbody>
   </table>
 </div>
+<div class="table-foot">
+  <button type="submit" class="danger small">Delete selected…</button>
+  <span class="hint">You confirm on the next page.</span>
+</div>
+</form>
+{{else if .Filter}}
+<p class="empty">No groups here. <a href="/admin/">Show all groups</a>.</p>
 {{else}}
 <p class="empty">No groups yet. <a href="/admin/tokens">Generate a creation token</a> and hand it to the first device.</p>
+{{end}}
+
+{{with .Health}}
+<div class="section-head">
+  <h2>Health</h2>
+</div>
+<div class="card">
+  <dl class="facts">
+    <div><dt>Version</dt><dd>{{.Version}}</dd></div>
+    <div><dt>Running for</dt><dd>{{.Uptime}}</dd></div>
+    <div><dt>Go</dt><dd>{{.GoVersion}}</dd></div>
+    {{if .HasRedis}}
+    <div>
+      <dt>Redis eviction policy</dt>
+      <dd><code>{{.Policy}}</code> <span class="tag {{.PolicyState}}">{{if eq .PolicyState "good"}}ok{{else if eq .PolicyState "bad"}}unsafe{{else if eq .PolicyState "warn"}}check{{else}}unknown{{end}}</span></dd>
+    </div>
+    <div>
+      <dt>Redis persistence (AOF)</dt>
+      <dd><code>{{.AOF}}</code> <span class="tag {{.AOFState}}">{{if eq .AOFState "good"}}ok{{else if eq .AOFState "bad"}}off{{else}}unknown{{end}}</span></dd>
+    </div>
+    <div><dt>Redis memory</dt><dd>{{.Memory}} <span class="muted">of {{.MaxMemory}}</span></dd></div>
+    {{end}}
+  </dl>
+  {{if .PolicyNote}}<p class="notice {{if eq .PolicyState "bad"}}error{{else}}warn{{end}}">{{.PolicyNote}}</p>{{end}}
+  {{if .AOFNote}}<p class="notice {{if eq .AOFState "bad"}}error{{else}}warn{{end}}">{{.AOFNote}}</p>{{end}}
+</div>
 {{end}}
 
 {{with .Storage}}
 <div class="section-head">
   <h2>Storage</h2>
+  {{if $.Dashboard.CanSweep}}
+  <form method="post" action="/admin/sweep" class="inline-form">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <button type="submit" class="secondary small">Sweep now</button>
+  </form>
+  {{end}}
 </div>
 <div class="card">
   <dl class="facts">

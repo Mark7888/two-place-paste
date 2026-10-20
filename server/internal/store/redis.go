@@ -658,7 +658,7 @@ func sortGroups(groups []Group) {
 func (s *RedisStore) setIfExists(ctx context.Context, key string, fields ...any) error {
 	code, err := setIfExistsScript.Run(ctx, s.rdb, []string{key}, fields...).Int64()
 	if err != nil {
-		return err
+		return fmt.Errorf("write %s: %w", key, err)
 	}
 	if code == 1 {
 		return ErrNotFound

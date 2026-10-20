@@ -26,6 +26,8 @@
   --error: #a01b1b;
   --error-soft: rgba(160, 27, 27, 0.1);
   --ok: #1d7a46;
+  --warn: #8a5a00;
+  --warn-soft: rgba(181, 120, 0, 0.12);
 
   --radius: 10px;
   --radius-sm: 7px;
@@ -48,6 +50,8 @@
     --error: #f08a8a;
     --error-soft: rgba(240, 138, 138, 0.13);
     --ok: #6cc795;
+    --warn: #e6b450;
+    --warn-soft: rgba(230, 180, 80, 0.13);
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
   }
 }
@@ -97,6 +101,7 @@ body {
    button, and takes the free space so the button stays at the far edge. */
 .nav {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.25rem;
   margin-right: auto;
 }
@@ -249,7 +254,9 @@ label {
 /* --- controls ------------------------------------------------------------ */
 
 input[type="text"],
-input[type="password"] {
+input[type="password"],
+input[type="number"],
+select {
   /* Width, never flex: see the note at the top of this file. */
   width: 100%;
   min-width: 0;
@@ -411,6 +418,11 @@ code.wrap { overflow-wrap: anywhere; word-break: break-word; }
 .tag.good { color: var(--ok); border-color: transparent; background: var(--card-sunken); }
 .tag.bad { color: var(--error); border-color: transparent; background: var(--error-soft); }
 .tag.open { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+.tag.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+.tag.unknown { color: var(--muted); background: var(--card-sunken); }
+
+/* A tag next to a name or a heading sits on the text's baseline. */
+h1 .tag, td.name .tag { vertical-align: 0.15em; margin-left: 0.25rem; }
 
 .empty {
   padding: 2.5rem 1.25rem;
@@ -566,6 +578,8 @@ td.usage meter { max-width: 12rem; }
 }
 
 .notice.error { color: var(--error); background: var(--error-soft); }
+.notice.ok { color: var(--ok); background: var(--card-sunken); }
+.notice.warn { color: var(--warn); background: var(--warn-soft); }
 
 /* --- dialog -------------------------------------------------------------- */
 
@@ -682,3 +696,79 @@ dialog::backdrop { background: rgba(10, 12, 16, 0.45); }
 
 /* The "Source code" link sits in muted text and should read as part of it. */
 footer a { color: inherit; }
+
+/* --- group management ---------------------------------------------------- */
+
+/* A select draws its own arrow; the shared rule above gives it the input's
+   box, and this keeps the text clear of the arrow. */
+select { padding-right: 2rem; }
+
+/* Several optional fields side by side, wrapping to one per row. */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.75rem;
+}
+
+/* A checkbox with its label to the right, in a form's flow. */
+label.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+  font-size: 0.92rem;
+}
+
+label.check input { width: 1.05rem; height: 1.05rem; margin: 0; }
+
+/* A number with its unit written after it. */
+.with-unit { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.with-unit input { width: 7rem; }
+.with-unit span { color: var(--muted); }
+
+/* A link styled as a button, for actions that open a confirmation page. */
+a.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 2.5rem;
+  padding: 0 0.95rem;
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: none;
+  color: var(--accent-fg);
+  background: var(--accent);
+  border-radius: var(--radius-sm);
+}
+
+a.button.secondary { color: var(--fg); background: var(--card); border: 1px solid var(--line); }
+a.button.secondary:hover { background: var(--line-soft); }
+a.button.danger { color: #fff; background: var(--error); }
+
+.form-row.spread { justify-content: space-between; align-items: center; }
+.danger-zone { border-color: var(--error-soft); }
+
+.crumbs { margin: 0 0 0.35rem; font-size: 0.85rem; color: var(--muted); }
+.crumbs a { color: var(--muted); }
+
+/* The dashboard's per-row selection, and the bar under the table that acts on
+   it. */
+td.select { width: 2.5rem; }
+td.select input { width: 1.05rem; height: 1.05rem; margin: 0; }
+.table-foot { display: flex; align-items: center; gap: 0.75rem; margin: 0.75rem 0 1.75rem; flex-wrap: wrap; }
+.table-foot .hint { margin: 0; }
+
+tr.current td { background: var(--accent-soft); }
+
+/* A tag's limit form, inside its table cell. */
+.limit-form { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 0; }
+.limit-form input[type="text"] { width: 7.5rem; height: 2rem; }
+
+.hint.spaced { margin: 0.6rem 0 1.75rem; }
+.muted.small { font-size: 0.82rem; }
+.note { font-weight: 400; font-size: 0.85rem; }
+.nowrap { white-space: nowrap; }
+
+@media (max-width: 46rem) {
+  td.select::before { content: "Select"; }
+}

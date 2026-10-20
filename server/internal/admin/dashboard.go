@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"sort"
 	"time"
+
+	"github.com/Mark7888/two-place-paste/server/internal/store"
 )
 
 // dashboardView is everything the dashboard renders. It is built from counts
@@ -19,12 +21,43 @@ type dashboardView struct {
 	// Storage is nil when no ledger is wired.
 	Storage *storageView
 
+	// Health is the state of the server and of Redis.
+	Health *healthView
+
+	// Groups are the rows shown: every group, or the ones under Filter.
 	Groups []groupView
+
+	// Tags totals every tag, plus the untagged groups, whatever the filter.
+	Tags []tagSummary
+
+	// Filter is the tag the table is narrowed to: "" for all, "-" for the
+	// untagged groups, or a tag name. FilterName is how the page says it.
+	Filter     string
+	FilterName string
+
+	// StaleCount is how many of all groups are stale, and StaleAfter how
+	// long that means.
+	StaleCount int
+	StaleAfter string
+
+	// CanSweep shows the "Sweep now" button.
+	CanSweep bool
 
 	// Problems lists the parts that could not be read. The rest of the page
 	// still renders: a dashboard that fails whole when one Redis call does
 	// is useless exactly when it is needed.
 	Problems []string
+}
+
+// tagSummary is one row of the dashboard's per-tag totals.
+type tagSummary struct {
+	Name    string
+	Filter  string
+	Current bool
+	Groups  int
+	Devices int
+	Used    string
+	Limit   string
 }
 
 type storageView struct {
@@ -57,37 +90,118 @@ type storageView struct {
 }
 
 type groupView struct {
+	ID      string
+	Path    string
 	Name    string
+	Tag     string
 	ShortID string
 	Created string
 
 	Devices  int
 	LastSeen string
 
+	// Stale marks a group none of whose devices has connected for longer
+	// than the stale threshold.
+	Stale bool
+
 	Entries int64
 	Oldest  string
 
-	// Blob storage against the group limit. HasUsage is false when no
-	// ledger is wired.
-	HasUsage   bool
-	Used       string
-	UsedBytes  int64
-	LimitBytes int64
-	HighBytes  int64
-	Percent    int
+	// Blob storage against the group's effective limit. HasUsage is false
+	// when no ledger is wired.
+	HasUsage    bool
+	Used        string
+	UsedBytes   int64
+	LimitBytes  int64
+	HighBytes   int64
+	Percent     int
+	LimitText   string
+	LimitSource string
+
+	// OverLimit marks a group holding more than its limit, which happens
+	// after the limit is lowered: its next upload evicts down to it.
+	OverLimit bool
 }
 
 // renderDashboard renders the dashboard for an authenticated session.
 func (s *Server) renderDashboard(w http.ResponseWriter, r *http.Request, sess session) {
-	data := pageData{Title: "Dashboard", Authenticated: true, CSRF: sess.csrf, Nav: "dashboard"}
-	data.Dashboard = s.buildDashboard(r.Context())
+	data := s.page(sess, "Dashboard", "dashboard")
+	data.Dashboard = s.buildDashboard(r.Context(), r.URL.Query().Get("tag"))
 	s.render(w, r, http.StatusOK, "dashboard.html", data)
 }
 
-func (s *Server) buildDashboard(ctx context.Context) *dashboardView {
+// settings reads the runtime settings, falling back to the defaults when they
+// cannot be read: a stale badge computed from the default is better than no
+// page.
+func (s *Server) settings(ctx context.Context) store.Settings {
+	st, err := s.store.GetSettings(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "read settings", "error", err)
+		return store.Settings{StaleAfter: store.DefaultStaleAfter}
+	}
+	return st
+}
+
+// groupRow builds one group's row: devices, activity, entries and storage. It
+// also returns the devices, which the group page lists.
+func (s *Server) groupRow(ctx context.Context, g store.Group, tags map[string]store.Tag, settings store.Settings, now time.Time, problem func(string, error)) (groupView, []store.Device) {
+	d := s.dashboard
+	v := groupView{
+		ID:      g.ID,
+		Path:    groupPath(g.ID),
+		Name:    g.Name,
+		Tag:     g.Tag,
+		ShortID: shortID(g.ID),
+		Created: g.CreatedAt.UTC().Format("2006-01-02"),
+	}
+
+	devices, err := s.store.ListDevices(ctx, g.ID)
+	if err != nil {
+		problem("the devices of "+g.Name, err)
+	}
+	v.Devices = len(devices)
+	var last time.Time
+	for _, dev := range devices {
+		if dev.LastSeen.After(last) {
+			last = dev.LastSeen
+		}
+	}
+	v.LastSeen = ago(now, last, "never")
+	v.Stale = isStale(now, lastActive(g, devices), settings.StaleAfter)
+
+	if d.Entries != nil {
+		st, err := d.Entries.GroupStats(ctx, g.ID)
+		if err != nil {
+			problem("the entries of "+g.Name, err)
+		}
+		v.Entries = st.Entries
+		v.Oldest = ago(now, st.Oldest, "—")
+	}
+
+	l := s.effectiveLimit(g, tags)
+	limit := s.shownLimit(l)
+	v.LimitBytes = limit
+	v.LimitText = limitText(limit)
+	v.LimitSource = l.Source
+	if d.Ledger != nil {
+		u, err := d.Ledger.GroupUsage(ctx, g.ID)
+		if err != nil {
+			problem("the storage of "+g.Name, err)
+		}
+		v.HasUsage = true
+		v.Used = humanBytes(u.Bytes)
+		v.UsedBytes = u.Bytes
+		v.HighBytes = limit * 9 / 10
+		v.Percent = percent(u.Bytes, limit)
+		v.OverLimit = limit > 0 && u.Bytes > limit
+	}
+	return v, devices
+}
+
+func (s *Server) buildDashboard(ctx context.Context, filter string) *dashboardView {
 	d := s.dashboard
 	now := s.now()
-	view := &dashboardView{}
+	view := &dashboardView{CanSweep: s.sweep != nil}
 	problem := func(what string, err error) {
 		s.logger.ErrorContext(ctx, "dashboard: "+what, "error", err)
 		view.Problems = append(view.Problems, "Could not read "+what+".")
@@ -96,71 +210,106 @@ func (s *Server) buildDashboard(ctx context.Context) *dashboardView {
 	if d.Ledger != nil {
 		view.Storage = s.storageView(ctx, now, problem)
 	}
+	view.Health = s.health(ctx, now)
 
 	tokens, err := s.store.ListTokens(ctx)
+	if err != nil {
+		problem("the tokens", err)
+	}
+	for _, t := range tokens {
+		if !t.Used && !t.Expired(now) {
+			view.UnusedTokens++
+		}
+	}
+
+	groups, err := s.store.ListGroups(ctx)
 	if err != nil {
 		problem("the groups", err)
 		return view
 	}
-	for _, t := range tokens {
-		if !t.Used {
-			view.UnusedTokens++
-			continue
-		}
-		g := groupView{
-			Name:    t.Name,
-			ShortID: shortID(t.GroupID),
-			Created: t.CreatedAt.UTC().Format("2006-01-02"),
-		}
-
-		devices, err := s.store.ListDevices(ctx, t.GroupID)
-		if err != nil {
-			problem("the devices of "+t.Name, err)
-		}
-		g.Devices = len(devices)
-		var last time.Time
-		for _, dev := range devices {
-			if dev.LastSeen.After(last) {
-				last = dev.LastSeen
-			}
-		}
-		g.LastSeen = ago(now, last, "never")
-		view.DeviceCount += len(devices)
-
-		if d.Entries != nil {
-			st, err := d.Entries.GroupStats(ctx, t.GroupID)
-			if err != nil {
-				problem("the entries of "+t.Name, err)
-			}
-			g.Entries = st.Entries
-			g.Oldest = ago(now, st.Oldest, "—")
-		}
-
-		if d.Ledger != nil {
-			u, err := d.Ledger.GroupUsage(ctx, t.GroupID)
-			if err != nil {
-				problem("the storage of "+t.Name, err)
-			}
-			limit := d.GroupLimit
-			if d.TotalLimit > 0 && (limit == 0 || d.TotalLimit < limit) {
-				limit = d.TotalLimit
-			}
-			g.HasUsage = true
-			g.Used = humanBytes(u.Bytes)
-			g.UsedBytes = u.Bytes
-			g.LimitBytes = limit
-			g.HighBytes = limit * 9 / 10
-			g.Percent = percent(u.Bytes, limit)
-		}
-		view.Groups = append(view.Groups, g)
+	tags, err := s.tagMap(ctx)
+	if err != nil {
+		problem("the tags", err)
 	}
-	view.GroupCount = len(view.Groups)
+	settings := s.settings(ctx)
+	view.StaleAfter = days(settings.StaleAfter)
+
+	type total struct {
+		groups, devices int
+		used            int64
+	}
+	totals := make(map[string]*total)
+	for _, g := range groups {
+		row, _ := s.groupRow(ctx, g, tags, settings, now, problem)
+		view.DeviceCount += row.Devices
+		if row.Stale {
+			view.StaleCount++
+		}
+		key := g.Tag
+		if key == "" {
+			key = "-"
+		}
+		t := totals[key]
+		if t == nil {
+			t = &total{}
+			totals[key] = t
+		}
+		t.groups++
+		t.devices += row.Devices
+		t.used += row.UsedBytes
+
+		if filter == "" || filter == key {
+			view.Groups = append(view.Groups, row)
+		}
+	}
+	view.GroupCount = len(groups)
+
+	// Every tag, even an empty one, then the untagged groups.
+	names := make([]string, 0, len(tags))
+	for name := range tags {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		t := totals[name]
+		if t == nil {
+			t = &total{}
+		}
+		lim := "default"
+		if tag := tags[name]; tag.Limit.Enabled {
+			lim = limitText(tag.Limit.Bytes)
+		}
+		view.Tags = append(view.Tags, tagSummary{
+			Name: name, Filter: name, Current: filter == name,
+			Groups: t.groups, Devices: t.devices, Used: humanBytes(t.used), Limit: lim,
+		})
+	}
+	if t := totals["-"]; t != nil && len(names) > 0 {
+		view.Tags = append(view.Tags, tagSummary{
+			Name: "Untagged", Filter: "-", Current: filter == "-",
+			Groups: t.groups, Devices: t.devices, Used: humanBytes(t.used), Limit: "default",
+		})
+	}
+
+	switch filter {
+	case "":
+	case "-":
+		view.Filter, view.FilterName = filter, "untagged groups"
+	default:
+		view.Filter, view.FilterName = filter, "tag “"+filter+"”"
+	}
 
 	// Heaviest first: the group closest to its limit is the one to look at.
 	sort.SliceStable(view.Groups, func(i, j int) bool {
 		return view.Groups[i].UsedBytes > view.Groups[j].UsedBytes
 	})
 	return view
+}
+
+// days renders a duration as whole days.
+func days(d time.Duration) string {
+	n := int(d / (24 * time.Hour))
+	return fmt.Sprintf("%d %s", n, plural(n, "day", "days"))
 }
 
 func (s *Server) storageView(ctx context.Context, now time.Time, problem func(string, error)) *storageView {
