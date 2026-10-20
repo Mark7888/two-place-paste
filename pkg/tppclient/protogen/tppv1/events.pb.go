@@ -297,6 +297,55 @@ func (x *EntryEvicted) GetEntryId() string {
 	return ""
 }
 
+// GroupRenamed tells every connected device of the group that the server admin
+// changed the group's display name. A device that was offline learns the new
+// name from GroupInfoResponse on its next connect instead.
+type GroupRenamed struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The new name, with the same meaning as GroupInfoResponse.name. Empty
+	// means the label was cleared.
+	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GroupRenamed) Reset() {
+	*x = GroupRenamed{}
+	mi := &file_tpp_v1_events_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GroupRenamed) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GroupRenamed) ProtoMessage() {}
+
+func (x *GroupRenamed) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_events_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GroupRenamed.ProtoReflect.Descriptor instead.
+func (*GroupRenamed) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_events_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *GroupRenamed) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
 var File_tpp_v1_events_proto protoreflect.FileDescriptor
 
 const file_tpp_v1_events_proto_rawDesc = "" +
@@ -315,7 +364,9 @@ const file_tpp_v1_events_proto_rawDesc = "" +
 	"EntryAdded\x12%\n" +
 	"\x04meta\x18\x01 \x01(\v2\x11.tpp.v1.EntryMetaR\x04meta\")\n" +
 	"\fEntryEvicted\x12\x19\n" +
-	"\bentry_id\x18\x01 \x01(\tR\aentryIdBHZFgithub.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1b\x06proto3"
+	"\bentry_id\x18\x01 \x01(\tR\aentryId\"\"\n" +
+	"\fGroupRenamed\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04nameBHZFgithub.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1b\x06proto3"
 
 var (
 	file_tpp_v1_events_proto_rawDescOnce sync.Once
@@ -329,17 +380,18 @@ func file_tpp_v1_events_proto_rawDescGZIP() []byte {
 	return file_tpp_v1_events_proto_rawDescData
 }
 
-var file_tpp_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_tpp_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_tpp_v1_events_proto_goTypes = []any{
 	(*EpochChanged)(nil),        // 0: tpp.v1.EpochChanged
 	(*WrappedKeyAvailable)(nil), // 1: tpp.v1.WrappedKeyAvailable
 	(*DeviceRevoked)(nil),       // 2: tpp.v1.DeviceRevoked
 	(*EntryAdded)(nil),          // 3: tpp.v1.EntryAdded
 	(*EntryEvicted)(nil),        // 4: tpp.v1.EntryEvicted
-	(*EntryMeta)(nil),           // 5: tpp.v1.EntryMeta
+	(*GroupRenamed)(nil),        // 5: tpp.v1.GroupRenamed
+	(*EntryMeta)(nil),           // 6: tpp.v1.EntryMeta
 }
 var file_tpp_v1_events_proto_depIdxs = []int32{
-	5, // 0: tpp.v1.EntryAdded.meta:type_name -> tpp.v1.EntryMeta
+	6, // 0: tpp.v1.EntryAdded.meta:type_name -> tpp.v1.EntryMeta
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
@@ -359,7 +411,7 @@ func file_tpp_v1_events_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_tpp_v1_events_proto_rawDesc), len(file_tpp_v1_events_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

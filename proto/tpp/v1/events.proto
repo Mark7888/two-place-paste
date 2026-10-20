@@ -62,3 +62,12 @@ message EntryAdded {
 message EntryEvicted {
   string entry_id = 1;
 }
+
+// GroupRenamed tells every connected device of the group that the server admin
+// changed the group's display name. A device that was offline learns the new
+// name from GroupInfoResponse on its next connect instead.
+message GroupRenamed {
+  // The new name, with the same meaning as GroupInfoResponse.name. Empty
+  // means the label was cleared.
+  string name = 1;
+}

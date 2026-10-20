@@ -77,6 +77,19 @@ export interface EntryEvicted {
   entryId: string;
 }
 
+/**
+ * GroupRenamed tells every connected device of the group that the server admin
+ * changed the group's display name. A device that was offline learns the new
+ * name from GroupInfoResponse on its next connect instead.
+ */
+export interface GroupRenamed {
+  /**
+   * The new name, with the same meaning as GroupInfoResponse.name. Empty
+   * means the label was cleared.
+   */
+  name: string;
+}
+
 function createBaseEpochChanged(): EpochChanged {
   return { epoch: "0", revokedDeviceId: "" };
 }
@@ -480,6 +493,73 @@ export const EntryEvicted: MessageFns<EntryEvicted> = {
   fromPartial<I extends Exact<DeepPartial<EntryEvicted>, I>>(object: I): EntryEvicted {
     const message = createBaseEntryEvicted();
     message.entryId = object.entryId ?? "";
+    return message;
+  },
+};
+
+function createBaseGroupRenamed(): GroupRenamed {
+  return { name: "" };
+}
+
+export const GroupRenamed: MessageFns<GroupRenamed> = {
+  encode(message: GroupRenamed, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.name !== "") {
+      writer.uint32(10).string(message.name);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): GroupRenamed {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseGroupRenamed();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.name = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): GroupRenamed {
+    return { name: isSet(object.name) ? globalThis.String(object.name) : "" };
+  },
+
+  toJSON(message: GroupRenamed): unknown {
+    const obj: any = {};
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GroupRenamed>, I>>(base?: I): GroupRenamed {
+    return GroupRenamed.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GroupRenamed>, I>>(object: I): GroupRenamed {
+    const message = createBaseGroupRenamed();
+    message.name = object.name ?? "";
     return message;
   },
 };
