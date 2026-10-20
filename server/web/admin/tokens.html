@@ -76,7 +76,7 @@
           </span>
         </td>
         <td data-label="Group">
-          {{if .GroupPath}}<a href="{{.GroupPath}}">Open group</a>{{else if .Used}}<span class="muted">deleted</span>{{else}}<span class="muted">—</span>{{end}}
+          {{if .GroupPath}}<a class="nowrap" href="{{.GroupPath}}">Open group</a>{{else if .Used}}<span class="muted">deleted</span>{{else}}<span class="muted">—</span>{{end}}
         </td>
         <td class="actions" data-label="Actions">
           {{if .Used}}

@@ -1,6 +1,8 @@
 # Plan — Admin group management, tags, storage overrides and housekeeping
 
-**Status:** agreed; the questions in §7 are answered.
+**Status:** implemented. Step 0 merged as #35; steps 1–5 are on one branch, since they
+were asked for together. §8 records where the build differs from the plan below, which is
+kept as it was agreed.
 **Touches:** `/proto/**` (step 0), `/server/**` (all steps), `/pkg/tppclient/**`,
 `/desktop/**` and `/mobile/**` (steps 4 and 5), `/docs/site/**`, `/deploy/.env.example`, SPEC §4.4.
 
@@ -120,17 +122,16 @@ new JavaScript; it degrades to a selectable field.
 
 ### 4.6 Clients (steps 4 and 5)
 
-- Group name (step 5): `tppclient` sends `GroupInfoRequest` after connecting
-  and handles `GroupRenamed`; desktop shows the name in the tray tooltip and
-  the UI header, mobile on the main screen. Empty name → no label.
-- The server side of step 5 answers `GroupInfoRequest` and broadcasts
-  `GroupRenamed` from the rename handler.
-
 - `pkg/tppclient`: `ErrGroupDeleted` (D8), tests for 410 and close 4410.
 - Desktop: `OnRevoked` message branches on the error; UI shows the
   "deleted by admin" text and the create/join actions.
 - Mobile: `src/core/protocol` maps the same two signals; `SyncScreen` shows the
   message. Interop test (`npm run interop`) covers a deletion.
+- Group name (step 5): `tppclient` sends `GroupInfoRequest` after connecting
+  and handles `GroupRenamed`; desktop shows the name in the tray tooltip and
+  the UI header, mobile on the main screen. Empty name → no label.
+- The server side of step 5 answers `GroupInfoRequest` and broadcasts
+  `GroupRenamed` from the rename handler.
 
 ### 4.7 Config and docs
 
@@ -184,3 +185,26 @@ Each PR updates the docs site and `docs/internal/ROADMAP.md`.
 6. Tombstones for a deleted group's devices live 30 days (D7).
 7. Token expiry: never (default), 1, 7 or 30 days (D9).
 8. Stale threshold: 90 days by default, set on the admin Settings page (D10).
+
+## 8. Where the build differs
+
+1. **D4, where the limit is resolved.** The admin server resolves default < tag <
+   group from the store and writes the result to the ledger's own `quota:limits`
+   hash; the reserve script reads that hash, so a change still lands wholly before or
+   after an upload. This keeps `internal/quota` inside its own key namespace instead of
+   reading `group:` and `tag:` hashes. The server re-applies every group's limit at
+   startup (`admin.Server.SyncStorageLimits`), and `tpp gc --rebuild-accounting` keeps
+   the hash.
+2. **D8, the Go handler.** `tppclient` has an `OnGroupDeleted` handler, which fires
+   instead of `OnRevoked` when set; `ErrGroupDeleted` wraps `ErrRevoked` as planned.
+3. **D7 on Android.** React Native's WebSocket does not expose the status of a refused
+   upgrade, so the TS client asks the same `/ws?device_id=` URL with a plain GET when a
+   dial is refused. The relay checks the device before it upgrades, so the GET gets the
+   same 410 or 401. A live socket is told by the 4410 close code, as planned.
+4. **Interop.** The deletion path is covered by a Go integration test against the real
+   relay (`pkg/tppclient/admin_integration_test.go`) and by the TS client's fake-relay
+   tests, not by `npm run interop`.
+5. **Build version on the health card** comes from the Go build info. The Docker build
+   has no VCS data in its context, so the image shows "development build" until the
+   version is passed in with `-ldflags`, which needs a change to `deploy/Dockerfile` and
+   `docker.yml` (a CI workflow, so its own PR).

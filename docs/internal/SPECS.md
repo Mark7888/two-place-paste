@@ -66,8 +66,9 @@ requirements are not worth the marginal revocation benefit.
 ### 2.3 What the server sees
 
 Ciphertext, byte sizes, timestamps, device identifiers, wrapped key blobs, group
-membership. It does **not** see clipboard content, content type, or plaintext size
-(padding is not required for MVP but the format should not preclude it).
+membership, and the labels the admin gives groups (a display name and a tag). It does
+**not** see clipboard content, content type, or plaintext size (padding is not required
+for MVP but the format should not preclude it).
 
 Each entry may carry a **sealed header**: content type, filename and plaintext size,
 encrypted under the group key, so a history listing can say what an entry is without
@@ -197,6 +198,26 @@ OS clipboard, it stays there.
 user with only one remaining device that has lost access should leave and create a new
 group. Nothing of value is lost given the 24-hour TTL.
 
+### 3.4 Deletion by the admin
+
+The admin can delete a whole group from the admin UI (§4.4). There is no rekey — there
+is nothing left to re-key for — so deletion is a server operation:
+
+1. One atomic operation removes the group record, its roster, every device record and
+   every wrapped key. Each former device id is kept as a **tombstone** for 30 days. The
+   creation token is kept and marked as having had its group deleted.
+2. The server closes the group's open sockets with WebSocket close code **4410**.
+3. The group's entries and blobs are deleted. A blob whose delete fails is reclaimed by
+   the bucket sweep (§4.5) like any other.
+
+A device of a deleted group that connects later is refused with **410 Gone** while its
+tombstone lasts, and with 401 after that, exactly like a revoked device (§3.3 step 5).
+Clients tell the user the group was deleted, and the way back is the same as for a
+revoked device: leave the group, then create or join another.
+
+The admin cannot remove a single device: that would leave the removed device holding the
+current group key, which only a rekey by a member (§3.3) takes away.
+
 ---
 
 ## 4. Server
@@ -296,17 +317,30 @@ reserving room and storing the entry costs that room for at most one lifetime.
 
 Served on the public domain. Credentials from `.env`.
 
-**Scope:** two screens.
+**Scope** (docs/internal/plans/admin-group-management.md):
 
 - **Dashboard** — what the relay can know without knowing any content: blob storage
-  used against its limits, entries evicted in the last day, per group the device
-  count, last activity, live entry count, age of the oldest entry and blob storage
-  used, and the storage backend's configuration and last sweep. Sizes and counts
-  only: no entry id, content type or filename is shown, and none is available to show.
-- **Tokens** — creation tokens with name, created date, whether used, and the
-  resulting group if used. Token generation, and revocation of a token that has not
-  been used yet (its URL then returns 404, like any unknown token). A used token
-  cannot be revoked: its group already exists, and is removed by revoking its devices.
+  used against its limits, entries evicted in the last day, totals per tag, per group
+  the device count, last activity, live entry count, age of the oldest entry and blob
+  storage used against the group's limit, the storage backend's configuration and last
+  sweep, and the health of the deployment (build, uptime, Redis eviction policy, AOF,
+  memory). Sizes and counts only: no entry id, content type or filename is shown, and
+  none is available to show. Groups idle longer than the stale threshold are marked and
+  can be deleted in bulk; a sweep can be run on demand.
+- **Group** — one page per group: rename it, put it under a tag, set its own storage
+  limit, list its devices (name, paired, last seen, online), purge its entries early, and
+  delete it (§3.4). Purge and delete go through a confirmation page.
+- **Tags** — create and delete tags; a group has at most one. A tag may carry a storage
+  limit for its groups. A group's blob limit is its own override if enabled, else its
+  tag's if enabled, else `TPP_BLOB_MAX_GROUP_BYTES`.
+- **Tokens** — creation tokens with name, note, starting tag, created date, optional
+  expiry (1, 7 or 30 days), status, and the resulting group if used. Token generation,
+  and revocation of a token that has not been used yet (its URL then returns 404, like
+  any unknown token). An expired token is treated as unknown. A used token cannot be
+  revoked: its group already exists, and is removed by deleting it (§3.4).
+- **Settings** — runtime settings stored in Redis: the stale threshold.
+- **Audit log** — the last 1000 admin actions and sign-ins, with time and client
+  address. It never holds a token value, a password, a cookie or a key.
 
 No content access, by construction.
 
