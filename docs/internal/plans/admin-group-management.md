@@ -1,8 +1,8 @@
 # Plan — Admin group management, tags, storage overrides and housekeeping
 
-**Status:** proposed. Open questions in §7 must be answered before step 3 starts.
-**Touches:** `/server/**` (all steps), `/pkg/tppclient/**`, `/desktop/**` and
-`/mobile/**` (step 4 only), `/docs/site/**`, `/deploy/.env.example`, SPEC §4.4.
+**Status:** agreed; the questions in §7 are answered.
+**Touches:** `/proto/**` (step 0), `/server/**` (all steps), `/pkg/tppclient/**`,
+`/desktop/**` and `/mobile/**` (steps 4 and 5), `/docs/site/**`, `/deploy/.env.example`, SPEC §4.4.
 
 ---
 
@@ -12,7 +12,7 @@ Give the admin real control over groups without giving them any access to
 content (SPEC §2.3, §4.4 stay true):
 
 1. **Group detail page:** rename a group, see its devices (name, created, last
-   seen, online now).
+   seen, online now). The apps show the group's name too.
 2. **Tags:** put groups under a tag ("family", "friends"), and filter and total
    the dashboard by tag.
 3. **Delete a group** from the admin UI, with clients telling the user what
@@ -24,6 +24,7 @@ content (SPEC §2.3, §4.4 stay true):
 7. **Token improvements:** optional expiry, copy-link button, a note, and a tag
    the resulting group inherits.
 8. **Stale groups:** highlight groups inactive for N days, and bulk-delete them.
+   N is set on a new **Settings** page of the admin UI.
 9. **Audit log** of admin actions.
 10. **Storage limit overrides** with the precedence `default < tag < group`.
 
@@ -47,19 +48,20 @@ rekey, SPEC §3.3), and any per-entry view (SPEC §4.4: sizes and counts only).
 | # | Decision | Why |
 |---|---|---|
 | D1 | The group name is a `name` field on `group:<id>`. When it is empty the token name is shown, so existing groups need no migration. Renaming does not touch the token. | Admin-only metadata the server already knows; no E2E impact. |
-| D2 | A group has **at most one tag** (§7 Q2). Tags are stored as `tag:<name>` hashes (storage override) plus a `tags` set; the group's tag is a `tag` field on `group:<id>`. Deleting a tag untags its groups. | One tag keeps the override precedence unambiguous: a group in two tags would have two candidate limits. |
+| D2 | A group has **at most one tag** (§7, answer 2). Tags are stored as `tag:<name>` hashes (storage override) plus a `tags` set; the group's tag is a `tag` field on `group:<id>`. Deleting a tag untags its groups. | One tag keeps the override precedence unambiguous: a group in two tags would have two candidate limits. |
 | D3 | Storage overrides are `{bytes, enabled}` pairs on the tag and on the group. The effective per-group limit is the first **enabled** override of group, then tag, then `TPP_BLOB_MAX_GROUP_BYTES`. Unticking keeps the stored bytes. | As requested: the env value is the default, the checkbox decides whether the override counts. |
 | D4 | The effective limit is resolved **inside the reserve Lua script** from `group:<id>` and `tag:<name>`, not passed from Go. | No race between a rename/retag and an upload; one round trip. |
-| D5 | An override may not exceed `TPP_BLOB_MAX_TOTAL_BYTES` (when that is set); `0` means "no per-group limit", as it does for the env value. Lowering a limit below current usage evicts **nothing at once**; the next upload evicts oldest-first as today. The dashboard flags the group as over its limit. | Matches the existing eviction path (plan s3-blob-storage D5); no surprise mass deletion from a form submit. |
+| D5 | An override may not exceed `TPP_BLOB_MAX_TOTAL_BYTES` (when that is set); `0` means "no per-group limit", as it does for the env value. Lowering a limit below current usage evicts **nothing at once**. The next upload to that group evicts oldest-first until usage plus the new upload fits the new limit, which is what the reserve script already does with any limit. The dashboard flags the group as over its limit until then. | Matches the existing eviction path (plan s3-blob-storage D5); no surprise mass deletion from a form submit. |
 | D6 | Group deletion is one Lua script: group hash, device set, device hashes, wrapped keys, entry index and hashes, inline blobs, quota usage and index, pending pairings/offers. Blob files are deleted after the script, best effort; anything missed is reclaimed by the normal sweep (expiry paths, SPEC §4.5). The token record stays, marked "group deleted". | Atomic for everything that decides access; blobs are already safe to leave to the sweeper. |
-| D7 | Deletion leaves a **tombstone** `deleted_device:<id>` per former device, with a TTL (§7 Q6). The WS upgrade answers **410 Gone** for a tombstoned device, 401 otherwise. Live sockets are closed with WebSocket close code **4410** ("group deleted"). No protobuf change. | Lets an offline device learn *why* it lost access when it comes back. TTL keys are correct under `volatile-lru` (losing one only degrades the message to "revoked"). |
+| D7 | Deletion leaves a **tombstone** `deleted_device:<id>` per former device, with a TTL (§7, answer 6). The WS upgrade answers **410 Gone** for a tombstoned device, 401 otherwise. Live sockets are closed with WebSocket close code **4410** ("group deleted"). No protobuf change. | Lets an offline device learn *why* it lost access when it comes back. TTL keys are correct under `volatile-lru` (losing one only degrades the message to "revoked"). |
 | D8 | `tppclient` maps 410 and close code 4410 to a new `ErrGroupDeleted` (wrapping `ErrRevoked`, so existing callers keep working). Desktop and mobile show "This group was deleted by the server admin" and offer to create or join a group. | Same exit path as revocation, clearer message. |
 | D9 | Token expiry is optional, chosen at creation (never / 1 day / 7 days / 30 days). An expired token behaves like an unknown one (404, cannot create). The token list shows it as expired and lets the admin delete it. | Leaked unused links stop working by themselves. |
-| D10 | Stale threshold is `TPP_ADMIN_STALE_AFTER` (duration, default `2160h` = 90 days). | Config durations are `time.Duration` strings (conventions). |
+| D10 | Stale threshold is a server setting edited on a new admin **Settings** page (`/admin/settings`), stored in a Redis hash `settings` (persistent zone, no TTL), default 90 days. No env variable. | The admin asked for it in the UI; the page is the home for later runtime settings. |
 | D11 | The audit log is a capped Redis list `audit` (last 1000 entries, no TTL): time, action, target ID or name, result, and for logins the client IP. Never tokens, passwords, cookies or keys. | Fits the logging rules in CLAUDE.md; small and bounded. |
 | D12 | Health checks read `CONFIG GET maxmemory-policy`, `appendonly`, and `INFO memory` once per dashboard load. A failing `CONFIG` (managed Redis that disables it) shows "unknown", not an error. | SPEC §4.2: `allkeys-lru` destroys pairings silently; the admin should see it. |
 | D13 | "Sweep now" signals the sweeper's existing goroutine over a buffered channel of 1; a sweep already queued or running absorbs the click. | Keeps one owner for the sweep loop (conventions: every goroutine has an owner). |
 | D14 | Every destructive action (delete, bulk delete, purge) goes through a confirmation page that names the group(s), device counts and storage to be freed. | Irreversible; the admin UI is publicly reachable. |
+| D15 | The group name reaches the apps through new messages, not existing ones: `GroupInfoRequest`/`GroupInfoResponse` (the client asks on every connect) and a `GroupRenamed` event. All protobuf changes for this plan land in **one dedicated PR** (step 0). Deletion needs none (D7). | Additive messages; old clients ignore the event and never send the request. Proto is a shared contract (CLAUDE.md). |
 
 ## 4. Work items
 
@@ -110,12 +112,19 @@ SameSite=Strict protection):
 | `GET /admin/tags`, `POST /admin/tags`, `POST /admin/tags/{name}`, `POST /admin/tags/{name}/delete` | Tag list with group counts and the override checkbox |
 | `POST /admin/sweep` | Sweep now |
 | `GET /admin/audit` | Audit log, newest first |
+| `GET`/`POST /admin/settings` | Server settings: stale threshold |
 | `POST /admin/tokens` | Gains note, tag, expiry; list gets a copy-link button |
 
 Every page keeps the `/source` link (AGPL, CLAUDE.md). Copy-link is the only
 new JavaScript; it degrades to a selectable field.
 
-### 4.6 Clients (step 4 only)
+### 4.6 Clients (steps 4 and 5)
+
+- Group name (step 5): `tppclient` sends `GroupInfoRequest` after connecting
+  and handles `GroupRenamed`; desktop shows the name in the tray tooltip and
+  the UI header, mobile on the main screen. Empty name → no label.
+- The server side of step 5 answers `GroupInfoRequest` and broadcasts
+  `GroupRenamed` from the rename handler.
 
 - `pkg/tppclient`: `ErrGroupDeleted` (D8), tests for 410 and close 4410.
 - Desktop: `OnRevoked` message branches on the error; UI shows the
@@ -125,8 +134,7 @@ new JavaScript; it degrades to a selectable field.
 
 ### 4.7 Config and docs
 
-- `TPP_ADMIN_STALE_AFTER` in `internal/config`, `deploy/.env.example`,
-  `self-hosting/configuration.md`.
+- No new env variable; the stale threshold lives on the Settings page.
 - `docs/site/.../self-hosting/admin.mdx`: every new screen and button, the
   override precedence, what deletion does to devices; retake admin screenshots.
 - User docs: what a device shows when its group is deleted.
@@ -136,6 +144,8 @@ new JavaScript; it degrades to a selectable field.
 
 ## 5. Order of work (one PR each)
 
+0. **Protobuf (own branch and PR):** `GroupInfoRequest`, `GroupInfoResponse`,
+   `GroupRenamed`, regenerated Go and TS bindings. Nothing uses them yet.
 1. **Read-only and metadata (server only):** group detail page with devices and
    online state, rename, tags, health card, sweep now, token note/tag/expiry/copy,
    stale badges, audit log. No client change.
@@ -145,6 +155,8 @@ new JavaScript; it degrades to a selectable field.
    clients already handle it.
 4. **Group deletion (server + `tppclient` + desktop + mobile):** D6–D8, bulk
    stale delete, SPEC update. Wire change lands everywhere at once.
+5. **Group name in the apps (server + `tppclient` + desktop + mobile):** uses
+   the messages from step 0.
 
 Each PR updates the docs site and `docs/internal/ROADMAP.md`.
 
@@ -159,24 +171,16 @@ Each PR updates the docs site and `docs/internal/ROADMAP.md`.
 - Client: 410 and 4410 map to `ErrGroupDeleted` in Go and TS; desktop and
   mobile UI tests for the new message.
 
-## 7. Open questions
+## 7. Answered questions
 
-Recommended answers in **bold**; the plan above assumes them.
-
-1. **Override levels.** "default < group < entry" is read as env default <
-   **tag** (e.g. "family") < **individual group**. Confirm. **Yes.**
-2. **One tag per group, or several?** Several would make the override
-   ambiguous. **One.**
-3. **Which limit do overrides change?** Only the per-group blob storage limit
-   (`TPP_BLOB_MAX_GROUP_BYTES`), or also the largest single upload
-   (`TPP_ENTRY_MAX_BYTES`)? The latter needs clients to learn the limit before
-   uploading. **Group storage only.**
-4. **Lowering a limit below current usage:** evict at once, or on the next
-   upload? **Next upload (D5).**
-5. **Show the admin's group name in the apps?** Needs a small proto change
-   (name in `DeviceListResponse` + a rename event), done as its own PR.
-   **Not now; add later if wanted.**
-6. **Tombstone lifetime** for deleted groups' devices (how long an offline
-   device can still be told "deleted by admin"). **30 days.**
-7. **Token expiry choices.** **Never (default) / 1 / 7 / 30 days.**
-8. **Stale threshold default.** **90 days, configurable.**
+1. Override levels are env default < tag < individual group. **Yes.**
+2. One tag per group. **Yes.**
+3. Overrides change the per-group blob storage limit only, not the largest
+   single upload. **Yes.**
+4. Lowering a limit below usage: the next upload evicts as many entries as it
+   takes to fit the new limit (D5).
+5. The apps show the admin's group name; every protobuf change of this plan
+   goes in one separate branch and PR (D15, step 0).
+6. Tombstones for a deleted group's devices live 30 days (D7).
+7. Token expiry: never (default), 1, 7 or 30 days (D9).
+8. Stale threshold: 90 days by default, set on the admin Settings page (D10).
