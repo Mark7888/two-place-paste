@@ -19,6 +19,7 @@ import (
 //	quota:entry:<id>         hash    group, size, pending, expires_at
 //	quota:group:<id>:index   zset    the group's entry ids, scored as above
 //	quota:group:<id>:usage   string  the group's accounted bytes
+//	quota:limits             hash    group id → its own limit, when it has one
 const (
 	// defaultNamespace prefixes every key. Tests use their own, so that
 	// parallel tests sharing one Redis cannot see each other's totals.
@@ -44,6 +45,7 @@ func (k keys) groupPrefix() string              { return k.ns + "group:" }
 func (k keys) entry(id string) string           { return k.entryPrefix() + id }
 func (k keys) groupIndex(groupID string) string { return k.groupPrefix() + groupID + ":index" }
 func (k keys) groupUsage(groupID string) string { return k.groupPrefix() + groupID + ":usage" }
+func (k keys) limits() string                   { return k.ns + "limits" }
 
 // evictions is the hourly eviction counter for the UTC hour holding t. It
 // carries a TTL: it is a statistic for the dashboard, not bookkeeping, and
@@ -89,16 +91,23 @@ end
 // entry alone exceeds a limit; {2} the id is already accounted; {3} eviction
 // cannot free enough room.
 //
+// The group limit is the group's own when quota:limits holds one, and the
+// default in ARGV[9] otherwise. It is read here, inside the script, so a limit
+// changed while an upload is starting is either wholly before it or wholly
+// after it.
+//
 //	KEYS[1] quota:index      ARGV[1] entry prefix    ARGV[6] expires_at (ms)
 //	KEYS[2] quota:usage      ARGV[2] group prefix    ARGV[7] now (ms)
 //	KEYS[3] eviction hour    ARGV[3] entry id        ARGV[8] total limit (0 = none)
-//	                         ARGV[4] group id        ARGV[9] group limit (0 = none)
+//	KEYS[4] quota:limits     ARGV[4] group id        ARGV[9] default group limit (0 = none)
 //	                         ARGV[5] size
 var reserveScript = redis.NewScript(luaHelpers + `
 expire(ARGV[7], ` + strconv.Itoa(expireBatch) + `)
 
 local id, g, size = ARGV[3], ARGV[4], tonumber(ARGV[5])
 local totalLimit, groupLimit = tonumber(ARGV[8]), tonumber(ARGV[9])
+local own = redis.call('HGET', KEYS[4], g)
+if own then groupLimit = tonumber(own) end
 
 if redis.call('EXISTS', P_ENTRY .. id) == 1 then return {2} end
 if (groupLimit > 0 and size > groupLimit) or (totalLimit > 0 and size > totalLimit) then
@@ -182,6 +191,21 @@ var expireScript = redis.NewScript(luaHelpers + `
 return expire(ARGV[3], tonumber(ARGV[4]))
 `)
 
+// forgetGroupScript forgets up to ARGV[4] entries of one group and returns
+// how many it forgot. Once the group holds none, its usage counter goes too.
+//
+//	KEYS[1] quota:index   ARGV[1] entry prefix   ARGV[3] group id
+//	KEYS[2] quota:usage   ARGV[2] group prefix   ARGV[4] batch size
+var forgetGroupScript = redis.NewScript(luaHelpers + `
+local index = P_GROUP .. ARGV[3] .. ':index'
+local ids = redis.call('ZRANGE', index, 0, tonumber(ARGV[4]) - 1)
+for _, id in ipairs(ids) do forget(id) end
+if redis.call('ZCARD', index) == 0 then
+  redis.call('DEL', index, P_GROUP .. ARGV[3] .. ':usage')
+end
+return #ids
+`)
+
 // commitScript clears the pending flag of an entry that is still accounted.
 //
 //	KEYS[1] entry key
@@ -219,7 +243,7 @@ func (q *Redis) Reserve(ctx context.Context, r Reservation) ([]Victim, error) {
 		return nil, err
 	}
 	now := q.now()
-	reply, err := reserveScript.Run(ctx, q.rdb, []string{q.k.index(), q.k.usage(), q.k.evictions(now)},
+	reply, err := reserveScript.Run(ctx, q.rdb, []string{q.k.index(), q.k.usage(), q.k.evictions(now), q.k.limits()},
 		q.k.entryPrefix(), q.k.groupPrefix(),
 		r.EntryID, r.GroupID, strconv.FormatInt(r.Size, 10),
 		ms(r.ExpiresAt), ms(now),
@@ -401,7 +425,14 @@ func (q *Redis) Rebuild(ctx context.Context, entries []Reservation) error {
 		if err != nil {
 			return fmt.Errorf("rebuild accounting: scan: %w", err)
 		}
-		stale = append(stale, keys...)
+		for _, key := range keys {
+			// Group limits are the admin's configuration, not bookkeeping
+			// derived from entries; a rebuild has nothing to replace them
+			// with.
+			if key != q.k.limits() {
+				stale = append(stale, key)
+			}
+		}
 		if next == 0 {
 			break
 		}
@@ -431,4 +462,47 @@ func (q *Redis) Rebuild(ctx context.Context, entries []Reservation) error {
 		return fmt.Errorf("rebuild accounting: write: %w", err)
 	}
 	return nil
+}
+
+// SetGroupLimit implements Ledger.
+func (q *Redis) SetGroupLimit(ctx context.Context, groupID string, limit int64, set bool) error {
+	var err error
+	if set {
+		// No TTL: configuration, never evictable (SPEC §4.2).
+		err = q.rdb.HSet(ctx, q.k.limits(), groupID, strconv.FormatInt(max(limit, 0), 10)).Err()
+	} else {
+		err = q.rdb.HDel(ctx, q.k.limits(), groupID).Err()
+	}
+	if err != nil {
+		return fmt.Errorf("set storage limit of group %s: %w", groupID, err)
+	}
+	return nil
+}
+
+// GroupLimit implements Ledger.
+func (q *Redis) GroupLimit(ctx context.Context, groupID string) (int64, bool, error) {
+	v, err := q.rdb.HGet(ctx, q.k.limits(), groupID).Int64()
+	if errors.Is(err, redis.Nil) {
+		return q.limits.GroupBytes, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("read storage limit of group %s: %w", groupID, err)
+	}
+	return v, true, nil
+}
+
+// ForgetGroup implements Ledger. Like Expire it works in batches.
+func (q *Redis) ForgetGroup(ctx context.Context, groupID string) (int, error) {
+	total := 0
+	for {
+		n, err := forgetGroupScript.Run(ctx, q.rdb, []string{q.k.index(), q.k.usage()},
+			q.k.entryPrefix(), q.k.groupPrefix(), groupID, expireBatch).Int()
+		if err != nil {
+			return total, fmt.Errorf("forget entries of group %s: %w", groupID, err)
+		}
+		total += n
+		if n < expireBatch {
+			return total, nil
+		}
+	}
 }

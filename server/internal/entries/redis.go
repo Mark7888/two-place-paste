@@ -304,6 +304,14 @@ func (s *RedisStore) Delete(ctx context.Context, groupID, entryID string) error 
 	return nil
 }
 
+// DeleteGroupIndex implements Store.
+func (s *RedisStore) DeleteGroupIndex(ctx context.Context, groupID string) error {
+	if err := s.rdb.Del(ctx, groupEntriesKey(groupID)).Err(); err != nil {
+		return fmt.Errorf("delete entry index of group %s: %w", groupID, err)
+	}
+	return nil
+}
+
 // deleteEntryScript removes an entry that belongs to the named group. The
 // index member is removed regardless, so a stale id cannot linger there.
 //

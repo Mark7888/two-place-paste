@@ -22,6 +22,11 @@ type Sweeper struct {
 	now      func() time.Time
 	tasks    []sweepTask
 
+	// kick asks the running loop for a sweep now. It holds at most one
+	// request: a click while one is already queued or running is absorbed
+	// by it.
+	kick chan struct{}
+
 	mu     sync.Mutex
 	status SweepStatus
 }
@@ -69,6 +74,20 @@ func NewSweeper(backend Backend, interval time.Duration, logger *slog.Logger) *S
 		interval: interval,
 		logger:   logger,
 		now:      func() time.Time { return time.Now().UTC() },
+		kick:     make(chan struct{}, 1),
+	}
+}
+
+// Trigger asks for a sweep as soon as the running loop is free, and reports
+// whether the request was queued; false means one is already waiting. The
+// sweep itself still runs on Run's goroutine, which stays its only owner
+// (docs/internal/conventions.md §8).
+func (s *Sweeper) Trigger() bool {
+	select {
+	case s.kick <- struct{}{}:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -94,6 +113,8 @@ func (s *Sweeper) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			s.sweepOnce(ctx)
+		case <-s.kick:
 			s.sweepOnce(ctx)
 		}
 	}

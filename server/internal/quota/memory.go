@@ -18,6 +18,7 @@ type Memory struct {
 	mu        sync.Mutex
 	entries   map[string]memEntry
 	evictions []memEviction
+	own       map[string]int64
 }
 
 type memEviction struct {
@@ -32,7 +33,7 @@ type memEntry struct {
 
 // NewMemory returns an empty in-memory ledger.
 func NewMemory(opts Options) *Memory {
-	return &Memory{limits: opts.Limits, now: opts.now(), entries: make(map[string]memEntry)}
+	return &Memory{limits: opts.Limits, now: opts.now(), entries: make(map[string]memEntry), own: make(map[string]int64)}
 }
 
 var _ Ledger = (*Memory)(nil)
@@ -49,7 +50,11 @@ func (m *Memory) Reserve(_ context.Context, r Reservation) ([]Victim, error) {
 	if _, ok := m.entries[r.EntryID]; ok {
 		return nil, fmt.Errorf("reserve %s: %w", r.EntryID, ErrExists)
 	}
-	if exceeds(r.Size, m.limits.GroupBytes) || exceeds(r.Size, m.limits.TotalBytes) {
+	groupLimit := m.limits.GroupBytes
+	if own, ok := m.own[r.GroupID]; ok {
+		groupLimit = own
+	}
+	if exceeds(r.Size, groupLimit) || exceeds(r.Size, m.limits.TotalBytes) {
 		return nil, fmt.Errorf("reserve %s: %w", r.EntryID, ErrTooLarge)
 	}
 
@@ -78,16 +83,16 @@ func (m *Memory) Reserve(_ context.Context, r Reservation) ([]Victim, error) {
 		victims = append(victims, Victim{EntryID: e.EntryID, GroupID: e.GroupID, Size: e.Size})
 	}
 
-	if m.limits.GroupBytes > 0 {
+	if groupLimit > 0 {
 		for _, e := range ordered {
-			if groups[r.GroupID]+r.Size <= m.limits.GroupBytes {
+			if groups[r.GroupID]+r.Size <= groupLimit {
 				break
 			}
 			if e.GroupID == r.GroupID && !e.pending {
 				take(e)
 			}
 		}
-		if groups[r.GroupID]+r.Size > m.limits.GroupBytes {
+		if groups[r.GroupID]+r.Size > groupLimit {
 			return nil, fmt.Errorf("reserve %s: %w", r.EntryID, ErrExceeded)
 		}
 	}
@@ -220,6 +225,42 @@ func (m *Memory) Rebuild(_ context.Context, entries []Reservation) error {
 		m.entries[r.EntryID] = memEntry{Reservation: r}
 	}
 	return nil
+}
+
+// SetGroupLimit implements Ledger.
+func (m *Memory) SetGroupLimit(_ context.Context, groupID string, limit int64, set bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if set {
+		m.own[groupID] = max(limit, 0)
+	} else {
+		delete(m.own, groupID)
+	}
+	return nil
+}
+
+// GroupLimit implements Ledger.
+func (m *Memory) GroupLimit(_ context.Context, groupID string) (int64, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if own, ok := m.own[groupID]; ok {
+		return own, true, nil
+	}
+	return m.limits.GroupBytes, false, nil
+}
+
+// ForgetGroup implements Ledger.
+func (m *Memory) ForgetGroup(_ context.Context, groupID string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for id, e := range m.entries {
+		if e.GroupID == groupID {
+			delete(m.entries, id)
+			n++
+		}
+	}
+	return n, nil
 }
 
 // exceeds reports whether size is over a limit, where zero is unlimited.

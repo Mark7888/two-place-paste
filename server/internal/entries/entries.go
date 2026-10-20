@@ -178,4 +178,21 @@ type Store interface {
 	// It is how a storage eviction takes an entry away. That shortens an
 	// entry's life, which SPEC §4.5 permits; nothing may lengthen one.
 	Delete(ctx context.Context, groupID, entryID string) error
+
+	// DeleteGroupIndex drops what is left of a group's history index once
+	// its entries have been deleted one by one: ids of entries that expired
+	// on their own, which the index only sheds on writes.
+	DeleteGroupIndex(ctx context.Context, groupID string) error
+}
+
+// PurgeResult is what PurgeGroup removed.
+type PurgeResult struct {
+	// Entries is the number of entries deleted.
+	Entries int
+
+	// Bytes is their ciphertext, inline and blob alike.
+	Bytes int64
+
+	// Uploads is the number of chunked uploads aborted.
+	Uploads int
 }

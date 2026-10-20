@@ -63,6 +63,7 @@ type Store interface {
 	AcceptOffer(ctx context.Context, code, groupID string, publicKey, wrappedGroupKey []byte) (store.PairingOffer, store.Device, error)
 	DeleteOffer(ctx context.Context, code string) error
 	TouchLastSeen(ctx context.Context, deviceID string) error
+	DeviceTombstoned(ctx context.Context, deviceID string) (bool, error)
 }
 
 // Entries is the entry read/write subset this package needs.
