@@ -75,6 +75,20 @@ message DeviceListResponse {
   uint64 epoch = 2;
 }
 
+// GroupInfoRequest asks for the group's display details. It carries no
+// fields: the group is determined by the connection's device identity. A
+// client sends it after every connect, because a rename made while it was
+// offline is not replayed as a GroupRenamed event.
+message GroupInfoRequest {}
+
+// GroupInfoResponse carries what the server admin has said about the group.
+message GroupInfoResponse {
+  // The admin's display name for the group (SPEC §4.4), shown as-is. It is
+  // admin-chosen display text, never clipboard content, and may be empty, in
+  // which case a client shows no group label.
+  string name = 1;
+}
+
 // WrappedKey carries the new group key encrypted to one device's public key.
 message WrappedKey {
   string device_id = 1;

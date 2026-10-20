@@ -53,6 +53,9 @@ export enum MessageType {
   MESSAGE_TYPE_DEVICE_LIST_RESPONSE = 31,
   MESSAGE_TYPE_REKEY_REQUEST = 32,
   MESSAGE_TYPE_REKEY_RESPONSE = 33,
+  /** MESSAGE_TYPE_GROUP_INFO_REQUEST - Group display details set by the server admin (SPEC §4.4). */
+  MESSAGE_TYPE_GROUP_INFO_REQUEST = 34,
+  MESSAGE_TYPE_GROUP_INFO_RESPONSE = 35,
   /** MESSAGE_TYPE_ENTRY_PUT_REQUEST - Entries (SPEC §4.3, §6). */
   MESSAGE_TYPE_ENTRY_PUT_REQUEST = 40,
   MESSAGE_TYPE_ENTRY_PUT_RESPONSE = 41,
@@ -79,6 +82,7 @@ export enum MessageType {
   MESSAGE_TYPE_DEVICE_REVOKED = 52,
   MESSAGE_TYPE_ENTRY_ADDED = 53,
   MESSAGE_TYPE_ENTRY_EVICTED = 54,
+  MESSAGE_TYPE_GROUP_RENAMED = 55,
   UNRECOGNIZED = -1,
 }
 
@@ -135,6 +139,12 @@ export function messageTypeFromJSON(object: any): MessageType {
     case 33:
     case "MESSAGE_TYPE_REKEY_RESPONSE":
       return MessageType.MESSAGE_TYPE_REKEY_RESPONSE;
+    case 34:
+    case "MESSAGE_TYPE_GROUP_INFO_REQUEST":
+      return MessageType.MESSAGE_TYPE_GROUP_INFO_REQUEST;
+    case 35:
+    case "MESSAGE_TYPE_GROUP_INFO_RESPONSE":
+      return MessageType.MESSAGE_TYPE_GROUP_INFO_RESPONSE;
     case 40:
     case "MESSAGE_TYPE_ENTRY_PUT_REQUEST":
       return MessageType.MESSAGE_TYPE_ENTRY_PUT_REQUEST;
@@ -204,6 +214,9 @@ export function messageTypeFromJSON(object: any): MessageType {
     case 54:
     case "MESSAGE_TYPE_ENTRY_EVICTED":
       return MessageType.MESSAGE_TYPE_ENTRY_EVICTED;
+    case 55:
+    case "MESSAGE_TYPE_GROUP_RENAMED":
+      return MessageType.MESSAGE_TYPE_GROUP_RENAMED;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -247,6 +260,10 @@ export function messageTypeToJSON(object: MessageType): string {
       return "MESSAGE_TYPE_REKEY_REQUEST";
     case MessageType.MESSAGE_TYPE_REKEY_RESPONSE:
       return "MESSAGE_TYPE_REKEY_RESPONSE";
+    case MessageType.MESSAGE_TYPE_GROUP_INFO_REQUEST:
+      return "MESSAGE_TYPE_GROUP_INFO_REQUEST";
+    case MessageType.MESSAGE_TYPE_GROUP_INFO_RESPONSE:
+      return "MESSAGE_TYPE_GROUP_INFO_RESPONSE";
     case MessageType.MESSAGE_TYPE_ENTRY_PUT_REQUEST:
       return "MESSAGE_TYPE_ENTRY_PUT_REQUEST";
     case MessageType.MESSAGE_TYPE_ENTRY_PUT_RESPONSE:
@@ -293,6 +310,8 @@ export function messageTypeToJSON(object: MessageType): string {
       return "MESSAGE_TYPE_ENTRY_ADDED";
     case MessageType.MESSAGE_TYPE_ENTRY_EVICTED:
       return "MESSAGE_TYPE_ENTRY_EVICTED";
+    case MessageType.MESSAGE_TYPE_GROUP_RENAMED:
+      return "MESSAGE_TYPE_GROUP_RENAMED";
     case MessageType.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";

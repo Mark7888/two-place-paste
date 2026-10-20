@@ -347,6 +347,94 @@ func (x *DeviceListResponse) GetEpoch() uint64 {
 	return 0
 }
 
+// GroupInfoRequest asks for the group's display details. It carries no
+// fields: the group is determined by the connection's device identity. A
+// client sends it after every connect, because a rename made while it was
+// offline is not replayed as a GroupRenamed event.
+type GroupInfoRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GroupInfoRequest) Reset() {
+	*x = GroupInfoRequest{}
+	mi := &file_tpp_v1_group_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GroupInfoRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GroupInfoRequest) ProtoMessage() {}
+
+func (x *GroupInfoRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_group_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GroupInfoRequest.ProtoReflect.Descriptor instead.
+func (*GroupInfoRequest) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_group_proto_rawDescGZIP(), []int{5}
+}
+
+// GroupInfoResponse carries what the server admin has said about the group.
+type GroupInfoResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The admin's display name for the group (SPEC §4.4), shown as-is. It is
+	// admin-chosen display text, never clipboard content, and may be empty, in
+	// which case a client shows no group label.
+	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GroupInfoResponse) Reset() {
+	*x = GroupInfoResponse{}
+	mi := &file_tpp_v1_group_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GroupInfoResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GroupInfoResponse) ProtoMessage() {}
+
+func (x *GroupInfoResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_group_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GroupInfoResponse.ProtoReflect.Descriptor instead.
+func (*GroupInfoResponse) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_group_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *GroupInfoResponse) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
 // WrappedKey carries the new group key encrypted to one device's public key.
 type WrappedKey struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
@@ -359,7 +447,7 @@ type WrappedKey struct {
 
 func (x *WrappedKey) Reset() {
 	*x = WrappedKey{}
-	mi := &file_tpp_v1_group_proto_msgTypes[5]
+	mi := &file_tpp_v1_group_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -371,7 +459,7 @@ func (x *WrappedKey) String() string {
 func (*WrappedKey) ProtoMessage() {}
 
 func (x *WrappedKey) ProtoReflect() protoreflect.Message {
-	mi := &file_tpp_v1_group_proto_msgTypes[5]
+	mi := &file_tpp_v1_group_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -384,7 +472,7 @@ func (x *WrappedKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WrappedKey.ProtoReflect.Descriptor instead.
 func (*WrappedKey) Descriptor() ([]byte, []int) {
-	return file_tpp_v1_group_proto_rawDescGZIP(), []int{5}
+	return file_tpp_v1_group_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *WrappedKey) GetDeviceId() string {
@@ -426,7 +514,7 @@ type RekeyRequest struct {
 
 func (x *RekeyRequest) Reset() {
 	*x = RekeyRequest{}
-	mi := &file_tpp_v1_group_proto_msgTypes[6]
+	mi := &file_tpp_v1_group_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -438,7 +526,7 @@ func (x *RekeyRequest) String() string {
 func (*RekeyRequest) ProtoMessage() {}
 
 func (x *RekeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_tpp_v1_group_proto_msgTypes[6]
+	mi := &file_tpp_v1_group_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -451,7 +539,7 @@ func (x *RekeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RekeyRequest.ProtoReflect.Descriptor instead.
 func (*RekeyRequest) Descriptor() ([]byte, []int) {
-	return file_tpp_v1_group_proto_rawDescGZIP(), []int{6}
+	return file_tpp_v1_group_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *RekeyRequest) GetRevokedDeviceId() string {
@@ -486,7 +574,7 @@ type RekeyResponse struct {
 
 func (x *RekeyResponse) Reset() {
 	*x = RekeyResponse{}
-	mi := &file_tpp_v1_group_proto_msgTypes[7]
+	mi := &file_tpp_v1_group_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -498,7 +586,7 @@ func (x *RekeyResponse) String() string {
 func (*RekeyResponse) ProtoMessage() {}
 
 func (x *RekeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_tpp_v1_group_proto_msgTypes[7]
+	mi := &file_tpp_v1_group_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -511,7 +599,7 @@ func (x *RekeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RekeyResponse.ProtoReflect.Descriptor instead.
 func (*RekeyResponse) Descriptor() ([]byte, []int) {
-	return file_tpp_v1_group_proto_rawDescGZIP(), []int{7}
+	return file_tpp_v1_group_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RekeyResponse) GetEpoch() uint64 {
@@ -546,7 +634,10 @@ const file_tpp_v1_group_proto_rawDesc = "" +
 	"\x11DeviceListRequest\"T\n" +
 	"\x12DeviceListResponse\x12(\n" +
 	"\adevices\x18\x01 \x03(\v2\x0e.tpp.v1.DeviceR\adevices\x12\x14\n" +
-	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\"U\n" +
+	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\"\x12\n" +
+	"\x10GroupInfoRequest\"'\n" +
+	"\x11GroupInfoResponse\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"U\n" +
 	"\n" +
 	"WrappedKey\x12\x1b\n" +
 	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12*\n" +
@@ -570,20 +661,22 @@ func file_tpp_v1_group_proto_rawDescGZIP() []byte {
 	return file_tpp_v1_group_proto_rawDescData
 }
 
-var file_tpp_v1_group_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_tpp_v1_group_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_tpp_v1_group_proto_goTypes = []any{
 	(*CreateGroupRequest)(nil),  // 0: tpp.v1.CreateGroupRequest
 	(*CreateGroupResponse)(nil), // 1: tpp.v1.CreateGroupResponse
 	(*Device)(nil),              // 2: tpp.v1.Device
 	(*DeviceListRequest)(nil),   // 3: tpp.v1.DeviceListRequest
 	(*DeviceListResponse)(nil),  // 4: tpp.v1.DeviceListResponse
-	(*WrappedKey)(nil),          // 5: tpp.v1.WrappedKey
-	(*RekeyRequest)(nil),        // 6: tpp.v1.RekeyRequest
-	(*RekeyResponse)(nil),       // 7: tpp.v1.RekeyResponse
+	(*GroupInfoRequest)(nil),    // 5: tpp.v1.GroupInfoRequest
+	(*GroupInfoResponse)(nil),   // 6: tpp.v1.GroupInfoResponse
+	(*WrappedKey)(nil),          // 7: tpp.v1.WrappedKey
+	(*RekeyRequest)(nil),        // 8: tpp.v1.RekeyRequest
+	(*RekeyResponse)(nil),       // 9: tpp.v1.RekeyResponse
 }
 var file_tpp_v1_group_proto_depIdxs = []int32{
 	2, // 0: tpp.v1.DeviceListResponse.devices:type_name -> tpp.v1.Device
-	5, // 1: tpp.v1.RekeyRequest.wrapped_keys:type_name -> tpp.v1.WrappedKey
+	7, // 1: tpp.v1.RekeyRequest.wrapped_keys:type_name -> tpp.v1.WrappedKey
 	2, // [2:2] is the sub-list for method output_type
 	2, // [2:2] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name
@@ -602,7 +695,7 @@ func file_tpp_v1_group_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_tpp_v1_group_proto_rawDesc), len(file_tpp_v1_group_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

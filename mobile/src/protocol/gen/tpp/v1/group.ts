@@ -92,6 +92,25 @@ export interface DeviceListResponse {
   epoch: string;
 }
 
+/**
+ * GroupInfoRequest asks for the group's display details. It carries no
+ * fields: the group is determined by the connection's device identity. A
+ * client sends it after every connect, because a rename made while it was
+ * offline is not replayed as a GroupRenamed event.
+ */
+export interface GroupInfoRequest {
+}
+
+/** GroupInfoResponse carries what the server admin has said about the group. */
+export interface GroupInfoResponse {
+  /**
+   * The admin's display name for the group (SPEC §4.4), shown as-is. It is
+   * admin-chosen display text, never clipboard content, and may be empty, in
+   * which case a client shows no group label.
+   */
+  name: string;
+}
+
 /** WrappedKey carries the new group key encrypted to one device's public key. */
 export interface WrappedKey {
   deviceId: string;
@@ -649,6 +668,125 @@ export const DeviceListResponse: MessageFns<DeviceListResponse> = {
     const message = createBaseDeviceListResponse();
     message.devices = object.devices?.map((e) => Device.fromPartial(e)) || [];
     message.epoch = object.epoch ?? "0";
+    return message;
+  },
+};
+
+function createBaseGroupInfoRequest(): GroupInfoRequest {
+  return {};
+}
+
+export const GroupInfoRequest: MessageFns<GroupInfoRequest> = {
+  encode(_: GroupInfoRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): GroupInfoRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseGroupInfoRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(_: any): GroupInfoRequest {
+    return {};
+  },
+
+  toJSON(_: GroupInfoRequest): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GroupInfoRequest>, I>>(base?: I): GroupInfoRequest {
+    return GroupInfoRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GroupInfoRequest>, I>>(_: I): GroupInfoRequest {
+    const message = createBaseGroupInfoRequest();
+    return message;
+  },
+};
+
+function createBaseGroupInfoResponse(): GroupInfoResponse {
+  return { name: "" };
+}
+
+export const GroupInfoResponse: MessageFns<GroupInfoResponse> = {
+  encode(message: GroupInfoResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.name !== "") {
+      writer.uint32(10).string(message.name);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): GroupInfoResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseGroupInfoResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.name = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): GroupInfoResponse {
+    return { name: isSet(object.name) ? globalThis.String(object.name) : "" };
+  },
+
+  toJSON(message: GroupInfoResponse): unknown {
+    const obj: any = {};
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GroupInfoResponse>, I>>(base?: I): GroupInfoResponse {
+    return GroupInfoResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GroupInfoResponse>, I>>(object: I): GroupInfoResponse {
+    const message = createBaseGroupInfoResponse();
+    message.name = object.name ?? "";
     return message;
   },
 };

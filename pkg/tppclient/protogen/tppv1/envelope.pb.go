@@ -61,6 +61,9 @@ const (
 	MessageType_MESSAGE_TYPE_DEVICE_LIST_RESPONSE MessageType = 31
 	MessageType_MESSAGE_TYPE_REKEY_REQUEST        MessageType = 32
 	MessageType_MESSAGE_TYPE_REKEY_RESPONSE       MessageType = 33
+	// Group display details set by the server admin (SPEC §4.4).
+	MessageType_MESSAGE_TYPE_GROUP_INFO_REQUEST  MessageType = 34
+	MessageType_MESSAGE_TYPE_GROUP_INFO_RESPONSE MessageType = 35
 	// Entries (SPEC §4.3, §6).
 	MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST      MessageType = 40
 	MessageType_MESSAGE_TYPE_ENTRY_PUT_RESPONSE     MessageType = 41
@@ -87,6 +90,7 @@ const (
 	MessageType_MESSAGE_TYPE_DEVICE_REVOKED        MessageType = 52
 	MessageType_MESSAGE_TYPE_ENTRY_ADDED           MessageType = 53
 	MessageType_MESSAGE_TYPE_ENTRY_EVICTED         MessageType = 54
+	MessageType_MESSAGE_TYPE_GROUP_RENAMED         MessageType = 55
 )
 
 // Enum value maps for MessageType.
@@ -109,6 +113,8 @@ var (
 		31: "MESSAGE_TYPE_DEVICE_LIST_RESPONSE",
 		32: "MESSAGE_TYPE_REKEY_REQUEST",
 		33: "MESSAGE_TYPE_REKEY_RESPONSE",
+		34: "MESSAGE_TYPE_GROUP_INFO_REQUEST",
+		35: "MESSAGE_TYPE_GROUP_INFO_RESPONSE",
 		40: "MESSAGE_TYPE_ENTRY_PUT_REQUEST",
 		41: "MESSAGE_TYPE_ENTRY_PUT_RESPONSE",
 		42: "MESSAGE_TYPE_ENTRY_LATEST_REQUEST",
@@ -132,6 +138,7 @@ var (
 		52: "MESSAGE_TYPE_DEVICE_REVOKED",
 		53: "MESSAGE_TYPE_ENTRY_ADDED",
 		54: "MESSAGE_TYPE_ENTRY_EVICTED",
+		55: "MESSAGE_TYPE_GROUP_RENAMED",
 	}
 	MessageType_value = map[string]int32{
 		"MESSAGE_TYPE_UNSPECIFIED":                  0,
@@ -151,6 +158,8 @@ var (
 		"MESSAGE_TYPE_DEVICE_LIST_RESPONSE":         31,
 		"MESSAGE_TYPE_REKEY_REQUEST":                32,
 		"MESSAGE_TYPE_REKEY_RESPONSE":               33,
+		"MESSAGE_TYPE_GROUP_INFO_REQUEST":           34,
+		"MESSAGE_TYPE_GROUP_INFO_RESPONSE":          35,
 		"MESSAGE_TYPE_ENTRY_PUT_REQUEST":            40,
 		"MESSAGE_TYPE_ENTRY_PUT_RESPONSE":           41,
 		"MESSAGE_TYPE_ENTRY_LATEST_REQUEST":         42,
@@ -174,6 +183,7 @@ var (
 		"MESSAGE_TYPE_DEVICE_REVOKED":               52,
 		"MESSAGE_TYPE_ENTRY_ADDED":                  53,
 		"MESSAGE_TYPE_ENTRY_EVICTED":                54,
+		"MESSAGE_TYPE_GROUP_RENAMED":                55,
 	}
 )
 
@@ -280,7 +290,7 @@ const file_tpp_v1_envelope_proto_rawDesc = "" +
 	"\bEnvelope\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
 	"\x04type\x18\x02 \x01(\x0e2\x13.tpp.v1.MessageTypeR\x04type\x12\x18\n" +
-	"\apayload\x18\x03 \x01(\fR\apayload*\xa4\f\n" +
+	"\apayload\x18\x03 \x01(\fR\apayload*\x8f\r\n" +
 	"\vMessageType\x12\x1c\n" +
 	"\x18MESSAGE_TYPE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12MESSAGE_TYPE_ERROR\x10\x01\x12%\n" +
@@ -299,7 +309,9 @@ const file_tpp_v1_envelope_proto_rawDesc = "" +
 	" MESSAGE_TYPE_DEVICE_LIST_REQUEST\x10\x1e\x12%\n" +
 	"!MESSAGE_TYPE_DEVICE_LIST_RESPONSE\x10\x1f\x12\x1e\n" +
 	"\x1aMESSAGE_TYPE_REKEY_REQUEST\x10 \x12\x1f\n" +
-	"\x1bMESSAGE_TYPE_REKEY_RESPONSE\x10!\x12\"\n" +
+	"\x1bMESSAGE_TYPE_REKEY_RESPONSE\x10!\x12#\n" +
+	"\x1fMESSAGE_TYPE_GROUP_INFO_REQUEST\x10\"\x12$\n" +
+	" MESSAGE_TYPE_GROUP_INFO_RESPONSE\x10#\x12\"\n" +
 	"\x1eMESSAGE_TYPE_ENTRY_PUT_REQUEST\x10(\x12#\n" +
 	"\x1fMESSAGE_TYPE_ENTRY_PUT_RESPONSE\x10)\x12%\n" +
 	"!MESSAGE_TYPE_ENTRY_LATEST_REQUEST\x10*\x12&\n" +
@@ -322,7 +334,8 @@ const file_tpp_v1_envelope_proto_rawDesc = "" +
 	"\"MESSAGE_TYPE_WRAPPED_KEY_AVAILABLE\x103\x12\x1f\n" +
 	"\x1bMESSAGE_TYPE_DEVICE_REVOKED\x104\x12\x1c\n" +
 	"\x18MESSAGE_TYPE_ENTRY_ADDED\x105\x12\x1e\n" +
-	"\x1aMESSAGE_TYPE_ENTRY_EVICTED\x106BHZFgithub.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1b\x06proto3"
+	"\x1aMESSAGE_TYPE_ENTRY_EVICTED\x106\x12\x1e\n" +
+	"\x1aMESSAGE_TYPE_GROUP_RENAMED\x107BHZFgithub.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1b\x06proto3"
 
 var (
 	file_tpp_v1_envelope_proto_rawDescOnce sync.Once
