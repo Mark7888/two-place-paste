@@ -25,6 +25,9 @@ The relay server has matching image tags: `latest` for Stable and `beta` for Bet
   the system pick the time and holds off on battery and in Low Power Mode.
 - An update only restarts the app when the screen is locked or nothing has synced for ten minutes,
   so it never interrupts you mid-copy.
+- While a build downloads, Settings → Updates shows how far it has got. A slow connection is fine:
+  the download only gives up if nothing arrives for a minute, and then says so; press
+  **Install and restart** again to retry.
 - Every download is checked against a manifest signed in CI. A build that does not match is not
   installed.
 - The previous version is kept, and **Roll back to …** in Settings → Updates returns to it in one click.

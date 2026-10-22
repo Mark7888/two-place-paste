@@ -646,6 +646,23 @@ button.action.choice .choice-why {
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* A download's progress: the spinner's footprint, filling clockwise from the
+   top instead of turning. */
+.progress-ring {
+  width: 1.15rem;
+  height: 1.15rem;
+  flex: none;
+  transform: rotate(-90deg);
+}
+
+.progress-ring circle { fill: none; stroke-width: 2.5; }
+.progress-ring .track { stroke: var(--line); }
+.progress-ring .fill {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.25s linear;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .spinner { animation-duration: 2s; }
   button.action:active:not(:disabled) { transform: none; }

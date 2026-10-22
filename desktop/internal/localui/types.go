@@ -389,6 +389,13 @@ const (
 	EventGroupName = "group_name"
 )
 
+// DownloadProgress is how far an update download has got, in bytes. Total is
+// 0 when the size is not known yet.
+type DownloadProgress struct {
+	Done  int64 `json:"done"`
+	Total int64 `json:"total"`
+}
+
 // UpdateView is the updates section's model
 // (docs/internal/plans/versioning-releases-and-updates.md §3).
 type UpdateView struct {
@@ -401,6 +408,10 @@ type UpdateView struct {
 
 	// State is one of the UpdateState* constants.
 	State string `json:"state"`
+
+	// Progress is the download in progress while State is downloading, once
+	// its first bytes have arrived.
+	Progress *DownloadProgress `json:"progress,omitempty"`
 
 	// Message says what the state means for a person: why a check failed,
 	// why nothing can be installed.

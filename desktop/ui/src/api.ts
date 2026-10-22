@@ -262,6 +262,12 @@ export type UpdateState =
   | "restarting"
   | "error";
 
+/** DownloadProgress is how far an update download has got; `total` is 0 when unknown. */
+export interface DownloadProgress {
+  done: number;
+  total: number;
+}
+
 export interface UpdateView {
   current: BuildView;
   channel: UpdateChannel;
@@ -269,6 +275,8 @@ export interface UpdateView {
   nightly_commit?: string;
   state: UpdateState;
   message?: string;
+  /** The download in progress while `state` is "downloading", once bytes arrive. */
+  progress?: DownloadProgress;
   available?: UpdateCandidate;
   last_checked?: string;
   can_install: boolean;

@@ -23,20 +23,30 @@ var ErrChecksum = errors.New("update: the download does not match its manifest")
 // download fetches url into a new file in dir and checks it against want. On
 // any failure nothing is left behind. The returned file is the caller's to
 // remove.
-func download(ctx context.Context, client *http.Client, url, dir string, want File) (string, error) {
+//
+// There is no deadline on the whole download, only on a stall (see
+// stallTimeout): a build arriving slowly but steadily is let finish.
+func download(ctx context.Context, client *http.Client, url, dir string, want File, progress progressFunc) (string, error) {
+	ctx, kick, stop := withStallGuard(ctx)
+	defer stop()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", fmt.Errorf("update: build the request for %s: %w", url, err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("update: download %s: %w", url, err)
+		return "", fmt.Errorf("update: download %s: %w", url, stalled(ctx, err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("update: download %s: %s", url, resp.Status)
 	}
-	return saveVerified(resp.Body, dir, want)
+	total := want.Size
+	if total <= 0 && resp.ContentLength > 0 {
+		total = resp.ContentLength
+	}
+	path, err := saveVerified(&progressReader{r: resp.Body, total: total, kick: kick, report: progress}, dir, want)
+	return path, stalled(ctx, err)
 }
 
 // saveVerified writes r to a new file in dir, checking its size and SHA-256
