@@ -302,6 +302,9 @@ func run(logger *slog.Logger) error {
 			}
 			syncFromTray(runCtx, svc, tr, dir, logger)
 		},
+		PushSensitive: func(planID string) {
+			runTraySync(runCtx, svc, tr, localui.SyncRequest{Direction: localui.DirectionUpload, PlanID: planID}, logger)
+		},
 		// A check from the tray has nowhere to show its answer but the UI, so
 		// an update it finds opens the updates section; finding nothing, or
 		// failing, only logs.
@@ -346,11 +349,27 @@ func closeClient(logger *slog.Logger, client *tppclient.Client, timeout time.Dur
 // to move, says so in a notification; one that moved something only flashes
 // the transfer icon, which is answer enough for a click that did what it said.
 func syncFromTray(ctx context.Context, svc *service.Service, tr *tray.Tray, d localui.Direction, logger *slog.Logger) {
-	res, err := svc.Sync(ctx, localui.SyncRequest{Direction: d})
+	runTraySync(ctx, svc, tr, localui.SyncRequest{Direction: d}, logger)
+}
+
+// runTraySync runs one sync for the tray and answers it there.
+//
+// An upload of a protected entry asks "push anyway?" with a notification
+// whose button confirms the plan the service issued. A confirmation that
+// finds the clipboard changed meanwhile gets a new plan, and so asks again
+// about what is actually there now.
+func runTraySync(ctx context.Context, svc *service.Service, tr *tray.Tray, req localui.SyncRequest, logger *slog.Logger) {
+	res, err := svc.Sync(ctx, req)
+	var sensitive *localui.SensitiveError
 	switch {
 	case errors.Is(err, service.ErrDirectionUnknown):
 		logger.Info("sync from the tray needs a direction; asking the user")
 		tr.AskDirection()
+		return
+	case errors.As(err, &sensitive):
+		// The reason stays out of the log: it may be a label the user wrote.
+		logger.Info("upload from the tray is a protected entry; asking the user")
+		tr.AskSensitive(sensitive.PlanID, sensitive.Reason)
 		return
 	case err != nil:
 		logger.Warn("sync from the tray failed", "error", err)

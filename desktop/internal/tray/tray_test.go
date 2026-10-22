@@ -220,6 +220,7 @@ func TestNothingIsPaintedOnceTheTrayHasGone(t *testing.T) {
 	tr.attach(p.paint)
 	var revealed []bool
 	tr.setChoiceItems(func(show bool) { revealed = append(revealed, show) })
+	tr.setPushItem(func(show bool) { revealed = append(revealed, show) })
 	_, before := p.last()
 
 	// What Run does when the platform's loop ends: from here a paint would
@@ -228,11 +229,73 @@ func TestNothingIsPaintedOnceTheTrayHasGone(t *testing.T) {
 	tr.SetStatus(StatusDisconnected)
 	tr.SetGroupName("Home")
 	tr.withdrawChoice()
+	tr.withdrawSensitive()
 
 	if _, after := p.last(); after != before {
 		t.Errorf("paints = %d after the tray went, want %d", after, before)
 	}
 	if len(revealed) != 0 {
 		t.Errorf("menu items changed %d times after the tray went, want 0", len(revealed))
+	}
+}
+
+// TestPushAnywayConfirmsThePlanOnce: the answer carries the plan id it was
+// asked with, takes the menu item back, and a second press does nothing.
+func TestPushAnywayConfirmsThePlanOnce(t *testing.T) {
+	t.Parallel()
+
+	tr := New(nil)
+	pushed := make(chan string, 2)
+	tr.onPush = func(plan string) { pushed <- plan }
+	var mu sync.Mutex
+	var shown []bool
+	tr.setPushItem(func(show bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		shown = append(shown, show)
+	})
+
+	tr.AskSensitive("plan-7", "Marked private by the app that copied it")
+	tr.chooseAction(actionPushAnyway)
+	select {
+	case plan := <-pushed:
+		if plan != "plan-7" {
+			t.Errorf("PushSensitive got %q, want plan-7", plan)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("PushSensitive was not called")
+	}
+
+	// The plan was used: a second press finds none and starts nothing, so
+	// there is nothing to wait for.
+	tr.pushAnyway()
+	if len(pushed) != 0 || tr.pushPlan != "" {
+		t.Errorf("a second press pushed again (%d queued, plan %q)", len(pushed), tr.pushPlan)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(shown) < 2 || !shown[0] || shown[1] {
+		t.Errorf("push item shown = %v, want it shown then hidden", shown)
+	}
+}
+
+func TestPushAnywayIsNotADirection(t *testing.T) {
+	t.Parallel()
+	if _, ok := directionForAction(actionPushAnyway); ok {
+		t.Error("the push anyway action maps to a sync direction")
+	}
+}
+
+func TestSensitiveBody(t *testing.T) {
+	t.Parallel()
+	tests := map[string]string{
+		"":         sensitivePrompt,
+		"My bank":  "My bank. " + sensitivePrompt,
+		"Has dot.": "Has dot. " + sensitivePrompt,
+	}
+	for reason, want := range tests {
+		if got := sensitiveBody(reason); got != want {
+			t.Errorf("sensitiveBody(%q) = %q, want %q", reason, got, want)
+		}
 	}
 }
