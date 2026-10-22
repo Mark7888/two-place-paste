@@ -46,8 +46,9 @@ environment.
 | `cmd/tppdesktop` | The binary: logging, keystore, wiring, shutdown. |
 | `internal/service` | Sync direction (SPEC §6), the revocation gate (SPEC §3.3), settings. |
 | `internal/localui` | The localhost server: token, Origin check, embedded UI, JSON API, event stream. |
-| `internal/clipboard` | Per-OS clipboard plus the watcher and its self-write suppression. |
-| `internal/tray` | Tray icon, its status glyphs, the menu, notifications (the sync-direction prompt), and the visible bind failure. |
+| `internal/clipboard` | Per-OS clipboard plus the watcher and its self-write suppression, and the password managers' privacy markers (`markers.go`). |
+| `internal/sensitive` | What counts as sensitive: the OS marker, built-in detectors and the user's filters (`docs/internal/plans/auto-upload-filters.md`). |
+| `internal/tray` | Tray icon, its status glyphs, the menu, notifications (the sync-direction and protected-entry prompts), and the visible bind failure. |
 | `internal/autostart` | launchd agent (macOS) and the HKCU Run key (Windows). |
 | `internal/config` | The settings file. Non-secret by design: the port must be editable by hand. |
 | `internal/update` | The auto-updater: Stable, Beta and Nightly sources, manifest signatures, the in-place swap. |
@@ -68,6 +69,12 @@ Anything in the user's browser can reach `127.0.0.1`, so:
 
 Secrets are the keystore's, not this module's: the device private key and the group
 key never reach the settings file or a log.
+
+Sensitive-content filters may hold the user's own private text, so neither a filter's
+value nor its label is ever logged; a match is logged by source and rule id only. An
+exact-match filter keeps only an argon2id hash. The macOS privacy marker is read
+through AppKit, so a build with `CGO_ENABLED=0` cannot see it and treats no copy as a
+password manager's; release builds use cgo.
 
 ## Windows has no console, so there is a log file
 

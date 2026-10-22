@@ -964,6 +964,16 @@ moving the risk onto the member, and the work split are in
 
 ---
 
+## Desktop feature — sensitive content and auto-upload filters
+
+🔍 **In review.** Keeps password-manager copies and anything matching a built-in detector
+or a user filter out of auto-upload, masks it on the Sync screen, and asks before a manual
+push, from the UI or the tray. Desktop only and local only: no wire, spec or server
+change. Plan, decisions and what was built differently are in
+[`docs/internal/plans/auto-upload-filters.md`](plans/auto-upload-filters.md).
+
+---
+
 ## Deferred backlog — do not let agents start these
 
 | Item | Spec ref |

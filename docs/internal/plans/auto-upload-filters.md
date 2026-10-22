@@ -1,6 +1,8 @@
 # Plan — Sensitive clipboard content and auto-upload filters (desktop)
 
-**Status:** proposed.
+**Status:** implemented on `claude/auto-upload-filters-wsfin5`, in the six commits of §6.
+§8 records where the build differs from the plan below, and why; the plan itself is kept
+as it was agreed.
 **Touches:** `/desktop/**` (clipboard, config, service, localui, tray, UI),
 `/docs/internal/SPECS.md` §7.2, `/docs/site/**`. No change to `/proto`, `/spec`, the
 server, `pkg/tppclient` or mobile.
@@ -365,3 +367,86 @@ One PR, in this commit order, each passing `make test lint` and `npm run typeche
   auto-apply (spec + vectors + Go + TS).
 - A *source app* filter (foreground app at copy time), if wanted later.
 - Mobile, if it ever gains auto-upload.
+
+## 8. As built
+
+Everything in §4 and §5 was built. These are the places the code differs from the text
+above, and why.
+
+**OS detection (§4.1)**
+
+- The reason the user sees is *"Marked private by the app that copied it"*, and macOS's
+  transient and auto-generated types read as *"Marked temporary by the app that copied
+  it"*, so the two are told apart.
+- macOS, when the change count moves during a read twice in a row: the marker is taken
+  from *both* type lists rather than dropped. A race can then mark a plain copy as
+  private (it costs a question) but can never unmark a password (it would cost a leak).
+- Windows reads a DWORD format through a dedicated `readDWORD`, which copies four bytes
+  and no more, instead of the general `readBytes`.
+- **Not done here:** the manual test matrix with real password managers, and compiling
+  the macOS cgo code (`pasteboard_darwin.go`, `notify_darwin.m`), which this Linux
+  environment cannot do. Both need a Mac and a Windows machine before merge.
+
+**Classifier (§4.2)**
+
+- `Classify(content)` takes no context: it does no I/O. `Verdict.Rule` replaces
+  `FilterID` and also names a detector. `Matches` returns every match, for the test box.
+- The first benchmark ran 18 s on 50 MB of text. Three rules were rewritten to bring a
+  full configuration (every detector, four filters) to about 0.7 s:
+  - API tokens and JWTs jump between occurrences of each literal prefix and run an
+    anchored pattern on a short window there, instead of one alternation tried at every
+    byte. The token list also gained GitHub's `ghu_`/`ghr_`, Stripe's `rk_live_`,
+    GitLab, npm and SendGrid.
+  - Cards and IBANs are byte scanners, not regular expressions with counted repetition.
+    The IBAN scanner tries every group boundary as the end, so a trailing capitalised
+    word does not hide the number before it.
+  - Case-insensitive *contains* lower-cases the text once, shared by every such filter,
+    instead of a `(?i)` regular expression per filter. *Starts with* uses an anchored
+    `(?i)` pattern; *ends with* runs one on the last `4 × len(value)` bytes.
+- The log line is `"clipboard change not uploaded automatically: sensitive"` with
+  `source` and `rule`.
+
+**Service and API (§4.4, §4.5)**
+
+- Push plans have their own map, `pushPlans`, rather than sharing the revocation plans'.
+- A classification is cached by content digest and classifier, so the status refresh
+  and the watcher do not hash an exact filter twice for one copy.
+- A sensitive skip publishes `EventSensitive` (not `EventClipboard`) and clears an
+  upload `Skipped` notice, which was about the copy it replaced.
+- `POST /api/filters/test` also takes the draft's detectors, so the Built-in tab's
+  switches are tested before saving. New filters get their id in the editor, so a match
+  can point at an unsaved row.
+- A full filter list (200 × 1 KiB) and a 1 MiB test sample exceed the API's 64 KiB body
+  limit; `POST /api/settings` and `POST /api/filters/test` have limits of their own.
+
+**Tray (§4.6)**
+
+- `AskSensitive(planID, reason)` keeps the plan id in the tray. The question is withdrawn
+  after two minutes, the plan's life, rather than when the clipboard changes; confirming
+  after a change gets a new question about the new copy, which is the same outcome.
+- The notification reads *"This is a protected entry"* / *"<reason>. Push it to your
+  other devices anyway?"*.
+
+**UI (§4.7)**
+
+- A saved exact filter shows the placeholder *"Saved — type to replace"* rather than
+  "set". The kind is labelled *"Exact match"*; *"only a hash is kept"* is in its
+  placeholder, because the long label was cut off in the select.
+- Only the rows scroll inside the editor, so the tabs and the test box stay in view.
+- With unsaved changes the editor cannot be dismissed with Escape or the backdrop;
+  Cancel asks *"Discard your changes?"*.
+- `Modal` now focuses an element marked `data-autofocus` when it opens: React's
+  `autoFocus` ran while the dialog was still closed, so the close button took the focus
+  and the "push anyway?" dialog did not default to Cancel.
+- The UI has no test runner; a Playwright script against the built UI with a mocked API
+  checked the masked clipboard, reveal, push anyway, both tabs, turn all on/off, the
+  discard question and what Save sends. It is not committed.
+
+**Docs (§4.8)**
+
+- The detectors and filter kinds have a page of their own,
+  `guides/sensitive-content.mdx`, which Settings, Sync, Tray, Troubleshooting, Security
+  and the FAQ link to. The `!cgo` note is in `desktop/README.md`, where a developer
+  building without cgo will read it.
+- `desktop-sync.webp` is unchanged (its state did not change); the masked clipboard and
+  the protected-entry dialog have new screenshots, and Settings was retaken.
