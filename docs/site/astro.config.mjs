@@ -45,6 +45,7 @@ export default defineConfig({
 						'guides/add-a-device',
 						'guides/sync',
 						'guides/tray',
+						'guides/sensitive-content',
 						'guides/history',
 						'guides/devices',
 						'guides/settings',

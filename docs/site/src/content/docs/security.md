@@ -52,6 +52,13 @@ to reach `127.0.0.1`, the app:
   `localStorage`,
 - checks the `Origin` header on every request, including the WebSocket.
 
+## Passwords on the clipboard
+
+With *Watch the clipboard* on, the desktop app does not upload a copy that its application marked as
+private — a password manager's, most often — or one that matches a built-in detector or your own
+filter. You can still send it by hand, after a confirmation. This is decided on your computer, and
+the relay never learns about it. See [Sensitive content](/two-place-paste/guides/sensitive-content/).
+
 ## Reporting a problem
 
 Please report security issues privately through
