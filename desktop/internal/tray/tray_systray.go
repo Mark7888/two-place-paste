@@ -82,6 +82,10 @@ func runMenu(ctx context.Context, t *Tray, opts Options) {
 	downloadItem := systray.AddMenuItem(downloadLabel, "Put the group's latest entry on this clipboard")
 	uploadItem.Hide()
 	downloadItem.Hide()
+	// Hidden until an upload from the tray has had to ask about a
+	// protected entry.
+	pushItem := systray.AddMenuItem(pushMenuLabel, "Upload the protected clipboard to the group anyway")
+	pushItem.Hide()
 	openItem := systray.AddMenuItem("Open TwoPlacePaste", "Open the app in your browser")
 	updateItem := systray.AddMenuItem("Check for updates…", "Check the update channel for a newer build")
 	if opts.CheckUpdates == nil {
@@ -99,6 +103,13 @@ func runMenu(ctx context.Context, t *Tray, opts Options) {
 		uploadItem.Hide()
 		downloadItem.Hide()
 	})
+	t.setPushItem(func(show bool) {
+		if show {
+			pushItem.Show()
+			return
+		}
+		pushItem.Hide()
+	})
 	t.attach(t.paintStatus(statusItem))
 
 	go func() {
@@ -115,6 +126,8 @@ func runMenu(ctx context.Context, t *Tray, opts Options) {
 				t.choose(Upload)
 			case <-downloadItem.ClickedCh:
 				t.choose(Download)
+			case <-pushItem.ClickedCh:
+				t.pushAnyway()
 			case <-updateItem.ClickedCh:
 				if opts.CheckUpdates != nil {
 					go opts.CheckUpdates()
