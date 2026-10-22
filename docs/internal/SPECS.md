@@ -325,8 +325,8 @@ Served on the public domain. Credentials from `.env`.
   storage used against the group's limit, the storage backend's configuration and last
   sweep, and the health of the deployment (build, uptime, Redis eviction policy, AOF,
   memory). Sizes and counts only: no entry id, content type or filename is shown, and
-  none is available to show. Groups idle longer than the stale threshold are marked and
-  can be deleted in bulk; a sweep can be run on demand.
+  none is available to show. Groups idle longer than the stale threshold are marked; a
+  group is deleted from its own page, one at a time. A sweep can be run on demand.
 - **Group** — one page per group: rename it, put it under a tag, set its own storage
   limit, list its devices (name, paired, last seen, online), purge its entries early, and
   delete it (§3.4). Purge and delete go through a confirmation page.

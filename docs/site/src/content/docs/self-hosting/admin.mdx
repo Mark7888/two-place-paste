@@ -60,7 +60,8 @@ that should share a clipboard).
 - **Groups**, heaviest first: devices, last activity, live entries, oldest entry and storage
   against the group's limit. Click a name to open the [group's page](#manage-a-group). Badges mark
   a group that is **stale** (no device has connected for longer than the
-  [stale threshold](#settings)) or **over limit** (its limit was lowered below what it holds).
+  [stale threshold](#settings)) or **over limit** (its limit was lowered below what it holds). To
+  remove a stale group, open it and [delete it](#delete-a-group); groups are deleted one at a time.
 - **Health**: the relay's version and uptime, and how Redis is set up. Redis must run with
   `maxmemory-policy volatile-lru` and AOF on (see [Docker](/two-place-paste/self-hosting/docker/));
   the card marks anything else, because `allkeys-lru` or no AOF can silently lose groups. A managed
@@ -69,12 +70,6 @@ that should share a clipboard).
   one straight away.
 
 If part of the dashboard cannot be read (say Redis is down), it says which part and shows the rest.
-
-### Delete several groups
-
-Tick groups in the table and press **Delete selected…**. When some groups are stale, the dashboard
-also offers **Review stale groups**, which selects all of them. Either way you confirm on the next
-page, which lists each group with its devices and storage.
 
 ## Manage a group
 

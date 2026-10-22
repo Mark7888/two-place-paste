@@ -7,7 +7,7 @@
   <table>
     <thead><tr><th>Group</th><th>Devices</th><th>Entries</th><th>Blob storage</th><th>Last active</th></tr></thead>
     <tbody>
-    {{range .Groups}}
+    {{with .Group}}
       <tr>
         <td class="name" data-label="Group">
           <span class="stack"><span>{{.Name}} {{if .Tag}}<span class="tag open">{{.Tag}}</span>{{end}}</span><code class="muted">{{.ShortID}}</code></span>
@@ -21,11 +21,10 @@
     </tbody>
   </table>
 </div>
-<p class="hint spaced">{{len .Groups}} {{if eq (len .Groups) 1}}group{{else}}groups{{end}}, {{.Total}} of blob storage freed.</p>
+<p class="hint spaced">{{.Total}} of blob storage freed.</p>
 
 <form method="post" action="{{.Action}}" class="form-row">
   <input type="hidden" name="csrf" value="{{$.CSRF}}">
-  {{range .IDs}}<input type="hidden" name="id" value="{{.}}">{{end}}
   <button type="submit" class="danger">{{.Button}}</button>
   <a class="button secondary" href="{{.Back}}">Cancel</a>
 </form>

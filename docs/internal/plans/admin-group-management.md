@@ -208,3 +208,7 @@ Each PR updates the docs site and `docs/internal/ROADMAP.md`.
    has no VCS data in its context, so the image shows "development build" until the
    version is passed in with `-ldflags`, which needs a change to `deploy/Dockerfile` and
    `docker.yml` (a CI workflow, so its own PR).
+6. **No bulk delete.** Goal 8's bulk deletion of stale groups, and the
+   `/admin/groups/delete` routes, were built and then taken out at review: a
+   deletion cuts a set of devices off for good, so each one is made from the
+   group's own page. Stale groups are still marked on the dashboard.

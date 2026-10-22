@@ -76,17 +76,15 @@
 {{if gt .StaleCount 0}}
 <p class="notice warn">
   {{.StaleCount}} {{if eq .StaleCount 1}}group has{{else}}groups have{{end}} had no device connect for more than {{.StaleAfter}}.
-  <a href="/admin/groups/delete?stale=1">Review stale groups</a>
+  {{if eq .StaleCount 1}}It is marked below; open it to delete it.{{else}}They are marked below; open one to delete it.{{end}}
 </p>
 {{end}}
 
 {{if .Groups}}
-<form method="get" action="/admin/groups/delete">
 <div class="table-wrap">
   <table>
     <thead>
       <tr>
-        <th><span class="sr-only">Select</span></th>
         <th>Group</th>
         <th>Devices</th>
         <th>Last active</th>
@@ -98,9 +96,6 @@
     <tbody>
     {{range .Groups}}
       <tr>
-        <td class="select" data-label="Select">
-          <input type="checkbox" name="id" value="{{.ID}}" aria-label="Select {{.Name}}">
-        </td>
         <td class="name" data-label="Group">
           <span class="stack">
             <span><a href="{{.Path}}">{{.Name}}</a>
@@ -131,11 +126,6 @@
     </tbody>
   </table>
 </div>
-<div class="table-foot">
-  <button type="submit" class="danger small">Delete selected…</button>
-  <span class="hint">You confirm on the next page.</span>
-</div>
-</form>
 {{else if .Filter}}
 <p class="empty">No groups here. <a href="/admin/">Show all groups</a>.</p>
 {{else}}

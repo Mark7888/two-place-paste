@@ -347,6 +347,14 @@ func TestDeleteGroup(t *testing.T) {
 	}
 
 	wantStatus(t, g.postForm(c, "/admin/groups/"+id+"/delete", url.Values{"csrf": {csrf}}), http.StatusSeeOther)
+	if body := readBody(t, g.get(c, "/admin/")); !strings.Contains(body, "Deleted the group “Anna”.") {
+		t.Errorf("dashboard after delete does not confirm it")
+	}
+	// Deleting it again changes nothing and says so.
+	wantStatus(t, g.postForm(c, "/admin/groups/"+id+"/delete", url.Values{"csrf": {csrf}}), http.StatusSeeOther)
+	if body := readBody(t, g.get(c, "/admin/")); !strings.Contains(body, "that group no longer exists") {
+		t.Errorf("a second delete is not reported as a no-op")
+	}
 	if _, err := g.store.GetGroup(ctx, id); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("GetGroup() after delete error = %v, want %v", err, store.ErrNotFound)
 	}
@@ -379,7 +387,10 @@ func TestDeleteGroup(t *testing.T) {
 	}
 }
 
-func TestBulkDeleteStaleGroups(t *testing.T) {
+// TestStaleGroupsAreMarkedNotBulkDeleted: the dashboard marks groups idle
+// past the stale threshold, and offers no way to delete several at once —
+// a group is deleted from its own page, one at a time.
+func TestStaleGroupsAreMarkedNotBulkDeleted(t *testing.T) {
 	t.Parallel()
 	g := newGroupFixture(t, quota.Limits{}, nil)
 	old, _ := g.group(t, "Old")
@@ -393,29 +404,34 @@ func TestBulkDeleteStaleGroups(t *testing.T) {
 	csrf := g.login(c)
 
 	// The default threshold is 90 days: nothing is stale yet.
-	if body := readBody(t, g.get(c, "/admin/")); strings.Contains(body, "Review stale groups") {
-		t.Errorf("dashboard reports stale groups under the default threshold")
+	if body := readBody(t, g.get(c, "/admin/")); strings.Contains(body, "tag warn\">stale") {
+		t.Errorf("dashboard marks groups stale under the default threshold")
 	}
 	wantStatus(t, g.postForm(c, "/admin/settings", url.Values{"csrf": {csrf}, "stale_days": {"30"}}), http.StatusSeeOther)
 
 	// At 30 days both groups are stale.
 	body := readBody(t, g.get(c, "/admin/"))
 	if !strings.Contains(body, "2 groups have had no device connect for more than 30 days") {
-		t.Fatalf("dashboard does not report both groups stale")
+		t.Errorf("dashboard does not report both groups stale")
 	}
-	confirm := readBody(t, g.get(c, "/admin/groups/delete?stale=1"))
-	if !strings.Contains(confirm, "Old") || !strings.Contains(confirm, "Other") {
-		t.Errorf("stale review does not list both groups")
+	if n := strings.Count(body, `<span class="tag warn">stale</span>`); n != 2 {
+		t.Errorf("dashboard marks %d groups stale, want 2", n)
+	}
+	for _, gone := range []string{`type="checkbox"`, "Delete selected", "/admin/groups/delete"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("dashboard still offers bulk deletion: it contains %q", gone)
+		}
 	}
 
-	// The confirmation posts what it listed; a hand-picked subset deletes
-	// only that subset.
-	wantStatus(t, g.postForm(c, "/admin/groups/delete", url.Values{"csrf": {csrf}, "id": {old}}), http.StatusSeeOther)
-	if _, err := g.store.GetGroup(context.Background(), old); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("stale group still exists after bulk delete: %v", err)
+	// The bulk route is gone: a POST to it deletes nothing.
+	resp := g.postForm(c, "/admin/groups/delete", url.Values{"csrf": {csrf}, "id": {old, other}})
+	if resp.StatusCode == http.StatusSeeOther {
+		t.Errorf("POST /admin/groups/delete = %d, want it refused", resp.StatusCode)
 	}
-	if _, err := g.store.GetGroup(context.Background(), other); err != nil {
-		t.Errorf("bulk delete took a group it was not given: %v", err)
+	for _, id := range []string{old, other} {
+		if _, err := g.store.GetGroup(context.Background(), id); err != nil {
+			t.Errorf("group %s was deleted through the removed bulk route: %v", id, err)
+		}
 	}
 }
 
@@ -580,7 +596,7 @@ func TestGroupRoutesRequireASession(t *testing.T) {
 
 	for _, path := range []string{
 		"/admin/groups/" + id + "/rename", "/admin/groups/" + id + "/tag", "/admin/groups/" + id + "/limit",
-		"/admin/groups/" + id + "/purge", "/admin/groups/" + id + "/delete", "/admin/groups/delete",
+		"/admin/groups/" + id + "/purge", "/admin/groups/" + id + "/delete",
 		"/admin/tags", "/admin/tags/x/limit", "/admin/tags/x/delete", "/admin/settings", "/admin/sweep",
 	} {
 		resp := g.postForm(c, path, url.Values{"name": {"x"}, "id": {id}})

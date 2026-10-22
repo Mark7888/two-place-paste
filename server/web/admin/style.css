@@ -751,13 +751,6 @@ a.button.danger { color: #fff; background: var(--error); }
 .crumbs { margin: 0 0 0.35rem; font-size: 0.85rem; color: var(--muted); }
 .crumbs a { color: var(--muted); }
 
-/* The dashboard's per-row selection, and the bar under the table that acts on
-   it. */
-td.select { width: 2.5rem; }
-td.select input { width: 1.05rem; height: 1.05rem; margin: 0; }
-.table-foot { display: flex; align-items: center; gap: 0.75rem; margin: 0.75rem 0 1.75rem; flex-wrap: wrap; }
-.table-foot .hint { margin: 0; }
-
 tr.current td { background: var(--accent-soft); }
 
 /* A tag's limit form, inside its table cell. */
@@ -771,7 +764,3 @@ tr.current td { background: var(--accent-soft); }
 .muted.small { font-size: 0.82rem; }
 .note { font-weight: 400; font-size: 0.85rem; }
 .nowrap { white-space: nowrap; }
-
-@media (max-width: 46rem) {
-  td.select::before { content: "Select"; }
-}

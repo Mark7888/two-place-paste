@@ -416,15 +416,14 @@ func (s *Server) groupEditDone(w http.ResponseWriter, r *http.Request, sess sess
 }
 
 // confirmView is a confirmation page for an action that cannot be undone
-// (plan D14). It names every group the action touches and what it frees.
+// (plan D14). It names the group the action touches and what it frees.
 type confirmView struct {
 	Heading string
 	Lede    string
 	Action  string
 	Button  string
 	Back    string
-	Groups  []groupView
-	IDs     []string
+	Group   groupView
 	Total   string
 }
 
@@ -436,7 +435,7 @@ func (s *Server) handlePurgeConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	s.renderConfirm(w, r, sess, []string{id}, confirmView{
+	s.renderConfirm(w, r, sess, id, confirmView{
 		Heading: "Purge entries",
 		Lede: "Every entry this group holds is deleted now, before its 24 hours are up. " +
 			"Its devices keep working and their own clipboards are not touched; they only lose the shared history.",
@@ -453,46 +452,18 @@ func (s *Server) handleDeleteConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	s.renderConfirm(w, r, sess, []string{id}, deleteConfirm(groupPath(id)+"/delete", groupPath(id)))
-}
-
-func deleteConfirm(action, back string) confirmView {
-	return confirmView{
-		Heading: "Delete groups",
-		Lede: "The groups, their devices and every entry they hold are deleted. " +
+	s.renderConfirm(w, r, sess, id, confirmView{
+		Heading: "Delete group",
+		Lede: "The group, its devices and every entry it holds are deleted. " +
 			"Each device is disconnected and told its group was deleted; to use this server again it needs a new creation token. " +
 			"This cannot be undone.",
-		Action: action,
-		Button: "Delete",
-		Back:   back,
-	}
+		Action: groupPath(id) + "/delete",
+		Button: "Delete group",
+		Back:   groupPath(id),
+	})
 }
 
-// handleBulkDeleteConfirm confirms deleting the groups ticked on the
-// dashboard, or every stale group with ?stale=1.
-func (s *Server) handleBulkDeleteConfirm(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.session(r)
-	if !ok {
-		s.redirect(w, r, "/admin/login")
-		return
-	}
-	ids := r.URL.Query()["id"]
-	if r.URL.Query().Get("stale") == "1" {
-		stale, err := s.staleGroupIDs(r.Context())
-		if err != nil {
-			s.logger.ErrorContext(r.Context(), "find stale groups", "error", err)
-		}
-		ids = stale
-	}
-	if len(ids) == 0 {
-		s.sessions.setNotice(sess.id, "No groups were selected.")
-		s.redirect(w, r, "/admin/")
-		return
-	}
-	s.renderConfirm(w, r, sess, ids, deleteConfirm("/admin/groups/delete", "/admin/"))
-}
-
-func (s *Server) renderConfirm(w http.ResponseWriter, r *http.Request, sess session, ids []string, v confirmView) {
+func (s *Server) renderConfirm(w http.ResponseWriter, r *http.Request, sess session, id string, v confirmView) {
 	ctx := r.Context()
 	data := s.page(sess, v.Heading, "dashboard")
 	tags, err := s.tagMap(ctx)
@@ -507,31 +478,16 @@ func (s *Server) renderConfirm(w http.ResponseWriter, r *http.Request, sess sess
 		problems = append(problems, "Could not read "+what+".")
 	}
 
-	var total int64
-	seen := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		if seen[id] {
-			continue
-		}
-		seen[id] = true
-		g, err := s.store.GetGroup(ctx, id)
-		if err != nil {
-			continue // gone already, or never was: nothing to confirm
-		}
-		row, _ := s.groupRow(ctx, g, tags, settings, now, problem)
-		v.Groups = append(v.Groups, row)
-		v.IDs = append(v.IDs, g.ID)
-		total += row.UsedBytes
-	}
-	if len(v.Groups) == 0 {
-		s.sessions.setNotice(sess.id, "Those groups no longer exist.")
+	g, err := s.store.GetGroup(ctx, id)
+	if err != nil {
+		// Gone already, or never was: nothing to confirm.
+		s.sessions.setNotice(sess.id, "That group no longer exists.")
 		s.redirect(w, r, "/admin/")
 		return
 	}
-	if len(v.Groups) == 1 && v.Heading == "Delete groups" {
-		v.Heading = "Delete group"
-	}
-	v.Total = humanBytes(total)
+	row, _ := s.groupRow(ctx, g, tags, settings, now, problem)
+	v.Group = row
+	v.Total = humanBytes(row.UsedBytes)
 	data.Title = v.Heading
 	data.Confirm = &v
 	data.Problems = problems
@@ -565,42 +521,24 @@ func (s *Server) handlePurgeGroup(w http.ResponseWriter, r *http.Request) {
 	s.redirect(w, r, groupPath(id))
 }
 
-// handleDeleteGroup deletes one group.
+// handleDeleteGroup deletes one group. Groups are deleted one at a time, from
+// their own page: each deletion cuts a set of devices off for good, so each
+// is a decision about one group.
 func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.formSession(w, r)
 	if !ok {
 		return
 	}
-	s.deleteGroups(w, r, sess, []string{r.PathValue("id")})
-}
-
-// handleBulkDelete deletes every group the confirmation page carried.
-func (s *Server) handleBulkDelete(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.formSession(w, r)
-	if !ok {
-		return
-	}
-	s.deleteGroups(w, r, sess, r.PostForm["id"])
-}
-
-func (s *Server) deleteGroups(w http.ResponseWriter, r *http.Request, sess session, ids []string) {
-	deleted, failed := 0, 0
-	for _, id := range ids {
-		if err := s.deleteGroup(r, id); err != nil {
-			if !errors.Is(err, store.ErrNotFound) {
-				failed++
-			}
-			continue
-		}
-		deleted++
-	}
+	id := r.PathValue("id")
+	name, err := s.deleteGroup(r, id)
 	switch {
-	case failed > 0:
-		s.sessions.setNotice(sess.id, fmt.Sprintf("Deleted %d %s; %d could not be deleted. Check the server log.", deleted, plural(deleted, "group", "groups"), failed))
-	case deleted == 0:
-		s.sessions.setNotice(sess.id, "Nothing was deleted: those groups no longer exist.")
+	case errors.Is(err, store.ErrNotFound):
+		s.sessions.setNotice(sess.id, "Nothing was deleted: that group no longer exists.")
+	case err != nil:
+		s.renderGroup(w, r, sess, id, http.StatusInternalServerError, "The group could not be deleted. Check the server log.")
+		return
 	default:
-		s.sessions.setNotice(sess.id, fmt.Sprintf("Deleted %d %s.", deleted, plural(deleted, "group", "groups")))
+		s.sessions.setNotice(sess.id, "Deleted the group “"+name+"”.")
 	}
 	s.redirect(w, r, "/admin/")
 }
@@ -610,14 +548,16 @@ func (s *Server) deleteGroups(w http.ResponseWriter, r *http.Request, sess sessi
 // (docs/internal/plans/admin-group-management.md D6). A purge failure after
 // the group is gone leaves only entries nobody can read, which expire within
 // 24 hours anyway.
-func (s *Server) deleteGroup(r *http.Request, id string) error {
+//
+// It returns the deleted group's name.
+func (s *Server) deleteGroup(r *http.Request, id string) (string, error) {
 	ctx := r.Context()
 	del, err := s.store.DeleteGroup(ctx, id)
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
 			s.logger.ErrorContext(ctx, "delete group", "group_id", id, "error", err)
 		}
-		return fmt.Errorf("delete group %s: %w", id, err)
+		return "", fmt.Errorf("delete group %s: %w", id, err)
 	}
 	if s.live != nil {
 		s.live.CloseGroup(id)
@@ -639,28 +579,7 @@ func (s *Server) deleteGroup(r *http.Request, id string) error {
 	s.logger.InfoContext(ctx, "group deleted by admin",
 		slog.String("group_id", id), slog.Int("devices", len(del.DeviceIDs)))
 	s.audit(r, "group.delete", groupLabel(del.Group), detail)
-	return nil
-}
-
-// staleGroupIDs lists the groups the dashboard would mark stale.
-func (s *Server) staleGroupIDs(ctx context.Context) ([]string, error) {
-	groups, err := s.store.ListGroups(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("find stale groups: %w", err)
-	}
-	settings := s.settings(ctx)
-	now := s.now()
-	var ids []string
-	for _, g := range groups {
-		devices, err := s.store.ListDevices(ctx, g.ID)
-		if err != nil {
-			return nil, fmt.Errorf("find stale groups: %w", err)
-		}
-		if isStale(now, lastActive(g, devices), settings.StaleAfter) {
-			ids = append(ids, g.ID)
-		}
-	}
-	return ids, nil
+	return del.Group.Name, nil
 }
 
 // lastActive is when any device of the group last connected, or when the

@@ -43,8 +43,6 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/groups/{id}/purge", s.handlePurgeGroup)
 	mux.HandleFunc("GET /admin/groups/{id}/delete", s.handleDeleteConfirm)
 	mux.HandleFunc("POST /admin/groups/{id}/delete", s.handleDeleteGroup)
-	mux.HandleFunc("GET /admin/groups/delete", s.handleBulkDeleteConfirm)
-	mux.HandleFunc("POST /admin/groups/delete", s.handleBulkDelete)
 
 	mux.HandleFunc("GET /admin/tags", s.handleTags)
 	mux.HandleFunc("POST /admin/tags", s.handleCreateTag)
