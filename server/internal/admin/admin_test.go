@@ -54,6 +54,7 @@ type fixture struct {
 	srv   *httptest.Server
 	store *store.MemoryStore
 	clk   *clock
+	admin *admin.Server
 }
 
 func newFixture(t *testing.T, baseURL string) *fixture {
@@ -63,17 +64,27 @@ func newFixture(t *testing.T, baseURL string) *fixture {
 
 func newFixtureWithDashboard(t *testing.T, baseURL string, dash admin.Dashboard) *fixture {
 	t.Helper()
+	return newFixtureWithOptions(t, baseURL, func(o *admin.Options) { o.Dashboard = dash })
+}
+
+// newFixtureWithOptions lets a test wire the optional parts of the admin
+// server — the transport, the purger, the ledger — before it is built.
+func newFixtureWithOptions(t *testing.T, baseURL string, configure func(*admin.Options)) *fixture {
+	t.Helper()
 
 	st := store.NewMemoryStore()
 	clk := newClock()
-	a, err := admin.New(st, admin.Options{
+	opts := admin.Options{
 		PublicBaseURL: baseURL,
 		SessionTTL:    2 * time.Hour,
 		Password:      testPassword,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           clk.now,
-		Dashboard:     dash,
-	})
+	}
+	if configure != nil {
+		configure(&opts)
+	}
+	a, err := admin.New(st, opts)
 	if err != nil {
 		t.Fatalf("admin.New() error = %v", err)
 	}
@@ -88,7 +99,7 @@ func newFixtureWithDashboard(t *testing.T, baseURL string, dash admin.Dashboard)
 
 	srv := httptest.NewServer(httpapi.New(wsReg, a))
 	t.Cleanup(srv.Close)
-	return &fixture{t: t, srv: srv, store: st, clk: clk}
+	return &fixture{t: t, srv: srv, store: st, clk: clk, admin: a}
 }
 
 // client returns an HTTP client that keeps cookies but does not follow

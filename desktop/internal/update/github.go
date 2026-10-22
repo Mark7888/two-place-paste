@@ -112,7 +112,13 @@ func (g githubAPI) status(resp *http.Response, path string) error {
 // which is then fetched with a fresh request carrying no token at all. Go
 // would drop the Authorization header on a cross-host redirect by itself;
 // doing it explicitly means the token's safety does not rest on that.
-func (g githubAPI) downloadArtifact(ctx context.Context, archiveURL string, w io.Writer) error {
+//
+// Like every update download it has no overall deadline, only a stall guard
+// (see stallTimeout); size is the artifact's size as the API listed it, for
+// progress when the storage response does not say.
+func (g githubAPI) downloadArtifact(ctx context.Context, archiveURL string, w io.Writer, size int64, progress progressFunc) error {
+	ctx, kick, stop := withStallGuard(ctx)
+	defer stop()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, archiveURL, nil)
 	if err != nil {
 		return fmt.Errorf("build the artifact request: %w", err)
@@ -123,7 +129,7 @@ func (g githubAPI) downloadArtifact(ctx context.Context, archiveURL string, w io
 	api.client = &noFollow
 	resp, err := api.do(req)
 	if err != nil {
-		return err
+		return stalled(ctx, err)
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusFound && resp.StatusCode != http.StatusSeeOther &&
@@ -144,6 +150,11 @@ func (g githubAPI) downloadArtifact(ctx context.Context, archiveURL string, w io
 	}
 	plain := *g.client
 	plain.CheckRedirect = nil
+	// The API client's timeout bounds a whole request, body included, which
+	// is right for a page of JSON and wrong for a build: it failed every
+	// artifact that took longer than that to arrive. The stall guard bounds
+	// this one instead.
+	plain.Timeout = 0
 	got, err := plain.Do(dl)
 	if err != nil {
 		// The storage URL is signed; the error must not echo it into a log,
@@ -152,14 +163,19 @@ func (g githubAPI) downloadArtifact(ctx context.Context, archiveURL string, w io
 		if errors.As(err, &ue) {
 			err = ue.Err
 		}
-		return fmt.Errorf("download the artifact from %s: %w", loc.Host, err)
+		return fmt.Errorf("download the artifact from %s: %w", loc.Host, stalled(ctx, err))
 	}
 	defer func() { _ = got.Body.Close() }()
 	if got.StatusCode != http.StatusOK {
 		return fmt.Errorf("download the artifact: %s", got.Status)
 	}
-	if _, err := io.Copy(w, io.LimitReader(got.Body, maxPayloadBytes)); err != nil {
-		return fmt.Errorf("download the artifact: %w", err)
+	total := size
+	if got.ContentLength > 0 {
+		total = got.ContentLength
+	}
+	body := &progressReader{r: io.LimitReader(got.Body, maxPayloadBytes), total: total, kick: kick, report: progress}
+	if _, err := io.Copy(w, body); err != nil {
+		return fmt.Errorf("download the artifact: %w", stalled(ctx, err))
 	}
 	return nil
 }

@@ -357,6 +357,90 @@ func (s *Service) evict(ctx context.Context, victims []quota.Victim) {
 	}
 }
 
+// purgePage is how many entries PurgeGroup reads at a time.
+const purgePage = 200
+
+// PurgeGroup deletes every entry of a group now, ahead of its expiry: the
+// admin freeing a group's storage, or deleting the group
+// (docs/internal/plans/admin-group-management.md). Uploads in progress for the
+// group are aborted first, so nothing lands after the purge.
+//
+// Each entry goes the way an eviction does — record, then blob — and the
+// OnEvict hook tells the group's open history lists. Deleting an entry only
+// shortens its life, which SPEC §4.5 permits. A blob whose delete fails is
+// reclaimed by the bucket sweep when its hour expires.
+func (s *Service) PurgeGroup(ctx context.Context, groupID string) (PurgeResult, error) {
+	ctx = context.WithoutCancel(ctx)
+	var res PurgeResult
+	res.Uploads = s.abortGroupUploads(ctx, groupID)
+
+	for {
+		// Always the newest page: every entry read is deleted before the
+		// next read, so the index shrinks until a read comes back empty.
+		metas, _, err := s.store.History(ctx, groupID, purgePage, time.Time{})
+		if err != nil {
+			return res, fmt.Errorf("purge group %s: %w", groupID, err)
+		}
+		if len(metas) == 0 {
+			break
+		}
+		for _, m := range metas {
+			if err := s.store.Delete(ctx, groupID, m.ID); err != nil {
+				return res, fmt.Errorf("purge group %s: %w", groupID, err)
+			}
+			if m.StorageRef != "" {
+				if err := s.blobs.Delete(ctx, m.StorageRef); err != nil {
+					s.logger.WarnContext(ctx, "purge: delete blob failed; the bucket sweep will reclaim it",
+						slog.String("entry_id", m.ID), slog.Any("error", err))
+				}
+			}
+			res.Entries++
+			res.Bytes += m.Size
+			if s.onEvict != nil {
+				s.onEvict(ctx, groupID, m.ID)
+			}
+		}
+	}
+	if err := s.store.DeleteGroupIndex(ctx, groupID); err != nil {
+		return res, fmt.Errorf("purge group %s: %w", groupID, err)
+	}
+	if s.quota != nil {
+		if _, err := s.quota.ForgetGroup(ctx, groupID); err != nil {
+			return res, fmt.Errorf("purge group %s: %w", groupID, err)
+		}
+	}
+	s.logger.InfoContext(ctx, "group entries purged",
+		slog.String("group_id", groupID),
+		slog.Int("entries", res.Entries),
+		slog.Int64("bytes", res.Bytes),
+		slog.Int("uploads", res.Uploads))
+	return res, nil
+}
+
+// abortGroupUploads abandons every upload in progress for one group and
+// reports how many.
+func (s *Service) abortGroupUploads(ctx context.Context, groupID string) int {
+	s.uploads.mu.Lock()
+	var mine []*uploadSession
+	for _, u := range s.uploads.byHandle {
+		if u.groupID == groupID {
+			mine = append(mine, u)
+		}
+	}
+	s.uploads.mu.Unlock()
+
+	n := 0
+	for _, u := range mine {
+		u.mu.Lock()
+		if !u.done {
+			s.endSession(ctx, u, "group purged")
+			n++
+		}
+		u.mu.Unlock()
+	}
+	return n
+}
+
 func (s *Service) release(ctx context.Context, entryID string) {
 	if s.quota == nil {
 		return

@@ -1,0 +1,125 @@
+{{define "content"}}
+{{with .Group}}
+<p class="crumbs"><a href="/admin/groups">Groups</a> / {{if .Tag}}<a href="/admin/groups?tag={{.Tag}}">{{.Tag}}</a> / {{end}}group</p>
+<h1>{{.Name}}
+  {{if .Tag}}<span class="tag open">{{.Tag}}</span>{{end}}
+  {{if .Stale}}<span class="tag warn">stale</span>{{end}}
+  {{if .OverLimit}}<span class="tag bad">over limit</span>{{end}}
+</h1>
+<p class="lede"><code>{{.ShortID}}</code> · created {{.Created}}</p>
+
+<div class="stats">
+  <section class="card stat" aria-labelledby="g-devices">
+    <h2 id="g-devices">Devices</h2>
+    <p class="figure">{{.Devices}}</p>
+    <p class="sub">last active {{.LastSeen}}</p>
+  </section>
+  <section class="card stat" aria-labelledby="g-entries">
+    <h2 id="g-entries">Entries</h2>
+    <p class="figure">{{.Entries}}</p>
+    <p class="sub">oldest {{.Oldest}}</p>
+  </section>
+  {{if .HasUsage}}
+  <section class="card stat wide" aria-labelledby="g-storage">
+    <h2 id="g-storage">Blob storage</h2>
+    <p class="figure">{{.Used}} <span class="muted">of {{.LimitText}}</span></p>
+    {{if gt .LimitBytes 0}}
+    <meter min="0" max="{{.LimitBytes}}" value="{{.UsedBytes}}" high="{{.HighBytes}}" optimum="0"
+           aria-label="Blob storage used">{{.Percent}}%</meter>
+    {{end}}
+    <p class="sub">limit from {{if eq .LimitSource "group"}}this group{{else if eq .LimitSource "tag"}}its tag{{else}}the server default{{end}}{{if .OverLimit}} · the next upload evicts its oldest entries down to the limit{{end}}</p>
+  </section>
+  {{end}}
+</div>
+
+<div class="section-head"><h2>Name</h2></div>
+<form method="post" action="{{.Path}}/rename" class="card">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <div class="form-row">
+    <div class="field">
+      <label for="group-name">Display name</label>
+      <input type="text" id="group-name" name="name" maxlength="120" value="{{.Name}}" required>
+    </div>
+    <button type="submit">Rename</button>
+  </div>
+  <span class="hint">The group's devices show this name. Connected ones update straight away.</span>
+</form>
+
+<div class="section-head"><h2>Tag</h2><a class="count" href="/admin/tags">Manage tags</a></div>
+<form method="post" action="{{.Path}}/tag" class="card">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <div class="form-row">
+    <div class="field">
+      <label for="group-tag">Tag</label>
+      <select id="group-tag" name="tag">
+        <option value="">No tag</option>
+        {{$current := .Tag}}
+        {{range .Tags}}<option value="{{.}}"{{if eq . $current}} selected{{end}}>{{.}}</option>{{end}}
+      </select>
+    </div>
+    <button type="submit">Save tag</button>
+  </div>
+  {{if not .Tags}}<span class="hint">There are no tags yet. <a href="/admin/tags">Create one</a> first.</span>{{end}}
+</form>
+
+<div class="section-head"><h2>Storage limit</h2></div>
+<form method="post" action="{{.Path}}/limit" class="card">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <label class="check">
+    <input type="checkbox" name="limit_on" value="1"{{if .LimitOn}} checked{{end}}>
+    Give this group its own limit
+  </label>
+  <div class="form-row">
+    <div class="field">
+      <label for="group-limit">Limit</label>
+      <input type="text" id="group-limit" name="limit" value="{{.LimitInput}}" placeholder="e.g. 5 GiB" inputmode="text">
+    </div>
+    <button type="submit">Save limit</button>
+  </div>
+  <span class="hint">
+    Overrides the tag's limit{{if .TagLimit}} ({{.TagLimit}}){{end}} and the server default ({{.DefaultText}}).
+    0 means no limit of its own. Unticking keeps the value for later.
+    Lowering it deletes nothing now: the group's next upload removes its oldest entries until it fits.
+  </span>
+</form>
+
+<div class="section-head">
+  <h2>Devices</h2>
+  <span class="count">{{.Devices}} total</span>
+</div>
+{{if .DeviceRows}}
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Device</th><th>Paired</th><th>Last seen</th><th>Status</th></tr></thead>
+    <tbody>
+    {{range .DeviceRows}}
+      <tr>
+        <td class="name" data-label="Device"><span class="stack">{{.Name}}<code class="muted">{{.ShortID}}</code></span></td>
+        <td data-label="Paired">{{.Created}}</td>
+        <td data-label="Last seen">{{.LastSeen}}</td>
+        <td data-label="Status">{{if .Online}}<span class="tag good">online</span>{{else}}<span class="tag used">offline</span>{{end}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+<p class="hint spaced">Devices are added by pairing and removed from another device of the group, which re-keys it. The server cannot re-key, so it cannot remove one.</p>
+{{else}}
+<p class="empty">This group has no devices left.</p>
+{{end}}
+
+<div class="section-head"><h2>Danger zone</h2></div>
+<div class="card danger-zone">
+  {{if .CanPurge}}
+  <div class="form-row spread">
+    <div><strong>Purge entries</strong><br><span class="muted">Delete everything the group holds now. Devices keep working.</span></div>
+    <a class="button secondary" href="{{.Path}}/purge">Purge entries…</a>
+  </div>
+  {{end}}
+  <div class="form-row spread">
+    <div><strong>Delete group</strong><br><span class="muted">Remove the group, its devices and entries. Cannot be undone.</span></div>
+    <a class="button danger" href="{{.Path}}/delete">Delete group…</a>
+  </div>
+</div>
+{{end}}
+{{end}}

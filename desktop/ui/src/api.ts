@@ -85,6 +85,10 @@ export interface Status {
   server_url: string;
   keystore: string;
   revoked: boolean;
+  /** Set with `revoked` when the server admin deleted the group. */
+  group_deleted: boolean;
+  /** The group's display name, as the server admin set it. */
+  group_name?: string;
   last_sync?: string;
   last_error?: string;
   clipboard: ClipboardView;
@@ -258,6 +262,12 @@ export type UpdateState =
   | "restarting"
   | "error";
 
+/** DownloadProgress is how far an update download has got; `total` is 0 when unknown. */
+export interface DownloadProgress {
+  done: number;
+  total: number;
+}
+
 export interface UpdateView {
   current: BuildView;
   channel: UpdateChannel;
@@ -265,6 +275,8 @@ export interface UpdateView {
   nightly_commit?: string;
   state: UpdateState;
   message?: string;
+  /** The download in progress while `state` is "downloading", once bytes arrive. */
+  progress?: DownloadProgress;
   available?: UpdateCandidate;
   last_checked?: string;
   can_install: boolean;

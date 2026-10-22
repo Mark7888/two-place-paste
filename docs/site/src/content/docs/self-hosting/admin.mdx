@@ -1,15 +1,20 @@
 ---
 title: Admin page and groups
-description: Sign in to the admin page, hand out groups, and read the dashboard.
+description: Sign in to the admin page, hand out groups, manage them and read the dashboard.
 ---
 
 import { Steps, Aside } from '@astrojs/starlight/components';
 import { Image } from 'astro:assets';
 import token from '../../../assets/screenshots/admin-token-created.webp';
 import dashboard from '../../../assets/screenshots/admin-dashboard.webp';
+import groups from '../../../assets/screenshots/admin-groups.webp';
+import group from '../../../assets/screenshots/admin-group.webp';
 
 The admin page lives at `https://tpp.example.com/admin/`. Sign in with `ADMIN_PASSWORD`. It shows
-sizes, counts and tokens — never content, because the relay has none to show.
+names, sizes and counts — never content, because the relay has none to show.
+
+The header links to six screens: **Dashboard**, **Groups**, **Tags**, **Tokens**, **Audit log**
+and **Settings**. Each group also has a page of its own, reached from **Groups**.
 
 ## Hand out a group
 
@@ -18,36 +23,127 @@ that should share a clipboard).
 
 <Steps>
 
-1. Open **Tokens**, type a name that tells you who it is for, and press **Generate token**.
+1. Open **Tokens** and type a name that tells you who it is for. The name becomes the group's name,
+   which its devices show; you can rename the group later. Optionally add:
+
+   - a **Note** that only you see;
+   - a **Tag**, which the new group starts under (see [Tags](#tags-and-storage-limits));
+   - when the **Link expires**: never, or in 1, 7 or 30 days.
+
+   Press **Generate token**.
 
    <Image src={token} alt="A new creation token with its QR code and link" class="screenshot" />
 
-2. Send the link to its owner — or let them scan the QR code. They paste it into the app under
-   **Pairing → Create a group**. See [Create a group](/two-place-paste/guides/create-a-group/).
+2. Send the link to its owner — **Copy link** puts it on your clipboard — or let them scan the QR
+   code. They paste it into the app under **Pairing → Create a group**. See
+   [Create a group](/two-place-paste/guides/create-a-group/).
 
 </Steps>
 
 - One token creates exactly one group; using it again fails.
 - A `GET` on a creation link returns **404** on purpose, so link previews, crawlers and mail
   scanners cannot use it up.
-- An unused token can be **revoked** from the same page. A used one cannot — its group already
-  exists; remove its devices by revoking them from a device in the group.
+- An expired token creates nothing; its link answers like an unknown one. The list shows it as
+  **expired**, and **Remove** clears it away.
+- An unused token can be **revoked** from the same page. A used one cannot: its group already
+  exists. To remove the group, [delete it](#delete-a-group).
 
 ## The dashboard
 
-<Image src={dashboard} alt="The admin dashboard with storage, groups, devices and evictions" class="screenshot" />
+<Image src={dashboard} alt="The admin dashboard with storage, counts, health and storage settings" class="screenshot" />
 
 - **Blob storage** used against `TPP_BLOB_MAX_TOTAL_BYTES`.
-- **Groups, devices** and unused tokens.
+- **Groups, devices**, unused tokens and how many groups are stale, with a link to **Groups**.
 - **Evictions in the last 24 hours** — entries removed early to make room. If this is often above
   zero, the storage limits are too tight.
-- **Groups**, heaviest first: devices, last activity, live entries, oldest entry and storage
-  against the per-group limit.
-- **Storage**: the backend and its limits, and when the last cleanup sweep ran.
+- **Health**: the relay's version and uptime, and how Redis is set up. Redis must run with
+  `maxmemory-policy volatile-lru` and AOF on (see [Docker](/two-place-paste/self-hosting/docker/));
+  the card marks anything else, because `allkeys-lru` or no AOF can silently lose groups. A managed
+  Redis that refuses `CONFIG GET` shows **unknown**.
+- **Storage**: the backend and its limits, and when the last cleanup sweep ran. **Sweep now** runs
+  one straight away.
 
 If part of the dashboard cannot be read (say Redis is down), it says which part and shows the rest.
 
+## The groups
+
+<Image src={groups} alt="The Groups screen: a tag filter above a table of groups with their storage" class="screenshot" />
+
+**Groups** lists every group, heaviest first: devices, last activity, live entries, oldest entry and
+storage against the group's limit. The row above the table filters it by tag, or to the untagged
+groups; [**Manage tags**](#tags-and-storage-limits) leads to the Tags screen.
+
+Click a name to open the [group's page](#manage-a-group). Badges mark a group that is **stale** (no
+device has connected for longer than the [stale threshold](#settings)) or **over limit** (its limit
+was lowered below what it holds). To remove a stale group, open it and
+[delete it](#delete-a-group); groups are deleted one at a time.
+
+## Manage a group
+
+<Image src={group} alt="A group's page: its storage, name, tag, limit and devices" class="screenshot" />
+
+A group's page shows its devices, entries and storage, and lets you:
+
+- **Rename** it. The group's devices show the new name; connected ones update at once.
+- Put it under a **Tag**, or under none.
+- Give it its own **Storage limit** (see below).
+- See its **Devices**: name, when each was paired, when it was last seen, and whether it is online
+  now. Devices are added by pairing and removed from another device of the group, which re-keys
+  it. The relay cannot re-key, so the admin page cannot remove a single device.
+
+### Purge entries
+
+**Purge entries…** deletes everything the group holds now, before its 24 hours are up, and frees
+its storage. Its devices keep working and their clipboards are not touched; open history lists
+drop the entries.
+
+### Delete a group
+
+**Delete group…** removes the group, its devices and every entry it holds, after a confirmation
+page. It cannot be undone.
+
+- Connected devices are disconnected at once. Devices that are offline find out when they next
+  connect. Either way the app says the server admin deleted the group, rather than that the device
+  was revoked — for 30 days; after that a device coming back just sees that it was revoked.
+- To use this relay again, a device leaves the group in its settings and then creates a new group
+  with a new token, or pairs with a device in another group.
+- The token that created the group stays in the token list, marked **group deleted**.
+
+## Tags and storage limits
+
+**Tags** group groups, such as “family” or “friends”. A group has at most one tag. Create tags on
+the **Tags** screen, then put groups under them from each group's page or when you generate a
+token.
+
+Each group has a blob storage limit; when an upload would go over it, the group's oldest entries
+are removed to make room. The limit is chosen in this order, the first that is on winning:
+
+1. the **group's own limit**, set on its page;
+2. its **tag's limit**, set on the Tags screen;
+3. the default, `TPP_BLOB_MAX_GROUP_BYTES`.
+
+Each limit has a checkbox and a size such as `5 GiB` or `500 MB`. Unticking the box keeps the size
+for later. `0` means the group has no limit of its own, though `TPP_BLOB_MAX_TOTAL_BYTES` still
+applies, and no limit can be above it. Lowering a limit below what a group already holds deletes
+nothing straight away: the group's next upload removes its oldest entries until everything fits.
+
+Deleting a tag leaves its groups untagged; they fall back to their own limit or the default.
+
+## Settings
+
+**Settings** holds what can change without a restart. Today that is the **stale threshold**: how
+many days a group may go without any of its devices connecting before the Groups screen marks it
+stale. The default is 90 days.
+
+## Audit log
+
+**Audit log** lists the last 1,000 things done on these screens, newest first: sign-ins (and failed
+or rate-limited ones), tokens created and revoked, groups renamed, tagged, limited, purged and
+deleted, tags and settings changed, and sweeps requested — with the time and the address it came
+from. It names groups and tokens, and never holds a token value, a password or a key.
+
 <Aside>
-	Sign-ins are rate-limited per IP address. That needs your reverse proxy to set
-	`X-Forwarded-For`; see [Reverse proxy](/two-place-paste/self-hosting/reverse-proxy/).
+	Sign-ins are rate-limited per IP address, and the audit log records the address. Both need your
+	reverse proxy to set `X-Forwarded-For`; see
+	[Reverse proxy](/two-place-paste/self-hosting/reverse-proxy/).
 </Aside>

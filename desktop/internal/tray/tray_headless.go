@@ -30,7 +30,7 @@ func run(ctx context.Context, t *Tray, opts Options) {
 	}
 	// The status still has somewhere to go: the log, at a level a developer
 	// running from a checkout can turn on.
-	t.attach(func(s Status) { t.logger.Debug("status", "status", s.label()) })
+	t.attach(func(s Status) { t.logger.Debug("status", "status", t.tooltipLocked(s)) })
 	<-ctx.Done()
 	if opts.Quit != nil {
 		opts.Quit()

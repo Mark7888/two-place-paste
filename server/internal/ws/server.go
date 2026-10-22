@@ -131,6 +131,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var err error
 		device, err = s.store.GetDevice(ctx, deviceID)
 		if errors.Is(err, store.ErrNotFound) {
+			// A device whose group the admin deleted is told so, for as long
+			// as its tombstone lasts, so the app can say why it lost access
+			// (docs/internal/plans/admin-group-management.md D7). A lookup
+			// failure here only costs that explanation.
+			if dead, terr := s.store.DeviceTombstoned(ctx, deviceID); terr == nil && dead {
+				http.Error(w, "group deleted", http.StatusGone)
+				return
+			}
 			// Also the answer for a device that was revoked while it was
 			// away: its credential died with its record (SPEC §3.3 step 5).
 			http.Error(w, "unknown device", http.StatusUnauthorized)
@@ -170,6 +178,42 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	go c.writePump(ctx)
 	go c.keepalive(ctx, s.pingInterval)
 	s.readLoop(ctx, c)
+}
+
+// GroupDeletedCloseCode is the WebSocket close code a device's socket is
+// closed with when the admin deletes its group. It is in the range RFC 6455
+// leaves to applications, and mirrors the HTTP 410 the same device gets if it
+// reconnects (docs/internal/plans/admin-group-management.md D7).
+const GroupDeletedCloseCode websocket.StatusCode = 4410
+
+// OnlineDevices reports which devices of a group hold a socket right now. It
+// is for the admin UI's device list.
+func (s *Server) OnlineDevices(groupID string) map[string]bool {
+	return s.hub.online(groupID)
+}
+
+// CloseGroup closes every socket of a group the admin has just deleted, with
+// GroupDeletedCloseCode. The store has already deleted the devices, so a
+// reconnect is refused with 410.
+func (s *Server) CloseGroup(groupID string) {
+	n := s.hub.closeGroup(groupID, GroupDeletedCloseCode, "group deleted")
+	if n > 0 {
+		s.logger.Info("closed the connections of a deleted group",
+			slog.String("group_id", groupID), slog.Int("connections", n))
+	}
+}
+
+// AnnounceRename tells every connected device of a group its new display
+// name. A device that is offline asks for it on its next connect
+// (GroupInfoRequest).
+func (s *Server) AnnounceRename(ctx context.Context, groupID, name string) {
+	frame, err := encode(newCorrelationID(), tppv1.MessageType_MESSAGE_TYPE_GROUP_RENAMED,
+		&tppv1.GroupRenamed{Name: name})
+	if err != nil {
+		s.logger.ErrorContext(ctx, "encoding group renamed event failed", slog.Any("error", err))
+		return
+	}
+	s.hub.broadcast(groupID, frame)
 }
 
 // onAuthenticated runs the per-connection work that follows a successful

@@ -11,7 +11,7 @@ import {
 } from "../api";
 import { Icon } from "../components/Icon";
 import { Modal } from "../components/Modal";
-import { relative, when } from "../format";
+import { bytes, relative, when } from "../format";
 
 // A build's stamp is seconds since this instant (scripts/version.sh).
 const STAMP_EPOCH = Date.UTC(2025, 0, 1);
@@ -455,6 +455,36 @@ function relativeFuture(iso?: string): string {
   return days === 1 ? "tomorrow" : `in ${days} days`;
 }
 
+/**
+ * ProgressRing is a download's progress as a ring that fills clockwise, the
+ * spinner's size and colours, with the percentage for assistive tech.
+ */
+function ProgressRing({ percent }: { percent: number }) {
+  const r = 7;
+  const c = 2 * Math.PI * r;
+  return (
+    <svg
+      className="progress-ring"
+      viewBox="0 0 18 18"
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={percent}
+      aria-label="Download progress"
+    >
+      <circle cx="9" cy="9" r={r} className="track" />
+      <circle
+        cx="9"
+        cy="9"
+        r={r}
+        className="fill"
+        strokeDasharray={c}
+        strokeDashoffset={c * (1 - percent / 100)}
+      />
+    </svg>
+  );
+}
+
 function StateNotice({ view }: { view: UpdateView }) {
   switch (view.state) {
     case "up_to_date":
@@ -471,12 +501,29 @@ function StateNotice({ view }: { view: UpdateView }) {
           <span>{view.message ? sentence(view.message) : "The last update failed."}</span>
         </div>
       );
-    case "downloading":
+    case "downloading": {
+      const p = view.progress;
+      const pct = p && p.total > 0 ? Math.min(100, Math.floor((p.done / p.total) * 100)) : null;
+      return (
+        <div className="notice info" role="status">
+          {pct === null ? <span className="spinner" /> : <ProgressRing percent={pct} />}
+          <span>
+            {p === undefined
+              ? "Downloading…"
+              : pct === null
+                ? `Downloading… ${bytes(p.done)}`
+                : pct >= 100
+                  ? "Verifying…"
+                  : `Downloading… ${pct}% · ${bytes(p.done)} of ${bytes(p.total)}`}
+          </span>
+        </div>
+      );
+    }
     case "installing":
       return (
         <div className="notice info" role="status">
           <span className="spinner" />
-          <span>{view.state === "downloading" ? "Downloading and verifying…" : "Installing…"}</span>
+          <span>Installing…</span>
         </div>
       );
     case "restarting":

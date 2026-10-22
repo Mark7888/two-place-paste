@@ -109,8 +109,7 @@ func TestDashboard(t *testing.T) {
 		">3</p>",                 // devices: 2 + 1
 		">1</p>",                 // evictions
 		"20.0 KiB removed early", // ben-1
-		"Anna", "Ben",
-		"40.0 KiB <span class=\"muted\">· 100%</span>", // Ben at his limit
+		`<a href="/admin/groups">View groups</a>`,
 		"http://minio:9000/tpp/",
 		"<dd>40.0 KiB</dd>", // per-group limit
 		"10 min ago, took 3ms",
@@ -121,15 +120,30 @@ func TestDashboard(t *testing.T) {
 		}
 	}
 
-	// Heaviest group first.
-	if strings.Index(body, "Ben") > strings.Index(body, "Anna") {
-		t.Errorf("dashboard lists Anna before Ben; want the heavier group first")
+	// The groups are on their own screen now, not on the dashboard.
+	if strings.Contains(body, ">Anna</a>") || strings.Contains(body, ">Ben</a>") {
+		t.Errorf("dashboard still lists the groups")
 	}
 
-	// Sizes and counts only: no entry id reaches the page.
+	groups := readBody(t, d.get(c, "/admin/groups"))
+	for _, want := range []string{
+		`aria-current="page">Groups`,
+		"Anna", "Ben",
+		"40.0 KiB <span class=\"muted\">· 100%</span>", // Ben at his limit
+	} {
+		if !strings.Contains(groups, want) {
+			t.Errorf("groups screen does not contain %q", want)
+		}
+	}
+	// Heaviest group first.
+	if strings.Index(groups, "Ben") > strings.Index(groups, "Anna") {
+		t.Errorf("groups screen lists Anna before Ben; want the heavier group first")
+	}
+
+	// Sizes and counts only: no entry id reaches either page.
 	for _, id := range []string{"anna-inline", "anna-blob", "ben-1", "ben-2", "ben-3"} {
-		if strings.Contains(body, id) {
-			t.Errorf("dashboard shows entry id %q; it must show counts only", id)
+		if strings.Contains(body, id) || strings.Contains(groups, id) {
+			t.Errorf("an admin page shows entry id %q; it must show counts only", id)
 		}
 	}
 }
@@ -201,8 +215,8 @@ func TestDashboardWithoutStorage(t *testing.T) {
 	f.login(c)
 
 	body := readBody(t, f.get(c, "/admin/"))
-	if !strings.Contains(body, "No groups yet") {
-		t.Errorf("dashboard without groups does not say so")
+	if groups := readBody(t, f.get(c, "/admin/groups")); !strings.Contains(groups, "No groups yet") {
+		t.Errorf("groups screen without groups does not say so")
 	}
 	for _, absent := range []string{"Blob storage", "Evictions", "Last sweep"} {
 		if strings.Contains(body, absent) {

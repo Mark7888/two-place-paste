@@ -60,6 +60,7 @@ type (
 		Expired            bool   `json:"expired"`
 		ArchiveDownloadURL string `json:"archive_download_url"`
 		Digest             string `json:"digest"`
+		SizeInBytes        int64  `json:"size_in_bytes"`
 	}
 	ghPull struct {
 		Number int    `json:"number"`
@@ -232,8 +233,8 @@ func (m *Manager) runCandidate(ctx context.Context, api githubAPI, commit ghComm
 	}
 	return &candidate{
 		view: view,
-		fetch: func(ctx context.Context, dir string) (string, error) {
-			return m.fetchArtifact(ctx, dir, payload, file, signed)
+		fetch: func(ctx context.Context, dir string, progress progressFunc) (string, error) {
+			return m.fetchArtifact(ctx, dir, payload, file, signed, progress)
 		},
 	}, nil
 }
@@ -243,7 +244,7 @@ func (m *Manager) runCandidate(ctx context.Context, api githubAPI, commit ghComm
 // as-is and reported unsigned.
 func (m *Manager) nightlyManifest(ctx context.Context, api githubAPI, art ghArtifact) (Manifest, bool, error) {
 	var buf strings.Builder
-	if err := api.downloadArtifact(ctx, art.ArchiveDownloadURL, &buf); err != nil {
+	if err := api.downloadArtifact(ctx, art.ArchiveDownloadURL, &buf, art.SizeInBytes, nil); err != nil {
 		return Manifest{}, false, err
 	}
 	z, err := zip.NewReader(strings.NewReader(buf.String()), int64(buf.Len()))
@@ -270,7 +271,7 @@ func (m *Manager) nightlyManifest(ctx context.Context, api githubAPI, art ghArti
 // platform installs. A signed build's file is checked against its manifest; an
 // unsigned build's whole artifact is checked against the SHA-256 GitHub
 // recorded when the run uploaded it, which is all there is to check it by.
-func (m *Manager) fetchArtifact(ctx context.Context, dir string, art ghArtifact, want File, signed bool) (string, error) {
+func (m *Manager) fetchArtifact(ctx context.Context, dir string, art ghArtifact, want File, signed bool, progress progressFunc) (string, error) {
 	token, err := m.readToken()
 	if err != nil {
 		return "", err
@@ -287,7 +288,7 @@ func (m *Manager) fetchArtifact(ctx context.Context, dir string, art ghArtifact,
 		_ = os.Remove(zf.Name())
 	}()
 	h := sha256.New()
-	if err := m.api(token).downloadArtifact(ctx, art.ArchiveDownloadURL, io.MultiWriter(zf, h)); err != nil {
+	if err := m.api(token).downloadArtifact(ctx, art.ArchiveDownloadURL, io.MultiWriter(zf, h), art.SizeInBytes, progress); err != nil {
 		return "", err
 	}
 	if !signed && "sha256:"+hex.EncodeToString(h.Sum(nil)) != art.Digest {

@@ -67,6 +67,7 @@ export function App() {
 
   const connection = useMemo(() => {
     if (!status) return { cls: "", text: "connecting…" };
+    if (status.group_deleted) return { cls: "off", text: "group deleted" };
     if (status.revoked) return { cls: "off", text: "revoked" };
     if (!status.in_group) return { cls: "", text: "no group" };
     return status.connected ? { cls: "on", text: "connected" } : { cls: "off", text: "offline" };
@@ -93,6 +94,11 @@ export function App() {
       <header className="titlebar">
         <span className="name">TwoPlacePaste</span>
         <span className="spacer" />
+        {status?.group_name ? (
+          <span className="group-name" title="This device's group">
+            {status.group_name}
+          </span>
+        ) : null}
         {status?.device_name ? <span className="device-name">{status.device_name}</span> : null}
         <span className={`pill ${connection.cls}`}>
           <span className="dot" />
@@ -164,7 +170,16 @@ export function App() {
               <span>{error}</span>
             </div>
           ) : null}
-          {status?.revoked ? (
+          {status?.group_deleted ? (
+            <div className="notice error">
+              <Icon name="alert" />
+              <span>
+                The server admin deleted this device&rsquo;s group. Nothing more syncs here. Leave the
+                group in Settings, then create a new group with a fresh token or pair with a device in
+                another group.
+              </span>
+            </div>
+          ) : status?.revoked ? (
             <div className="notice error">
               <Icon name="alert" />
               <span>

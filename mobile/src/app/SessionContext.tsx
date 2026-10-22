@@ -38,6 +38,10 @@ export interface SessionState {
   notice: string;
   /** probablyRevoked is set when the relay is up but refuses this device's socket (SPEC §3.3 step 5). */
   probablyRevoked: boolean;
+  /** groupDeleted is set when the relay has said the server admin deleted this device's group. */
+  groupDeleted: boolean;
+  /** groupName is the group's display name as the server admin set it, or "". */
+  groupName: string;
   /** syncing is true while a sync the store started — a tile tap — is running. */
   syncing: boolean;
   /** question is a sync waiting on the user: a direction to pick, or what to do with a file. */
@@ -93,6 +97,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
       epoch: snapshot.epoch,
       notice: snapshot.notice,
       probablyRevoked: snapshot.probablyRevoked,
+      groupDeleted: snapshot.groupDeleted,
+      groupName: snapshot.groupName,
       syncing: snapshot.syncing,
       question: snapshot.question,
       error: snapshot.error,
