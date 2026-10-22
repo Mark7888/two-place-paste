@@ -272,8 +272,8 @@ func privacyMarker() string {
 			continue
 		}
 		present = append(present, name)
-		if b, err := readBytes(id); err == nil && len(b) >= 4 {
-			dwords[name] = binary.LittleEndian.Uint32(b[:4])
+		if v, ok := readDWORD(id); ok {
+			dwords[name] = v
 		}
 	}
 	return concealedFromFormats(present, dwords)
@@ -312,6 +312,27 @@ func readBytes(format uint32) ([]byte, error) {
 	out := make([]byte, size)
 	copy(out, unsafe.Slice((*byte)(locked(p)), size))
 	return out, nil
+}
+
+// readDWORD reads the first four bytes of a format, for the privacy formats
+// that carry a DWORD. It copies no more than that: the data is whatever the
+// copying application put there, and its size is not this service's to trust.
+func readDWORD(format uint32) (uint32, bool) {
+	h, _, _ := procGetClipboardData.Call(uintptr(format))
+	if h == 0 {
+		return 0, false
+	}
+	p, _, _ := procGlobalLock.Call(h)
+	if p == 0 {
+		return 0, false
+	}
+	defer func() { _, _, _ = procGlobalUnlock.Call(h) }()
+	if size, _, _ := procGlobalSize.Call(h); size < 4 {
+		return 0, false
+	}
+	var b [4]byte
+	copy(b[:], unsafe.Slice((*byte)(locked(p)), 4))
+	return binary.LittleEndian.Uint32(b[:]), true
 }
 
 func readText() (string, error) {

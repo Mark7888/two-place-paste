@@ -280,7 +280,7 @@ export function SyncPanel({ status, onChanged }: { status: Status | null; onChan
         onClose={() => setGuarded(null)}
         footer={
           <>
-            <button className="action" autoFocus onClick={() => setGuarded(null)}>
+            <button className="action" data-autofocus onClick={() => setGuarded(null)}>
               Cancel
             </button>
             <button
