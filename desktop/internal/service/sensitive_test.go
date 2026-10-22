@@ -93,7 +93,7 @@ func TestSensitiveChangeIsNotAutoUploaded(t *testing.T) {
 		reason string
 	}{
 		{"password manager", concealed("pw-from-a-manager"), clipboard.ReasonConcealed},
-		{"filter match", textContent(secretText), filterLabel},
+		{"filter match", textContent(secretText), "Matches custom filter “" + filterLabel + "”"},
 	} {
 		f.clip.set(tt.c)
 		f.svc.onClipboardChange(ctx, tt.c, f.now())

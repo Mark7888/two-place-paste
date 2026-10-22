@@ -75,8 +75,10 @@ contents of files are not checked.
   case with `(?i)`; an exact match is always compared as typed.
 - *Starts with* and *Ends with* look at the whole text. To match the start of any line, use a regex
   with `(?m)`, such as `(?m)^token=`.
-- A **label** is optional. When you add one, it is what the app shows as the reason a copy was held
-  back, instead of the kind of filter.
+- A **label** is optional. It is how the app names the filter when it holds a copy back — for
+  example *Not uploaded automatically: matches custom filter “Work VPN”*. Without one, it says
+  which kind of filter matched (*matches a custom “starts with” filter*). A built-in detector is
+  named the same way: *matches built-in filter “Private keys”*.
 - The switch at the start of each row turns a filter off without deleting it.
 
 The **Test** box under the tabs checks a sample against your unsaved changes: matching rows are

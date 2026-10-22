@@ -24,6 +24,9 @@ type Detector struct {
 	match func(s string) bool
 }
 
+// Reason is what the user is shown for a match on this detector.
+func (d Detector) Reason() string { return "Matches built-in filter “" + d.Title + "”" }
+
 // Match reports whether the detector finds anything in s.
 func (d Detector) Match(s string) bool { return d.match(s) }
 

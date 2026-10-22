@@ -446,7 +446,8 @@ export function FilterEditor({
           <p className="muted small">No filter matches this sample.</p>
         ) : (
           <p className="small">
-            <Icon name="lock" size={13} /> Sensitive: {matches.map((m) => m.reason).join(", ")}
+            <Icon name="lock" size={13} /> Sensitive — matches{" "}
+            {matches.map((m) => (m.name ? `“${m.name}” (${m.source === "detector" ? "built-in" : "custom"})` : m.reason.replace(/^Matches /, ""))).join(", ")}
           </p>
         )}
       </div>

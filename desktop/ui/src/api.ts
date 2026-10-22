@@ -248,7 +248,10 @@ export interface FilterMatch {
   source: "os" | "detector" | "filter";
   /** A detector's name or a filter's id. */
   rule: string;
+  /** A sentence: "Matches custom filter “VPN”". */
   reason: string;
+  /** The detector's title or the filter's label; absent for an unlabelled filter. */
+  name?: string;
 }
 
 export interface SettingsPatch {

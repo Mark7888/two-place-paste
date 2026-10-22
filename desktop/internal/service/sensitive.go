@@ -228,7 +228,7 @@ func (s *Service) TestFilters(_ context.Context, t localui.FilterTest) (localui.
 }
 
 func filterMatch(v sensitive.Verdict) localui.FilterMatch {
-	return localui.FilterMatch{Source: string(v.Source), Rule: v.Rule, Reason: v.Reason}
+	return localui.FilterMatch{Source: string(v.Source), Rule: v.Rule, Reason: v.Reason, Name: v.Name}
 }
 
 // checkDetectors refuses a detector name this build does not have. The
