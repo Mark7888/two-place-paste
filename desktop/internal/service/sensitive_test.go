@@ -323,10 +323,30 @@ func TestExactFilterKeepsOnlyAHash(t *testing.T) {
 		t.Fatalf("the exact secret was uploaded (%d entries)", n)
 	}
 
+	salt := f.svc.settings.FilterSalt
+	if salt == "" {
+		t.Fatal("no filter salt was created for the exact filter")
+	}
+
 	// Saved again without retyping, as the editor does: the hash stays.
 	view.Filters[0].Label = "renamed"
 	if _, err := f.svc.UpdateSettings(ctx, localui.SettingsPatch{Filters: &view.Filters}); err != nil {
 		t.Fatalf("re-saving the exact filter: %v", err)
+	}
+	// And a second new secret reuses the install's salt rather than making
+	// one that would orphan the first hash.
+	more := append([]localui.FilterView{}, view.Filters...)
+	more = append(more, localui.FilterView{ID: "exact2", Kind: "exact", Target: "text", Value: "another", Enabled: true})
+	if _, err := f.svc.UpdateSettings(ctx, localui.SettingsPatch{Filters: &more}); err != nil {
+		t.Fatalf("adding a second exact filter: %v", err)
+	}
+	if got := f.svc.settings.FilterSalt; got != salt {
+		t.Errorf("the filter salt changed on a later save")
+	}
+	before := f.relay.count()
+	f.svc.onClipboardChange(ctx, textContent(secret), f.now())
+	if f.relay.count() != before {
+		t.Error("after adding a second exact filter, the first secret was uploaded")
 	}
 	f.svc.onClipboardChange(ctx, textContent("noise"), f.now())
 	f.svc.onClipboardChange(ctx, textContent(secret), f.now())
