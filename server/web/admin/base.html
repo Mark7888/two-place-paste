@@ -17,6 +17,7 @@
   {{if .Authenticated}}
   <nav class="nav" aria-label="Admin">
     <a href="/admin/"{{if eq .Nav "dashboard"}} aria-current="page"{{end}}>Dashboard</a>
+    <a href="/admin/groups"{{if eq .Nav "groups"}} aria-current="page"{{end}}>Groups</a>
     <a href="/admin/tags"{{if eq .Nav "tags"}} aria-current="page"{{end}}>Tags</a>
     <a href="/admin/tokens"{{if eq .Nav "tokens"}} aria-current="page"{{end}}>Tokens</a>
     <a href="/admin/audit"{{if eq .Nav "audit"}} aria-current="page"{{end}}>Audit log</a>

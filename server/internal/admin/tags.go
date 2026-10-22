@@ -69,7 +69,7 @@ func (s *Server) renderTags(w http.ResponseWriter, r *http.Request, sess session
 			LimitOn:    t.Limit.Enabled,
 			LimitInput: sizeInput(t.Limit.Bytes),
 			LimitText:  limitText(t.Limit.Bytes),
-			Filter:     "/admin/?tag=" + url.QueryEscape(t.Name),
+			Filter:     "/admin/groups?tag=" + url.QueryEscape(t.Name),
 		})
 	}
 	for i := range v.Tags {

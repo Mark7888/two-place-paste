@@ -35,6 +35,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/tokens/{token}/qr.png", s.handleTokenQR)
 	mux.HandleFunc("POST /admin/tokens/{token}/revoke", s.handleRevokeToken)
 
+	mux.HandleFunc("GET /admin/groups", s.handleGroupList)
 	mux.HandleFunc("GET /admin/groups/{id}", s.handleGroup)
 	mux.HandleFunc("POST /admin/groups/{id}/rename", s.handleRenameGroup)
 	mux.HandleFunc("POST /admin/groups/{id}/tag", s.handleSetGroupTag)

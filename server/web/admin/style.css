@@ -764,3 +764,18 @@ tr.current td { background: var(--accent-soft); }
 .muted.small { font-size: 0.82rem; }
 .note { font-weight: 400; font-size: 0.85rem; }
 .nowrap { white-space: nowrap; }
+
+/* The groups screen's tag filter: one link per tag, the current one marked. */
+.chips { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin: 0 0 1.25rem; }
+.chips a {
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--fg);
+  font-size: 0.88rem;
+  text-decoration: none;
+}
+.chips a:hover { background: var(--line-soft); }
+.chips a[aria-current="page"] { background: var(--accent-soft); border-color: transparent; font-weight: 600; }
+.chips a.manage { border: 0; background: none; color: var(--muted); text-decoration: underline; margin-left: auto; }

@@ -320,13 +320,15 @@ Served on the public domain. Credentials from `.env`.
 **Scope** (docs/internal/plans/admin-group-management.md):
 
 - **Dashboard** — what the relay can know without knowing any content: blob storage
-  used against its limits, entries evicted in the last day, totals per tag, per group
-  the device count, last activity, live entry count, age of the oldest entry and blob
-  storage used against the group's limit, the storage backend's configuration and last
-  sweep, and the health of the deployment (build, uptime, Redis eviction policy, AOF,
-  memory). Sizes and counts only: no entry id, content type or filename is shown, and
-  none is available to show. Groups idle longer than the stale threshold are marked; a
-  group is deleted from its own page, one at a time. A sweep can be run on demand.
+  used against its limits, entries evicted in the last day, group, device, unused-token
+  and stale-group counts, the storage backend's configuration and last sweep, and the
+  health of the deployment (build, uptime, Redis eviction policy, AOF, memory). A sweep
+  can be run on demand.
+- **Groups** — every group, filterable by tag: the device count, last activity, live
+  entry count, age of the oldest entry and blob storage used against the group's limit.
+  Sizes and counts only: no entry id, content type or filename is shown, and none is
+  available to show. Groups idle longer than the stale threshold are marked; a group is
+  deleted from its own page, one at a time.
 - **Group** — one page per group: rename it, put it under a tag, set its own storage
   limit, list its devices (name, paired, last seen, online), purge its entries early, and
   delete it (§3.4). Purge and delete go through a confirmation page.

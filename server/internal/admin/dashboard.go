@@ -43,6 +43,10 @@ type dashboardView struct {
 	// CanSweep shows the "Sweep now" button.
 	CanSweep bool
 
+	// HasUsage is set when blob storage is accounted, so the groups table
+	// has a storage column.
+	HasUsage bool
+
 	// Problems lists the parts that could not be read. The rest of the page
 	// still renders: a dashboard that fails whole when one Redis call does
 	// is useless exactly when it is needed.
@@ -123,11 +127,26 @@ type groupView struct {
 	OverLimit bool
 }
 
-// renderDashboard renders the dashboard for an authenticated session.
+// renderDashboard renders the dashboard for an authenticated session: the
+// summary cards, the health card and storage. The groups are on their own
+// screen (handleGroupList).
 func (s *Server) renderDashboard(w http.ResponseWriter, r *http.Request, sess session) {
 	data := s.page(sess, "Dashboard", "dashboard")
-	data.Dashboard = s.buildDashboard(r.Context(), r.URL.Query().Get("tag"))
+	data.Dashboard = s.buildDashboard(r.Context(), "", true)
 	s.render(w, r, http.StatusOK, "dashboard.html", data)
+}
+
+// handleGroupList renders the groups screen: every group, or those under one
+// tag (?tag=name, or ?tag=- for the untagged ones).
+func (s *Server) handleGroupList(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(r)
+	if !ok {
+		s.redirect(w, r, "/admin/login")
+		return
+	}
+	data := s.page(sess, "Groups", "groups")
+	data.Dashboard = s.buildDashboard(r.Context(), r.URL.Query().Get("tag"), false)
+	s.render(w, r, http.StatusOK, "groups.html", data)
 }
 
 // settings reads the runtime settings, falling back to the defaults when they
@@ -198,19 +217,24 @@ func (s *Server) groupRow(ctx context.Context, g store.Group, tags map[string]st
 	return v, devices
 }
 
-func (s *Server) buildDashboard(ctx context.Context, filter string) *dashboardView {
+// buildDashboard reads what the dashboard and the groups screen show. The
+// groups are always read, for the counts; withStatus adds the storage and
+// health cards, which only the dashboard shows.
+func (s *Server) buildDashboard(ctx context.Context, filter string, withStatus bool) *dashboardView {
 	d := s.dashboard
 	now := s.now()
-	view := &dashboardView{CanSweep: s.sweep != nil}
+	view := &dashboardView{CanSweep: s.sweep != nil, HasUsage: d.Ledger != nil}
 	problem := func(what string, err error) {
 		s.logger.ErrorContext(ctx, "dashboard: "+what, "error", err)
 		view.Problems = append(view.Problems, "Could not read "+what+".")
 	}
 
-	if d.Ledger != nil {
-		view.Storage = s.storageView(ctx, now, problem)
+	if withStatus {
+		if d.Ledger != nil {
+			view.Storage = s.storageView(ctx, now, problem)
+		}
+		view.Health = s.health(ctx, now)
 	}
-	view.Health = s.health(ctx, now)
 
 	tokens, err := s.store.ListTokens(ctx)
 	if err != nil {

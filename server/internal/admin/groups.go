@@ -234,7 +234,7 @@ func (s *Server) handleGroup(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) renderGroup(w http.ResponseWriter, r *http.Request, sess session, id string, status int, msg string) {
 	ctx := r.Context()
-	data := s.page(sess, "Group", "dashboard")
+	data := s.page(sess, "Group", "groups")
 	data.Error = msg
 
 	g, err := s.store.GetGroup(ctx, id)
@@ -465,7 +465,7 @@ func (s *Server) handleDeleteConfirm(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) renderConfirm(w http.ResponseWriter, r *http.Request, sess session, id string, v confirmView) {
 	ctx := r.Context()
-	data := s.page(sess, v.Heading, "dashboard")
+	data := s.page(sess, v.Heading, "groups")
 	tags, err := s.tagMap(ctx)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "list tags", "error", err)
@@ -482,7 +482,7 @@ func (s *Server) renderConfirm(w http.ResponseWriter, r *http.Request, sess sess
 	if err != nil {
 		// Gone already, or never was: nothing to confirm.
 		s.sessions.setNotice(sess.id, "That group no longer exists.")
-		s.redirect(w, r, "/admin/")
+		s.redirect(w, r, "/admin/groups")
 		return
 	}
 	row, _ := s.groupRow(ctx, g, tags, settings, now, problem)
@@ -540,7 +540,7 @@ func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.sessions.setNotice(sess.id, "Deleted the group “"+name+"”.")
 	}
-	s.redirect(w, r, "/admin/")
+	s.redirect(w, r, "/admin/groups")
 }
 
 // deleteGroup removes a group: the persistent zone first, which is what cuts

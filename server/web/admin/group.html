@@ -1,6 +1,6 @@
 {{define "content"}}
 {{with .Group}}
-<p class="crumbs"><a href="/admin/">Dashboard</a> / {{if .Tag}}<a href="/admin/?tag={{.Tag}}">{{.Tag}}</a> / {{end}}group</p>
+<p class="crumbs"><a href="/admin/groups">Groups</a> / {{if .Tag}}<a href="/admin/groups?tag={{.Tag}}">{{.Tag}}</a> / {{end}}group</p>
 <h1>{{.Name}}
   {{if .Tag}}<span class="tag open">{{.Tag}}</span>{{end}}
   {{if .Stale}}<span class="tag warn">stale</span>{{end}}

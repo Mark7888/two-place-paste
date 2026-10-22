@@ -35,7 +35,8 @@ type pageData struct {
 	AuditLimit   string
 
 	// Nav names the screen the header marks as current: "dashboard",
-	// "tags", "tokens", "audit" or "settings". Empty on the sign-in screen.
+	// "groups", "tags", "tokens", "audit" or "settings". Empty on the
+	// sign-in screen.
 	Nav string
 
 	// Centered puts the page in the middle of the viewport rather than at the
@@ -92,7 +93,7 @@ type templateSet struct {
 
 func parseTemplates() (*templateSet, error) {
 	pages := []string{
-		"login.html", "tokens.html", "dashboard.html", "group.html",
+		"login.html", "tokens.html", "dashboard.html", "groups.html", "group.html",
 		"tags.html", "settings.html", "audit.html", "confirm.html",
 	}
 	set := &templateSet{pages: make(map[string]*template.Template, len(pages))}

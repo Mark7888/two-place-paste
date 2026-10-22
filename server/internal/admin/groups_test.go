@@ -347,12 +347,12 @@ func TestDeleteGroup(t *testing.T) {
 	}
 
 	wantStatus(t, g.postForm(c, "/admin/groups/"+id+"/delete", url.Values{"csrf": {csrf}}), http.StatusSeeOther)
-	if body := readBody(t, g.get(c, "/admin/")); !strings.Contains(body, "Deleted the group “Anna”.") {
+	if body := readBody(t, g.get(c, "/admin/groups")); !strings.Contains(body, "Deleted the group “Anna”.") {
 		t.Errorf("dashboard after delete does not confirm it")
 	}
 	// Deleting it again changes nothing and says so.
 	wantStatus(t, g.postForm(c, "/admin/groups/"+id+"/delete", url.Values{"csrf": {csrf}}), http.StatusSeeOther)
-	if body := readBody(t, g.get(c, "/admin/")); !strings.Contains(body, "that group no longer exists") {
+	if body := readBody(t, g.get(c, "/admin/groups")); !strings.Contains(body, "that group no longer exists") {
 		t.Errorf("a second delete is not reported as a no-op")
 	}
 	if _, err := g.store.GetGroup(ctx, id); !errors.Is(err, store.ErrNotFound) {
@@ -404,13 +404,16 @@ func TestStaleGroupsAreMarkedNotBulkDeleted(t *testing.T) {
 	csrf := g.login(c)
 
 	// The default threshold is 90 days: nothing is stale yet.
-	if body := readBody(t, g.get(c, "/admin/")); strings.Contains(body, "tag warn\">stale") {
+	if body := readBody(t, g.get(c, "/admin/groups")); strings.Contains(body, "tag warn\">stale") {
 		t.Errorf("dashboard marks groups stale under the default threshold")
 	}
 	wantStatus(t, g.postForm(c, "/admin/settings", url.Values{"csrf": {csrf}, "stale_days": {"30"}}), http.StatusSeeOther)
 
-	// At 30 days both groups are stale.
-	body := readBody(t, g.get(c, "/admin/"))
+	// At 30 days both groups are stale; the dashboard counts them.
+	if dash := readBody(t, g.get(c, "/admin/")); !strings.Contains(dash, "2 stale") {
+		t.Errorf("dashboard does not count the stale groups")
+	}
+	body := readBody(t, g.get(c, "/admin/groups"))
 	if !strings.Contains(body, "2 groups have had no device connect for more than 30 days") {
 		t.Errorf("dashboard does not report both groups stale")
 	}
@@ -574,15 +577,15 @@ func TestDashboardTagFilter(t *testing.T) {
 	wantStatus(t, g.postForm(c, "/admin/tags", url.Values{"csrf": {csrf}, "name": {"family"}}), http.StatusSeeOther)
 	wantStatus(t, g.postForm(c, "/admin/groups/"+anna+"/tag", url.Values{"csrf": {csrf}, "tag": {"family"}}), http.StatusSeeOther)
 
-	all := readBody(t, g.get(c, "/admin/"))
-	if !strings.Contains(all, "Anna") || !strings.Contains(all, "Ben") || !strings.Contains(all, "Untagged") {
-		t.Errorf("unfiltered dashboard does not list both groups and the untagged total")
+	all := readBody(t, g.get(c, "/admin/groups"))
+	if !strings.Contains(all, ">Anna</a>") || !strings.Contains(all, ">Ben</a>") || !strings.Contains(all, "Untagged") {
+		t.Errorf("unfiltered groups screen does not list both groups and the untagged filter")
 	}
-	family := readBody(t, g.get(c, "/admin/?tag=family"))
+	family := readBody(t, g.get(c, "/admin/groups?tag=family"))
 	if !strings.Contains(family, `href="/admin/groups/`+anna+`"`) || strings.Contains(family, ">Ben</a>") {
 		t.Errorf("family filter does not show exactly Anna")
 	}
-	untagged := readBody(t, g.get(c, "/admin/?tag=-"))
+	untagged := readBody(t, g.get(c, "/admin/groups?tag=-"))
 	if !strings.Contains(untagged, ">Ben</a>") || strings.Contains(untagged, ">Anna</a>") {
 		t.Errorf("untagged filter does not show exactly Ben")
 	}
@@ -604,7 +607,7 @@ func TestGroupRoutesRequireASession(t *testing.T) {
 			t.Errorf("POST %s without a session = %d → %q, want a redirect to sign in", path, resp.StatusCode, resp.Header.Get("Location"))
 		}
 	}
-	for _, path := range []string{"/admin/groups/" + id, "/admin/groups/" + id + "/delete", "/admin/tags", "/admin/settings", "/admin/audit"} {
+	for _, path := range []string{"/admin/groups", "/admin/groups/" + id, "/admin/groups/" + id + "/delete", "/admin/tags", "/admin/settings", "/admin/audit"} {
 		resp := g.get(c, path)
 		if resp.StatusCode != http.StatusSeeOther {
 			t.Errorf("GET %s without a session = %d, want a redirect", path, resp.StatusCode)

@@ -7,13 +7,14 @@ import { Steps, Aside } from '@astrojs/starlight/components';
 import { Image } from 'astro:assets';
 import token from '../../../assets/screenshots/admin-token-created.webp';
 import dashboard from '../../../assets/screenshots/admin-dashboard.webp';
+import groups from '../../../assets/screenshots/admin-groups.webp';
 import group from '../../../assets/screenshots/admin-group.webp';
 
 The admin page lives at `https://tpp.example.com/admin/`. Sign in with `ADMIN_PASSWORD`. It shows
 names, sizes and counts — never content, because the relay has none to show.
 
-The header links to five screens: **Dashboard**, **Tags**, **Tokens**, **Audit log** and
-**Settings**. Each group also has a page of its own, reached from the dashboard.
+The header links to six screens: **Dashboard**, **Groups**, **Tags**, **Tokens**, **Audit log**
+and **Settings**. Each group also has a page of its own, reached from **Groups**.
 
 ## Hand out a group
 
@@ -49,19 +50,12 @@ that should share a clipboard).
 
 ## The dashboard
 
-<Image src={dashboard} alt="The admin dashboard with storage, tags, groups and the health card" class="screenshot" />
+<Image src={dashboard} alt="The admin dashboard with storage, counts, health and storage settings" class="screenshot" />
 
 - **Blob storage** used against `TPP_BLOB_MAX_TOTAL_BYTES`.
-- **Groups, devices** and unused tokens.
+- **Groups, devices**, unused tokens and how many groups are stale, with a link to **Groups**.
 - **Evictions in the last 24 hours** — entries removed early to make room. If this is often above
   zero, the storage limits are too tight.
-- **Tags**: groups, devices and storage per tag, and for the untagged groups. Click a tag to show
-  only its groups.
-- **Groups**, heaviest first: devices, last activity, live entries, oldest entry and storage
-  against the group's limit. Click a name to open the [group's page](#manage-a-group). Badges mark
-  a group that is **stale** (no device has connected for longer than the
-  [stale threshold](#settings)) or **over limit** (its limit was lowered below what it holds). To
-  remove a stale group, open it and [delete it](#delete-a-group); groups are deleted one at a time.
 - **Health**: the relay's version and uptime, and how Redis is set up. Redis must run with
   `maxmemory-policy volatile-lru` and AOF on (see [Docker](/two-place-paste/self-hosting/docker/));
   the card marks anything else, because `allkeys-lru` or no AOF can silently lose groups. A managed
@@ -70,6 +64,19 @@ that should share a clipboard).
   one straight away.
 
 If part of the dashboard cannot be read (say Redis is down), it says which part and shows the rest.
+
+## The groups
+
+<Image src={groups} alt="The Groups screen: a tag filter above a table of groups with their storage" class="screenshot" />
+
+**Groups** lists every group, heaviest first: devices, last activity, live entries, oldest entry and
+storage against the group's limit. The row above the table filters it by tag, or to the untagged
+groups; [**Manage tags**](#tags-and-storage-limits) leads to the Tags screen.
+
+Click a name to open the [group's page](#manage-a-group). Badges mark a group that is **stale** (no
+device has connected for longer than the [stale threshold](#settings)) or **over limit** (its limit
+was lowered below what it holds). To remove a stale group, open it and
+[delete it](#delete-a-group); groups are deleted one at a time.
 
 ## Manage a group
 
@@ -125,7 +132,7 @@ Deleting a tag leaves its groups untagged; they fall back to their own limit or 
 ## Settings
 
 **Settings** holds what can change without a restart. Today that is the **stale threshold**: how
-many days a group may go without any of its devices connecting before the dashboard calls it
+many days a group may go without any of its devices connecting before the Groups screen marks it
 stale. The default is 90 days.
 
 ## Audit log
