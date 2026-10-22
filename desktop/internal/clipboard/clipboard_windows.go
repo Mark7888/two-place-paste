@@ -2,6 +2,7 @@ package clipboard
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -74,6 +75,19 @@ func (windowsClipboard) Read(ctx context.Context) (Content, error) {
 	}
 	defer release()
 
+	c, err := readContent()
+	if err != nil {
+		return c, err
+	}
+	// Read in the same open session as the payload, so the marker belongs to
+	// these bytes: no other application can change the clipboard while this
+	// one holds it open.
+	c.Concealed = privacyMarker()
+	return c, nil
+}
+
+// readContent reads the payload. It must be called through acquire.
+func readContent() (Content, error) {
 	// Files first, then image, then text: an image copied from a file offers
 	// several flavours and the richest one is the one the user meant.
 	//
@@ -220,15 +234,49 @@ func formatAvailable(format uint32) bool {
 	return r != 0
 }
 
-// pngFormat resolves the registered "PNG" format id. Registering a name that
-// already exists returns the existing id, so this is idempotent.
-func pngFormat() uint32 {
-	name, err := windows.UTF16PtrFromString("PNG")
+// pngFormat resolves the registered "PNG" format id.
+func pngFormat() uint32 { return registeredFormat("PNG") }
+
+// registeredFormat resolves a registered clipboard format's id. Registering a
+// name that already exists returns the existing id, so this is idempotent.
+func registeredFormat(name string) uint32 {
+	p, err := windows.UTF16PtrFromString(name)
 	if err != nil {
 		return 0
 	}
-	r, _, _ := procRegisterClipboardFormatW.Call(uintptr(unsafe.Pointer(name)))
+	r, _, _ := procRegisterClipboardFormatW.Call(uintptr(unsafe.Pointer(p)))
 	return uint32(r)
+}
+
+// windowsPrivacyFormats lists the privacy formats (markers.go) in the order
+// they are checked.
+var windowsPrivacyFormats = []string{
+	winExcludeFromMonitors,
+	winCanIncludeInHistory,
+	winCanUploadToCloud,
+	winViewerIgnore,
+}
+
+// privacyMarker reports whether the application that copied marked the
+// content private (markers.go). It must be called through acquire.
+//
+// A format that is offered but whose data cannot be read counts as present
+// without a value: enough for the formats that mark by being there, and not
+// enough to read a Can… format as "no".
+func privacyMarker() string {
+	var present []string
+	dwords := map[string]uint32{}
+	for _, name := range windowsPrivacyFormats {
+		id := registeredFormat(name)
+		if id == 0 || !formatAvailable(id) {
+			continue
+		}
+		present = append(present, name)
+		if b, err := readBytes(id); err == nil && len(b) >= 4 {
+			dwords[name] = binary.LittleEndian.Uint32(b[:4])
+		}
+	}
+	return concealedFromFormats(present, dwords)
 }
 
 // locked turns the address GlobalLock returned into a pointer Go can read
