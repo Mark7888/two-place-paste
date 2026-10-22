@@ -46,9 +46,7 @@ func (s *Server) handleDismissSkipped(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Direction Direction `json:"direction"`
-	}
+	var body SyncRequest
 	if !decode(w, r, &body) {
 		return
 	}
@@ -61,9 +59,36 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "unknown sync direction")
 		return
 	}
-	res, err := s.api.Sync(r.Context(), body.Direction)
+	res, err := s.api.Sync(r.Context(), body)
 	if err != nil {
 		s.fail(w, r, "sync", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) handleRevealClipboard(w http.ResponseWriter, r *http.Request) {
+	res, err := s.api.RevealClipboard(r.Context())
+	if err != nil {
+		s.fail(w, r, "read the clipboard", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// maxFilterTestBytes bounds a filter test: a sample of up to a mebibyte and
+// a full draft of filters. Larger than every other request, because a sample
+// the user pastes may be a whole document.
+const maxFilterTestBytes = 1<<20 + 512<<10
+
+func (s *Server) handleTestFilters(w http.ResponseWriter, r *http.Request) {
+	var body FilterTest
+	if !decodeLimit(w, r, &body, maxFilterTestBytes) {
+		return
+	}
+	res, err := s.api.TestFilters(r.Context(), body)
+	if err != nil {
+		s.fail(w, r, "test the filters", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -346,9 +371,13 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.api.Settings(r.Context()))
 }
 
+// maxSettingsBytes bounds a settings update, which may carry the whole
+// filter list: up to 200 filters of a kibibyte each, JSON-escaped.
+const maxSettingsBytes = 1 << 20
+
 func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var patch SettingsPatch
-	if !decode(w, r, &patch) {
+	if !decodeLimit(w, r, &patch, maxSettingsBytes) {
 		return
 	}
 	view, err := s.api.UpdateSettings(r.Context(), patch)
@@ -447,6 +476,18 @@ func (s *Server) handleDeleteUpdateToken(w http.ResponseWriter, r *http.Request)
 // and a message meant for a person; anything else is a bug and is reported as
 // one, with the detail going to the log rather than to the page.
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, op string, err error) {
+	// A protected entry is a question for the user, not a failure: the UI
+	// asks "push anyway?" and confirms with the plan id.
+	var sens *SensitiveError
+	if errors.As(err, &sens) {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error":   "this is a protected entry; confirm to push it anyway",
+			"code":    "sensitive",
+			"plan_id": sens.PlanID,
+			"reason":  sens.Reason,
+		})
+		return
+	}
 	var se *StatusError
 	if errors.As(err, &se) {
 		s.logger.WarnContext(r.Context(), "a request could not be completed", "op", op, "error", err)
@@ -458,7 +499,11 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, op string, err err
 }
 
 func decode(w http.ResponseWriter, r *http.Request, out any) bool {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes))
+	return decodeLimit(w, r, out, maxRequestBytes)
+}
+
+func decodeLimit(w http.ResponseWriter, r *http.Request, out any, limit int64) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(out); err != nil {
 		writeError(w, http.StatusBadRequest, "the request body is not the JSON this endpoint expects")

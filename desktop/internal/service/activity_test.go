@@ -100,7 +100,7 @@ func TestActivityNamesTheTransferDirection(t *testing.T) {
 			clip.set(textContent("to upload"))
 			relay.push(tppclient.Item{ContentType: "text/plain", Body: []byte("from the phone")})
 
-			if _, err := svc.Sync(context.Background(), tt.dir); err != nil {
+			if _, err := svc.Sync(context.Background(), localui.SyncRequest{Direction: tt.dir}); err != nil {
 				t.Fatalf("Sync(%s) error = %v", tt.dir, err)
 			}
 
@@ -138,7 +138,7 @@ func TestActivityShowsASkippedTransferUntilASyncClearsIt(t *testing.T) {
 	}
 
 	clip.set(big)
-	if _, err := svc.Sync(ctx, localui.DirectionUpload); err != nil {
+	if _, err := svc.Sync(ctx, localui.SyncRequest{Direction: localui.DirectionUpload}); err != nil {
 		t.Fatalf("Sync(upload) error = %v", err)
 	}
 	if got := svc.Activity().Skipped; got != "" {
@@ -169,7 +169,7 @@ func TestAutoSyncNamesTheUnknownDirection(t *testing.T) {
 	f.clip.set(textContent("copied before the service started"))
 	f.relay.push(tppclient.Item{ContentType: "text/plain", Body: []byte("from the phone"), CreatedAt: f.now()})
 
-	_, err := f.svc.Sync(context.Background(), localui.DirectionAuto)
+	_, err := f.svc.Sync(context.Background(), localui.SyncRequest{Direction: localui.DirectionAuto})
 	if !errors.Is(err, ErrDirectionUnknown) {
 		t.Errorf("Sync(auto) error = %v, want ErrDirectionUnknown", err)
 	}
