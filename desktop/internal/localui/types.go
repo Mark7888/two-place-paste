@@ -385,6 +385,9 @@ type FilterMatch struct {
 	Source string `json:"source"`
 	Rule   string `json:"rule"`
 	Reason string `json:"reason"`
+	// Name is the detector's title or the filter's label; empty for a filter
+	// without a label.
+	Name string `json:"name,omitempty"`
 }
 
 // FilterTestResult lists every match, in the order a clipboard change is

@@ -42,9 +42,14 @@ type Verdict struct {
 	// Source says what matched. Empty when nothing did.
 	Source Source
 
-	// Reason is shown to the user: the OS reason, a detector's title, or a
-	// filter's label or kind. Never the value or pattern that matched.
+	// Reason is shown to the user as a sentence: the OS reason, or which
+	// built-in or custom filter matched, by title, label or kind. Never the
+	// value or pattern that matched.
 	Reason string
+
+	// Name is the matching rule on its own: a detector's title or a filter's
+	// label, empty for a filter without one and for SourceOS.
+	Name string
 
 	// Rule names the detector or filter that matched, for the UI; empty for
 	// SourceOS.
@@ -169,7 +174,7 @@ func (c *Classifier) matches(content clipboard.Content, first bool) []Verdict {
 	if content.Kind() == clipboard.KindText {
 		if text := content.Text(); text != "" {
 			for _, d := range c.detectors {
-				if d.match(text) && add(Verdict{Sensitive: true, Source: SourceDetector, Reason: d.Title, Rule: d.Name}) {
+				if d.match(text) && add(Verdict{Sensitive: true, Source: SourceDetector, Reason: d.Reason(), Name: d.Title, Rule: d.Name}) {
 					return out
 				}
 			}
@@ -196,7 +201,7 @@ func (c *Classifier) matches(content clipboard.Content, first bool) []Verdict {
 }
 
 func filterVerdict(f Filter) Verdict {
-	return Verdict{Sensitive: true, Source: SourceFilter, Reason: f.Reason(), Rule: f.ID}
+	return Verdict{Sensitive: true, Source: SourceFilter, Reason: f.Reason(), Name: f.Label, Rule: f.ID}
 }
 
 // NewID returns a random filter id.

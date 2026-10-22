@@ -122,8 +122,8 @@ func TestOrderOSThenDetectorThenFilter(t *testing.T) {
 		reason  string
 	}{
 		{"os first", concealed, SourceOS, concealed.Concealed},
-		{"detector second", text(key), SourceDetector, "Private keys"},
-		{"filter last", text("abc"), SourceFilter, "Mine"},
+		{"detector second", text(key), SourceDetector, "Matches built-in filter “Private keys”"},
+		{"filter last", text("abc"), SourceFilter, "Matches custom filter “Mine”"},
 	}
 	for _, tt := range tests {
 		v := c.Classify(tt.content)
@@ -142,6 +142,33 @@ func TestOrderOSThenDetectorThenFilter(t *testing.T) {
 	}
 	if v := off.Classify(concealed); v.Source != SourceDetector {
 		t.Errorf("with OS detection off, verdict = %+v, want the detector", v)
+	}
+}
+
+// The reason says that a filter matched, whether it is built in or the
+// user's own, and which one — and never the filter's value.
+func TestReasonNamesTheFilter(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		f    Filter
+		want string
+	}{
+		{"labelled", Filter{Kind: KindContains, Value: "s3cret", Label: "asd"}, "Matches custom filter “asd”"},
+		{"unlabelled", Filter{Kind: KindPrefix, Value: "s3cret"}, "Matches a custom “starts with” filter"},
+		{"unlabelled exact", Filter{Kind: KindExact}, "Matches a custom “exact match” filter"},
+	}
+	for _, tt := range tests {
+		if got := tt.f.Reason(); got != tt.want {
+			t.Errorf("%s: Reason() = %q, want %q", tt.name, got, tt.want)
+		}
+		if strings.Contains(tt.f.Reason(), "s3cret") {
+			t.Errorf("%s: Reason() repeats the value", tt.name)
+		}
+	}
+	d, _ := LookupDetector("private_keys")
+	if got, want := d.Reason(), "Matches built-in filter “Private keys”"; got != want {
+		t.Errorf("detector Reason() = %q, want %q", got, want)
 	}
 }
 

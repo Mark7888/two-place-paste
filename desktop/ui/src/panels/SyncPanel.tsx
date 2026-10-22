@@ -12,6 +12,11 @@ import { bytes, relative, useNow, when } from "../format";
 import { Icon } from "../components/Icon";
 import { Modal } from "../components/Modal";
 
+/** lowerFirst puts a reason, which the service writes as a sentence, mid-sentence. */
+function lowerFirst(s: string): string {
+  return s.charAt(0).toLowerCase() + s.slice(1);
+}
+
 export function SyncPanel({ status, onChanged }: { status: Status | null; onChanged: () => void }) {
   const [busy, setBusy] = useState<Direction | null>(null);
   const [result, setResult] = useState<SyncResult | null>(null);
@@ -228,8 +233,8 @@ export function SyncPanel({ status, onChanged }: { status: Status | null; onChan
             <p className="muted small row tight" style={{ marginTop: "0.6rem" }}>
               <Icon name="lock" size={13} />
               <span>
-                Not uploaded automatically: {status.sensitive_note.reason}. Use Upload to push it
-                anyway.
+                Not uploaded automatically: {lowerFirst(status.sensitive_note.reason)}. Use Upload
+                to push it anyway.
               </span>
             </p>
           ) : null}

@@ -238,23 +238,29 @@ func (f Filter) compile() (func(in *input) bool, error) {
 	return nil, fmt.Errorf("%w: unknown kind %q", ErrInvalid, f.Kind)
 }
 
-// Reason is what the user is shown for a match on this filter. A label wins;
-// without one, the kind. Never the value.
+// Reason is what the user is shown for a match on this filter: that a filter
+// matched, that it is one of their own, and which one — by its label, or by
+// its kind when it has none. Never the value.
 func (f Filter) Reason() string {
 	if f.Label != "" {
-		return f.Label
+		return "Matches custom filter “" + f.Label + "”"
 	}
+	return "Matches a custom “" + f.KindName() + "” filter"
+}
+
+// KindName is the kind in the words the filter editor uses.
+func (f Filter) KindName() string {
 	switch f.Kind {
 	case KindContains:
-		return "Custom filter (contains)"
+		return "contains"
 	case KindPrefix:
-		return "Custom filter (starts with)"
+		return "starts with"
 	case KindSuffix:
-		return "Custom filter (ends with)"
+		return "ends with"
 	case KindRegex:
-		return "Custom filter (regex)"
+		return "regex"
 	case KindExact:
-		return "Custom filter (exact match)"
+		return "exact match"
 	}
-	return "Custom filter"
+	return string(f.Kind)
 }
