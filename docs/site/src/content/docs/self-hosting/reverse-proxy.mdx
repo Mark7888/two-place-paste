@@ -98,7 +98,7 @@ Then sign in at `https://tpp.example.com/admin/`.
 |---|---|
 | `/healthz` | Health check. Returns `ok`. |
 | `/ws` | The devices' WebSocket. |
-| `/admin/` | The [admin page](/two-place-paste/self-hosting/admin/): dashboard and creation tokens. |
+| `/admin/` | The [admin page](/two-place-paste/self-hosting/admin/): dashboard and creation tokens. Its own API is under `/admin/api/`. |
 | `/pair` | The page a pairing link opens on a device without the app. |
 | `/source` | Redirects to the relay's source code (`TPP_SOURCE_URL`). |
 | `/<token>` | Group creation. A browser `GET` returns 404 on purpose; only the app's `POST` uses the token. |

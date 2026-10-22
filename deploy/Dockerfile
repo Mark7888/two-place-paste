@@ -8,6 +8,22 @@
 #
 # docker-compose.yml in this directory does exactly that.
 
+# The admin UI (server/ui) is a React app the binary embeds. It is built in a
+# stage of its own, on the builder's platform: its output is the same files
+# for every target, and the runtime image needs no Node.
+FROM --platform=$BUILDPLATFORM node:24-alpine AS ui
+WORKDIR /src
+
+# Dependency layer, as for Go below.
+COPY server/ui/package.json server/ui/package-lock.json ./server/ui/
+RUN cd server/ui && npm ci
+
+COPY server/ui ./server/ui
+# The build writes into the Go package that embeds it; the .gitkeep is what
+# its clean step leaves in place.
+COPY server/web/admin/dist/.gitkeep ./server/web/admin/dist/.gitkeep
+RUN cd server/ui && npm run build
+
 # The build stage runs on the builder's own platform and cross-compiles, so a
 # multi-platform build (docker.yml: linux/amd64 and linux/arm64) compiles Go
 # natively instead of under emulation. A plain `docker build` sets both
@@ -32,16 +48,24 @@ COPY desktop/go.mod ./desktop/
 RUN cd server && GOWORK=off go mod download
 
 COPY . .
+# The built admin UI, for go:embed, and the UI's dependencies, for the
+# notices below. Dockerfile.dockerignore keeps the host's own copies of both
+# out of the context, so these are the only ones.
+COPY --from=ui /src/server/web/admin/dist ./server/web/admin/dist
+COPY --from=ui /src/server/ui/node_modules ./server/ui/node_modules
+RUN test -f server/web/admin/dist/index.html
 # CGO is off: the result is a static binary that runs on the scratch-like
 # runtime below without a libc.
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -C server -trimpath -ldflags="-s -w" -o /out/tpp ./cmd/tpp
 
-# The binary carries the code of every Go module it was built from, and their
-# licenses ask that a binary distribution carry their notices too (LICENSING.md).
+# The binary carries the code of every Go module it was built from, and the
+# admin UI it serves carries its npm packages; their licenses ask that a
+# distribution carry their notices too (LICENSING.md).
 RUN node scripts/notices/notices.mjs \
       --title "TwoPlacePaste relay (tpp): third-party notices" \
       --intro "The relay is licensed under the GNU Affero General Public License v3.0 or later (LICENSE in this directory) and includes code from pkg/tppclient, licensed under the Mozilla Public License 2.0 (LICENSE.MPL-2.0). Its source code is at https://github.com/Mark7888/two-place-paste. It also includes the third-party software below." \
       --go server=./cmd/tpp --goos "$TARGETOS" \
+      --npm server/ui \
       --out /out/THIRD_PARTY_NOTICES.txt
 
 FROM alpine:3.21

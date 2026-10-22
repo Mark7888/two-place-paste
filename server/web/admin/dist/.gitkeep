@@ -1,0 +1,7 @@
+The built admin UI (server/ui) is written here by `npm run build` and embedded
+into the relay by embed.go. Nothing in this directory but this file is
+committed: the build output is a build artefact, and the Docker build and CI
+build it before they build the binary.
+
+A binary built without it still runs and says so — see placeholderPage in
+internal/admin/ui.go.

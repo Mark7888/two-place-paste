@@ -1,6 +1,7 @@
 package admin_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/Mark7888/two-place-paste/server/internal/admin"
@@ -22,6 +24,17 @@ import (
 )
 
 const testPassword = "correct horse battery staple"
+
+// testUI stands in for the React build, so these tests neither need nor see
+// whatever `npm run build` last left in server/web/admin/dist.
+var testUI = fstest.MapFS{
+	"index.html":           {Data: []byte(`<!doctype html><title>admin</title><div id="root"></div><script type="module" src="/admin/assets/app.js"></script>`)},
+	"assets/app.js":        {Data: []byte(`console.log("app")`)},
+	"assets/app.css":       {Data: []byte(`body{}`)},
+	"favicon.svg":          {Data: []byte(`<svg xmlns="http://www.w3.org/2000/svg"/>`)},
+	"favicon.ico":          {Data: []byte{0, 0, 1, 0}},
+	"apple-touch-icon.png": {Data: []byte("\x89PNG\r\n\x1a\n")},
+}
 
 // clock is a manually advanced UTC clock. Nothing in these tests sleeps
 // (docs/internal/conventions.md §5).
@@ -80,6 +93,7 @@ func newFixtureWithOptions(t *testing.T, baseURL string, configure func(*admin.O
 		Password:      testPassword,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           clk.now,
+		Assets:        testUI,
 	}
 	if configure != nil {
 		configure(&opts)
@@ -132,41 +146,51 @@ func (f *fixture) get(c *http.Client, path string) *http.Response {
 	return f.do(c, req)
 }
 
-func (f *fixture) postForm(c *http.Client, path string, form url.Values) *http.Response {
+// call makes an admin API request the way the app does: a JSON body, and the
+// session's CSRF token in its header when csrf is not empty.
+func (f *fixture) call(c *http.Client, csrf, method, path string, body any) *http.Response {
 	f.t.Helper()
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, f.srv.URL+path, strings.NewReader(form.Encode()))
+	var r io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			f.t.Fatalf("encode request body: %v", err)
+		}
+		r = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(context.Background(), method, f.srv.URL+path, r)
 	if err != nil {
 		f.t.Fatalf("new request: %v", err)
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if csrf != "" {
+		req.Header.Set("X-CSRF-Token", csrf)
+	}
 	return f.do(c, req)
 }
 
-// login signs in and returns the authenticated client plus the session's CSRF
-// token, read back out of the token screen.
-func (f *fixture) login(c *http.Client) string {
+// tryLogin posts a password to the sign-in endpoint.
+func (f *fixture) tryLogin(c *http.Client, password string) *http.Response {
 	f.t.Helper()
-	resp := f.postForm(c, "/admin/login", url.Values{"password": {testPassword}})
-	if resp.StatusCode != http.StatusSeeOther {
-		f.t.Fatalf("POST /admin/login status = %d, want %d", resp.StatusCode, http.StatusSeeOther)
-	}
-	return f.csrf(c)
+	return f.call(c, "", http.MethodPost, "/admin/api/login", map[string]string{"password": password})
 }
 
-func (f *fixture) csrf(c *http.Client) string {
+// login signs in and returns the session's CSRF token.
+func (f *fixture) login(c *http.Client) string {
 	f.t.Helper()
-	body := readBody(f.t, f.get(c, "/admin/"))
-	const marker = `name="csrf" value="`
-	i := strings.Index(body, marker)
-	if i < 0 {
-		f.t.Fatalf("token screen carries no csrf token")
+	resp := f.tryLogin(c, testPassword)
+	if resp.StatusCode != http.StatusOK {
+		f.t.Fatalf("POST /admin/api/login status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
-	rest := body[i+len(marker):]
-	j := strings.Index(rest, `"`)
-	if j < 0 {
-		f.t.Fatalf("csrf token is unterminated")
+	got := readJSON[struct {
+		CSRF string `json:"csrf"`
+	}](f.t, resp)
+	if got.CSRF == "" {
+		f.t.Fatal("login returned no csrf token")
 	}
-	return rest[:j]
+	return got.CSRF
 }
 
 func readBody(t *testing.T, resp *http.Response) string {
@@ -176,6 +200,31 @@ func readBody(t *testing.T, resp *http.Response) string {
 		t.Fatalf("read body: %v", err)
 	}
 	return string(b)
+}
+
+// readJSON decodes a response body.
+func readJSON[T any](t *testing.T, resp *http.Response) T {
+	t.Helper()
+	var v T
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		t.Fatalf("decode %s %s response: %v", resp.Request.Method, resp.Request.URL.Path, err)
+	}
+	return v
+}
+
+// apiError is the message of a refused API request.
+func apiError(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	return readJSON[struct {
+		Error string `json:"error"`
+	}](t, resp).Error
+}
+
+func wantStatus(t *testing.T, resp *http.Response, want int) {
+	t.Helper()
+	if resp.StatusCode != want {
+		t.Fatalf("%s %s = %d, want %d", resp.Request.Method, resp.Request.URL.Path, resp.StatusCode, want)
+	}
 }
 
 // jar is a cookie jar that ignores domains and paths: the fixture talks to one
@@ -244,7 +293,7 @@ func TestSessionCookieFlags(t *testing.T) {
 			t.Parallel()
 
 			f := newFixture(t, tt.baseURL)
-			resp := f.postForm(f.client(), "/admin/login", url.Values{"password": {testPassword}})
+			resp := f.tryLogin(f.client(), testPassword)
 
 			var c *http.Cookie
 			for _, got := range resp.Cookies() {
@@ -270,6 +319,11 @@ func TestSessionCookieFlags(t *testing.T) {
 			if c.MaxAge <= 0 || time.Duration(c.MaxAge)*time.Second > 2*time.Hour {
 				t.Errorf("session cookie MaxAge = %d, want a positive value no greater than the 2h session TTL", c.MaxAge)
 			}
+			// The cookie is the session; the body hands out only the CSRF
+			// token, never the session id.
+			if body := readBody(t, resp); strings.Contains(body, c.Value) {
+				t.Error("the login response body carries the session id")
+			}
 		})
 	}
 }
@@ -281,28 +335,48 @@ func TestLoginRateLimit(t *testing.T) {
 
 	f := newFixture(t, "https://tpp.example.com")
 	c := f.client()
-	bad := url.Values{"password": {"wrong"}}
 
 	// The per-IP burst is 5; the sixth attempt within the window is refused
 	// before the password is looked at.
 	for i := range 5 {
-		if got := f.postForm(c, "/admin/login", bad).StatusCode; got != http.StatusUnauthorized {
-			t.Fatalf("attempt %d status = %d, want %d", i+1, got, http.StatusUnauthorized)
+		resp := f.tryLogin(c, "wrong")
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("attempt %d status = %d, want %d", i+1, resp.StatusCode, http.StatusUnauthorized)
+		}
+		if got := apiError(t, resp); got != "Incorrect password." {
+			t.Errorf("attempt %d error = %q, want %q", i+1, got, "Incorrect password.")
 		}
 	}
-	if got := f.postForm(c, "/admin/login", bad).StatusCode; got != http.StatusTooManyRequests {
-		t.Fatalf("attempt 6 status = %d, want %d", got, http.StatusTooManyRequests)
+	resp := f.tryLogin(c, "wrong")
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("attempt 6 status = %d, want %d", resp.StatusCode, http.StatusTooManyRequests)
+	}
+	if resp.Header.Get("Retry-After") == "" {
+		t.Error("a rate-limited sign-in has no Retry-After header")
 	}
 
 	// A correct password does not bypass the lockout.
-	if got := f.postForm(c, "/admin/login", url.Values{"password": {testPassword}}).StatusCode; got != http.StatusTooManyRequests {
+	if got := f.tryLogin(c, testPassword).StatusCode; got != http.StatusTooManyRequests {
 		t.Fatalf("correct password while locked out status = %d, want %d", got, http.StatusTooManyRequests)
 	}
 
 	// One refill interval later exactly one attempt is available again.
 	f.clk.advance(12 * time.Second)
-	if got := f.postForm(c, "/admin/login", url.Values{"password": {testPassword}}).StatusCode; got != http.StatusSeeOther {
-		t.Fatalf("after refill status = %d, want %d", got, http.StatusSeeOther)
+	if got := f.tryLogin(c, testPassword).StatusCode; got != http.StatusOK {
+		t.Fatalf("after refill status = %d, want %d", got, http.StatusOK)
+	}
+}
+
+func TestLoginRejectsUnreadableBody(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, "https://tpp.example.com")
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, f.srv.URL+"/admin/api/login", strings.NewReader("password=x"))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if got := f.do(f.client(), req).StatusCode; got != http.StatusBadRequest {
+		t.Errorf("POST /admin/api/login with a form body = %d, want %d", got, http.StatusBadRequest)
 	}
 }
 
@@ -314,15 +388,19 @@ func TestUnauthenticatedAccess(t *testing.T) {
 	f := newFixture(t, "https://tpp.example.com")
 	c := f.client()
 
-	if resp := f.get(c, "/admin/"); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/admin/login" {
-		t.Errorf("GET /admin/ = %d %q, want %d %q",
-			resp.StatusCode, resp.Header.Get("Location"), http.StatusSeeOther, "/admin/login")
+	for _, path := range []string{"/admin/", "/admin/tokens", "/admin/groups/abc", "/admin/settings"} {
+		if resp := f.get(c, path); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/admin/login" {
+			t.Errorf("GET %s = %d %q, want %d %q",
+				path, resp.StatusCode, resp.Header.Get("Location"), http.StatusSeeOther, "/admin/login")
+		}
 	}
-	if resp := f.get(c, "/admin/tokens"); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/admin/login" {
-		t.Errorf("GET /admin/tokens = %d %q, want a redirect to the login page", resp.StatusCode, resp.Header.Get("Location"))
+	for _, path := range []string{"/admin/api/session", "/admin/api/dashboard", "/admin/api/tokens", "/admin/api/audit"} {
+		if got := f.get(c, path).StatusCode; got != http.StatusUnauthorized {
+			t.Errorf("GET %s = %d, want %d", path, got, http.StatusUnauthorized)
+		}
 	}
-	if resp := f.postForm(c, "/admin/tokens", url.Values{"name": {"sneaky"}}); resp.StatusCode != http.StatusSeeOther {
-		t.Errorf("POST /admin/tokens = %d, want a redirect to the login page", resp.StatusCode)
+	if got := f.call(c, "", http.MethodPost, "/admin/api/tokens", map[string]string{"name": "sneaky"}).StatusCode; got != http.StatusUnauthorized {
+		t.Errorf("POST /admin/api/tokens = %d, want %d", got, http.StatusUnauthorized)
 	}
 	if got, err := f.store.ListTokens(context.Background()); err != nil || len(got) != 0 {
 		t.Errorf("tokens after unauthenticated POST = %d, want 0 (err = %v)", len(got), err)
@@ -332,15 +410,65 @@ func TestUnauthenticatedAccess(t *testing.T) {
 	}
 }
 
-func TestTokenCreationRequiresCSRF(t *testing.T) {
+// TestSessionLifecycle: the session endpoint answers with the CSRF token the
+// login handed out, the sign-in screen sends a signed-in admin on, and
+// logging out ends the session on the server.
+func TestSessionLifecycle(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, "https://tpp.example.com")
+	c := f.client()
+
+	if resp := f.get(c, "/admin/login"); resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /admin/login signed out = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	csrf := f.login(c)
+
+	resp := f.get(c, "/admin/api/session")
+	wantStatus(t, resp, http.StatusOK)
+	if got := readJSON[struct {
+		CSRF string `json:"csrf"`
+	}](t, resp).CSRF; got != csrf {
+		t.Errorf("session csrf = %q, want the login's %q", got, csrf)
+	}
+	if resp := f.get(c, "/admin/login"); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/admin/" {
+		t.Errorf("GET /admin/login signed in = %d %q, want a redirect to /admin/", resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	// Logging out needs the CSRF header, so another site cannot do it.
+	wantStatus(t, f.call(c, "", http.MethodPost, "/admin/api/logout", nil), http.StatusForbidden)
+	wantStatus(t, f.get(c, "/admin/api/session"), http.StatusOK)
+
+	wantStatus(t, f.call(c, csrf, http.MethodPost, "/admin/api/logout", nil), http.StatusNoContent)
+	wantStatus(t, f.get(c, "/admin/api/session"), http.StatusUnauthorized)
+}
+
+// TestSessionExpires: a session is refused once its TTL has passed.
+func TestSessionExpires(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t, "https://tpp.example.com")
 	c := f.client()
 	f.login(c)
+	f.clk.advance(2*time.Hour + time.Second)
+	wantStatus(t, f.get(c, "/admin/api/dashboard"), http.StatusUnauthorized)
+}
 
-	if resp := f.postForm(c, "/admin/tokens", url.Values{"name": {"no csrf"}}); resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("POST /admin/tokens without csrf = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+// TestChangesRequireCSRF: every request that changes something is refused
+// without the session's CSRF header, or with someone else's.
+func TestChangesRequireCSRF(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, "https://tpp.example.com")
+	c := f.client()
+	f.login(c)
+	other := f.login(f.client())
+
+	for _, csrf := range []string{"", other} {
+		resp := f.call(c, csrf, http.MethodPost, "/admin/api/tokens", map[string]string{"name": "no csrf"})
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("POST /admin/api/tokens with csrf %q = %d, want %d", csrf, resp.StatusCode, http.StatusForbidden)
+		}
 	}
 	if got, _ := f.store.ListTokens(context.Background()); len(got) != 0 {
 		t.Errorf("tokens created without csrf = %d, want 0", len(got))
@@ -356,24 +484,27 @@ func TestTokenScreen(t *testing.T) {
 	c := f.client()
 	csrf := f.login(c)
 
-	if resp := f.postForm(c, "/admin/tokens", url.Values{"name": {"Anna — laptop"}, "csrf": {csrf}}); resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("POST /admin/tokens = %d, want %d", resp.StatusCode, http.StatusSeeOther)
-	}
+	resp := f.call(c, csrf, http.MethodPost, "/admin/api/tokens", map[string]string{"name": "Anna — laptop"})
+	wantStatus(t, resp, http.StatusCreated)
+	created := readJSON[tokenRow](t, resp)
 
 	tokens, err := f.store.ListTokens(context.Background())
 	if err != nil || len(tokens) != 1 {
 		t.Fatalf("ListTokens() = %d tokens, %v; want 1, nil", len(tokens), err)
 	}
 	tok := tokens[0]
-
-	body := readBody(t, f.get(c, "/admin/tokens"))
-	for _, want := range []string{"Anna — laptop", "https://tpp.example.com/" + tok.Value, "/admin/tokens/" + tok.Value + "/qr.png"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("token screen does not contain %q", want)
-		}
+	// The new token comes back in the response, so the screen can show its
+	// code at once without the value ever being put in a URL.
+	if created.Value != tok.Value || created.URL != "https://tpp.example.com/"+tok.Value || created.Status != "unused" {
+		t.Errorf("created token = %+v, want value %q, its URL and status unused", created, tok.Value)
 	}
 
-	resp := f.get(c, "/admin/tokens/"+tok.Value+"/qr.png")
+	list := readJSON[tokenList](t, f.get(c, "/admin/api/tokens"))
+	if len(list.Tokens) != 1 || list.Tokens[0].Name != "Anna — laptop" || list.Tokens[0].URL != created.URL {
+		t.Errorf("token list = %+v, want the new token with its URL", list.Tokens)
+	}
+
+	resp = f.get(c, "/admin/tokens/"+tok.Value+"/qr.png")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET qr.png = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
@@ -384,7 +515,7 @@ func TestTokenScreen(t *testing.T) {
 		t.Error("qr.png body is not a PNG")
 	}
 
-	// A consumed token has no onboarding value left, so it has no QR code.
+	// A consumed token has no onboarding value left: no QR code, no URL.
 	if _, err := f.store.CreateGroup(context.Background(), tok.Value, store.NewDevice{
 		PublicKey: []byte("pk"), WrappedGroupKey: []byte("wk"),
 	}); err != nil {
@@ -393,6 +524,27 @@ func TestTokenScreen(t *testing.T) {
 	if got := f.get(c, "/admin/tokens/"+tok.Value+"/qr.png").StatusCode; got != http.StatusNotFound {
 		t.Errorf("GET qr.png for a used token = %d, want %d", got, http.StatusNotFound)
 	}
+	list = readJSON[tokenList](t, f.get(c, "/admin/api/tokens"))
+	if got := list.Tokens[0]; got.Status != "used" || got.URL != "" || got.GroupID != tok.Value {
+		t.Errorf("used token = %+v, want status used, no URL and its group", got)
+	}
+}
+
+// tokenRow and tokenList are the token API's JSON, as a test reads it.
+type tokenRow struct {
+	Value     string     `json:"value"`
+	Name      string     `json:"name"`
+	Note      string     `json:"note"`
+	Tag       string     `json:"tag"`
+	Status    string     `json:"status"`
+	ExpiresAt *time.Time `json:"expires_at"`
+	URL       string     `json:"url"`
+	GroupID   string     `json:"group_id"`
+}
+
+type tokenList struct {
+	Tokens []tokenRow `json:"tokens"`
+	Tags   []string   `json:"tags"`
 }
 
 // TestRevokeToken: revoking an unused token removes it and its creation URL
@@ -409,26 +561,15 @@ func TestRevokeToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateToken() error = %v", err)
 	}
-	revokePath := "/admin/tokens/" + unused.Value + "/revoke"
+	revokePath := "/admin/api/tokens/" + unused.Value
 
-	if body := readBody(t, f.get(c, "/admin/tokens")); !strings.Contains(body, revokePath) {
-		t.Errorf("token screen has no revoke form for an unused token")
-	}
-
-	if got := f.postForm(c, revokePath, url.Values{}).StatusCode; got != http.StatusBadRequest {
-		t.Errorf("revoke without csrf = %d, want %d", got, http.StatusBadRequest)
-	}
+	wantStatus(t, f.call(c, "", http.MethodDelete, revokePath, nil), http.StatusForbidden)
 	if _, err := f.store.GetToken(ctx, unused.Value); err != nil {
 		t.Fatalf("token revoked without csrf: GetToken() error = %v", err)
 	}
+	wantStatus(t, f.call(f.client(), csrf, http.MethodDelete, revokePath, nil), http.StatusUnauthorized)
 
-	if got := f.postForm(f.client(), revokePath, url.Values{"csrf": {csrf}}).StatusCode; got != http.StatusSeeOther {
-		t.Errorf("revoke without a session = %d, want a redirect to login", got)
-	}
-
-	if got := f.postForm(c, revokePath, url.Values{"csrf": {csrf}}).StatusCode; got != http.StatusSeeOther {
-		t.Fatalf("revoke = %d, want %d", got, http.StatusSeeOther)
-	}
+	wantStatus(t, f.call(c, csrf, http.MethodDelete, revokePath, nil), http.StatusNoContent)
 	if _, err := f.store.GetToken(ctx, unused.Value); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("GetToken(revoked) error = %v, want %v", err, store.ErrNotFound)
 	}
@@ -436,8 +577,10 @@ func TestRevokeToken(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("POST of a revoked creation URL = %d, want %d", resp.StatusCode, http.StatusNotFound)
 	}
-	if got := f.postForm(c, revokePath, url.Values{"csrf": {csrf}}).StatusCode; got != http.StatusNotFound {
-		t.Errorf("second revoke = %d, want %d", got, http.StatusNotFound)
+	resp = f.call(c, csrf, http.MethodDelete, revokePath, nil)
+	wantStatus(t, resp, http.StatusNotFound)
+	if got := apiError(t, resp); got != "That token no longer exists." {
+		t.Errorf("second revoke error = %q", got)
 	}
 
 	used, err := f.store.CreateToken(ctx, "spent")
@@ -447,12 +590,7 @@ func TestRevokeToken(t *testing.T) {
 	if _, err := f.store.ConsumeToken(ctx, used.Value); err != nil {
 		t.Fatalf("ConsumeToken() error = %v", err)
 	}
-	if body := readBody(t, f.get(c, "/admin/tokens")); strings.Contains(body, "/admin/tokens/"+used.Value+"/revoke") {
-		t.Errorf("token screen offers to revoke a used token")
-	}
-	if got := f.postForm(c, "/admin/tokens/"+used.Value+"/revoke", url.Values{"csrf": {csrf}}).StatusCode; got != http.StatusConflict {
-		t.Errorf("revoke of a used token = %d, want %d", got, http.StatusConflict)
-	}
+	wantStatus(t, f.call(c, csrf, http.MethodDelete, "/admin/api/tokens/"+used.Value, nil), http.StatusConflict)
 	if got, err := f.store.GetToken(ctx, used.Value); err != nil || !got.Used {
 		t.Errorf("used token after a refused revoke = {Used:%v}, %v; want it untouched", got.Used, err)
 	}
@@ -570,25 +708,6 @@ func TestWildcardDoesNotShadowOtherRoutes(t *testing.T) {
 	}
 }
 
-// TestPagesLinkToSource covers the AGPL "Source code" link, which every
-// admin page shows, signed in or not.
-func TestPagesLinkToSource(t *testing.T) {
-	t.Parallel()
-
-	f := newFixture(t, "https://tpp.example.com")
-	c := f.client()
-
-	if body := readBody(t, f.get(c, "/admin/login")); !strings.Contains(body, `href="/source"`) {
-		t.Error("the login page has no link to /source")
-	}
-	f.login(c)
-	for _, path := range []string{"/admin/", "/admin/tokens"} {
-		if body := readBody(t, f.get(c, path)); !strings.Contains(body, `href="/source"`) {
-			t.Errorf("GET %s has no link to /source", path)
-		}
-	}
-}
-
 func (f *fixture) postJSON(c *http.Client, path, body string) *http.Response {
 	f.t.Helper()
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, f.srv.URL+path, strings.NewReader(body))
@@ -599,51 +718,71 @@ func (f *fixture) postJSON(c *http.Client, path, body string) *http.Response {
 	return f.do(c, req)
 }
 
-// TestTokenScreenShowsANewCodeOnce covers the one-shot reveal: minting a token
-// redirects to a listing that opens that token's code, and only that render
-// does — a reload shows the row with its button and nothing opened.
-func TestTokenScreenShowsANewCodeOnce(t *testing.T) {
+// TestAppShell covers how the React app is served: one page for every
+// screen, behind the policy that allows only this origin's own files, and
+// the bundle and icons it loads.
+func TestAppShell(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t, "https://tpp.example.com")
 	c := f.client()
-	csrf := f.login(c)
+	index := string(testUI["index.html"].Data)
 
-	f.postForm(c, "/admin/tokens", url.Values{"name": {"Anna — laptop"}, "csrf": {csrf}})
-
-	first := readBody(t, f.get(c, "/admin/tokens"))
-	if !strings.Contains(first, "data-autoshow") {
-		t.Error("the render after minting a token does not mark it to be shown")
+	// The sign-in screen is the one screen served without a session.
+	resp := f.get(c, "/admin/login")
+	wantStatus(t, resp, http.StatusOK)
+	if got := readBody(t, resp); got != index {
+		t.Errorf("GET /admin/login served %q, want the app's index.html", got)
+	}
+	csp := resp.Header.Get("Content-Security-Policy")
+	for _, want := range []string{"default-src 'none'", "script-src 'self'", "style-src 'self'", "connect-src 'self'", "frame-ancestors 'none'"} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("Content-Security-Policy %q does not contain %q", csp, want)
+		}
+	}
+	// Whatever else changes, inline script must never become allowed: the
+	// whole app is one bundle from this origin precisely so it does not have
+	// to be.
+	if strings.Contains(csp, "unsafe-inline") || strings.Contains(csp, "unsafe-eval") {
+		t.Errorf("Content-Security-Policy %q relaxes script execution", csp)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Errorf("index Cache-Control = %q, want no-store", got)
 	}
 
-	second := readBody(t, f.get(c, "/admin/tokens"))
-	if strings.Contains(second, "data-autoshow") {
-		t.Error("a reload shows the code again; the flash is not one-shot")
+	f.login(c)
+	for _, path := range []string{"/admin/", "/admin/groups", "/admin/groups/abc", "/admin/groups/abc/purge", "/admin/groups/abc/delete", "/admin/tags", "/admin/tokens", "/admin/audit", "/admin/settings"} {
+		resp := f.get(c, path)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("GET %s = %d, want %d", path, resp.StatusCode, http.StatusOK)
+			continue
+		}
+		if got := readBody(t, resp); got != index {
+			t.Errorf("GET %s did not serve the app", path)
+		}
 	}
-	// The row is still there, with the button that shows the code on demand.
-	if !strings.Contains(second, "data-token-dialog") {
-		t.Error("the unused token has no button to show its code again")
+	// Only the app's screens exist: anything else under /admin/ is a 404, as
+	// is a JSON path no endpoint claims.
+	for _, path := range []string{"/admin/nope", "/admin/groups/abc/nope", "/admin/index.html", "/admin/assets/", "/admin/assets/missing.js", "/admin/api/nope"} {
+		if got := f.get(c, path).StatusCode; got != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want %d", path, got, http.StatusNotFound)
+		}
 	}
-}
+	if got := f.get(c, "/admin").Header.Get("Location"); got != "/admin/" {
+		t.Errorf("GET /admin redirects to %q, want /admin/", got)
+	}
 
-// TestAdminAssets covers the two static files the pages load, and the policy
-// that allows them and nothing else.
-func TestAdminAssets(t *testing.T) {
-	t.Parallel()
-
-	f := newFixture(t, "https://tpp.example.com")
-	c := f.client()
-
+	// The bundle and the icons are public: the sign-in screen loads them
+	// before a session exists.
+	anon := f.client()
 	for _, tc := range []struct{ path, contentType string }{
-		{"/admin/style.css", "text/css; charset=utf-8"},
-		{"/admin/app.js", "text/javascript; charset=utf-8"},
+		{"/admin/assets/app.js", "text/javascript; charset=utf-8"},
+		{"/admin/assets/app.css", "text/css; charset=utf-8"},
 		{"/admin/favicon.svg", "image/svg+xml"},
 		{"/admin/favicon.ico", "image/x-icon"},
 		{"/admin/apple-touch-icon.png", "image/png"},
 	} {
-		// Both are reachable without a session: the login page needs them
-		// before one exists.
-		resp := f.get(c, tc.path)
+		resp := f.get(anon, tc.path)
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("GET %s = %d, want %d", tc.path, resp.StatusCode, http.StatusOK)
 			continue
@@ -651,20 +790,69 @@ func TestAdminAssets(t *testing.T) {
 		if got := resp.Header.Get("Content-Type"); got != tc.contentType {
 			t.Errorf("GET %s Content-Type = %q, want %q", tc.path, got, tc.contentType)
 		}
-		if readBody(t, resp) == "" {
-			t.Errorf("GET %s served an empty body", tc.path)
+		if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("GET %s X-Content-Type-Options = %q, want nosniff", tc.path, got)
 		}
 	}
+}
 
-	csp := f.get(c, "/admin/login").Header.Get("Content-Security-Policy")
-	for _, want := range []string{"default-src 'none'", "script-src 'self'", "style-src 'self'"} {
-		if !strings.Contains(csp, want) {
-			t.Errorf("Content-Security-Policy %q does not contain %q", csp, want)
+// TestPlaceholderWithoutUIBuild: a binary built without the UI still serves
+// every screen, with a page that says what is missing and keeps the AGPL
+// source link every page of the relay carries.
+func TestPlaceholderWithoutUIBuild(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureWithOptions(t, "https://tpp.example.com", func(o *admin.Options) { o.Assets = fstest.MapFS{} })
+	c := f.client()
+
+	resp := f.get(c, "/admin/login")
+	wantStatus(t, resp, http.StatusOK)
+	body := readBody(t, resp)
+	for _, want := range []string{"The admin UI is not in this binary", "server/ui", `href="/source"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("placeholder page does not contain %q", want)
 		}
 	}
-	// Whatever else changes, inline script must never become allowed: every
-	// line of script is in app.js precisely so it does not have to be.
-	if strings.Contains(csp, "unsafe-inline") || strings.Contains(csp, "unsafe-eval") {
-		t.Errorf("Content-Security-Policy %q relaxes script execution", csp)
+	// The API works regardless.
+	f.login(c)
+	wantStatus(t, f.get(c, "/admin/api/dashboard"), http.StatusOK)
+}
+
+// TestRefusedRequestLogsNoToken: a request refused for its CSRF header is
+// logged by route, never by path, because a path can carry a token value.
+func TestRefusedRequestLogsNoToken(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	var mu sync.Mutex
+	f := newFixtureWithOptions(t, "https://tpp.example.com", func(o *admin.Options) {
+		o.Logger = slog.New(slog.NewTextHandler(&lockedWriter{w: &logs, mu: &mu}, nil))
+	})
+	c := f.client()
+	f.login(c)
+	tok, err := f.store.CreateToken(context.Background(), "spare")
+	if err != nil {
+		t.Fatalf("CreateToken() error = %v", err)
 	}
+	wantStatus(t, f.call(c, "", http.MethodDelete, "/admin/api/tokens/"+tok.Value, nil), http.StatusForbidden)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(logs.String(), "bad csrf token") {
+		t.Fatalf("the refusal was not logged: %s", logs.String())
+	}
+	if strings.Contains(logs.String(), tok.Value) {
+		t.Errorf("the log holds the token value: %s", logs.String())
+	}
+}
+
+type lockedWriter struct {
+	w  io.Writer
+	mu *sync.Mutex
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }

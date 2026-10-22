@@ -1,6 +1,11 @@
 // Package admin is the operator-facing surface: the login-protected admin
 // screens, and the creation-token endpoint clients POST to (SPEC §3.1, §4.4).
 //
+// The screens are a React app (server/ui), built into server/web/admin and
+// embedded in the binary. This package serves it and the JSON API under
+// /admin/api/ that is all it talks to; every decision — who is signed in,
+// what is valid, what is shown — is made here, and the app only renders it.
+//
 // The dashboard shows what the relay can know without knowing any content:
 // byte counts, entry counts, device counts, the state of its storage and of
 // Redis. A page per group renames it, tags it, sets its storage limit, lists
@@ -14,8 +19,8 @@
 //
 // Two routes are public and both are attack surface:
 //
-//   - /admin/login is reachable by anyone, so it is rate limited per IP and
-//     globally, and a lockout is logged.
+//   - /admin/api/login is reachable by anyone, so it is rate limited per IP
+//     and globally, and a lockout is logged.
 //   - /<token> is the creation endpoint. GET returns 404 so that a crawler or
 //     a link preview can never burn a token; only POST consumes one
 //     (SPEC §3.1).
@@ -25,6 +30,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/url"
 	"strings"
@@ -136,11 +142,12 @@ const (
 	maxNoteLen    = 500
 	maxTagNameLen = 40
 
-	// maxFormBodyBytes bounds every admin form but the login. The largest
-	// is a bulk delete, which carries one group id per selected row.
+	// maxFormBodyBytes bounds the body of every admin API request that
+	// changes something, but the login. The largest is a new token: a name
+	// and a note.
 	maxFormBodyBytes = 64 << 10
 
-	// maxLoginBodyBytes bounds the login form body. The form has one field.
+	// maxLoginBodyBytes bounds the login request body. It has one field.
 	maxLoginBodyBytes = 4 << 10
 
 	// maxCreateBodyBytes bounds the group-creation request body: two public
@@ -203,6 +210,11 @@ type Options struct {
 
 	// StartedAt is when the server started, for its uptime.
 	StartedAt time.Time
+
+	// Assets is the built admin UI: index.html, assets/ and the favicons.
+	// Nil means the build embedded in the binary (server/web/admin); tests
+	// set it so that they do not depend on a UI build.
+	Assets fs.FS
 }
 
 // Dashboard wires the dashboard to the storage subsystems. Every field is
@@ -269,11 +281,11 @@ type Server struct {
 	version   string
 	startedAt time.Time
 
-	baseURL   string
-	password  []byte
-	sessions  *sessionStore
-	logins    *limiter
-	templates *templateSet
+	baseURL  string
+	password []byte
+	sessions *sessionStore
+	logins   *limiter
+	ui       uiAssets
 
 	// secureCookies mirrors the public base URL's scheme. SPEC §4.4 requires
 	// Secure, and a deployment always terminates TLS in front of the server
@@ -285,8 +297,9 @@ type Server struct {
 }
 
 // New returns an admin server over st. It fails rather than starting with a
-// credential it cannot verify or templates it cannot parse — both are
-// programmer or operator errors that must surface at startup.
+// credential it cannot verify or a UI build it cannot read — both are
+// programmer or operator errors that must surface at startup. A binary built
+// without the UI at all still starts; see loadUI.
 func New(st Store, opts Options) (*Server, error) {
 	if st == nil {
 		return nil, errors.New("admin: store is required")
@@ -304,11 +317,6 @@ func New(st Store, opts Options) (*Server, error) {
 		return nil, fmt.Errorf("admin: public base URL %q is not an absolute http(s) URL", opts.PublicBaseURL)
 	}
 
-	tmpl, err := parseTemplates()
-	if err != nil {
-		return nil, err
-	}
-
 	now := opts.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
@@ -316,6 +324,10 @@ func New(st Store, opts Options) (*Server, error) {
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default()
+	}
+	ui, err := loadUI(opts.Assets, logger)
+	if err != nil {
+		return nil, err
 	}
 	ttl := opts.SessionTTL
 	if ttl <= 0 {
@@ -343,7 +355,7 @@ func New(st Store, opts Options) (*Server, error) {
 		password:      []byte(opts.Password),
 		sessions:      newSessionStore(ttl, now),
 		logins:        newLimiter(defaultLoginRate, defaultLoginBurst, defaultGlobalLoginRate, defaultGlobalLoginBurst, now),
-		templates:     tmpl,
+		ui:            ui,
 		secureCookies: u.Scheme == "https",
 	}, nil
 }

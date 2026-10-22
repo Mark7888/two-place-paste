@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -18,69 +17,17 @@ import (
 	"github.com/Mark7888/two-place-paste/server/internal/store"
 )
 
-// handleStyle serves the one stylesheet, and handleScript the one script.
-// Both are public because the login page needs them before a session exists,
-// and neither contains anything: the script reads the page it is on and makes
-// no request of its own.
-func (s *Server) handleStyle(w http.ResponseWriter, r *http.Request) {
-	s.serveAsset(w, r, "style.css", "text/css; charset=utf-8")
+// sessionJSON is what the app learns about its session: only the CSRF token
+// it must send back on every change. The session id itself stays in the
+// HttpOnly cookie, out of reach of any script.
+type sessionJSON struct {
+	CSRF string `json:"csrf"`
 }
 
-func (s *Server) handleScript(w http.ResponseWriter, r *http.Request) {
-	s.serveAsset(w, r, "app.js", "text/javascript; charset=utf-8")
-}
-
-// handleIcon serves one favicon. Public for the same reason as the stylesheet.
-func (s *Server) handleIcon(name, contentType string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		s.serveAsset(w, r, name, contentType)
-	}
-}
-
-func (s *Server) serveAsset(w http.ResponseWriter, r *http.Request, name, contentType string) {
-	b, err := webadminFile(name)
-	if err != nil {
-		s.logger.ErrorContext(r.Context(), "read admin asset", "asset", name, "error", err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Cache-Control", "no-cache")
-	_, _ = w.Write(b)
-}
-
-// handleIndex renders the dashboard (SPEC §4.4).
-func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	// "GET /admin/" also matches every unregistered path below /admin/.
-	if r.URL.Path != "/admin/" {
-		http.NotFound(w, r)
-		return
-	}
-	sess, ok := s.session(r)
-	if !ok {
-		s.redirect(w, r, "/admin/login")
-		return
-	}
-	s.renderDashboard(w, r, sess)
-}
-
-// handleTokens renders the token screen (SPEC §4.4).
-func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.session(r)
-	if !ok {
-		s.redirect(w, r, "/admin/login")
-		return
-	}
-	s.renderTokens(w, r, sess, http.StatusOK, "")
-}
-
-// handleLoginForm renders the login page.
-func (s *Server) handleLoginForm(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.session(r); ok {
-		s.redirect(w, r, "/admin/")
-		return
-	}
-	s.render(w, r, http.StatusOK, "login.html", pageData{Title: "Sign in", Centered: true})
+// handleSession tells the app whether it is signed in, and hands it the CSRF
+// token when it is.
+func (s *Server) handleSession(w http.ResponseWriter, _ *http.Request, sess session) {
+	writeJSON(w, http.StatusOK, sessionJSON{CSRF: sess.csrf})
 }
 
 // handleLogin verifies the admin password and starts a session.
@@ -97,32 +44,22 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			slog.String("client_ip", ip), slog.String("scope", scope))
 		s.audit(r, "login.limited", "", scope)
 		w.Header().Set("Retry-After", "60")
-		s.render(w, r, http.StatusTooManyRequests, "login.html", pageData{
-			Title:    "Sign in",
-			Centered: true,
-			Error:    "Too many sign-in attempts. Wait a minute and try again.",
-		})
+		writeJSONError(w, http.StatusTooManyRequests, "Too many sign-in attempts. Wait a minute and try again.")
 		return
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBodyBytes)
-	if err := r.ParseForm(); err != nil {
-		s.render(w, r, http.StatusBadRequest, "login.html", pageData{
-			Title:    "Sign in",
-			Centered: true,
-			Error:    "That request could not be read.",
-		})
+	var req struct {
+		Password string `json:"password"`
+	}
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 
-	if subtle.ConstantTimeCompare([]byte(r.PostFormValue("password")), s.password) != 1 {
+	if subtle.ConstantTimeCompare([]byte(req.Password), s.password) != 1 {
 		s.logger.WarnContext(r.Context(), "admin login failed", slog.String("client_ip", ip))
 		s.audit(r, "login.failed", "", "")
-		s.render(w, r, http.StatusUnauthorized, "login.html", pageData{
-			Title:    "Sign in",
-			Centered: true,
-			Error:    "Incorrect password.",
-		})
+		writeJSONError(w, http.StatusUnauthorized, "Incorrect password.")
 		return
 	}
 
@@ -141,13 +78,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 	s.logger.InfoContext(r.Context(), "admin signed in", slog.String("client_ip", ip))
 	s.audit(r, "login", "", "")
-	s.redirect(w, r, "/admin/")
+	writeJSON(w, http.StatusOK, sessionJSON{CSRF: sess.csrf})
 }
 
-// handleLogout destroys the session server-side and clears the cookie.
+// handleLogout destroys the session server-side and clears the cookie. Without
+// a session there is nothing to protect and it only clears the cookie; with
+// one, it needs the CSRF header like any other change, so a cross-site request
+// cannot sign the admin out.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.session(r)
-	if ok {
+	if sess, ok := s.session(r); ok {
 		if !s.checkCSRF(w, r, sess) {
 			return
 		}
@@ -163,44 +102,117 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})
-	s.redirect(w, r, "/admin/login")
+	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleCreateToken mints a creation token (SPEC §3.1 step 1).
-func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.session(r)
-	if !ok {
-		s.redirect(w, r, "/admin/login")
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBodyBytes)
-	if err := r.ParseForm(); err != nil {
-		s.renderTokens(w, r, sess, http.StatusBadRequest, "That request could not be read.")
-		return
-	}
-	if !s.checkCSRF(w, r, sess) {
-		return
-	}
+// tokenJSON is one creation token as the token screen lists it (SPEC §4.4). It
+// carries no clipboard data because the server holds none.
+type tokenJSON struct {
+	// Value is the token itself. The screen needs it to revoke the token, and
+	// it is also the id of the group the token created.
+	Value     string    `json:"value"`
+	Name      string    `json:"name"`
+	Note      string    `json:"note"`
+	Tag       string    `json:"tag"`
+	CreatedAt time.Time `json:"created_at"`
 
-	name, ok := validName(r.PostFormValue("name"), maxTokenNameLen)
+	// Status is "unused", "used", "expired" or "group_deleted".
+	Status    string     `json:"status"`
+	ExpiresAt *time.Time `json:"expires_at"`
+
+	// URL is the creation URL, for an unused token only: a spent or expired
+	// one creates nothing, so there is nothing to hand out.
+	URL string `json:"url,omitempty"`
+
+	// GroupID is the group the token created, while that group exists.
+	GroupID string `json:"group_id,omitempty"`
+}
+
+type tokensJSON struct {
+	Tokens []tokenJSON `json:"tokens"`
+
+	// Tags are the tags a new token can start its group under.
+	Tags []string `json:"tags"`
+}
+
+func (s *Server) tokenView(t store.Token, now time.Time) tokenJSON {
+	v := tokenJSON{
+		Value:     t.Value,
+		Name:      t.Name,
+		Note:      t.Note,
+		Tag:       t.Tag,
+		CreatedAt: t.CreatedAt.UTC(),
+		ExpiresAt: timeOrNil(t.ExpiresAt),
+	}
+	switch {
+	case t.Used && t.GroupDeleted:
+		v.Status = "group_deleted"
+	case t.Used:
+		v.Status = "used"
+		v.GroupID = t.GroupID
+	case t.Expired(now):
+		v.Status = "expired"
+	default:
+		v.Status = "unused"
+		v.URL = s.creationURL(t.Value)
+	}
+	return v
+}
+
+// handleTokens lists the creation tokens, newest first (SPEC §4.4).
+func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request, _ session) {
+	ctx := r.Context()
+	tokens, err := s.store.ListTokens(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "list tokens", "error", err)
+		writeJSONError(w, http.StatusInternalServerError, "The token list could not be loaded.")
+		return
+	}
+	out := tokensJSON{Tokens: make([]tokenJSON, 0, len(tokens)), Tags: []string{}}
+	if tags, err := s.store.ListTags(ctx); err == nil {
+		for _, t := range tags {
+			out.Tags = append(out.Tags, t.Name)
+		}
+	}
+	now := s.now()
+	for _, t := range tokens {
+		out.Tokens = append(out.Tokens, s.tokenView(t, now))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleCreateToken mints a creation token (SPEC §3.1 step 1) and returns it,
+// so the screen can show its code straight away. The value travels in this
+// response body only — never in a URL, where a credential would end up in the
+// browser's history and in every access log on the way.
+func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, _ session) {
+	var req struct {
+		Name    string `json:"name"`
+		Note    string `json:"note"`
+		Tag     string `json:"tag"`
+		Expires string `json:"expires"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	name, ok := validName(req.Name, maxTokenNameLen)
 	if !ok {
-		s.renderTokens(w, r, sess, http.StatusBadRequest, "Give the token a name so you can tell it apart later.")
+		writeJSONError(w, http.StatusBadRequest, "Give the token a name so you can tell it apart later.")
 		return
 	}
-	note := strings.TrimSpace(r.PostFormValue("note"))
+	note := strings.TrimSpace(req.Note)
 	if len(note) > maxNoteLen {
-		s.renderTokens(w, r, sess, http.StatusBadRequest, fmt.Sprintf("Keep the note under %d characters.", maxNoteLen))
+		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("Keep the note under %d characters.", maxNoteLen))
 		return
 	}
-	tag := r.PostFormValue("tag")
-	if tag != "" {
-		if _, err := s.store.GetTag(r.Context(), tag); err != nil {
-			s.renderTokens(w, r, sess, http.StatusBadRequest, "That tag no longer exists.")
+	if req.Tag != "" {
+		if _, err := s.store.GetTag(r.Context(), req.Tag); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "That tag no longer exists.")
 			return
 		}
 	}
 	var expires time.Time
-	switch r.PostFormValue("expires") {
+	switch req.Expires {
 	case "", "never":
 	case "1":
 		expires = s.now().Add(24 * time.Hour)
@@ -209,48 +221,28 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	case "30":
 		expires = s.now().Add(30 * 24 * time.Hour)
 	default:
-		s.renderTokens(w, r, sess, http.StatusBadRequest, "Choose when the token expires from the list.")
+		writeJSONError(w, http.StatusBadRequest, "Choose when the token expires from the list.")
 		return
 	}
 
-	tok, err := s.store.CreateTokenWith(r.Context(), store.NewToken{Name: name, Note: note, Tag: tag, ExpiresAt: expires})
+	tok, err := s.store.CreateTokenWith(r.Context(), store.NewToken{Name: name, Note: note, Tag: req.Tag, ExpiresAt: expires})
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "create token", "error", err)
-		s.renderTokens(w, r, sess, http.StatusInternalServerError, "The token could not be created.")
+		writeJSONError(w, http.StatusInternalServerError, "The token could not be created.")
 		return
 	}
 	// The token value itself is a credential and is never logged
 	// (docs/internal/conventions.md §2).
 	s.logger.InfoContext(r.Context(), "creation token issued", slog.String("token_name", tok.Name))
 	s.audit(r, "token.create", tok.Name, expiryText(tok.ExpiresAt))
-	// Remember which token this redirect is carrying the user back to see, so
-	// the listing opens its code straight away. It is held on the session for
-	// one render rather than put in the query string: a creation URL in a
-	// redirect target ends up in the browser's history and in every access log
-	// between here and the operator.
-	s.sessions.flash(sess.id, tok.Value)
-	s.redirect(w, r, "/admin/tokens")
+	writeJSON(w, http.StatusCreated, s.tokenView(tok, s.now()))
 }
 
 // handleRevokeToken deletes an unused creation token, so the URL that was
 // handed out for it stops working. A used token is refused with a message
 // rather than deleted: its group already exists, and removing the record
 // would only hide which token created it.
-func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.session(r)
-	if !ok {
-		s.redirect(w, r, "/admin/login")
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBodyBytes)
-	if err := r.ParseForm(); err != nil {
-		s.renderTokens(w, r, sess, http.StatusBadRequest, "That request could not be read.")
-		return
-	}
-	if !s.checkCSRF(w, r, sess) {
-		return
-	}
-
+func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request, _ session) {
 	value := r.PathValue("token")
 	tok, err := s.store.GetToken(r.Context(), value)
 	if err == nil {
@@ -258,20 +250,20 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		s.renderTokens(w, r, sess, http.StatusNotFound, "That token no longer exists.")
+		writeJSONError(w, http.StatusNotFound, "That token no longer exists.")
 		return
 	case errors.Is(err, store.ErrTokenConsumed):
-		s.renderTokens(w, r, sess, http.StatusConflict, "That token has already created a group, so there is nothing to revoke.")
+		writeJSONError(w, http.StatusConflict, "That token has already created a group, so there is nothing to revoke.")
 		return
 	case err != nil:
 		s.logger.ErrorContext(r.Context(), "revoke token", "error", err)
-		s.renderTokens(w, r, sess, http.StatusInternalServerError, "The token could not be revoked.")
+		writeJSONError(w, http.StatusInternalServerError, "The token could not be revoked.")
 		return
 	}
 	// Logged by name only: the value is a credential (docs/internal/conventions.md §2).
 	s.logger.InfoContext(r.Context(), "creation token revoked", slog.String("token_name", tok.Name))
 	s.audit(r, "token.revoke", tok.Name, "")
-	s.redirect(w, r, "/admin/tokens")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleTokenQR renders a token's creation URL as a QR code, so first-device
@@ -386,108 +378,12 @@ func (s *Server) handleTokenPost(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// expiryText says when a token expires, for the audit log and the listing.
+// expiryText says when a token expires, for the audit log.
 func expiryText(t time.Time) string {
 	if t.IsZero() {
 		return "never expires"
 	}
 	return "expires " + t.UTC().Format("2006-01-02 15:04 UTC")
-}
-
-// renderTokens renders the token screen for an authenticated session.
-func (s *Server) renderTokens(w http.ResponseWriter, r *http.Request, sess session, status int, msg string) {
-	data := s.page(sess, "Creation tokens", "tokens")
-	data.Error = msg
-	if tags, err := s.store.ListTags(r.Context()); err == nil {
-		for _, t := range tags {
-			data.TagNames = append(data.TagNames, t.Name)
-		}
-	}
-
-	tokens, err := s.store.ListTokens(r.Context())
-	if err != nil {
-		s.logger.ErrorContext(r.Context(), "list tokens", "error", err)
-		data.Error = "The token list could not be loaded."
-		s.render(w, r, http.StatusInternalServerError, "tokens.html", data)
-		return
-	}
-	// The flash is taken once, whether or not a matching token is still in
-	// the listing: a code shown a second time on a reload is a code the user
-	// did not ask to see again.
-	fresh := s.sessions.takeFlash(sess.id)
-
-	now := s.now()
-	data.Tokens = make([]tokenView, 0, len(tokens))
-	for i, t := range tokens {
-		v := tokenView{
-			Value:   t.Value,
-			Name:    t.Name,
-			Note:    t.Note,
-			Tag:     t.Tag,
-			Created: t.CreatedAt.UTC().Format("2006-01-02 15:04 UTC"),
-			Used:    t.Used,
-			GroupID: t.GroupID,
-			Index:   i,
-		}
-		switch {
-		case t.Used && t.GroupDeleted:
-			v.Status, v.StatusClass = "group deleted", "used"
-		case t.Used:
-			v.Status, v.StatusClass = "used", "used"
-			v.GroupPath = groupPath(t.GroupID)
-		case t.Expired(now):
-			v.Status, v.StatusClass = "expired", "bad"
-			v.Expired = true
-			v.RevokePath = "/admin/tokens/" + url.PathEscape(t.Value) + "/revoke"
-		default:
-			v.Status, v.StatusClass = "unused", "open"
-			v.URL = s.creationURL(t.Value)
-			v.QRPath = "/admin/tokens/" + url.PathEscape(t.Value) + "/qr.png"
-			v.RevokePath = "/admin/tokens/" + url.PathEscape(t.Value) + "/revoke"
-			v.Fresh = fresh != "" && subtle.ConstantTimeCompare([]byte(fresh), []byte(t.Value)) == 1
-		}
-		if !t.Used && !t.ExpiresAt.IsZero() {
-			if v.Expired {
-				v.Expires = "expired " + ago(now, t.ExpiresAt, "")
-			} else {
-				v.Expires = "expires " + t.ExpiresAt.UTC().Format("2006-01-02 15:04 UTC")
-			}
-		}
-		data.Tokens = append(data.Tokens, v)
-	}
-	s.render(w, r, status, "tokens.html", data)
-}
-
-// page starts the data for an authenticated page, taking the session's
-// pending confirmation with it.
-func (s *Server) page(sess session, title, nav string) pageData {
-	return pageData{
-		Title:         title,
-		Authenticated: true,
-		CSRF:          sess.csrf,
-		Nav:           nav,
-		Notice:        s.sessions.takeNotice(sess.id),
-	}
-}
-
-// formSession is the preamble of every admin form POST: a live session, a
-// bounded body, and a matching CSRF token. On false a response has already
-// been written.
-func (s *Server) formSession(w http.ResponseWriter, r *http.Request) (session, bool) {
-	sess, ok := s.session(r)
-	if !ok {
-		s.redirect(w, r, "/admin/login")
-		return session{}, false
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBodyBytes)
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return session{}, false
-	}
-	if !s.checkCSRF(w, r, sess) {
-		return session{}, false
-	}
-	return sess, true
 }
 
 // session returns the request's session, if it has a live one.
@@ -497,19 +393,6 @@ func (s *Server) session(r *http.Request) (session, bool) {
 		return session{}, false
 	}
 	return s.sessions.get(c.Value)
-}
-
-// checkCSRF verifies the form token. SameSite=Strict already keeps a
-// cross-site form from carrying the cookie; this is the second lock, because
-// the first one is a browser policy rather than something the server enforces.
-func (s *Server) checkCSRF(w http.ResponseWriter, r *http.Request, sess session) bool {
-	if subtle.ConstantTimeCompare([]byte(r.PostFormValue("csrf")), []byte(sess.csrf)) == 1 {
-		return true
-	}
-	s.logger.WarnContext(r.Context(), "admin request rejected: bad csrf token",
-		slog.String("client_ip", clientIP(r)), slog.String("path", r.URL.Path))
-	http.Error(w, "bad request", http.StatusBadRequest)
-	return false
 }
 
 func (s *Server) redirect(w http.ResponseWriter, r *http.Request, to string) {
@@ -543,15 +426,4 @@ func clientIP(r *http.Request) string {
 		return ip.String()
 	}
 	return host
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeJSONError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }

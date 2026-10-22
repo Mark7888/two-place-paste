@@ -1,7 +1,9 @@
 # Go CI: build, vet, lint and test each module independently.
 #
 # Path-gated so that a mobile-only change does not run Go jobs
-# (ROADMAP P0 deliverables).
+# (ROADMAP P0 deliverables). The two React UIs (desktop/ui, server/ui) are
+# Node's: the Go modules embed their builds but compile and test without them,
+# and node.yml checks them.
 name: Go
 
 on:
@@ -9,6 +11,7 @@ on:
     branches: [main, master]
     paths:
       - "server/**"
+      - "!server/ui/**"
       - "pkg/**"
       - "desktop/**"
       - "!desktop/ui/**"
@@ -20,6 +23,7 @@ on:
   pull_request:
     paths:
       - "server/**"
+      - "!server/ui/**"
       - "pkg/**"
       - "desktop/**"
       - "!desktop/ui/**"

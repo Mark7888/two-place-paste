@@ -17,21 +17,10 @@ type session struct {
 	id        string
 	csrf      string
 	expiresAt time.Time
-
-	// flash is the value of a token this session has just minted, waiting to
-	// be shown once by the next render. It lives here rather than in the
-	// redirect's query string because a creation URL is a credential, and a
-	// credential in a URL is a credential in the browser's history and in
-	// every access log on the way (SPEC §3.1).
-	flash string
-
-	// notice is a one-line confirmation ("Group renamed.") for the next
-	// render, after a form's redirect.
-	notice string
 }
 
 // sessionStore keeps sessions in memory. A restart logs every admin out, which
-// is the correct trade for a single-screen operator UI: it costs one login and
+// is the correct trade for an operator UI: it costs one login and
 // removes a persistence format, a migration and an eviction policy from the
 // threat surface.
 type sessionStore struct {
@@ -83,58 +72,6 @@ func (s *sessionStore) get(id string) (session, bool) {
 		return session{}, false
 	}
 	return sess, true
-}
-
-// flash records a value for the next render of this session to show once.
-// Setting it replaces whatever was there: only the most recent mint matters.
-func (s *sessionStore) flash(id, value string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sess, ok := s.byID[id]
-	if !ok {
-		return
-	}
-	sess.flash = value
-	s.byID[id] = sess
-}
-
-// takeFlash returns the session's pending flash and clears it, so a reload
-// shows nothing. It returns "" when there is none.
-func (s *sessionStore) takeFlash(id string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sess, ok := s.byID[id]
-	if !ok || sess.flash == "" {
-		return ""
-	}
-	value := sess.flash
-	sess.flash = ""
-	s.byID[id] = sess
-	return value
-}
-
-// setNotice records a confirmation for the next render of this session.
-func (s *sessionStore) setNotice(id, msg string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if sess, ok := s.byID[id]; ok {
-		sess.notice = msg
-		s.byID[id] = sess
-	}
-}
-
-// takeNotice returns the session's pending confirmation and clears it.
-func (s *sessionStore) takeNotice(id string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sess, ok := s.byID[id]
-	if !ok {
-		return ""
-	}
-	msg := sess.notice
-	sess.notice = ""
-	s.byID[id] = sess
-	return msg
 }
 
 // destroy removes a session; logging out must not depend on the cookie

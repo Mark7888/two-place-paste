@@ -32,7 +32,9 @@ Upgrade with `git pull && docker compose up -d --build`.
 
 <Steps>
 
-1. **Install Go 1.26 and Redis 7.** On Debian or Ubuntu, Redis is `apt install redis-server`.
+1. **Install Go 1.26, Node.js 24 or newer, and Redis 7.** On Debian or Ubuntu, Redis is
+   `apt install redis-server`. Node is only needed to build the admin page; the relay does not
+   run it.
 
 2. **Configure Redis** for TwoPlacePaste. These two settings are required, not tuning — see
    [why](/two-place-paste/self-hosting/operations/#redis-settings-that-are-not-tuning):
@@ -45,15 +47,20 @@ Upgrade with `git pull && docker compose up -d --build`.
 
    Restart Redis afterwards.
 
-3. **Build the relay.** Build from the repository root: the Go workspace (`go.work`) links the
-   server to the shared client module.
+3. **Build the relay.** First build the admin page, which the binary embeds, then the binary
+   itself from the repository root: the Go workspace (`go.work`) links the server to the shared
+   client module.
 
    ```sh
    git clone https://github.com/Mark7888/two-place-paste
    cd two-place-paste
+   (cd server/ui && npm ci && npm run build)
    CGO_ENABLED=0 go build -C server -trimpath -ldflags="-s -w" -o /tmp/tpp ./cmd/tpp
    sudo install -m 0755 /tmp/tpp /usr/local/bin/tpp
    ```
+
+   A binary built without the first step still runs, but its admin page only says that the UI
+   is missing.
 
 4. **Create a user, a blob directory and the settings file.**
 
@@ -108,7 +115,8 @@ Upgrade with `git pull && docker compose up -d --build`.
 
 </Steps>
 
-To upgrade, pull, rebuild, install the new binary and `sudo systemctl restart tpp`.
+To upgrade, pull, rebuild (the admin page too), install the new binary and
+`sudo systemctl restart tpp`.
 
 </TabItem>
 </Tabs>

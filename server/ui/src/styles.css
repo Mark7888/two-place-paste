@@ -1,4 +1,5 @@
-/* Admin UI styling. One file, no build step, no framework (ROADMAP P4).
+/* Admin UI styling. One file for the whole app, written by hand: the class
+ * names are the ones the React components put on their elements.
  *
  * The layout is a two-row app shell — a header bar and one scrolling column —
  * and every measurement below is either a token on :root or a ch/rem unit, so
@@ -80,6 +81,10 @@ body {
 }
 
 /* --- app shell ----------------------------------------------------------- */
+
+/* React renders into #root. It takes no box of its own, so the header, main
+   and footer are the body's flex items exactly as if they were its children. */
+#root { display: contents; }
 
 .bar {
   position: sticky;
@@ -677,9 +682,6 @@ dialog::backdrop { background: rgba(10, 12, 16, 0.45); }
 .copied { color: var(--ok); font-size: 0.82rem; min-height: 1.2em; margin: 0; }
 
 .scan-hint { margin: 0; text-align: center; color: var(--muted); font-size: 0.85rem; }
-
-/* The no-JS path renders the same material inline. */
-.noscript-reveal { display: flex; flex-direction: column; gap: 0.4rem; align-items: flex-start; }
 
 /* Visually hidden, still announced. */
 .sr-only {

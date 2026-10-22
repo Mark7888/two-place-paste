@@ -1,5 +1,5 @@
-# Node CI for the React Native app (Phase 6a onward) and the desktop localhost
-# UI (Phase 5c).
+# Node CI for the React Native app (Phase 6a onward), the desktop localhost
+# UI (Phase 5c) and the relay's admin UI.
 #
 # Path-gated so that a Go-only change does not run Node jobs. Each job is a
 # no-op until the corresponding directory exists, so this workflow is green
@@ -12,11 +12,13 @@ on:
     paths:
       - "mobile/**"
       - "desktop/ui/**"
+      - "server/ui/**"
       - ".github/workflows/node.yml"
   pull_request:
     paths:
       - "mobile/**"
       - "desktop/ui/**"
+      - "server/ui/**"
       - ".github/workflows/node.yml"
   workflow_dispatch:
 
@@ -34,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project: [mobile, desktop/ui]
+        project: [mobile, desktop/ui, server/ui]
     steps:
       - uses: actions/checkout@v5
 

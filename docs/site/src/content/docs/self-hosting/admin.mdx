@@ -13,6 +13,9 @@ import group from '../../../assets/screenshots/admin-group.webp';
 The admin page lives at `https://tpp.example.com/admin/`. Sign in with `ADMIN_PASSWORD`. It shows
 names, sizes and counts — never content, because the relay has none to show.
 
+The page is a web app built into the relay itself, so it needs JavaScript in the browser. It loads
+nothing from anywhere but the relay, and it talks to the relay only through `/admin/api/`.
+
 The header links to six screens: **Dashboard**, **Groups**, **Tags**, **Tokens**, **Audit log**
 and **Settings**. Each group also has a page of its own, reached from **Groups**.
 

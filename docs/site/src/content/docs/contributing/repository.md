@@ -10,12 +10,14 @@ proto/                  protobuf schema (the shared wire contract) + codegen
 spec/                   crypto spec + cross-language test vectors
 server/                 Go module: relay + admin UI
   cmd/tpp               the binary: serve, gc --verify, gc --rebuild-accounting
+  ui/                   the admin UI, a React app; builds into web/admin/dist
   internal/config       .env + environment, validated in one pass
   internal/store        Redis persistent zone (groups, devices, wrapped keys)
   internal/entries      Redis ephemeral zone + entry service
   internal/blob         blob backends (disk, S3), expiry-bucket sweeper, verify
   internal/ws           WebSocket transport and protocol handlers
-  internal/admin        admin UI, login rate limiting, creation tokens
+  internal/admin        admin JSON API, sessions, login rate limiting, creation tokens
+  web/admin             the admin UI's build, embedded in the binary
   internal/httpapi      route assembly
 pkg/tppclient/          Go module: shared client core
   tppcrypto             the crypto profile, validated against spec/vectors
@@ -70,5 +72,6 @@ would change its license. See
 [`CONTRIBUTING.md`](https://github.com/Mark7888/two-place-paste/blob/master/CONTRIBUTING.md).
 
 Every shipped build carries the licenses of the libraries it is built from, generated at build time
-by `scripts/notices/notices.mjs`. The Docker build, the desktop UI's `npm run build` and the
-Android build run it on their own; nothing about it is maintained by hand.
+by `scripts/notices/notices.mjs`. The Docker build (which lists the admin UI's npm packages too), the desktop UI's
+`npm run build` and the Android build run it on their own; nothing about it is maintained by
+hand.

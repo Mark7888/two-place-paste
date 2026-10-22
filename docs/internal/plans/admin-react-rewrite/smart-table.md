@@ -1,10 +1,11 @@
 # Plan — SmartTable, the admin UI's data table
 
-**Status:** proposed, for the React rewrite of the admin UI. Nothing here is built yet:
-today's admin UI is server-rendered Go templates (`server/web/admin`) with plain
-tables, and this is the component that should replace them.
-**Touches (when built):** the admin UI's new React project and the admin server's JSON
-endpoints under `server/internal/admin`.
+**Status:** proposed. The React rewrite it builds on has landed (`rewrite.md`): the admin
+UI is now a React app in `server/ui` over a JSON API, still with the plain tables of the
+templates it replaced (`server/ui/src/components/Table.tsx`). Nothing in this plan is
+built yet; this is the component that should replace those tables.
+**Touches (when built):** `server/ui` and the admin server's JSON endpoints under
+`server/internal/admin`.
 
 ---
 

@@ -103,7 +103,8 @@ Fixed in P0, not renegotiated later. Phase ownership is expressed in terms of it
   internal/ws/               WebSocket transport + frame handlers
   internal/admin/            admin UI handlers, sessions, rate limit
   internal/httpapi/          router assembly (registry, written in P0)
-  web/admin/                 admin UI assets
+  ui/                        React app for the admin UI (replaced the P4 templates)
+  web/admin/                 the admin UI's build, embedded
 /pkg/tppclient/              Go module: shared client core (crypto, WS client, flows)
 /desktop/                    Go module: tray service
   cmd/tppdesktop/
@@ -363,6 +364,9 @@ step. This phase is the first one that produces a runnable server.
 - `GET /<token>` returns **404** (§3.1), so crawlers and link previews can never burn a
   token; `POST` still consumes it.
 - Server-rendered Go templates. Do not pull a second React build into the server module.
+  *(Superseded later: the admin UI grew to six screens and was rewritten as a React app
+  in `server/ui` over a JSON API, with the same look and behaviour — see
+  `docs/internal/plans/admin-react-rewrite/`.)*
 - `main.go`: wire the registrars, store, blob backend and sweeper; graceful shutdown;
   healthcheck endpoint. Also add `cmd/tpp/gc.go` and its `tpp gc --verify` subcommand on
   top of P3's `blob.Verify` / `VerifyReport.WriteReport`: the file could not exist before

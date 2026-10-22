@@ -8,7 +8,7 @@ description: Build, test and run TwoPlacePaste from a checkout.
 | Tool | Version | Needed for |
 |---|---|---|
 | Go | 1.26 | Every Go module. `GOTOOLCHAIN=auto` (the Makefile's default) lets an older `go` fetch it. |
-| Node.js | 26 (24 works) | The desktop UI, this documentation site, and the TypeScript protobuf bindings. |
+| Node.js | 26 (24 works) | The desktop UI, the relay's admin UI, this documentation site, and the TypeScript protobuf bindings. |
 | golangci-lint | v2.6.2+, built with Go 1.26 | `make lint`. |
 | Docker | any recent | Redis and the deployment stack. |
 
@@ -35,6 +35,33 @@ make help         # everything else
 
 `make run-server` reads `.env` from `server/` and needs a Redis it can reach (`TPP_REDIS_ADDR`,
 default `127.0.0.1:6379`).
+
+## Run the relay's admin UI from a checkout
+
+The admin page is a React app in `server/ui`. The relay binary embeds its build, so build it
+**before** the binary (or before `make run-server`) if you want the real page; without it the
+admin screens show a page saying the UI is not built. The Go tests do not need it.
+
+```sh
+cd server/ui && npm ci && npm run build   # builds into ../web/admin/dist
+cd .. && go run ./cmd/tpp
+```
+
+For UI work, run Vite next to a running relay. It serves the app at
+`http://127.0.0.1:5174/admin/` and forwards `/admin/api/`, the token QR images and `/source` to
+the relay, so sign-in, the session cookie and the CSRF check behave as in production:
+
+```sh
+make run-server                                        # the relay, on :8080
+cd server/ui && npm run dev                            # http://127.0.0.1:5174/admin/
+TPP_ADMIN_DEV_RELAY=http://127.0.0.1:9090 npm run dev  # a relay elsewhere
+```
+
+With an `http://` `TPP_PUBLIC_BASE_URL` the session cookie is not marked `Secure`, which is what
+lets this work without TLS.
+
+`npm test` runs the UI's unit tests and `npm run typecheck` its type check; CI runs both, and the
+build, for every change under `server/ui`.
 
 `make proto` needs no `protoc`: `proto/generate.sh` builds pinned tools from `proto/tools/go.mod`
 and `proto/package-lock.json`. Generated output is committed and must stay byte-identical.
