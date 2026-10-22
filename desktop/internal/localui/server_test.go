@@ -66,9 +66,19 @@ func (s *stubAPI) Status(context.Context) Status {
 
 func (s *stubAPI) DismissSkipped(context.Context) { s.record("dismiss-skipped") }
 
-func (s *stubAPI) Sync(context.Context, Direction) (SyncResult, error) {
+func (s *stubAPI) Sync(context.Context, SyncRequest) (SyncResult, error) {
 	s.record("sync")
 	return SyncResult{Direction: DirectionUpload, Changed: true, Message: "uploaded"}, s.nextErr
+}
+
+func (s *stubAPI) RevealClipboard(context.Context) (ClipboardReveal, error) {
+	s.record("reveal")
+	return ClipboardReveal{Preview: "hunter2"}, nil
+}
+
+func (s *stubAPI) TestFilters(context.Context, FilterTest) (FilterTestResult, error) {
+	s.record("test-filters")
+	return FilterTestResult{Matches: []FilterMatch{{Source: "filter", Rule: "f1", Reason: "Mine"}}}, nil
 }
 
 func (s *stubAPI) History(context.Context, HistoryQuery) (HistoryPage, error) {
@@ -215,6 +225,8 @@ func TestOriginIsValidatedOnEveryRequest(t *testing.T) {
 		{"GET", "/api/status", ""},
 		{"POST", "/api/sync", `{"direction":"upload"}`},
 		{"DELETE", "/api/skipped", ""},
+		{"POST", "/api/clipboard/reveal", `{}`},
+		{"POST", "/api/filters/test", `{"text":"x"}`},
 		{"GET", "/api/history", ""},
 		{"POST", "/api/entries/copy", `{"entry_id":"e1"}`},
 		{"POST", "/api/entries/preview", `{"entry_id":"e1"}`},
@@ -728,5 +740,64 @@ func TestForgetIsReachableAndDestructive(t *testing.T) {
 	api.nextErr = errors.New("the keystore is unwritable")
 	if rec := do(t, srv, "POST", "/api/group/forget", `{}`, headers); rec.Code != http.StatusInternalServerError {
 		t.Errorf("a failing forget answered %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+// TestSensitiveUploadAnswersWithAPlan: a protected entry reaches the page as
+// a 409 the UI can recognise and confirm, not as a failure.
+func TestSensitiveUploadAnswersWithAPlan(t *testing.T) {
+	t.Parallel()
+
+	srv, api := newTestServer(t)
+	headers := map[string]string{
+		"Origin":    fmt.Sprintf("http://127.0.0.1:%d", srv.Port()),
+		tokenHeader: "test-token",
+	}
+	api.nextErr = &SensitiveError{PlanID: "plan-9", Reason: "Marked private by the app that copied it"}
+	rec := do(t, srv, "POST", "/api/sync", `{"direction":"upload"}`, headers)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusConflict)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["code"] != "sensitive" || body["plan_id"] != "plan-9" || body["reason"] == "" || body["error"] == "" {
+		t.Errorf("body = %v, want code, plan_id, reason and error", body)
+	}
+
+	// The confirmation carries the plan id.
+	api.nextErr = nil
+	rec = do(t, srv, "POST", "/api/sync", `{"direction":"upload","plan_id":"plan-9"}`, headers)
+	if rec.Code != http.StatusOK {
+		t.Errorf("a confirmed sync answered %d, want 200", rec.Code)
+	}
+}
+
+// The filter list and a filter test sample are larger than any other
+// request; they have limits of their own.
+func TestLargeFilterRequestsAreAccepted(t *testing.T) {
+	t.Parallel()
+
+	srv, api := newTestServer(t)
+	headers := map[string]string{
+		"Origin":    fmt.Sprintf("http://127.0.0.1:%d", srv.Port()),
+		tokenHeader: "test-token",
+	}
+	var filters []string
+	for i := range 200 {
+		filters = append(filters, fmt.Sprintf(`{"id":"f%d","kind":"contains","target":"text","value":%q,"enabled":true}`, i, strings.Repeat("v", 1000)))
+	}
+	rec := do(t, srv, "POST", "/api/settings", `{"filters":[`+strings.Join(filters, ",")+`]}`, headers)
+	if rec.Code != http.StatusOK || !api.called("settings-update") {
+		t.Errorf("a full filter list answered %d, want 200", rec.Code)
+	}
+	rec = do(t, srv, "POST", "/api/filters/test", `{"text":"`+strings.Repeat("x", 1<<20)+`"}`, headers)
+	if rec.Code != http.StatusOK || !api.called("test-filters") {
+		t.Errorf("a 1 MB test sample answered %d, want 200", rec.Code)
+	}
+	rec = do(t, srv, "POST", "/api/sync", `{"direction":"upload","plan_id":"`+strings.Repeat("x", 100<<10)+`"}`, headers)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("an oversized sync request answered %d, want 400", rec.Code)
 	}
 }

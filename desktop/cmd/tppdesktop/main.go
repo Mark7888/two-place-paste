@@ -273,7 +273,7 @@ func run(logger *slog.Logger) error {
 // to move, says so in a notification; one that moved something only flashes
 // the transfer icon, which is answer enough for a click that did what it said.
 func syncFromTray(ctx context.Context, svc *service.Service, tr *tray.Tray, d localui.Direction, logger *slog.Logger) {
-	res, err := svc.Sync(ctx, d)
+	res, err := svc.Sync(ctx, localui.SyncRequest{Direction: d})
 	switch {
 	case errors.Is(err, service.ErrDirectionUnknown):
 		logger.Info("sync from the tray needs a direction; asking the user")
