@@ -17,7 +17,29 @@
   <!-- The hint sits outside the row on purpose. Inside the field it became the
        field's bottom edge, and the row aligns its items to that — which is why
        the button used to sit a line lower than the input it belongs to. -->
-  <span class="hint">Only you see this. It is how you tell one token from another.</span>
+  <span class="hint">It becomes the group's name, which its devices show. You can rename the group later.</span>
+  <div class="form-grid">
+    <div class="field">
+      <label for="note">Note <span class="muted">(optional)</span></label>
+      <input type="text" id="note" name="note" maxlength="500" placeholder="Only you see this">
+    </div>
+    <div class="field">
+      <label for="tag">Tag <span class="muted">(optional)</span></label>
+      <select id="tag" name="tag">
+        <option value="">No tag</option>
+        {{range .TagNames}}<option value="{{.}}">{{.}}</option>{{end}}
+      </select>
+    </div>
+    <div class="field">
+      <label for="expires">Link expires</label>
+      <select id="expires" name="expires">
+        <option value="never">Never</option>
+        <option value="1">In 1 day</option>
+        <option value="7">In 7 days</option>
+        <option value="30">In 30 days</option>
+      </select>
+    </div>
+  </div>
 </form>
 
 <div class="section-head">
@@ -34,24 +56,42 @@
         <th>Created</th>
         <th>Status</th>
         <th>Group</th>
-        <th><span class="sr-only">Code</span></th>
+        <th><span class="sr-only">Actions</span></th>
       </tr>
     </thead>
     <tbody>
     {{range .Tokens}}
       <tr>
-        <td class="name" data-label="Name">{{.Name}}</td>
+        <td class="name" data-label="Name">
+          <span class="stack">
+            <span>{{.Name}} {{if .Tag}}<span class="tag open">{{.Tag}}</span>{{end}}</span>
+            {{if .Note}}<span class="muted note">{{.Note}}</span>{{end}}
+          </span>
+        </td>
         <td data-label="Created">{{.Created}}</td>
         <td data-label="Status">
-          {{if .Used}}<span class="tag used">used</span>{{else}}<span class="tag open">unused</span>{{end}}
+          <span class="stack">
+            <span><span class="tag {{.StatusClass}}">{{.Status}}</span></span>
+            {{if .Expires}}<span class="muted small">{{.Expires}}</span>{{end}}
+          </span>
         </td>
         <td data-label="Group">
-          {{if .Used}}<code class="wrap">{{.GroupID}}</code>{{else}}<span class="muted">—</span>{{end}}
+          {{if .GroupPath}}<a class="nowrap" href="{{.GroupPath}}">Open group</a>{{else if .Used}}<span class="muted">deleted</span>{{else}}<span class="muted">—</span>{{end}}
         </td>
-        <td class="actions" data-label="Code">
+        <td class="actions" data-label="Actions">
           {{if .Used}}
             <span class="muted">Spent</span>
+          {{else if .Expired}}
+            <form method="post" action="{{.RevokePath}}" class="inline-form"
+                  data-confirm="Remove the expired token “{{.Name}}” from the list?">
+              <input type="hidden" name="csrf" value="{{$.CSRF}}">
+              <button type="submit" class="secondary small">Remove</button>
+            </form>
           {{else}}
+            <code class="sr-only" id="token-url-{{.Index}}">{{.URL}}</code>
+            <button type="button" class="secondary small" data-copy="token-url-{{.Index}}">
+              <span data-copy-label>Copy link</span>
+            </button>
             <button type="button" class="secondary small"
                     data-token-dialog
                     {{if .Fresh}}data-autoshow{{end}}

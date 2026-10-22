@@ -152,6 +152,17 @@ export function splitCreationURL(raw: string): { base: string; token: string } {
  * the connection's credential and is omitted for the three unauthenticated
  * flows: group creation, pairing-join and offer minting.
  */
+/**
+ * deviceStatusURL is the transport endpoint over plain HTTP(S). A GET of it is
+ * not an upgrade, so the relay answers with the status it would refuse the
+ * upgrade with — 401 for a revoked device, 410 for one whose group the admin
+ * deleted — which the WebSocket API itself never shows.
+ */
+export function deviceStatusURL(base: string, deviceId: string): string {
+  const { scheme, host } = parse(base, 'server URL');
+  return `${scheme}://${host}${WEBSOCKET_PATH}?device_id=${encodeURIComponent(deviceId)}`;
+}
+
 export function websocketURL(base: string, deviceId: string): string {
   const { scheme, host } = parse(base, 'server URL');
   const transport = scheme === 'https' ? 'wss' : 'ws';

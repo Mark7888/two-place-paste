@@ -50,7 +50,7 @@ the whole entry in memory, and the crypto profile and test vectors do not change
 | D7 | SDK: `github.com/minio/minio-go/v7`. | One module, speaks to MinIO and AWS alike, far smaller dependency tree than `aws-sdk-go-v2` (conventions §9). |
 | D8 | The relay pushes an `EntryEvicted` event so open History lists update at once. | Agreed. |
 | D9 | The admin UI gets a dashboard of **byte counts only**: no content, no filenames, no content types. | Keeps SPEC §4.4's "no content access, by construction". |
-| D10 | "Revoke an invite" applies to **unused** creation tokens: the token is deleted and its URL stops working. A used token already produced a group; revoking it does nothing to the group. | A group is removed by revoking its devices, not by the admin. |
+| D10 | "Revoke an invite" applies to **unused** creation tokens: the token is deleted and its URL stops working. A used token already produced a group; revoking it does nothing to the group. | A group is removed by revoking its devices, not by the admin. *(Superseded: the admin can now delete a group, SPEC §3.4 and docs/internal/plans/admin-group-management.md.)* |
 
 ## 4. Work items
 

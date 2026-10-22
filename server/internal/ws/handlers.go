@@ -50,6 +50,8 @@ func (s *Server) dispatch(ctx context.Context, c *conn, env *tppv1.Envelope) ([]
 		return s.handlePairingOfferAccept(ctx, env, groupID)
 	case tppv1.MessageType_MESSAGE_TYPE_DEVICE_LIST_REQUEST:
 		return s.handleDeviceList(ctx, env, groupID)
+	case tppv1.MessageType_MESSAGE_TYPE_GROUP_INFO_REQUEST:
+		return s.handleGroupInfo(ctx, env, groupID)
 	case tppv1.MessageType_MESSAGE_TYPE_REKEY_REQUEST:
 		return s.handleRekey(ctx, env, deviceID, groupID)
 	case tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST:
@@ -417,6 +419,21 @@ func (s *Server) handlePairingOfferAccept(ctx context.Context, env *tppv1.Envelo
 	// wire contract has no separate ack, and this is how the member learns the
 	// identifier of the device it just admitted.
 	return encode(env.GetId(), tppv1.MessageType_MESSAGE_TYPE_PAIRING_COMPLETE, complete)
+}
+
+// handleGroupInfo returns the group's display name, as the server admin set
+// it. It is admin-chosen display text, not clipboard content (SPEC §2.3).
+func (s *Server) handleGroupInfo(ctx context.Context, env *tppv1.Envelope, groupID string) ([]byte, error) {
+	group, err := s.store.GetGroup(ctx, groupID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_NOT_FOUND, "no such group")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read group info: %w", err)
+	}
+	return encode(env.GetId(), tppv1.MessageType_MESSAGE_TYPE_GROUP_INFO_RESPONSE, &tppv1.GroupInfoResponse{
+		Name: group.Name,
+	})
 }
 
 // handleDeviceList returns the roster a client must render before it may offer

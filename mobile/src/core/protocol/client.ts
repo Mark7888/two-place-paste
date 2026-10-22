@@ -35,6 +35,8 @@ import {
   CreateGroupResponse,
   DeviceListRequest,
   DeviceListResponse,
+  GroupInfoRequest,
+  GroupInfoResponse,
   RekeyRequest,
   RekeyResponse,
   WrappedKey,
@@ -43,6 +45,7 @@ import {
   DeviceRevoked,
   EntryEvicted,
   EpochChanged,
+  GroupRenamed,
   WrappedKeyAvailable,
 } from '../../protocol/gen/tpp/v1/events';
 import {
@@ -114,7 +117,7 @@ import {
   newState,
   saveState,
 } from './state';
-import { splitCreationURL, normalizeServerURL, websocketURL } from './urls';
+import { deviceStatusURL, splitCreationURL, normalizeServerURL, websocketURL } from './urls';
 
 /**
  * SINGLE_FRAME_MAX_BYTES is the most ciphertext one frame carries, in either
@@ -285,6 +288,14 @@ export interface Handlers {
    */
   onProbablyRevoked?: () => void;
   /**
+   * onGroupDeleted fires when the server admin deleted this device's group:
+   * the relay closed the socket saying so, or answered 410 for this device.
+   * The client stops re-dialling. Unlike onProbablyRevoked this is not a guess.
+   */
+  onGroupDeleted?: () => void;
+  /** onGroupName fires when the group's display name is first learned or changes. It may be empty. */
+  onGroupName?: (name: string) => void;
+  /**
    * onEntryEvicted fires when the relay removed an entry before its expiry to
    * stay within its storage limit. A history view drops it.
    */
@@ -307,6 +318,12 @@ export interface ClientOptions {
   handlers?: Handlers;
   /** healthCheck reports whether the relay answers /healthz, used to tell "revoked" from "offline". */
   healthCheck?: (baseUrl: string) => Promise<boolean>;
+  /**
+   * deviceStatus asks the relay, over plain HTTP, what it would answer this
+   * device's upgrade with: 401 revoked, 410 group deleted. It resolves with the
+   * status, or null when the relay cannot be reached.
+   */
+  deviceStatus?: (baseUrl: string, deviceId: string) => Promise<number | null>;
   /**
    * cache keeps large downloaded entries for a while, still encrypted, so
    * opening one twice downloads it once. Without one, nothing is kept.
@@ -438,7 +455,10 @@ export class Client {
   /** limitsCache is the relay's entry limits as stated on one connection; a new connection asks again. */
   private limitsCache: { conn: Connection; limits: Limits } | null = null;
   private readonly healthCheck: (baseUrl: string) => Promise<boolean>;
+  private readonly deviceStatus: (baseUrl: string, deviceId: string) => Promise<number | null>;
   private readonly cache: EntryCache | null;
+  /** deleted is set once the relay has said this device's group was deleted; nothing re-dials after it. */
+  private deleted = false;
   /** downloads are the entry reads in flight, by id: a second read of one joins the first. */
   private readonly downloads = new Map<string, Promise<Fetched>>();
   /**
@@ -470,6 +490,7 @@ export class Client {
     this.now = options.now ?? (() => new Date());
     this.handlers = options.handlers ?? {};
     this.healthCheck = options.healthCheck ?? defaultHealthCheck;
+    this.deviceStatus = options.deviceStatus ?? defaultDeviceStatus;
     this.cache = options.cache ?? null;
   }
 
@@ -514,6 +535,16 @@ export class Client {
   /** serverUrl is the relay this device is paired with, or "". */
   get serverUrl(): string {
     return this.state.serverUrl;
+  }
+
+  /** groupName is the group's display name as the server admin set it, or "". */
+  get groupName(): string {
+    return this.state.groupName;
+  }
+
+  /** groupDeleted reports whether the relay has said the admin deleted this device's group. */
+  get groupDeleted(): boolean {
+    return this.deleted;
   }
 
   /** deviceId is this device's identifier on the relay, or "". */
@@ -609,6 +640,9 @@ export class Client {
 
   /** connection returns a live connection, dialling if there is none. */
   private async connection(): Promise<Connection> {
+    if (this.deleted) {
+      throw new TppError('group-deleted', "the server admin deleted this device's group");
+    }
     if (this.conn !== null && !this.conn.isClosed) {
       return this.conn;
     }
@@ -638,15 +672,62 @@ export class Client {
     conn.events((env) => {
       void this.onEvent(env);
     });
-    conn.closed((reason) => {
+    conn.closed((reason, code) => {
       if (this.conn === conn) {
         this.conn = null;
+      }
+      if (code === GROUP_DELETED_CLOSE_CODE) {
+        this.markDeleted();
       }
       this.handlers.onDisconnected?.(reason);
       this.scheduleRedial();
     });
     this.handlers.onConnected?.();
+    // A rename made while this device was away is not replayed as an event,
+    // so the name is asked for on every connect.
+    void this.refreshGroupName(conn);
     return conn;
+  }
+
+  /** markDeleted records that the admin deleted the group, once, and stops re-dialling. */
+  private markDeleted(): void {
+    if (this.deleted) {
+      return;
+    }
+    this.deleted = true;
+    if (this.retryTimer !== null) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    this.handlers.onGroupDeleted?.();
+  }
+
+  /**
+   * refreshGroupName asks the relay for the group's name. A relay too old to
+   * know the request refuses it, and the name stays what it was.
+   */
+  private async refreshGroupName(conn: Connection): Promise<void> {
+    try {
+      const response = await conn.call(
+        MessageType.MESSAGE_TYPE_GROUP_INFO_REQUEST,
+        { codec: GroupInfoRequest, message: {} },
+        GroupInfoResponse,
+      );
+      await this.setGroupName(response.name);
+    } catch {
+      // Not worth a status line: the name is a label, and the next connect
+      // asks again.
+    }
+  }
+
+  /** setGroupName records the group's name and tells the screens when it changed. */
+  private async setGroupName(name: string): Promise<void> {
+    if (this.state.groupName === name) {
+      return;
+    }
+    this.state = { ...this.state, groupName: name };
+    await saveState(this.store, this.state);
+    this.handlers.onGroupName?.(name);
   }
 
   /**
@@ -662,6 +743,18 @@ export class Client {
    * in those words; nothing is deleted on the strength of a guess.
    */
   private async probeRefusal(): Promise<void> {
+    // The relay answers a plain GET of the endpoint with the status it refused
+    // the upgrade with. 410 is definite: the admin deleted the group.
+    let status: number | null = null;
+    try {
+      status = await this.deviceStatus(this.state.serverUrl, this.state.deviceId);
+    } catch {
+      status = null;
+    }
+    if (status === 410) {
+      this.markDeleted();
+      return;
+    }
     this.refusals++;
     if (this.refusals < 2) {
       return;
@@ -678,7 +771,7 @@ export class Client {
   }
 
   private scheduleRedial(): void {
-    if (!this.wanted || this.retryTimer !== null) {
+    if (!this.wanted || this.deleted || this.retryTimer !== null) {
       return;
     }
     const delay = jitter(this.backoffMs);
@@ -724,6 +817,11 @@ export class Client {
         const event = EntryEvicted.decode(env.payload);
         this.forgetEntry(event.entryId);
         this.handlers.onEntryEvicted?.(event.entryId);
+        break;
+      }
+      case MessageType.MESSAGE_TYPE_GROUP_RENAMED: {
+        const event = GroupRenamed.decode(env.payload);
+        await this.setGroupName(event.name);
         break;
       }
       case MessageType.MESSAGE_TYPE_PAIRING_JOIN_NOTICE: {
@@ -816,7 +914,9 @@ export class Client {
       deviceId: response.deviceId,
       epoch: 1n,
       groupKey,
+      groupName: '',
     };
+    this.deleted = false;
     await saveState(this.store, this.state);
     await this.connect();
   }
@@ -1114,7 +1214,9 @@ export class Client {
       deviceId: complete.deviceId,
       epoch,
       groupKey,
+      groupName: '',
     };
+    this.deleted = false;
     await saveState(this.store, this.state);
     await this.connect();
   }
@@ -1140,6 +1242,7 @@ export class Client {
     this.recent = null;
     await this.cache?.clear().catch(() => undefined);
     this.refusals = 0;
+    this.deleted = false;
     this.state = newState(this.state.deviceName);
     await saveState(this.store, this.state);
   }
@@ -1770,6 +1873,22 @@ export class Client {
 /** jitter spreads reconnects so that every client of a relay that restarted does not come back in the same millisecond. */
 function jitter(ms: number): number {
   return Math.round(ms * (0.8 + Math.random() * 0.4));
+}
+
+/**
+ * GROUP_DELETED_CLOSE_CODE is the WebSocket close code the relay closes a
+ * device's socket with when the admin deletes its group.
+ */
+const GROUP_DELETED_CLOSE_CODE = 4410;
+
+/** defaultDeviceStatus asks the relay what it would answer this device's upgrade with. */
+async function defaultDeviceStatus(baseUrl: string, deviceId: string): Promise<number | null> {
+  try {
+    const response = await fetch(deviceStatusURL(baseUrl, deviceId));
+    return response.status;
+  } catch {
+    return null;
+  }
 }
 
 /** defaultHealthCheck asks the relay whether it is up, which is how a refused socket is told from an unreachable host. */

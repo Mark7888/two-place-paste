@@ -35,6 +35,26 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/tokens/{token}/qr.png", s.handleTokenQR)
 	mux.HandleFunc("POST /admin/tokens/{token}/revoke", s.handleRevokeToken)
 
+	mux.HandleFunc("GET /admin/groups", s.handleGroupList)
+	mux.HandleFunc("GET /admin/groups/{id}", s.handleGroup)
+	mux.HandleFunc("POST /admin/groups/{id}/rename", s.handleRenameGroup)
+	mux.HandleFunc("POST /admin/groups/{id}/tag", s.handleSetGroupTag)
+	mux.HandleFunc("POST /admin/groups/{id}/limit", s.handleSetGroupLimit)
+	mux.HandleFunc("GET /admin/groups/{id}/purge", s.handlePurgeConfirm)
+	mux.HandleFunc("POST /admin/groups/{id}/purge", s.handlePurgeGroup)
+	mux.HandleFunc("GET /admin/groups/{id}/delete", s.handleDeleteConfirm)
+	mux.HandleFunc("POST /admin/groups/{id}/delete", s.handleDeleteGroup)
+
+	mux.HandleFunc("GET /admin/tags", s.handleTags)
+	mux.HandleFunc("POST /admin/tags", s.handleCreateTag)
+	mux.HandleFunc("POST /admin/tags/{name}/limit", s.handleSetTagLimit)
+	mux.HandleFunc("POST /admin/tags/{name}/delete", s.handleDeleteTag)
+
+	mux.HandleFunc("GET /admin/settings", s.handleSettings)
+	mux.HandleFunc("POST /admin/settings", s.handleSaveSettings)
+	mux.HandleFunc("GET /admin/audit", s.handleAudit)
+	mux.HandleFunc("POST /admin/sweep", s.handleSweep)
+
 	mux.HandleFunc("GET /{token}", s.handleTokenGet)
 	mux.HandleFunc("POST /{token}", s.handleTokenPost)
 }

@@ -28,6 +28,11 @@ type MemoryStore struct {
 	wrapped  map[string]WrappedKey
 	pairings map[string]Pairing
 	offers   map[string]PairingOffer
+
+	tags       map[string]Tag
+	tombstones map[string]time.Time
+	settings   *Settings
+	audit      []AuditEntry
 }
 
 // NewMemoryStore returns an empty in-memory Store.
@@ -41,17 +46,32 @@ func NewMemoryStore() *MemoryStore {
 		wrapped:  make(map[string]WrappedKey),
 		pairings: make(map[string]Pairing),
 		offers:   make(map[string]PairingOffer),
+
+		tags:       make(map[string]Tag),
+		tombstones: make(map[string]time.Time),
 	}
 }
 
 var _ Store = (*MemoryStore)(nil)
 
 // CreateToken implements Store.
-func (m *MemoryStore) CreateToken(_ context.Context, name string) (Token, error) {
+func (m *MemoryStore) CreateToken(ctx context.Context, name string) (Token, error) {
+	return m.CreateTokenWith(ctx, NewToken{Name: name})
+}
+
+// CreateTokenWith implements Store.
+func (m *MemoryStore) CreateTokenWith(_ context.Context, t NewToken) (Token, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	tok := Token{Value: newID(), Name: name, CreatedAt: m.now()}
+	tok := Token{
+		Value:     newID(),
+		Name:      t.Name,
+		Note:      t.Note,
+		Tag:       t.Tag,
+		ExpiresAt: t.ExpiresAt.UTC(),
+		CreatedAt: m.now(),
+	}
 	m.tokens[tok.Value] = tok
 	return tok, nil
 }
@@ -94,6 +114,19 @@ func (m *MemoryStore) RevokeToken(_ context.Context, value string) error {
 	return nil
 }
 
+// groupLocked returns a group with its name resolved the way RedisStore
+// resolves it.
+func (m *MemoryStore) groupLocked(groupID string) (Group, bool) {
+	g, ok := m.groups[groupID]
+	if !ok {
+		return Group{}, false
+	}
+	if g.Name == "" {
+		g.Name = m.tokens[groupID].Name
+	}
+	return g, true
+}
+
 // ConsumeToken implements Store.
 func (m *MemoryStore) ConsumeToken(_ context.Context, token string) (Group, error) {
 	m.mu.Lock()
@@ -119,13 +152,20 @@ func (m *MemoryStore) createGroupLocked(token string, dev *NewDevice) (GroupCrea
 	if tok.Used {
 		return GroupCreation{}, ErrTokenConsumed
 	}
-
 	now := m.now()
+	if tok.Expired(now) {
+		return GroupCreation{}, ErrNotFound
+	}
+
 	tok.Used = true
 	tok.GroupID = token
 	m.tokens[token] = tok
 
-	group := Group{ID: token, Epoch: 1, CreatedAt: now}
+	tag := tok.Tag
+	if _, ok := m.tags[tag]; !ok {
+		tag = ""
+	}
+	group := Group{ID: token, Epoch: 1, CreatedAt: now, Name: tok.Name, Tag: tag}
 	m.groups[token] = group
 	m.members[token] = make(map[string]struct{})
 
@@ -153,7 +193,7 @@ func (m *MemoryStore) GetGroup(_ context.Context, groupID string) (Group, error)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	g, ok := m.groups[groupID]
+	g, ok := m.groupLocked(groupID)
 	if !ok {
 		return Group{}, ErrNotFound
 	}
@@ -460,4 +500,229 @@ func (m *MemoryStore) TouchLastSeen(_ context.Context, deviceID string) error {
 	dev.LastSeen = m.now()
 	m.devices[deviceID] = dev
 	return nil
+}
+
+// ListGroups implements Store.
+func (m *MemoryStore) ListGroups(context.Context) ([]Group, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	groups := make([]Group, 0, len(m.groups))
+	for id := range m.groups {
+		g, _ := m.groupLocked(id)
+		groups = append(groups, g)
+	}
+	sortGroups(groups)
+	return groups, nil
+}
+
+// RenameGroup implements Store.
+func (m *MemoryStore) RenameGroup(_ context.Context, groupID, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	g, ok := m.groups[groupID]
+	if !ok {
+		return ErrNotFound
+	}
+	g.Name = name
+	m.groups[groupID] = g
+	return nil
+}
+
+// SetGroupTag implements Store.
+func (m *MemoryStore) SetGroupTag(_ context.Context, groupID, tag string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	g, ok := m.groups[groupID]
+	if !ok {
+		return ErrNotFound
+	}
+	if _, ok := m.tags[tag]; tag != "" && !ok {
+		return ErrNotFound
+	}
+	g.Tag = tag
+	m.groups[groupID] = g
+	return nil
+}
+
+// SetGroupLimit implements Store.
+func (m *MemoryStore) SetGroupLimit(_ context.Context, groupID string, limit LimitOverride) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	g, ok := m.groups[groupID]
+	if !ok {
+		return ErrNotFound
+	}
+	limit.Bytes = max(limit.Bytes, 0)
+	g.Limit = limit
+	m.groups[groupID] = g
+	return nil
+}
+
+// DeleteGroup implements Store.
+func (m *MemoryStore) DeleteGroup(_ context.Context, groupID string) (DeletedGroup, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	g, ok := m.groupLocked(groupID)
+	if !ok {
+		return DeletedGroup{}, ErrNotFound
+	}
+	out := DeletedGroup{Group: g}
+	expires := m.now().Add(TombstoneTTL)
+	for id := range m.members[groupID] {
+		delete(m.devices, id)
+		delete(m.wrapped, id)
+		m.tombstones[id] = expires
+		out.DeviceIDs = append(out.DeviceIDs, id)
+	}
+	slices.Sort(out.DeviceIDs)
+	delete(m.members, groupID)
+	delete(m.groups, groupID)
+	if tok, ok := m.tokens[groupID]; ok {
+		tok.GroupDeleted = true
+		m.tokens[groupID] = tok
+	}
+	return out, nil
+}
+
+// DeviceTombstoned implements Store.
+func (m *MemoryStore) DeviceTombstoned(_ context.Context, deviceID string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	expires, ok := m.tombstones[deviceID]
+	if !ok {
+		return false, nil
+	}
+	// Redis expires the key; here the read enforces the deadline.
+	if !m.now().Before(expires) {
+		delete(m.tombstones, deviceID)
+		return false, nil
+	}
+	return true, nil
+}
+
+// ListTags implements Store.
+func (m *MemoryStore) ListTags(context.Context) ([]Tag, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	tags := slices.Collect(maps.Values(m.tags))
+	sort.Slice(tags, func(i, j int) bool { return tags[i].Name < tags[j].Name })
+	return tags, nil
+}
+
+// GetTag implements Store.
+func (m *MemoryStore) GetTag(_ context.Context, name string) (Tag, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	t, ok := m.tags[name]
+	if !ok {
+		return Tag{}, ErrNotFound
+	}
+	return t, nil
+}
+
+// CreateTag implements Store.
+func (m *MemoryStore) CreateTag(_ context.Context, name string) (Tag, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.tags[name]; ok {
+		return Tag{}, ErrTagExists
+	}
+	t := Tag{Name: name, CreatedAt: m.now()}
+	m.tags[name] = t
+	return t, nil
+}
+
+// SetTagLimit implements Store.
+func (m *MemoryStore) SetTagLimit(_ context.Context, name string, limit LimitOverride) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	t, ok := m.tags[name]
+	if !ok {
+		return ErrNotFound
+	}
+	limit.Bytes = max(limit.Bytes, 0)
+	t.Limit = limit
+	m.tags[name] = t
+	return nil
+}
+
+// DeleteTag implements Store.
+func (m *MemoryStore) DeleteTag(_ context.Context, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.tags[name]; !ok {
+		return ErrNotFound
+	}
+	delete(m.tags, name)
+	for id, g := range m.groups {
+		if g.Tag == name {
+			g.Tag = ""
+			m.groups[id] = g
+		}
+	}
+	for id, t := range m.tokens {
+		if t.Tag == name {
+			t.Tag = ""
+			m.tokens[id] = t
+		}
+	}
+	return nil
+}
+
+// GetSettings implements Store.
+func (m *MemoryStore) GetSettings(context.Context) (Settings, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.settings == nil {
+		return Settings{StaleAfter: DefaultStaleAfter}, nil
+	}
+	return *m.settings, nil
+}
+
+// PutSettings implements Store.
+func (m *MemoryStore) PutSettings(_ context.Context, s Settings) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.settings = &s
+	return nil
+}
+
+// AppendAudit implements Store.
+func (m *MemoryStore) AppendAudit(_ context.Context, e AuditEntry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if e.At.IsZero() {
+		e.At = m.now()
+	}
+	e.At = e.At.UTC()
+	m.audit = append([]AuditEntry{e}, m.audit...)
+	if len(m.audit) > AuditLimit {
+		m.audit = m.audit[:AuditLimit]
+	}
+	return nil
+}
+
+// ListAudit implements Store.
+func (m *MemoryStore) ListAudit(_ context.Context, limit int) ([]AuditEntry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if limit <= 0 || limit > len(m.audit) {
+		limit = len(m.audit)
+	}
+	return slices.Clone(m.audit[:limit]), nil
 }

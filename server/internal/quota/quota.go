@@ -40,7 +40,9 @@ var (
 // Limits are the storage caps, in ciphertext bytes. Zero means unlimited.
 //
 // A group limit larger than the total limit is legal: the total is then the
-// effective cap for every group.
+// effective cap for every group. GroupBytes is the default; one group can be
+// given its own limit with Ledger.SetGroupLimit
+// (docs/internal/plans/admin-group-management.md D3).
 type Limits struct {
 	TotalBytes int64
 	GroupBytes int64
@@ -142,6 +144,24 @@ type Ledger interface {
 
 	// Rebuild replaces the whole ledger with the given entries, all
 	// committed. It backs `tpp gc --rebuild-accounting`, for use after Redis
-	// data loss or a restore; it is never part of normal operation.
+	// data loss or a restore; it is never part of normal operation. Group
+	// limits set with SetGroupLimit are configuration, not accounting, and
+	// survive it.
 	Rebuild(ctx context.Context, entries []Reservation) error
+
+	// SetGroupLimit gives one group its own storage limit in place of the
+	// default, or drops it again when set is false. Zero means the group has
+	// no limit of its own; the total limit still applies. Lowering a limit
+	// below what the group holds evicts nothing now: the group's next
+	// reservation evicts its oldest entries until the new one fits.
+	SetGroupLimit(ctx context.Context, groupID string, limit int64, set bool) error
+
+	// GroupLimit reports the limit that applies to one group and whether it
+	// is the group's own rather than the default.
+	GroupLimit(ctx context.Context, groupID string) (limit int64, own bool, err error)
+
+	// ForgetGroup forgets every entry of one group, pending ones included,
+	// and reports how many. It is for a group whose entries are being purged
+	// or which is being deleted; the caller has already stopped its uploads.
+	ForgetGroup(ctx context.Context, groupID string) (int, error)
 }

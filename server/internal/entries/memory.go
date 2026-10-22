@@ -148,6 +148,14 @@ func (m *MemoryStore) Delete(_ context.Context, groupID, entryID string) error {
 	return nil
 }
 
+// DeleteGroupIndex implements Store.
+func (m *MemoryStore) DeleteGroupIndex(_ context.Context, groupID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.byGroup, groupID)
+	return nil
+}
+
 // GroupStats implements Store.
 func (m *MemoryStore) GroupStats(_ context.Context, groupID string) (GroupStats, error) {
 	m.mu.Lock()

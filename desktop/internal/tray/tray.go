@@ -214,6 +214,10 @@ type Tray struct {
 	hold    *time.Timer
 	paint   func(Status) // the platform's icon setter; nil until the icon exists
 
+	// group is the group's display name, which the tooltip leads with. It
+	// is read by paint, which always runs with mu held.
+	group string
+
 	onDirection  func(Direction)
 	revealChoice func(bool) // shows or hides the menu's direction items
 	choiceTimer  *time.Timer
@@ -293,6 +297,31 @@ func (t *Tray) showLocked(s Status) {
 	if t.paint != nil {
 		t.paint(s)
 	}
+}
+
+// SetGroupName puts the group's display name, as the server admin set it, in
+// the tooltip. An empty name leaves it out.
+func (t *Tray) SetGroupName(name string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.group == name {
+		return
+	}
+	t.group = name
+	if t.paint != nil {
+		t.paint(t.shown)
+	}
+}
+
+// title is the tooltip and, where a platform shows one, the menu title.
+const title = "TwoPlacePaste"
+
+// tooltipLocked is the tooltip for one status. The caller holds mu.
+func (t *Tray) tooltipLocked(s Status) string {
+	if t.group == "" {
+		return title + " — " + s.label()
+	}
+	return title + " — " + t.group + " — " + s.label()
 }
 
 // attach is the platform saying the icon now exists: from here on, a status

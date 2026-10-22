@@ -53,7 +53,25 @@ var (
 	// ErrInvalidRekey is returned when a rekey does not carry exactly one
 	// wrapped key per remaining device.
 	ErrInvalidRekey = errors.New("store: rekey does not cover every remaining device")
+
+	// ErrTagExists is returned when a tag is created under a name that is
+	// already taken.
+	ErrTagExists = errors.New("store: tag already exists")
 )
+
+// TombstoneTTL is how long a deleted group's devices are remembered, so that
+// one coming back online can be told its group was deleted rather than that
+// it was revoked (docs/internal/plans/admin-group-management.md D7).
+const TombstoneTTL = 30 * 24 * time.Hour
+
+// DefaultStaleAfter is how long a group may go without any of its devices
+// connecting before the dashboard calls it stale, until the admin sets
+// another value on the settings page.
+const DefaultStaleAfter = 90 * 24 * time.Hour
+
+// AuditLimit is how many audit entries are kept. Older ones are dropped as new
+// ones arrive, so the log stays small whatever the relay's age.
+const AuditLimit = 1000
 
 // Token is an admin-issued creation token (SPEC §3.1, §4.4).
 type Token struct {
@@ -72,6 +90,79 @@ type Token struct {
 	// GroupID is set once Used is true. It always equals Value; it is stored
 	// explicitly so the admin listing does not have to know that.
 	GroupID string
+
+	// Note is free text the admin keeps with the token. Only the admin sees
+	// it.
+	Note string
+
+	// Tag is the tag the group this token creates starts with. Empty for
+	// none.
+	Tag string
+
+	// ExpiresAt is when an unused token stops working. Zero means never. An
+	// expired token creates nothing and is answered like an unknown one
+	// (SPEC §3.1).
+	ExpiresAt time.Time
+
+	// GroupDeleted reports that the group this token created was deleted by
+	// the admin. The token record is kept so the listing can say so.
+	GroupDeleted bool
+}
+
+// Expired reports whether an unused token can no longer create a group.
+func (t Token) Expired(now time.Time) bool {
+	return !t.Used && !t.ExpiresAt.IsZero() && !now.Before(t.ExpiresAt)
+}
+
+// NewToken describes a creation token being minted.
+type NewToken struct {
+	Name      string
+	Note      string
+	Tag       string
+	ExpiresAt time.Time
+}
+
+// LimitOverride is a storage limit the admin set on a tag or a group
+// (docs/internal/plans/admin-group-management.md D3). Bytes is kept while
+// Enabled is false, so unticking the override and ticking it again restores
+// the same value. Zero bytes means no per-group limit.
+type LimitOverride struct {
+	Bytes   int64
+	Enabled bool
+}
+
+// Tag groups groups together on the admin screens, and can carry a storage
+// limit override for every group in it.
+type Tag struct {
+	Name      string
+	Limit     LimitOverride
+	CreatedAt time.Time
+}
+
+// Settings are the server settings the admin edits at runtime.
+type Settings struct {
+	// StaleAfter is how long a group may go without any device connecting
+	// before the dashboard marks it stale.
+	StaleAfter time.Duration
+}
+
+// AuditEntry is one admin action. It never holds a token value, a password, a
+// session cookie or a key: only what was done, to which group, tag or token
+// name, and from where (CLAUDE.md, security rules).
+type AuditEntry struct {
+	At     time.Time `json:"at"`
+	Action string    `json:"action"`
+	Target string    `json:"target,omitempty"`
+	Detail string    `json:"detail,omitempty"`
+	IP     string    `json:"ip,omitempty"`
+}
+
+// DeletedGroup is what DeleteGroup removed, for the caller to finish the job
+// outside the persistent zone: close the devices' sockets and purge the
+// group's entries.
+type DeletedGroup struct {
+	Group     Group
+	DeviceIDs []string
 }
 
 // Group is one clipboard group (SPEC §1.3).
@@ -83,6 +174,17 @@ type Group struct {
 	Epoch uint64
 
 	CreatedAt time.Time
+
+	// Name is the admin's display name for the group. A group created before
+	// names existed has none stored; it reads as its creation token's name,
+	// so no migration is needed.
+	Name string
+
+	// Tag is the group's one tag, or empty.
+	Tag string
+
+	// Limit is the group's own storage limit override.
+	Limit LimitOverride
 }
 
 // Device is one installation of a client (SPEC §4.2).
@@ -181,6 +283,10 @@ type Store interface {
 	// CreateToken mints a creation token with the given admin-chosen name.
 	CreateToken(ctx context.Context, name string) (Token, error)
 
+	// CreateTokenWith mints a creation token with a note, a starting tag and
+	// an optional expiry.
+	CreateTokenWith(ctx context.Context, t NewToken) (Token, error)
+
 	// ListTokens returns every creation token, newest first. This is the
 	// admin UI's only listing (SPEC §4.4).
 	ListTokens(ctx context.Context) ([]Token, error)
@@ -196,8 +302,9 @@ type Store interface {
 	RevokeToken(ctx context.Context, value string) error
 
 	// ConsumeToken atomically marks a token used and creates the group it
-	// names, at epoch 1. It returns ErrTokenConsumed if the token has already
-	// produced a group and ErrNotFound if it does not exist. Concurrent calls
+	// names, at epoch 1. The group takes the token's name and tag. It returns
+	// ErrTokenConsumed if the token has already produced a group and
+	// ErrNotFound if it does not exist or has expired. Concurrent calls
 	// with the same token produce exactly one group (SPEC §3.1 step 5).
 	ConsumeToken(ctx context.Context, token string) (Group, error)
 
@@ -280,6 +387,61 @@ type Store interface {
 
 	// TouchLastSeen records that a device connected.
 	TouchLastSeen(ctx context.Context, deviceID string) error
+
+	// ListGroups returns every group, oldest first. Groups are found through
+	// the token index, since every group was a token first (SPEC §3.1).
+	ListGroups(ctx context.Context) ([]Group, error)
+
+	// RenameGroup sets a group's display name.
+	RenameGroup(ctx context.Context, groupID, name string) error
+
+	// SetGroupTag puts a group under a tag, or under none when tag is
+	// empty. The tag must exist.
+	SetGroupTag(ctx context.Context, groupID, tag string) error
+
+	// SetGroupLimit stores a group's storage limit override.
+	SetGroupLimit(ctx context.Context, groupID string, limit LimitOverride) error
+
+	// DeleteGroup removes a group and everything the persistent zone holds
+	// for it: its record, its devices and their wrapped keys. Each former
+	// device is remembered for TombstoneTTL (see DeviceTombstoned), and the
+	// creation token is kept and marked. Entries are not touched: they are
+	// the ephemeral zone's, and the caller purges them.
+	DeleteGroup(ctx context.Context, groupID string) (DeletedGroup, error)
+
+	// DeviceTombstoned reports whether a device belonged to a group the
+	// admin deleted, within the last TombstoneTTL.
+	DeviceTombstoned(ctx context.Context, deviceID string) (bool, error)
+
+	// ListTags returns every tag, by name.
+	ListTags(ctx context.Context) ([]Tag, error)
+
+	// GetTag returns one tag.
+	GetTag(ctx context.Context, name string) (Tag, error)
+
+	// CreateTag adds a tag. It returns ErrTagExists for a taken name.
+	CreateTag(ctx context.Context, name string) (Tag, error)
+
+	// SetTagLimit stores a tag's storage limit override.
+	SetTagLimit(ctx context.Context, name string, limit LimitOverride) error
+
+	// DeleteTag removes a tag. Groups under it are left untagged, and tokens
+	// that would have given it to a new group give none.
+	DeleteTag(ctx context.Context, name string) error
+
+	// GetSettings returns the server settings, with defaults for anything
+	// never set.
+	GetSettings(ctx context.Context) (Settings, error)
+
+	// PutSettings stores the server settings.
+	PutSettings(ctx context.Context, s Settings) error
+
+	// AppendAudit records one admin action, dropping the oldest beyond
+	// AuditLimit.
+	AppendAudit(ctx context.Context, e AuditEntry) error
+
+	// ListAudit returns up to limit audit entries, newest first.
+	ListAudit(ctx context.Context, limit int) ([]AuditEntry, error)
 }
 
 // idBytes is the length of every server-generated identifier and token. 256

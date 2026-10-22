@@ -23,11 +23,17 @@ import (
 // the settings file but is the manager's alone, so the two never race.
 const stateFile = "update-state.json"
 
-// httpTimeout bounds one request; a download gets downloadTimeout.
+// httpTimeout bounds one API request or manifest read. A download has no
+// overall deadline, only a stall guard (stallTimeout), so a slow line can
+// finish one; installTimeout bounds putting a downloaded build in place.
 const (
-	httpTimeout     = 30 * time.Second
-	downloadTimeout = 15 * time.Minute
+	httpTimeout    = 30 * time.Second
+	installTimeout = 15 * time.Minute
 )
+
+// progressInterval is the least time between two progress reports to the UI:
+// every report makes it read the update state again.
+var progressInterval = 250 * time.Millisecond
 
 // quitDelay is how long the old process keeps running after a relaunch, so
 // the HTTP response that asked for the install reaches the page first. A
@@ -122,6 +128,12 @@ type Manager struct {
 	previous    *localui.BuildView
 	busy        bool
 
+	// The download in progress: bytes so far, bytes in all (0 when not
+	// known), and when the UI was last told.
+	progressDone  int64
+	progressTotal int64
+	progressAt    time.Time
+
 	// trigger wakes Run's loop; nil until Run starts.
 	trigger func()
 
@@ -138,8 +150,8 @@ type Manager struct {
 type candidate struct {
 	view localui.UpdateCandidate
 	// fetch downloads the build into dir and verifies it, returning the path
-	// of the file to install.
-	fetch func(ctx context.Context, dir string) (string, error)
+	// of the file to install. It reports progress as bytes arrive.
+	fetch func(ctx context.Context, dir string, progress progressFunc) (string, error)
 }
 
 // persisted is the shape of update-state.json.
@@ -256,6 +268,7 @@ func (m *Manager) viewLocked() localui.UpdateView {
 		NightlyCommit: m.prefs.NightlyCommit,
 		State:         m.state,
 		Message:       m.message,
+		Progress:      m.progressLocked(),
 		Previous:      m.previous,
 		Token:         m.token.view(),
 	}
@@ -391,17 +404,44 @@ func (m *Manager) findRelease(ctx context.Context, channel string) (*candidate, 
 			Older:  older,
 			Signed: true,
 		},
-		fetch: func(ctx context.Context, dir string) (string, error) {
-			return download(ctx, m.downloadClient(), url, dir, file)
+		fetch: func(ctx context.Context, dir string, progress progressFunc) (string, error) {
+			return download(ctx, m.downloadClient(), url, dir, file, progress)
 		},
 	}, nil
 }
 
-// downloadClient is the HTTP client with a timeout long enough for a build.
+// downloadClient is the HTTP client without the per-request timeout, which
+// would bound the whole body: a download is bounded by its stall guard
+// instead (stallTimeout).
 func (m *Manager) downloadClient() *http.Client {
 	c := *m.opts.Client
-	c.Timeout = downloadTimeout
+	c.Timeout = 0
 	return &c
+}
+
+// progressLocked is the download's progress for the UI, or nil when nothing
+// is downloading or nothing has arrived yet.
+func (m *Manager) progressLocked() *localui.DownloadProgress {
+	if m.state != localui.UpdateStateDownloading || m.progressDone == 0 {
+		return nil
+	}
+	return &localui.DownloadProgress{Done: m.progressDone, Total: m.progressTotal}
+}
+
+// reportProgress records a download's progress for the UI, telling it at
+// most every progressInterval, and always at the end.
+func (m *Manager) reportProgress(done, total int64) {
+	now := time.Now()
+	m.mu.Lock()
+	m.progressDone, m.progressTotal = done, total
+	due := now.Sub(m.progressAt) >= progressInterval || (total > 0 && done >= total)
+	if due {
+		m.progressAt = now
+	}
+	m.mu.Unlock()
+	if due {
+		m.changed()
+	}
 }
 
 // Install downloads, verifies and installs the offered build, then restarts
@@ -415,6 +455,7 @@ func (m *Manager) Install(ctx context.Context, req localui.InstallRequest) (loca
 	}
 	m.state = localui.UpdateStateDownloading
 	m.message = ""
+	m.progressDone, m.progressTotal, m.progressAt = 0, 0, time.Time{}
 	m.mu.Unlock()
 	m.changed()
 
@@ -463,15 +504,17 @@ func (m *Manager) beginInstallLocked(req localui.InstallRequest) (*candidate, er
 }
 
 func (m *Manager) install(ctx context.Context, cand *candidate) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), downloadTimeout)
-	defer cancel()
-
-	path, err := cand.fetch(ctx, m.opts.CacheDir)
+	// The download outlives the request that asked for it, and has no
+	// deadline of its own beyond the stall guard.
+	ctx = context.WithoutCancel(ctx)
+	path, err := cand.fetch(ctx, m.opts.CacheDir, m.reportProgress)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = os.Remove(path) }()
 
+	ctx, cancel := context.WithTimeout(ctx, installTimeout)
+	defer cancel()
 	m.setState(localui.UpdateStateInstalling)
 	if err := m.opts.Applier.Install(ctx, path); err != nil {
 		return fmt.Errorf("install %s: %w", cand.view.Version, err)

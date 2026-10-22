@@ -29,6 +29,7 @@ async function open(relay: FakeRelay, store: MemoryStore, name: string): Promise
     deviceName: name,
     socketFactory: relay.factory,
     healthCheck: async () => false,
+    deviceStatus: relay.deviceStatus,
   });
   opened.push(client);
   return client;
@@ -390,6 +391,86 @@ describe('revocation and rekey (SPEC §3.3, spec/crypto.md §7)', () => {
     await plan.confirm();
 
     await expect(phone.connect()).rejects.toThrow();
+  });
+});
+
+describe('what the server admin does to the group', () => {
+  /** until waits for a condition the client reaches on its own, over microtasks. */
+  async function until(cond: () => boolean): Promise<void> {
+    for (let i = 0; i < 200 && !cond(); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    expect(cond()).toBe(true);
+  }
+
+  test('the client learns the group name on connect and hears a rename', async () => {
+    const relay = new FakeRelay();
+    const store = new MemoryStore();
+    const names: string[] = [];
+    const laptop = await Client.open({
+      store,
+      deviceName: 'laptop',
+      socketFactory: relay.factory,
+      healthCheck: async () => false,
+      deviceStatus: relay.deviceStatus,
+      handlers: { onGroupName: (n) => names.push(n) },
+    });
+    opened.push(laptop);
+    await laptop.createGroup(relay.creationURL);
+
+    await until(() => laptop.groupName === 'Family');
+    relay.rename('Friends');
+    await until(() => laptop.groupName === 'Friends');
+    expect(names).toEqual(['Family', 'Friends']);
+    // Kept with the state, for a screen to show before it connects.
+    expect(store.peek('session')).toContain('"group_name":"Friends"');
+  });
+
+  test('a deleted group closes the socket and stops the client for good', async () => {
+    const relay = new FakeRelay();
+    let deleted = 0;
+    const laptop = await Client.open({
+      store: new MemoryStore(),
+      deviceName: 'laptop',
+      socketFactory: relay.factory,
+      healthCheck: async () => false,
+      deviceStatus: relay.deviceStatus,
+      handlers: { onGroupDeleted: () => deleted++ },
+    });
+    opened.push(laptop);
+    await laptop.createGroup(relay.creationURL);
+
+    relay.deleteGroup();
+    await until(() => laptop.groupDeleted);
+    expect(deleted).toBe(1);
+    await expect(laptop.getLatest()).rejects.toMatchObject({ kind: 'group-deleted' });
+
+    // Leaving the group is the way out, and it clears the flag.
+    await laptop.forget();
+    expect(laptop.groupDeleted).toBe(false);
+  });
+
+  test('a device that was away learns of the deletion from the relay’s 410', async () => {
+    const relay = new FakeRelay();
+    const store = new MemoryStore();
+    const laptop = await open(relay, store, 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    laptop.disconnect();
+    relay.deleteGroup();
+
+    let deleted = false;
+    const later = await Client.open({
+      store,
+      deviceName: 'laptop',
+      socketFactory: relay.factory,
+      healthCheck: async () => false,
+      deviceStatus: relay.deviceStatus,
+      handlers: { onGroupDeleted: () => (deleted = true) },
+    });
+    opened.push(later);
+    await expect(later.connect()).rejects.toThrow();
+    expect(deleted).toBe(true);
+    expect(later.groupDeleted).toBe(true);
   });
 });
 

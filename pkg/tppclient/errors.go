@@ -37,6 +37,13 @@ var (
 	// while this client was away, and its credentials died with its record
 	// (SPEC §3.3 step 5). Nothing recovers this install but pairing again.
 	ErrRevoked = errors.New("tppclient: this device has been revoked")
+
+	// ErrGroupDeleted means the server admin deleted this device's group.
+	// It wraps ErrRevoked, because the outcome is the same — the credential
+	// is gone for good — and a caller that only knows about revocation still
+	// stops; a caller that checks for this one can say why, and offer to
+	// create or join another group.
+	ErrGroupDeleted = fmt.Errorf("tppclient: this device's group was deleted by the server admin: %w", ErrRevoked)
 )
 
 // ProtocolError is an Error frame from the server. Callers branch on Code,

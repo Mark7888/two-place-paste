@@ -11,9 +11,11 @@ import "github.com/redis/go-redis/v9"
 // these scripts must be revisited before anything else.
 
 // createGroupScript turns a creation token into a group, and optionally into
-// its first device, in one step (SPEC §3.1 steps 4-5).
+// its first device, in one step (SPEC §3.1 steps 4-5). The group takes the
+// token's name, and its tag when that tag still exists.
 //
-// Return codes: 0 created, 1 no such token, 2 token already consumed.
+// Return codes: 0 created, 1 no such token (or expired), 2 token already
+// consumed.
 //
 //	KEYS[1] token key            ARGV[1] token / group id
 //	KEYS[2] group key            ARGV[2] now, unix ms
@@ -22,12 +24,20 @@ import "github.com/redis/go-redis/v9"
 //	KEYS[5] device wrapped key   ARGV[5] device public key
 //	                             ARGV[6] wrapped group key
 //	                             ARGV[7] "1" when ARGV[6] is present
+//	                             ARGV[8] tag key prefix
 var createGroupScript = redis.NewScript(`
 if redis.call('EXISTS', KEYS[1]) == 0 then return 1 end
 if redis.call('HGET', KEYS[1], 'used') == '1' then return 2 end
+local expires = tonumber(redis.call('HGET', KEYS[1], 'expires_at') or '0') or 0
+if expires > 0 and tonumber(ARGV[2]) >= expires then return 1 end
+
+local name = redis.call('HGET', KEYS[1], 'name') or ''
+local tag = redis.call('HGET', KEYS[1], 'tag') or ''
+if tag ~= '' and redis.call('EXISTS', ARGV[8] .. tag) == 0 then tag = '' end
 
 redis.call('HSET', KEYS[1], 'used', '1', 'group_id', ARGV[1])
-redis.call('HSET', KEYS[2], 'epoch', '1', 'created_at', ARGV[2])
+redis.call('HSET', KEYS[2], 'epoch', '1', 'created_at', ARGV[2], 'name', name, 'tag', tag,
+  'limit_bytes', '0', 'limit_on', '0')
 
 if ARGV[3] ~= '' then
   redis.call('SADD', KEYS[3], ARGV[3])
@@ -179,4 +189,69 @@ redis.call('HSET', KEYS[5], 'epoch', epoch, 'key', ARGV[4])
 redis.call('HSET', KEYS[1], 'group_id', ARGV[1], 'device_id', ARGV[2])
 
 return 0
+`)
+
+// setIfExistsScript writes hash fields only when the hash already exists, so
+// an edit racing a delete cannot bring a deleted group or tag back as a hash
+// holding nothing but the edited field.
+//
+// Return codes: 0 written, 1 no such hash.
+//
+//	KEYS[1] hash key             ARGV[1..] field, value, ...
+var setIfExistsScript = redis.NewScript(`
+if redis.call('EXISTS', KEYS[1]) == 0 then return 1 end
+redis.call('HSET', KEYS[1], unpack(ARGV))
+return 0
+`)
+
+// setGroupTagScript puts a group under a tag that exists, or under none.
+//
+// Return codes: 0 written, 1 no such group, 2 no such tag.
+//
+//	KEYS[1] group key            ARGV[1] tag name ("" for none)
+//	KEYS[2] tag key
+var setGroupTagScript = redis.NewScript(`
+if redis.call('EXISTS', KEYS[1]) == 0 then return 1 end
+if ARGV[1] ~= '' and redis.call('EXISTS', KEYS[2]) == 0 then return 2 end
+redis.call('HSET', KEYS[1], 'tag', ARGV[1])
+return 0
+`)
+
+// clearTagScript drops a tag from one hash (a group or a token) if, and only
+// if, it still names that tag.
+//
+//	KEYS[1] hash key             ARGV[1] tag name
+var clearTagScript = redis.NewScript(`
+if redis.call('HGET', KEYS[1], 'tag') == ARGV[1] then
+  redis.call('HSET', KEYS[1], 'tag', '')
+end
+return 0
+`)
+
+// deleteGroupScript removes a group from the persistent zone in one step
+// (docs/internal/plans/admin-group-management.md D6): every device record and
+// wrapped key, the roster and the group record. Each device id is left behind
+// as a tombstone with a TTL, and the creation token is marked, not deleted.
+//
+// Reply: {1} no such group; {0, device id, ...} deleted.
+//
+//	KEYS[1] group key            ARGV[1] device key prefix
+//	KEYS[2] group devices set    ARGV[2] wrapped key suffix
+//	KEYS[3] token key            ARGV[3] tombstone key prefix
+//	                             ARGV[4] tombstone TTL, ms
+//	                             ARGV[5] now, unix ms
+var deleteGroupScript = redis.NewScript(`
+if redis.call('EXISTS', KEYS[1]) == 0 then return {1} end
+
+local out = {0}
+for _, id in ipairs(redis.call('SMEMBERS', KEYS[2])) do
+  redis.call('DEL', ARGV[1] .. id, ARGV[1] .. id .. ARGV[2])
+  redis.call('SET', ARGV[3] .. id, '1', 'PX', ARGV[4])
+  out[#out + 1] = id
+end
+redis.call('DEL', KEYS[2], KEYS[1])
+if redis.call('EXISTS', KEYS[3]) == 1 then
+  redis.call('HSET', KEYS[3], 'group_deleted', '1', 'deleted_at', ARGV[5])
+end
+return out
 `)

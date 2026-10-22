@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"sync"
 	"syscall"
 	"time"
@@ -185,6 +186,13 @@ func serve(args []string) error {
 		Password:      cfg.Admin.Password,
 		PasswordHash:  cfg.Admin.PasswordHash,
 		Logger:        logger,
+		Live:          wsSrv,
+		Purger:        entrySvc,
+		Limits:        ledger,
+		Sweep:         sweeper.Trigger,
+		Redis:         rdb,
+		Version:       buildVersion(),
+		StartedAt:     time.Now().UTC(),
 		Dashboard: admin.Dashboard{
 			Ledger:         ledger,
 			Entries:        ephemeral,
@@ -200,6 +208,11 @@ func serve(args []string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("build admin server: %w", err)
+	}
+	// Storage limit overrides live in the store; the ledger checks uploads
+	// against its own copy. Bring the copy up to date before any upload.
+	if err := adminSrv.SyncStorageLimits(ctx); err != nil {
+		return fmt.Errorf("start admin server: %w", err)
 	}
 
 	// The pairing hand-off page: three static files behind "GET /pair", which
@@ -274,6 +287,45 @@ func serve(args []string) error {
 	}
 	logger.Info("server stopped")
 	return <-serveErr
+}
+
+// buildVersion describes the running binary for the admin health card: the
+// module version and the commit it was built from, when the build recorded
+// them.
+func buildVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	version := info.Main.Version
+	var rev string
+	var dirty bool
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			dirty = s.Value == "true"
+		}
+	}
+	if len(rev) > 12 {
+		rev = rev[:12]
+	}
+	if dirty && rev != "" {
+		rev += "+dirty"
+	}
+	switch {
+	case version != "" && version != "(devel)" && rev != "":
+		return version + " (" + rev + ")"
+	case rev != "":
+		return rev
+	case version == "(devel)":
+		// A build from a checkout without VCS data, such as the Docker
+		// build, whose context has no .git.
+		return "development build"
+	default:
+		return version
+	}
 }
 
 // uploadReapInterval is how often idle chunked uploads are looked for. An

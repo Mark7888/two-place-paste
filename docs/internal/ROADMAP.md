@@ -20,6 +20,7 @@ request. Phases run in numeric order; only one pair of phases may overlap.
 | **P7** | Android app | ✅ **Done** | P5 (server from P4 for tests) |
 | **P8** | Release — E2E, hardening, docs, artefacts | ▶ **Next** | P6, P7 |
 | **P9** | Storage — S3/MinIO blobs, storage limits, chunked transfer, admin dashboard | 🔍 **In review** (#26) | P3–P7 |
+| **P10** | Admin group management — rename, tags, limits, purge, delete, health, audit | 🔍 **In review** | P9 |
 
 **Only P6 and P7 may run at the same time** (different languages, disjoint directories,
 no shared file). Both are done, so P8 now runs on its own. Everything else is strictly
@@ -33,6 +34,11 @@ P9 is a cross-cutting change rather than a phase in the sequence above: it touch
 because a wire change has to land in every client at once. Its plan, decisions and
 work items are in [`docs/internal/plans/s3-blob-storage.md`](plans/s3-blob-storage.md), in the
 same way `docs/internal/plans/joiner-emitted-pairing.md` carried the last such change.
+
+P10 is cross-cutting in the same way: the admin can now rename, tag, limit, purge and
+delete groups, and the apps show a group's name and say when it was deleted. Its wire
+change went in first as its own PR (#35); the plan is
+[`docs/internal/plans/admin-group-management.md`](plans/admin-group-management.md).
 
 ---
 

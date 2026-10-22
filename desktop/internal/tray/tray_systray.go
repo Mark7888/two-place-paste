@@ -9,9 +9,6 @@ import (
 	"fyne.io/systray"
 )
 
-// title is the tooltip and, where a platform shows one, the menu title.
-const title = "TwoPlacePaste"
-
 // reveal opens the settings file's location, which is what the bind-failure
 // menu offers: SPEC §7.2 says the port is overridden in the config file, so
 // the tray's job is to put the user in front of it.
@@ -64,11 +61,11 @@ func run(ctx context.Context, t *Tray, opts Options) {
 }
 
 // paintStatus is the icon, the tooltip and the menu's status line for one
-// status.
-func paintStatus(statusItem *systray.MenuItem) func(Status) {
+// status. The function it returns runs with t.mu held, like every paint.
+func (t *Tray) paintStatus(statusItem *systray.MenuItem) func(Status) {
 	return func(s Status) {
 		setIcon(s)
-		systray.SetTooltip(title + " — " + s.label())
+		systray.SetTooltip(t.tooltipLocked(s))
 		if statusItem != nil {
 			statusItem.SetTitle(s.label())
 		}
@@ -113,7 +110,7 @@ func runMenu(ctx context.Context, t *Tray, opts Options) {
 		}
 		pushItem.Hide()
 	})
-	t.attach(paintStatus(statusItem))
+	t.attach(t.paintStatus(statusItem))
 
 	go func() {
 		for {
@@ -155,7 +152,7 @@ func runMenu(ctx context.Context, t *Tray, opts Options) {
 // runErrorMenu is the SPEC §7.2 bind failure: visible, and with the one action
 // that fixes it.
 func runErrorMenu(ctx context.Context, t *Tray, opts Options) {
-	t.attach(paintStatus(nil))
+	t.attach(t.paintStatus(nil))
 	problem := systray.AddMenuItem("TwoPlacePaste could not start", opts.Err.Error())
 	problem.Disable()
 	reason := systray.AddMenuItem(opts.Err.Error(), opts.Err.Error())

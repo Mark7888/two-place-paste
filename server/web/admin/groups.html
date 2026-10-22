@@ -1,0 +1,81 @@
+{{define "content"}}
+{{with .Dashboard}}
+<h1>Groups{{if .FilterName}} <span class="muted">· {{.FilterName}}</span>{{end}}</h1>
+<p class="lede">
+  Every group on this relay, heaviest first. Open one to rename it, tag it, set its storage
+  limit, see its devices, or purge or delete it.
+</p>
+
+{{range .Problems}}<p class="notice error" role="alert">{{.}}</p>{{end}}
+
+{{if .Tags}}
+<nav class="chips" aria-label="Filter by tag">
+  <a href="/admin/groups"{{if not .Filter}} aria-current="page"{{end}}>All <span class="muted">{{.GroupCount}}</span></a>
+  {{range .Tags}}
+  <a href="/admin/groups?tag={{.Filter}}"{{if .Current}} aria-current="page"{{end}}>{{.Name}} <span class="muted">{{.Groups}}</span></a>
+  {{end}}
+  <a class="manage" href="/admin/tags">Manage tags</a>
+</nav>
+{{end}}
+
+{{if gt .StaleCount 0}}
+<p class="notice warn">
+  {{.StaleCount}} {{if eq .StaleCount 1}}group has{{else}}groups have{{end}} had no device connect for more than {{.StaleAfter}}.
+  {{if eq .StaleCount 1}}It is marked below; open it to delete it.{{else}}They are marked below; open one to delete it.{{end}}
+</p>
+{{end}}
+
+{{if .Groups}}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Group</th>
+        <th>Devices</th>
+        <th>Last active</th>
+        <th>Entries</th>
+        <th>Oldest</th>
+        {{if $.Dashboard.HasUsage}}<th>Blob storage</th>{{end}}
+      </tr>
+    </thead>
+    <tbody>
+    {{range .Groups}}
+      <tr>
+        <td class="name" data-label="Group">
+          <span class="stack">
+            <span><a href="{{.Path}}">{{.Name}}</a>
+              {{if .Tag}}<span class="tag open">{{.Tag}}</span>{{end}}
+              {{if .Stale}}<span class="tag warn">stale</span>{{end}}
+              {{if .OverLimit}}<span class="tag bad">over limit</span>{{end}}
+            </span>
+            <code class="muted">{{.ShortID}} · {{.Created}}</code>
+          </span>
+        </td>
+        <td data-label="Devices">{{.Devices}}</td>
+        <td data-label="Last active">{{.LastSeen}}</td>
+        <td data-label="Entries">{{.Entries}}</td>
+        <td data-label="Oldest">{{.Oldest}}</td>
+        {{if .HasUsage}}
+        <td data-label="Blob storage" class="usage">
+          <span class="stack">
+            <span>{{.Used}}{{if gt .LimitBytes 0}} <span class="muted">· {{.Percent}}%</span>{{end}}</span>
+            {{if gt .LimitBytes 0}}
+            <meter min="0" max="{{.LimitBytes}}" value="{{.UsedBytes}}" high="{{.HighBytes}}" optimum="0"
+                   aria-label="Blob storage used by {{.Name}}">{{.Percent}}%</meter>
+            {{end}}
+          </span>
+        </td>
+        {{end}}
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+{{else if .Filter}}
+<p class="empty">No groups here. <a href="/admin/groups">Show all groups</a>.</p>
+{{else}}
+<p class="empty">No groups yet. <a href="/admin/tokens">Generate a creation token</a> and hand it to the first device.</p>
+{{end}}
+
+{{end}}
+{{end}}

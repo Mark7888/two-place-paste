@@ -173,3 +173,31 @@ func (h *Hub) closeDevice(deviceID string, logger *slog.Logger) {
 	logger.Info("closing revoked device connection", slog.String("device_id", deviceID))
 	c.closeWith(websocket.StatusPolicyViolation, "device revoked")
 }
+
+// online reports which devices of a group are connected.
+func (h *Hub) online(groupID string) map[string]bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	out := make(map[string]bool, len(h.groups[groupID]))
+	for c := range h.groups[groupID] {
+		if deviceID, _ := c.identity(); deviceID != "" {
+			out[deviceID] = true
+		}
+	}
+	return out
+}
+
+// closeGroup closes every connection of a group and reports how many.
+func (h *Hub) closeGroup(groupID string, status websocket.StatusCode, reason string) int {
+	h.mu.RLock()
+	peers := make([]*conn, 0, len(h.groups[groupID]))
+	for c := range h.groups[groupID] {
+		peers = append(peers, c)
+	}
+	h.mu.RUnlock()
+
+	for _, c := range peers {
+		c.closeWith(status, reason)
+	}
+	return len(peers)
+}

@@ -118,3 +118,43 @@ func (b *recordingBackend) BeginUpload(context.Context, string, time.Time, int64
 func (b *recordingBackend) GetRange(context.Context, string, int64, int64) (io.ReadCloser, error) {
 	return nil, errors.New("not used")
 }
+
+// TestSweeperTrigger: a triggered sweep runs on the loop's own goroutine well
+// before the interval, and a second trigger while one waits is absorbed.
+func TestSweeperTrigger(t *testing.T) {
+	t.Parallel()
+
+	backend := &recordingBackend{swept: make(chan time.Time)}
+	sweeper := blob.NewSweeper(backend, time.Hour, slog.New(slog.DiscardHandler))
+
+	if !sweeper.Trigger() {
+		t.Fatal("Trigger() = false on an idle sweeper, want true")
+	}
+	if sweeper.Trigger() {
+		t.Error("Trigger() = true with a request already queued, want false")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sweeper.Run(ctx)
+	}()
+
+	// The startup pass, then the triggered one; the hour-long interval never
+	// fires in this test.
+	for i := range 2 {
+		select {
+		case <-backend.swept:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("sweep %d did not happen", i+1)
+		}
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() did not return after its context was cancelled")
+	}
+}

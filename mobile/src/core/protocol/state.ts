@@ -43,6 +43,11 @@ export interface ClientState {
   devicePrivateKey: Uint8Array;
   /** groupKey is the current group key, unwrapped. Empty until this device joins a group. */
   groupKey: Uint8Array;
+  /**
+   * groupName is the group's display name as the server admin set it, kept so
+   * a screen can show it before the first connection. Not a secret.
+   */
+  groupName: string;
 }
 
 /** newState generates the state of a first launch: a device keypair and nothing else. */
@@ -55,6 +60,7 @@ export function newState(deviceName: string): ClientState {
     epoch: 0n,
     devicePrivateKey: generateDeviceKey(),
     groupKey: new Uint8Array(0),
+    groupName: '',
   };
 }
 
@@ -89,6 +95,7 @@ interface StoredState {
   epoch: string;
   device_private_key: string;
   group_key: string;
+  group_name?: string;
 }
 
 /** encodeState serializes state for the secure store. */
@@ -101,6 +108,7 @@ export function encodeState(state: ClientState): string {
     epoch: state.epoch.toString(),
     device_private_key: toBase64URL(state.devicePrivateKey),
     group_key: toBase64URL(state.groupKey),
+    group_name: state.groupName,
   };
   return JSON.stringify(stored);
 }
@@ -121,6 +129,7 @@ export function decodeState(raw: string): ClientState {
     epoch: BigInt(stored.epoch ?? '0'),
     devicePrivateKey: fromBase64URL(stored.device_private_key ?? ''),
     groupKey: fromBase64URL(stored.group_key ?? ''),
+    groupName: stored.group_name ?? '',
   };
 }
 

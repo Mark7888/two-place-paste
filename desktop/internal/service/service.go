@@ -127,13 +127,17 @@ type Service struct {
 	lastActivity Activity
 	activitySent bool
 
-	mu          sync.Mutex
-	relay       Relay
-	settings    config.Settings
-	connected   bool
-	revoked     bool
-	lastSync    time.Time
-	lastApplied time.Time
+	mu        sync.Mutex
+	relay     Relay
+	settings  config.Settings
+	connected bool
+	revoked   bool
+	lastSync  time.Time
+
+	// groupDeleted is set with revoked when the server admin deleted the
+	// group, which the UI words differently from a revocation.
+	groupDeleted bool
+	lastApplied  time.Time
 
 	// downloads counts downloads in flight, manual and automatic, for the
 	// tray's icon; uploads, below, does the same for uploads.
@@ -337,11 +341,32 @@ func (s *Service) ClientHandlers() tppclient.Handlers {
 			s.activityChanged()
 			s.hub.publish(localui.Event{
 				Kind:    localui.EventRevoked,
-				Message: "this device was revoked; pair it again to rejoin the group",
+				Message: revokedMessage,
 			})
+		},
+		OnGroupDeleted: func() {
+			s.mu.Lock()
+			s.revoked, s.groupDeleted, s.connected = true, true, false
+			s.mu.Unlock()
+			s.activityChanged()
+			s.hub.publish(localui.Event{
+				Kind:    localui.EventGroupDeleted,
+				Message: groupDeletedMessage,
+			})
+		},
+		OnGroupName: func(name string) {
+			s.activityChanged()
+			s.hub.publish(localui.Event{Kind: localui.EventGroupName, Name: name})
 		},
 	}
 }
+
+// The two ways a device loses its group, in the words the UI and the tray
+// use.
+const (
+	revokedMessage      = "this device was revoked; pair it again to rejoin the group"
+	groupDeletedMessage = "the server admin deleted this device's group; create a new group or pair with another device"
+)
 
 // Subscribe implements localui.API.
 func (s *Service) Subscribe() (<-chan localui.Event, func()) { return s.hub.subscribe() }
@@ -352,6 +377,7 @@ func (s *Service) setConnected(on bool, msg string) {
 	s.lastError = msg
 	if on {
 		s.revoked = false
+		s.groupDeleted = false
 		s.everConnected = true
 	}
 	s.mu.Unlock()
@@ -362,6 +388,7 @@ func (s *Service) setConnected(on bool, msg string) {
 func (s *Service) Status(ctx context.Context) localui.Status {
 	s.mu.Lock()
 	relay, connected, revoked, lastSync, lastErr := s.relay, s.connected, s.revoked, s.lastSync, s.lastError
+	groupDeleted := s.groupDeleted
 	var skipped *localui.SkippedView
 	if s.skipped != nil {
 		v := *s.skipped // a copy: the UI must not see it change under it
@@ -379,6 +406,7 @@ func (s *Service) Status(ctx context.Context) localui.Status {
 		SensitiveNote: note,
 		Connected:     connected,
 		Revoked:       revoked,
+		GroupDeleted:  groupDeleted,
 		LastSync:      localui.Optional(lastSync),
 		LastError:     lastErr,
 		Keystore:      s.backend,
@@ -393,6 +421,9 @@ func (s *Service) Status(ctx context.Context) localui.Status {
 	st.DeviceID = state.DeviceID
 	st.DeviceName = state.DeviceName
 	st.ServerURL = state.ServerURL
+	if st.InGroup {
+		st.GroupName = state.GroupName
+	}
 	if !st.InGroup || !connected {
 		return st
 	}
@@ -1129,6 +1160,7 @@ func (s *Service) Forget(context.Context) error {
 	s.mu.Lock()
 	s.connected = false
 	s.revoked = false
+	s.groupDeleted = false
 	s.everConnected = false
 	s.lastError = ""
 	s.lastSync = time.Time{}
@@ -1732,14 +1764,15 @@ func (s *Service) latest(ctx context.Context, relay Relay) (*localui.EntryView, 
 // group.
 func (s *Service) ready() (Relay, error) {
 	s.mu.Lock()
-	relay, revoked := s.relay, s.revoked
+	relay, revoked, deleted := s.relay, s.revoked, s.groupDeleted
 	s.mu.Unlock()
 	switch {
 	case relay == nil:
 		return nil, localui.Errorf(http.StatusServiceUnavailable, nil, "the service is still starting")
+	case deleted:
+		return nil, localui.Errorf(http.StatusForbidden, nil, groupDeletedMessage)
 	case revoked:
-		return nil, localui.Errorf(http.StatusForbidden, nil,
-			"this device was revoked; pair it again to rejoin the group")
+		return nil, localui.Errorf(http.StatusForbidden, nil, revokedMessage)
 	case !relay.InGroup():
 		return nil, localui.Errorf(http.StatusConflict, tppclient.ErrNoGroup,
 			"this device is not in a group yet: create one or pair with a device that is")
@@ -1753,9 +1786,10 @@ func (s *Service) relayError(op string, err error) error {
 	switch {
 	case errors.Is(err, tppclient.ErrNoGroup):
 		return localui.Errorf(http.StatusConflict, err, "this device is not in a group yet")
+	case errors.Is(err, tppclient.ErrGroupDeleted):
+		return localui.Errorf(http.StatusForbidden, err, groupDeletedMessage)
 	case errors.Is(err, tppclient.ErrRevoked), errors.Is(err, tppclient.ErrUnauthenticated):
-		return localui.Errorf(http.StatusForbidden, err,
-			"this device was revoked; pair it again to rejoin the group")
+		return localui.Errorf(http.StatusForbidden, err, revokedMessage)
 	case errors.Is(err, tppclient.ErrEpochConflict):
 		return localui.Errorf(http.StatusConflict, err,
 			"another device changed the group key first; refresh and try again")

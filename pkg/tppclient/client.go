@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coder/websocket"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/Mark7888/two-place-paste/pkg/tppclient/keystore"
@@ -58,6 +59,16 @@ type Handlers struct {
 	// exists: it was revoked while away (SPEC §3.3 step 5). The client stops
 	// reconnecting; nothing recovers the install but pairing again.
 	OnRevoked func()
+
+	// OnGroupDeleted fires instead of OnRevoked when the reason this device
+	// lost its credential is that the server admin deleted its group, so a
+	// shell can say so. Without it, a deletion fires OnRevoked. Either way
+	// the client stops reconnecting.
+	OnGroupDeleted func()
+
+	// OnGroupName fires when the group's display name, as the server admin
+	// set it, is first learned or changes. It may be empty.
+	OnGroupName func(name string)
 
 	// OnEntryAdded fires when another device of the group has written a new
 	// latest entry. It carries metadata only and runs on the read loop: a
@@ -150,7 +161,11 @@ type Client struct {
 	runCancel context.CancelFunc
 	started   bool
 	revoked   bool
-	stopped   chan struct{} // closed when the supervisor gives up for good
+
+	// revokedErr is why the client stopped for good: ErrRevoked or
+	// ErrGroupDeleted. Requests made after that return it.
+	revokedErr error
+	stopped    chan struct{} // closed when the supervisor gives up for good
 
 	closed    bool
 	closeOnce sync.Once
@@ -309,6 +324,7 @@ func (c *Client) Forget() error {
 	c.conn = nil
 	c.ready = make(chan struct{})
 	c.revoked = false
+	c.revokedErr = nil
 	c.started = false
 	if !closed {
 		// A fresh generation for the next Connect. A closed client stays
@@ -437,11 +453,23 @@ func (c *Client) supervise(runCtx context.Context, stopped chan struct{}) {
 		case errors.Is(err, ErrRevoked):
 			// The credential is gone for good: reconnecting cannot fix it, and
 			// retrying would only produce a stream of 401s (SPEC §3.3 step 5).
+			deleted := errors.Is(err, ErrGroupDeleted)
 			c.mu.Lock()
 			c.revoked = true
+			c.revokedErr = ErrRevoked
+			if deleted {
+				c.revokedErr = ErrGroupDeleted
+			}
 			c.mu.Unlock()
-			c.logger.Warn("this device has been revoked; not reconnecting")
-			if c.handlers.OnRevoked != nil {
+			if deleted {
+				c.logger.Warn("this device's group was deleted by the server admin; not reconnecting")
+			} else {
+				c.logger.Warn("this device has been revoked; not reconnecting")
+			}
+			switch {
+			case deleted && c.handlers.OnGroupDeleted != nil:
+				c.handlers.OnGroupDeleted()
+			case c.handlers.OnRevoked != nil:
 				c.handlers.OnRevoked()
 			}
 			return
@@ -491,7 +519,19 @@ func (c *Client) serveOnce(runCtx context.Context) (connected bool, err error) {
 	}
 
 	go conn.keepalive(runCtx, pingInterval, pingTimeout)
+	// A rename made while this device was offline is not replayed as an
+	// event, so the name is asked for on every connect.
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.refreshGroupName(runCtx, conn)
+	}()
 	readErr := conn.readLoop(runCtx, c.onEvent)
+	if websocket.CloseStatus(readErr) == groupDeletedCloseCode {
+		// The relay closed the socket because the admin deleted the group;
+		// a redial would be refused with 410 anyway.
+		readErr = fmt.Errorf("%w: %w", ErrGroupDeleted, readErr)
+	}
 
 	c.mu.Lock()
 	c.conn = nil
@@ -511,10 +551,60 @@ func (c *Client) dial(ctx context.Context, endpoint string) (*conn, error) {
 		return conn, nil
 	}
 	var status statusError
-	if errors.As(err, &status) && status.code == http.StatusUnauthorized {
-		return nil, fmt.Errorf("%w: %s", ErrRevoked, status.Error())
+	if errors.As(err, &status) {
+		switch status.code {
+		case http.StatusUnauthorized:
+			return nil, fmt.Errorf("%w: %s", ErrRevoked, status.Error())
+		case http.StatusGone:
+			// The device belonged to a group the admin deleted
+			// (docs/internal/plans/admin-group-management.md D7).
+			return nil, fmt.Errorf("%w: %s", ErrGroupDeleted, status.Error())
+		}
 	}
 	return nil, err
+}
+
+// groupDeletedCloseCode is the WebSocket close code the relay closes a
+// device's socket with when the admin deletes its group.
+const groupDeletedCloseCode websocket.StatusCode = 4410
+
+// GroupName is the group's display name as the server admin set it, as last
+// learned from the relay. It may be empty.
+func (c *Client) GroupName() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.state.GroupName
+}
+
+// refreshGroupName asks the relay for the group's name on a fresh
+// connection. A relay too old to know the request answers that it does not
+// handle it, which is not worth more than a debug line.
+func (c *Client) refreshGroupName(runCtx context.Context, conn *conn) {
+	ctx, cancel := context.WithTimeout(runCtx, 15*time.Second)
+	defer cancel()
+	var resp tppv1.GroupInfoResponse
+	if err := conn.call(ctx, tppv1.MessageType_MESSAGE_TYPE_GROUP_INFO_REQUEST, &tppv1.GroupInfoRequest{}, &resp); err != nil {
+		c.logger.Debug("reading the group's name failed", slog.Any("error", err))
+		return
+	}
+	c.setGroupName(resp.GetName())
+}
+
+// setGroupName records a group name and tells the shell when it changed.
+func (c *Client) setGroupName(name string) {
+	c.mu.Lock()
+	changed := c.state.GroupName != name
+	c.state.GroupName = name
+	c.mu.Unlock()
+	if !changed {
+		return
+	}
+	if err := c.persist(); err != nil {
+		c.logger.Warn("saving the group's name failed", slog.Any("error", err))
+	}
+	if c.handlers.OnGroupName != nil {
+		c.handlers.OnGroupName(name)
+	}
 }
 
 // connection waits for a live connection.
@@ -524,12 +614,12 @@ func (c *Client) connection(ctx context.Context) (*conn, error) {
 		// Forget swaps the whole set: a select on one generation's context and
 		// the next generation's stop channel would wait on neither.
 		c.mu.Lock()
-		conn, ready, revoked := c.conn, c.ready, c.revoked
+		conn, ready, revoked, revokedErr := c.conn, c.ready, c.revoked, c.revokedErr
 		runCtx, stopped := c.runCtx, c.stopped
 		c.mu.Unlock()
 		switch {
 		case revoked:
-			return nil, ErrRevoked
+			return nil, revokedErr
 		case conn != nil:
 			return conn, nil
 		}
@@ -542,10 +632,10 @@ func (c *Client) connection(ctx context.Context) (*conn, error) {
 			// The supervisor has given up: loop once more to read why, then
 			// answer instead of waiting for a connection that is not coming.
 			c.mu.Lock()
-			revoked := c.revoked
+			revoked, revokedErr := c.revoked, c.revokedErr
 			c.mu.Unlock()
 			if revoked {
-				return nil, ErrRevoked
+				return nil, revokedErr
 			}
 			return nil, ErrClosed
 		case <-ready:
@@ -624,6 +714,13 @@ func (c *Client) onEvent(env *tppv1.Envelope) {
 		if c.handlers.OnEntryEvicted != nil {
 			c.handlers.OnEntryEvicted(ev.GetEntryId())
 		}
+
+	case tppv1.MessageType_MESSAGE_TYPE_GROUP_RENAMED:
+		var ev tppv1.GroupRenamed
+		if err := proto.Unmarshal(env.GetPayload(), &ev); err != nil {
+			return
+		}
+		c.setGroupName(ev.GetName())
 
 	case tppv1.MessageType_MESSAGE_TYPE_PAIRING_JOIN_NOTICE:
 		var ev tppv1.PairingJoinNotice

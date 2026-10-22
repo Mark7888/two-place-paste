@@ -18,8 +18,25 @@ type pageData struct {
 	Tokens        []tokenView
 	Dashboard     *dashboardView
 
-	// Nav names the screen the header marks as current: "dashboard" or
-	// "tokens". Empty on the sign-in screen.
+	// Notice is a one-off confirmation of the form just submitted.
+	Notice string
+
+	// Problems lists parts of the page that could not be read.
+	Problems []string
+
+	// TagNames are the tags a form can choose from.
+	TagNames []string
+
+	Group        *groupDetailView
+	TagsPage     *tagsView
+	SettingsPage *settingsView
+	Confirm      *confirmView
+	Audit        []auditView
+	AuditLimit   string
+
+	// Nav names the screen the header marks as current: "dashboard",
+	// "groups", "tags", "tokens", "audit" or "settings". Empty on the
+	// sign-in screen.
 	Nav string
 
 	// Centered puts the page in the middle of the viewport rather than at the
@@ -33,10 +50,25 @@ type pageData struct {
 type tokenView struct {
 	Value   string
 	Name    string
+	Note    string
+	Tag     string
 	Created string
 	Used    bool
 	GroupID string
 	URL     string
+
+	// Index numbers the row, so its copy button can point at its URL.
+	Index int
+
+	// Status is "unused", "used", "expired" or "group deleted", and
+	// StatusClass the tag style it is shown in.
+	Status      string
+	StatusClass string
+	Expired     bool
+	Expires     string
+
+	// GroupPath links to the group's page while the group exists.
+	GroupPath string
 
 	// QRPath is where this token's QR image is served from. It is built here
 	// rather than in the template so the token is escaped as a path segment
@@ -60,8 +92,12 @@ type templateSet struct {
 }
 
 func parseTemplates() (*templateSet, error) {
-	set := &templateSet{pages: make(map[string]*template.Template, 3)}
-	for _, name := range []string{"login.html", "tokens.html", "dashboard.html"} {
+	pages := []string{
+		"login.html", "tokens.html", "dashboard.html", "groups.html", "group.html",
+		"tags.html", "settings.html", "audit.html", "confirm.html",
+	}
+	set := &templateSet{pages: make(map[string]*template.Template, len(pages))}
+	for _, name := range pages {
 		t, err := template.New(name).ParseFS(webadmin.FS, "base.html", name)
 		if err != nil {
 			return nil, fmt.Errorf("admin: parse template %s: %w", name, err)

@@ -29,7 +29,8 @@ export interface Socket {
   close(): void;
   onOpen(handler: () => void): void;
   onMessage(handler: (frame: Uint8Array) => void): void;
-  onClose(handler: (reason: string) => void): void;
+  /** onClose reports why the socket closed and, when the peer sent one, its close code. */
+  onClose(handler: (reason: string, code?: number) => void): void;
   onError(handler: (reason: string) => void): void;
 }
 
@@ -60,8 +61,9 @@ export class Connection {
   private readonly pending = new Map<string, Pending>();
   private readonly waiters = new Map<MessageType, Pending[]>();
   private onEvent: (env: Envelope) => void = () => {};
-  private onClosed: (reason: string) => void = () => {};
+  private onClosed: (reason: string, code?: number) => void = () => {};
   private closedReason: string | null = null;
+  private closedCode: number | undefined = undefined;
 
   private constructor(socket: Socket) {
     this.socket = socket;
@@ -105,14 +107,14 @@ export class Connection {
         }
         conn.fail(reason);
       });
-      socket.onClose((reason) => {
+      socket.onClose((reason, code) => {
         if (!settled) {
           settled = true;
           clearTimeout(timer);
           reject(new TppError('disconnected', `the relay closed the connection: ${reason}`));
           return;
         }
-        conn.fail(reason);
+        conn.fail(reason, code);
       });
     });
   }
@@ -122,11 +124,14 @@ export class Connection {
     this.onEvent = handler;
   }
 
-  /** closed registers the handler that fires once, when this connection ends. */
-  closed(handler: (reason: string) => void): void {
+  /**
+   * closed registers the handler that fires once, when this connection ends,
+   * with the close code the relay sent if it sent one.
+   */
+  closed(handler: (reason: string, code?: number) => void): void {
     this.onClosed = handler;
     if (this.closedReason !== null) {
-      handler(this.closedReason);
+      handler(this.closedReason, this.closedCode);
     }
   }
 
@@ -271,11 +276,12 @@ export class Connection {
     }
   }
 
-  private fail(reason: string): void {
+  private fail(reason: string, code?: number): void {
     if (this.closedReason !== null) {
       return;
     }
     this.closedReason = reason;
+    this.closedCode = code;
     const err = new TppError('disconnected', `connection lost: ${reason}`);
     for (const pending of this.pending.values()) {
       pending.reject(err);
@@ -287,7 +293,7 @@ export class Connection {
       }
     }
     this.waiters.clear();
-    this.onClosed(reason);
+    this.onClosed(reason, code);
   }
 }
 
@@ -334,7 +340,7 @@ export const webSocketFactory: SocketFactory = (url: string): Socket => {
       };
     },
     onClose: (handler) => {
-      ws.onclose = (event: CloseEvent) => handler(event.reason || `code ${event.code}`);
+      ws.onclose = (event: CloseEvent) => handler(event.reason || `code ${event.code}`, event.code);
     },
     onError: (handler) => {
       ws.onerror = () => handler('socket error');

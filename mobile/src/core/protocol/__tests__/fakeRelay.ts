@@ -20,10 +20,16 @@ import {
   CreateGroupResponse,
   Device as WireDevice,
   DeviceListResponse,
+  GroupInfoResponse,
   RekeyRequest,
   RekeyResponse,
 } from '../../../protocol/gen/tpp/v1/group';
-import { DeviceRevoked, EpochChanged, WrappedKeyAvailable } from '../../../protocol/gen/tpp/v1/events';
+import {
+  DeviceRevoked,
+  EpochChanged,
+  GroupRenamed,
+  WrappedKeyAvailable,
+} from '../../../protocol/gen/tpp/v1/events';
 import {
   EntryFetchRequest,
   EntryFetchResponse,
@@ -377,10 +383,60 @@ export class FakeRelay {
         return;
       }
 
+      case MessageType.MESSAGE_TYPE_GROUP_INFO_REQUEST: {
+        reply(
+          MessageType.MESSAGE_TYPE_GROUP_INFO_RESPONSE,
+          GroupInfoResponse.encode({ name: this.groupName }).finish(),
+        );
+        return;
+      }
+
       default:
         fail(ErrorCode.ERROR_CODE_UNSUPPORTED_MESSAGE, 'unsupported message');
     }
   }
+
+  /** groupName is what the admin has called the group. */
+  groupName = 'Family';
+
+  /** deleted is set by deleteGroup: every device of the group is refused from then on. */
+  deleted = false;
+
+  /** rename is the admin renaming the group: connected devices are told at once. */
+  rename(name: string): void {
+    this.groupName = name;
+    for (const socket of this.sockets.values()) {
+      socket.push({
+        id: 'renamed',
+        type: MessageType.MESSAGE_TYPE_GROUP_RENAMED,
+        payload: GroupRenamed.encode({ name }).finish(),
+      });
+    }
+  }
+
+  /**
+   * deleteGroup is the admin deleting the group: live sockets close with the
+   * group-deleted code, and the endpoint answers 410 for the devices it had.
+   */
+  deleteGroup(): void {
+    this.deleted = true;
+    for (const socket of this.sockets.values()) {
+      socket.drop('group deleted', 4410);
+    }
+    this.sockets.clear();
+    this.formerDevices = new Set(this.devices.keys());
+    this.devices.clear();
+  }
+
+  private formerDevices = new Set<string>();
+
+  /** deviceStatus is the status a plain GET of the endpoint would answer, for the client's deviceStatus option. */
+  readonly deviceStatus = async (_base: string, deviceId: string): Promise<number | null> => {
+    if (this.formerDevices.has(deviceId)) {
+      return 410;
+    }
+    return this.devices.has(deviceId) ? 426 : 401;
+  };
 
   /** rewriteEntryId makes the relay file the next entry under another id, to prove the client refuses it. */
   rewriteEntryId: string | null = null;
@@ -436,7 +492,7 @@ class RelaySocket {
 
   private openHandler: () => void = () => {};
   private messageHandler: (frame: Uint8Array) => void = () => {};
-  private closeHandler: (reason: string) => void = () => {};
+  private closeHandler: (reason: string, code?: number) => void = () => {};
   private errorHandler: (reason: string) => void = () => {};
   private closed = false;
 
@@ -493,9 +549,9 @@ class RelaySocket {
     queueMicrotask(() => this.messageHandler(Envelope.encode(env).finish()));
   }
 
-  drop(reason: string): void {
+  drop(reason: string, code?: number): void {
     this.closed = true;
-    queueMicrotask(() => this.closeHandler(reason));
+    queueMicrotask(() => this.closeHandler(reason, code));
   }
 }
 
