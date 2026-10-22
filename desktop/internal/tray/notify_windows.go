@@ -142,6 +142,14 @@ func postText(title, body string) error {
 	return pushToast(toastXML(title, body))
 }
 
+// postSensitive asks whether to upload a protected entry, with one button.
+func postSensitive(body string) error {
+	return pushToast(toastXML(sensitiveTitle, body, [2]string{pushAnywayLabel, actionPushAnyway}))
+}
+
+// withdrawSensitivePrompt has nothing to do on Windows, as withdrawPrompt.
+func withdrawSensitivePrompt() {}
+
 // withdrawPrompt has nothing to do on Windows: wintoast cannot take a toast
 // back, and one that was answered in the menu instead leaves the screen on
 // its own a few seconds later.
