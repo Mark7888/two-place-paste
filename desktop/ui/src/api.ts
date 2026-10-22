@@ -32,6 +32,18 @@ export interface ClipboardView {
   preview?: string;
   changed_at?: string;
   error?: string;
+  /** Set for a password manager's copy or a detector or filter match. The
+   *  preview is then withheld; revealClipboard fetches it on request. */
+  sensitive?: boolean;
+  sensitive_reason?: string;
+  /** The length of a masked text, in characters. */
+  chars?: number;
+}
+
+/** SensitiveNote is the last copy auto-watch kept here because it was sensitive. */
+export interface SensitiveNote {
+  reason: string;
+  at: string;
 }
 
 export interface EntryView {
@@ -79,6 +91,7 @@ export interface Status {
    * it until it is dismissed or a newer entry lands on either side.
    */
   skipped?: SkippedView;
+  sensitive_note?: SensitiveNote;
   in_group: boolean;
   connected: boolean;
   epoch: number;
@@ -194,6 +207,48 @@ export interface SettingsView {
   auto_update: boolean;
   nightly_commit: string;
   restart_required: boolean;
+  detect_sensitive: boolean;
+  detectors: DetectorView[];
+  filters: FilterView[];
+}
+
+/** DetectorView is a built-in detector: fixed, only switched on or off. */
+export interface DetectorView {
+  name: string;
+  title: string;
+  description: string;
+  enabled: boolean;
+}
+
+export type FilterKind = "contains" | "prefix" | "suffix" | "regex" | "exact";
+export type FilterTarget = "text" | "filename";
+
+/**
+ * FilterView is one of the user's filters. An exact filter's value is never
+ * sent back by the service; sending one without a value keeps the saved hash.
+ */
+export interface FilterView {
+  id: string;
+  kind: FilterKind;
+  target: FilterTarget;
+  value: string;
+  case_insensitive: boolean;
+  enabled: boolean;
+  label: string;
+}
+
+export interface FilterTest {
+  text: string;
+  filename: string;
+  detectors?: string[];
+  filters?: FilterView[];
+}
+
+export interface FilterMatch {
+  source: "os" | "detector" | "filter";
+  /** A detector's name or a filter's id. */
+  rule: string;
+  reason: string;
 }
 
 export interface SettingsPatch {
@@ -207,6 +262,9 @@ export interface SettingsPatch {
   update_channel?: UpdateChannel;
   auto_update?: boolean;
   nightly_commit?: string;
+  detect_sensitive?: boolean;
+  detectors?: string[];
+  filters?: FilterView[];
 }
 
 export type UpdateChannel = "stable" | "beta" | "nightly";
@@ -370,10 +428,18 @@ export class ApiError extends Error {
   readonly status: number;
   /** A refused save's duplicates, when the store already holds its content. */
   readonly duplicates?: StoreItemView[];
+  /** The rest of the error body's strings: code, and what goes with it. */
+  readonly details: Record<string, string>;
 
-  constructor(status: number, message: string, duplicates?: StoreItemView[]) {
+  constructor(
+    status: number,
+    message: string,
+    duplicates?: StoreItemView[],
+    details: Record<string, string> = {},
+  ) {
     super(message);
     this.status = status;
+    this.details = details;
     this.name = "ApiError";
     this.duplicates = duplicates;
   }
@@ -428,6 +494,23 @@ async function call(path: string, init: RequestInit): Promise<Response> {
   return res;
 }
 
+/** ProtectedEntry is a manual upload the service held back as sensitive. */
+export interface ProtectedEntry {
+  planId: string;
+  reason: string;
+}
+
+/**
+ * protectedEntry recognises the service's "push anyway?" answer: a 409 with
+ * code "sensitive" and the plan id that confirms it.
+ */
+export function protectedEntry(err: unknown): ProtectedEntry | null {
+  if (err instanceof ApiError && err.status === 409 && err.details.code === "sensitive" && err.details.plan_id) {
+    return { planId: err.details.plan_id, reason: err.details.reason ?? "" };
+  }
+  return null;
+}
+
 function send(method: string, path: string, body?: unknown): Promise<Response> {
   return call(path, {
     method,
@@ -457,7 +540,13 @@ function failure(status: number, text: string): ApiError {
     typeof parsed === "object" && parsed !== null && "duplicates" in parsed
       ? ((parsed as { duplicates: StoreItemView[] }).duplicates ?? undefined)
       : undefined;
-  return new ApiError(status, message, duplicates);
+  const details: Record<string, string> = {};
+  if (typeof parsed === "object" && parsed !== null) {
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === "string") details[k] = v;
+    }
+  }
+  return new ApiError(status, message, duplicates, details);
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -476,7 +565,12 @@ async function requestBlob(method: string, path: string, body?: unknown): Promis
 
 export const api = {
   status: () => request<Status>("GET", "/api/status"),
-  sync: (direction: Direction) => request<SyncResult>("POST", "/api/sync", { direction }),
+  // planId confirms an upload the service refused as a protected entry.
+  sync: (direction: Direction, planId?: string) =>
+    request<SyncResult>("POST", "/api/sync", planId ? { direction, plan_id: planId } : { direction }),
+  // A POST, like previewEntry: it returns clipboard text the status withheld.
+  revealClipboard: () => request<{ preview: string }>("POST", "/api/clipboard/reveal", {}),
+  testFilters: (t: FilterTest) => request<{ matches: FilterMatch[] }>("POST", "/api/filters/test", t),
   dismissSkipped: () => request<Status>("DELETE", "/api/skipped"),
   history: (before?: string) =>
     request<HistoryPage>(

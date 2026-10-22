@@ -1,5 +1,13 @@
-import { useState } from "react";
-import { ApiError, api, type Direction, type Status, type SyncResult } from "../api";
+import { useEffect, useState } from "react";
+import {
+  ApiError,
+  api,
+  protectedEntry,
+  type Direction,
+  type ProtectedEntry,
+  type Status,
+  type SyncResult,
+} from "../api";
 import { bytes, relative, useNow, when } from "../format";
 import { Icon } from "../components/Icon";
 import { Modal } from "../components/Modal";
@@ -9,22 +17,40 @@ export function SyncPanel({ status, onChanged }: { status: Status | null; onChan
   const [result, setResult] = useState<SyncResult | null>(null);
   const [error, setError] = useState("");
   const [asking, setAsking] = useState(false);
+  // A manual upload the service held back as a protected entry, waiting for
+  // "push anyway".
+  const [guarded, setGuarded] = useState<ProtectedEntry | null>(null);
+  // The masked clipboard's text, fetched only when the eye is pressed.
+  const [revealed, setRevealed] = useState<string | null>(null);
+  const [revealing, setRevealing] = useState(false);
 
   // "changed 2 min ago" counts up on its own; without this it is only as fresh
   // as the last push from the service.
   useNow();
 
-  const run = async (d: Direction) => {
+  const run = async (d: Direction, planId?: string) => {
     setBusy(d);
     setError("");
     try {
-      const res = await api.sync(d);
+      const res = await api.sync(d, planId);
       setResult(res);
       setAsking(false);
+      setGuarded(null);
       onChanged();
     } catch (err) {
-      // 409 is the service saying it cannot tell which side is newer. That is
-      // a question, not a failure: ask it instead of reporting it.
+      // A protected entry is a question too: push it anyway, or not. A
+      // confirmation that finds the clipboard changed comes back as a new
+      // question about what is there now.
+      const guard = protectedEntry(err);
+      if (guard) {
+        setResult(null);
+        setAsking(false);
+        setGuarded(guard);
+        return;
+      }
+      // Any other 409 is the service saying it cannot tell which side is
+      // newer. That is a question, not a failure: ask it instead of
+      // reporting it.
       if (err instanceof ApiError && err.status === 409) {
         setResult(null);
         setAsking(true);
@@ -34,6 +60,29 @@ export function SyncPanel({ status, onChanged }: { status: Status | null; onChan
       }
     } finally {
       setBusy(null);
+    }
+  };
+
+  // What was revealed belongs to the clipboard it was revealed for: a new
+  // copy hides it again.
+  const clipKey = status
+    ? `${status.clipboard.changed_at ?? ""}|${status.clipboard.bytes}|${status.clipboard.sensitive ? 1 : 0}`
+    : "";
+  useEffect(() => setRevealed(null), [clipKey]);
+
+  const reveal = async () => {
+    if (revealed !== null) {
+      setRevealed(null);
+      return;
+    }
+    setRevealing(true);
+    try {
+      const res = await api.revealClipboard();
+      setRevealed(res.preview);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRevealing(false);
     }
   };
 
@@ -141,9 +190,49 @@ export function SyncPanel({ status, onChanged }: { status: Status | null; onChan
                   changed {relative(clip.changed_at)}
                 </span>
               </div>
-              {clip.preview ? <pre className="preview mono">{clip.preview}</pre> : null}
+              {clip.sensitive ? (
+                <div className="masked">
+                  <span className="row tight">
+                    <Icon name="lock" size={15} />
+                    <span>
+                      <strong>Sensitive {clip.kind === "text" ? "text" : clip.kind}</strong>
+                      {clip.kind === "text" && clip.chars ? (
+                        <span className="muted"> · {clip.chars} characters</span>
+                      ) : null}
+                      {clip.sensitive_reason ? (
+                        <span className="muted"> · {clip.sensitive_reason}</span>
+                      ) : null}
+                    </span>
+                  </span>
+                  {clip.kind === "text" ? (
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label={revealed !== null ? "Hide" : "Show"}
+                      title={revealed !== null ? "Hide" : "Show"}
+                      disabled={revealing}
+                      onClick={() => void reveal()}
+                    >
+                      <Icon name={revealed !== null ? "eye-off" : "eye"} size={16} />
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+              {clip.sensitive && revealed ? <pre className="preview mono">{revealed}</pre> : null}
+              {!clip.sensitive && clip.preview ? (
+                <pre className="preview mono">{clip.preview}</pre>
+              ) : null}
             </>
           )}
+          {status.sensitive_note ? (
+            <p className="muted small row tight" style={{ marginTop: "0.6rem" }}>
+              <Icon name="lock" size={13} />
+              <span>
+                Not uploaded automatically: {status.sensitive_note.reason}. Use Upload to push it
+                anyway.
+              </span>
+            </p>
+          ) : null}
           {clip.error ? (
             <div className="notice error" style={{ marginTop: "0.6rem" }}>
               <Icon name="alert" />
@@ -180,6 +269,39 @@ export function SyncPanel({ status, onChanged }: { status: Status | null; onChan
           ) : null}
         </div>
       </section>
+
+      {/*
+        "Push anyway?" Cancel is first and takes the focus: the safe answer is
+        the one a stray Enter gives.
+      */}
+      <Modal
+        open={guarded !== null}
+        title="This is a protected entry"
+        onClose={() => setGuarded(null)}
+        footer={
+          <>
+            <button className="action" autoFocus onClick={() => setGuarded(null)}>
+              Cancel
+            </button>
+            <button
+              className="action primary"
+              disabled={busy !== null}
+              onClick={() => guarded && void run("upload", guarded.planId)}
+            >
+              {busy === "upload" ? <span className="spinner" /> : <Icon name="upload" size={16} />}
+              Push anyway
+            </button>
+          </>
+        }
+      >
+        <p>
+          {guarded?.reason ? <>{guarded.reason}. </> : null}
+          Push it to your other devices anyway?
+        </p>
+        <p className="muted small">
+          It is encrypted like every entry, and stays in the group&apos;s history for 24 hours.
+        </p>
+      </Modal>
 
       {/*
         The direction chooser. It replaces the old behaviour — a disabled "Sync
