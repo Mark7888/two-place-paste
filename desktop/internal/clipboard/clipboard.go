@@ -78,6 +78,16 @@ type Content struct {
 
 	// Body is the payload bytes.
 	Body []byte
+
+	// Concealed says why the application that copied marked this content as
+	// not for clipboard tools — a password manager, most often — and is empty
+	// when it did not. It is read in the same clipboard session as the
+	// payload, so it describes these bytes and not the next copy.
+	//
+	// It is local knowledge only: not part of Digest (the same bytes copied
+	// without the marker are the same content to change detection), never
+	// part of the encrypted frame, and never sent anywhere.
+	Concealed string
 }
 
 // Empty reports whether there is nothing to carry.
