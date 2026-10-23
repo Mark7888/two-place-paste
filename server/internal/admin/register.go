@@ -54,6 +54,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/icon-192.png", s.handleAsset)
 	mux.HandleFunc("GET /admin/icon-512.png", s.handleAsset)
 	mux.HandleFunc("GET /admin/icon-maskable-512.png", s.handleAsset)
+	// The id of the UI build this relay serves. An open admin polls it to
+	// offer an update when the relay has been upgraded under it.
+	mux.HandleFunc("GET /admin/version.json", s.handleAsset)
 
 	// The QR image is an <img>, so it is a plain session-checked GET outside
 	// the JSON API.

@@ -101,11 +101,20 @@ or QR images, so nothing private reaches a cache. The CSP adds `manifest-src 'se
 cards (`td.name` is the heading; `wide`, `usage` and `actions` cells span the card), controls are
 at least 44px and fields 16px (iOS zooms below that).
 
+An open admin, installed or in a tab, notices an upgrade. The same plugin gives each build an id,
+a digest of the built files, so it changes with any change to the UI whether the build is a
+release, a channel build or a local checkout, and does not change for a server-only upgrade. The
+id is written into the bundle, into the worker's version and into `/admin/version.json`
+(public, `no-cache`). The app checks that file on start, every five minutes while visible, and
+when it returns to the foreground or comes back online (at most every 30 seconds); when the ids
+differ it asks the worker to update and shows a bar at the bottom with **Update** (reload) and
+**Later**. It never reloads on its own, which would lose a half-filled form.
+
 ## 7. Checks
 
 - Go: the API, the page routes, the CSP and the placeholder are covered in
   `server/internal/admin/*_test.go`, independently of any UI build.
-- UI: `npm test` (formatting), `npm run typecheck`, `npm run build`, in `node.yml`.
+- UI: `npm test` (formatting, the SmartTable, the update bar), `npm run typecheck`, `npm run build`, in `node.yml`.
 - During the rewrite every screen was screenshotted against the template version at
   desktop and phone widths and matched it pixel for pixel, but for data (uptime, paths)
   and sub-pixel text shaping.

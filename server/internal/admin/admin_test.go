@@ -36,6 +36,7 @@ var testUI = fstest.MapFS{
 	"apple-touch-icon.png":  {Data: []byte("\x89PNG\r\n\x1a\n")},
 	"manifest.webmanifest":  {Data: []byte(`{"name":"TwoPlacePaste admin"}`)},
 	"sw.js":                 {Data: []byte(`self.addEventListener("fetch", () => {})`)},
+	"version.json":          {Data: []byte(`{"build":"0123456789ab"}`)},
 	"icon-192.png":          {Data: []byte("\x89PNG\r\n\x1a\n")},
 	"icon-512.png":          {Data: []byte("\x89PNG\r\n\x1a\n")},
 	"icon-maskable-512.png": {Data: []byte("\x89PNG\r\n\x1a\n")},
@@ -818,6 +819,8 @@ func TestAppShell(t *testing.T) {
 		{"/admin/icon-192.png", "image/png"},
 		{"/admin/icon-512.png", "image/png"},
 		{"/admin/icon-maskable-512.png", "image/png"},
+		// The build id, which an open admin polls for updates.
+		{"/admin/version.json", "application/json"},
 	} {
 		resp := f.get(anon, tc.path)
 		if resp.StatusCode != http.StatusOK {
@@ -829,6 +832,10 @@ func TestAppShell(t *testing.T) {
 		}
 		if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
 			t.Errorf("GET %s X-Content-Type-Options = %q, want nosniff", tc.path, got)
+		}
+		// Revalidated every time, or an upgrade would go unnoticed.
+		if got := resp.Header.Get("Cache-Control"); got != "no-cache" {
+			t.Errorf("GET %s Cache-Control = %q, want no-cache", tc.path, got)
 		}
 	}
 }

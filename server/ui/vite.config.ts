@@ -5,14 +5,25 @@ import react from "@vitejs/plugin-react";
 import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 
-/** serviceWorker builds sw/sw.js into the output as sw.js, with the list of
- *  files it keeps for offline use (the bundle and everything in public/, not
- *  the page, which it fetches itself) and a version that is a digest of those
- *  files. A new build is a new worker, so an installed app picks it up, and
- *  the worker drops what the old one kept. */
-function serviceWorker(): Plugin {
+/** BUILD_PLACEHOLDER is what src/lib/build.ts holds until the build fills in
+ *  the real id. */
+const BUILD_PLACEHOLDER = "__TPP_BUILD__";
+
+/** buildFiles gives every UI build an id, a digest of what it is made of: the
+ *  bundle and everything in public/. Two builds of the same source get the
+ *  same id, and any change to the UI gets a new one, wherever it was built —
+ *  a release, the Beta channel or a local checkout alike.
+ *
+ *  The id goes three places. The bundle carries it (src/lib/build.ts), so the
+ *  running app knows which build it is. version.json carries it, so the app
+ *  can ask the relay which build it serves now and offer to update when the
+ *  two differ (src/hooks/useUpdateCheck.ts). And the service worker is built
+ *  from sw/sw.js with it as its version, next to the list of files it keeps
+ *  for offline use (the bundle and public/, not the page, which it fetches
+ *  itself): a new build is a new worker, which drops what the old one kept. */
+function buildFiles(): Plugin {
   return {
-    name: "tpp-admin-service-worker",
+    name: "tpp-admin-build-files",
     apply: "build",
     generateBundle(_options, bundle) {
       const hash = createHash("sha256");
@@ -26,10 +37,19 @@ function serviceWorker(): Plugin {
         files.push(name);
         hash.update(name).update(readFileSync(join("public", name)));
       }
-      const source = readFileSync("sw/sw.js", "utf8")
-        .replace("__VERSION__", hash.digest("hex").slice(0, 12))
+      const build = hash.digest("hex").slice(0, 12);
+
+      const app = bundle["assets/app.js"];
+      if (app?.type !== "chunk" || !app.code.includes(BUILD_PLACEHOLDER)) {
+        this.error("assets/app.js does not carry the build id placeholder (src/lib/build.ts)");
+      }
+      app.code = app.code.replaceAll(BUILD_PLACEHOLDER, build);
+
+      this.emitFile({ type: "asset", fileName: "version.json", source: `${JSON.stringify({ build })}\n` });
+      const worker = readFileSync("sw/sw.js", "utf8")
+        .replace("__VERSION__", build)
         .replace("__PRECACHE__", JSON.stringify(files.map((f) => `/admin/${f}`)));
-      this.emitFile({ type: "asset", fileName: "sw.js", source });
+      this.emitFile({ type: "asset", fileName: "sw.js", source: worker });
     },
   };
 }
@@ -46,7 +66,7 @@ const relay = process.env.TPP_ADMIN_DEV_RELAY ?? "http://127.0.0.1:8080";
 // while keeping the .gitkeep that makes //go:embed compile in a checkout with
 // no UI build.
 export default defineConfig({
-  plugins: [react(), serviceWorker()],
+  plugins: [react(), buildFiles()],
   base: "/admin/",
   build: {
     outDir: "../web/admin/dist",

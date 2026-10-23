@@ -36,6 +36,19 @@ without a network; without one it says the relay could not be reached, and **Try
 it. No group, token or audit entry is ever stored on the device, and you still sign in with the
 admin password: signing out works as it does in the browser.
 
+### Updates
+
+An installed app can stay open for days, so it checks which version of the admin the relay
+serves when it starts, every few minutes while it is open, and whenever you come back to it.
+After you upgrade or rebuild the relay, a bar appears at the bottom of the screen: *A new
+version of the admin is available.* **Update** loads the new version; **Later** hides the bar
+until the relay has yet another one. The admin never reloads by itself, so nothing you are
+typing is lost. A browser tab does the same.
+
+The check compares the admin's own files, not a version number, so it works the same for
+releases, Beta and Nightly builds and a relay built from source. Upgrading only the server
+part, with the same admin screens, shows no bar.
+
 ## Lists: search, sort and pages
 
 The lists on **Groups**, **Tags**, **Tokens** and **Audit log** work the same way:

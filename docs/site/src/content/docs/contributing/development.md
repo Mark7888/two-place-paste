@@ -66,6 +66,15 @@ built files it keeps and a version taken from their contents; the dev server reg
 It never touches `/admin/api/` or a token's QR image. Its icons come from
 `assets/icon/generate.py` like every other icon.
 
+Every build also has a **build id**, a digest of the built files, computed by the same Vite
+plugin (`buildFiles` in `vite.config.ts`). It is written into the bundle (`src/lib/build.ts`),
+into `version.json`, which the relay serves as `/admin/version.json`, and into the worker as its
+version. The running app polls `version.json` and shows an **Update** bar at the bottom when the
+relay serves a different id (`src/hooks/useUpdateCheck.ts`, `src/components/UpdateBar.tsx`). A
+rebuild with any change to the UI is a new id, wherever it was built; the dev server has no id
+and never checks. To try it, build and run the relay, open the admin, change something in
+`server/ui`, rebuild and restart the relay, and come back to the tab after half a minute.
+
 `npm test` runs the UI's unit and component tests (Vitest, in a simulated browser) and
 `npm run typecheck` its type check; CI runs both, and the build, for every change under
 `server/ui`.

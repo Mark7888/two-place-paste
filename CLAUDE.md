@@ -57,7 +57,8 @@ Run Go commands per module (`cd server && go test -race ./...`), not from the ro
   `TPP_ADMIN_DEV_RELAY` points it elsewhere).
   It is an installable PWA: `public/manifest.webmanifest` and a service worker
   (`sw/sw.js`, built to `/admin/sw.js`) that must never cache `/admin/api/` or
-  QR images.
+  QR images. Each build gets an id (a digest of its files, `vite.config.ts`),
+  served as `/admin/version.json`; the app polls it and offers an Update bar.
 - Mobile: `cd mobile && npm ci && npm test && npm run lint && npm run typecheck`.
   `npm run interop` pairs the TS client with the Go client against a real
   relay (needs `go` and `redis-server`).

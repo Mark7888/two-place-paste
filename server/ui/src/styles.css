@@ -1138,3 +1138,35 @@ button.link-button:active { transform: none; }
 }
 
 footer { padding-bottom: max(2.5rem, env(safe-area-inset-bottom)); }
+
+/* --- update bar ---------------------------------------------------------- */
+
+/* The offer of a newer build (UpdateBar.tsx). It is the last thing on the
+   page and sticks to the bottom of the window, so it stays in view while the
+   page scrolls without ever covering the end of it. */
+.update-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem var(--gap);
+  padding: 0.7rem clamp(0.9rem, 4vw, 1.75rem);
+  padding-left: max(clamp(0.9rem, 4vw, 1.75rem), env(safe-area-inset-left));
+  padding-right: max(clamp(0.9rem, 4vw, 1.75rem), env(safe-area-inset-right));
+  padding-bottom: max(0.7rem, env(safe-area-inset-bottom));
+  background: var(--card);
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -8px 24px rgba(16, 18, 24, 0.08);
+}
+
+.update-bar p { margin: 0; font-weight: 500; }
+
+.update-actions { display: flex; gap: 0.5rem; margin-left: auto; }
+
+@media (max-width: 46rem) {
+  .update-actions { width: 100%; }
+  .update-actions button { flex: 1; }
+}

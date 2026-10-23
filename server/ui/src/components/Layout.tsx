@@ -3,6 +3,7 @@ import { Link, useRouter } from "../router";
 import { useInstallPrompt } from "../hooks/useInstallPrompt";
 import { useSession } from "../session";
 import { Notice } from "./Notice";
+import { UpdateBar } from "./UpdateBar";
 
 const screens = [
   { to: "/admin/", label: "Dashboard", current: (p: string) => p === "/admin/" },
@@ -16,7 +17,8 @@ const screens = [
 /** Layout is the app shell: the header bar with the screen links, one
  *  column of content, and the footer with the source link the AGPL asks for
  *  (LICENSING.md). The notice of the last change sits at the top of the
- *  column. */
+ *  column, and the offer of a newer build, when there is one, at the bottom
+ *  of the window. */
 export function Layout({
   authenticated,
   centered,
@@ -84,6 +86,7 @@ export function Layout({
           <a href="/source">Source code</a> — this relay is free software under the AGPL-3.0.
         </p>
       </footer>
+      <UpdateBar />
     </>
   );
 }
