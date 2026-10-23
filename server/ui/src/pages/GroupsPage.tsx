@@ -30,6 +30,14 @@ const baseColumns: Column<Group>[] = [
       <span className="stack">
         <span>
           <Link to={groupPath(g.handle)}>{g.name}</Link>
+          {/* On a phone the tag rides in the card's heading instead of a
+              column of its own, which saves the card a line. */}
+          {g.tag && (
+            <span className="mobile-only">
+              {" "}
+              <Badge kind="open">{g.tag}</Badge>
+            </span>
+          )}
           {g.stale && (
             <>
               {" "}
@@ -49,7 +57,7 @@ const baseColumns: Column<Group>[] = [
       </span>
     ),
   },
-  { key: "tag", header: "Tag", render: (g) => (g.tag ? <Badge kind="open">{g.tag}</Badge> : <Dash />) },
+  { key: "tag", header: "Tag", hideOnMobile: true, render: (g) => (g.tag ? <Badge kind="open">{g.tag}</Badge> : <Dash />) },
   { key: "devices", header: "Devices", firstDir: "desc", align: "end", render: (g) => g.devices },
   { key: "last_active", header: "Last active", firstDir: "desc", render: (g) => ago(Date.now(), g.last_seen, "never") },
   { key: "entries", header: "Entries", firstDir: "desc", align: "end", render: (g) => g.entries },

@@ -28,12 +28,17 @@ const testPassword = "correct horse battery staple"
 // testUI stands in for the React build, so these tests neither need nor see
 // whatever `npm run build` last left in server/web/admin/dist.
 var testUI = fstest.MapFS{
-	"index.html":           {Data: []byte(`<!doctype html><title>admin</title><div id="root"></div><script type="module" src="/admin/assets/app.js"></script>`)},
-	"assets/app.js":        {Data: []byte(`console.log("app")`)},
-	"assets/app.css":       {Data: []byte(`body{}`)},
-	"favicon.svg":          {Data: []byte(`<svg xmlns="http://www.w3.org/2000/svg"/>`)},
-	"favicon.ico":          {Data: []byte{0, 0, 1, 0}},
-	"apple-touch-icon.png": {Data: []byte("\x89PNG\r\n\x1a\n")},
+	"index.html":            {Data: []byte(`<!doctype html><title>admin</title><div id="root"></div><script type="module" src="/admin/assets/app.js"></script>`)},
+	"assets/app.js":         {Data: []byte(`console.log("app")`)},
+	"assets/app.css":        {Data: []byte(`body{}`)},
+	"favicon.svg":           {Data: []byte(`<svg xmlns="http://www.w3.org/2000/svg"/>`)},
+	"favicon.ico":           {Data: []byte{0, 0, 1, 0}},
+	"apple-touch-icon.png":  {Data: []byte("\x89PNG\r\n\x1a\n")},
+	"manifest.webmanifest":  {Data: []byte(`{"name":"TwoPlacePaste admin"}`)},
+	"sw.js":                 {Data: []byte(`self.addEventListener("fetch", () => {})`)},
+	"icon-192.png":          {Data: []byte("\x89PNG\r\n\x1a\n")},
+	"icon-512.png":          {Data: []byte("\x89PNG\r\n\x1a\n")},
+	"icon-maskable-512.png": {Data: []byte("\x89PNG\r\n\x1a\n")},
 }
 
 // clock is a manually advanced UTC clock. Nothing in these tests sleeps
@@ -760,7 +765,7 @@ func TestAppShell(t *testing.T) {
 		t.Errorf("GET /admin/login served %q, want the app's index.html", got)
 	}
 	csp := resp.Header.Get("Content-Security-Policy")
-	for _, want := range []string{"default-src 'none'", "script-src 'self'", "style-src 'self'", "connect-src 'self'", "frame-ancestors 'none'"} {
+	for _, want := range []string{"default-src 'none'", "script-src 'self'", "style-src 'self'", "connect-src 'self'", "manifest-src 'self'", "worker-src 'self'", "frame-ancestors 'none'"} {
 		if !strings.Contains(csp, want) {
 			t.Errorf("Content-Security-Policy %q does not contain %q", csp, want)
 		}
@@ -806,6 +811,13 @@ func TestAppShell(t *testing.T) {
 		{"/admin/favicon.svg", "image/svg+xml"},
 		{"/admin/favicon.ico", "image/x-icon"},
 		{"/admin/apple-touch-icon.png", "image/png"},
+		// The installable app's files, also public: a browser fetches the
+		// manifest and the worker without the page's cookies in mind.
+		{"/admin/manifest.webmanifest", "application/manifest+json"},
+		{"/admin/sw.js", "text/javascript; charset=utf-8"},
+		{"/admin/icon-192.png", "image/png"},
+		{"/admin/icon-512.png", "image/png"},
+		{"/admin/icon-maskable-512.png", "image/png"},
 	} {
 		resp := f.get(anon, tc.path)
 		if resp.StatusCode != http.StatusOK {

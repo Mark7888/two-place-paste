@@ -53,9 +53,14 @@ function Screens() {
   }, [session.status, onLogin, navigate]);
 
   if (session.status === "error") {
+    // Most often the relay is out of reach: no network, or an installed app
+    // opened offline from its saved copy. Say so, and offer the obvious step.
     return (
       <Layout authenticated={false} centered>
         <Notice kind="error">{session.error}</Notice>
+        <button type="button" className="secondary" onClick={() => window.location.reload()}>
+          Try again
+        </button>
       </Layout>
     );
   }

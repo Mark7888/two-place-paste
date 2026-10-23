@@ -55,6 +55,9 @@ Run Go commands per module (`cd server && go test -race ./...`), not from the ro
   `npm run typecheck`. Dev loop: a relay on :8080 plus `npm run dev`
   (http://127.0.0.1:5174/admin/, proxies `/admin/api` to the relay;
   `TPP_ADMIN_DEV_RELAY` points it elsewhere).
+  It is an installable PWA: `public/manifest.webmanifest` and a service worker
+  (`sw/sw.js`, built to `/admin/sw.js`) that must never cache `/admin/api/` or
+  QR images.
 - Mobile: `cd mobile && npm ci && npm test && npm run lint && npm run typecheck`.
   `npm run interop` pairs the TS client with the Go client against a real
   relay (needs `go` and `redis-server`).

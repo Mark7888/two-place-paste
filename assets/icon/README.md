@@ -12,7 +12,8 @@
 | `desktop/packaging/windows/app.ico` | Windows exe (via `desktop/cmd/tppdesktop/winres`) and installer |
 | `desktop/internal/tray/notify_icon.png` | The app logo on Windows toast notifications |
 | `desktop/ui/public/favicon.*`, `apple-touch-icon.png` | Desktop settings UI |
-| `server/web/{admin,pair}/favicon.*`, `apple-touch-icon.png` | Relay admin UI and pairing hand-off page |
+| `server/ui/public/favicon.*`, `apple-touch-icon.png`, `server/web/pair/favicon.*`, `apple-touch-icon.png` | Relay admin UI and pairing hand-off page |
+| `server/ui/public/icon-192.png`, `icon-512.png`, `icon-maskable-512.png` | The relay admin UI installed as an app (its web app manifest) |
 | `icon-outlined.svg` | The outlined variant the desktop icons and favicons are made from |
 | `icon-1024.png`, `play-store-512.png` | Store listings and anything else that wants a bitmap |
 

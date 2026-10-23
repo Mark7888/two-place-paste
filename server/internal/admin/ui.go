@@ -18,7 +18,10 @@ import (
 // origin's JSON API and shows only this origin's images (the token QR codes).
 // There is no inline script or style for the policy to have to allow, and
 // nothing may frame the page.
-const pagePolicy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+//
+// The app is also installable (a web app manifest) and has a service worker
+// for offline use (server/ui/sw/sw.js); both are this origin's files too.
+const pagePolicy = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 
 // assetTypes pins the content type of every kind of file the UI build
 // produces. mime.TypeByExtension falls back to the host's own tables, which
@@ -31,6 +34,8 @@ var assetTypes = map[string]string{
 	".png":  "image/png",
 	".txt":  "text/plain; charset=utf-8",
 	".json": "application/json",
+	// The web app manifest's own type, which browsers ask for.
+	".webmanifest": "application/manifest+json",
 }
 
 // uiAssets is the built admin UI, as the server serves it.

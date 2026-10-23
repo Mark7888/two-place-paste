@@ -1,5 +1,38 @@
-import { defineConfig } from "vitest/config";
+import { createHash } from "node:crypto";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import react from "@vitejs/plugin-react";
+import type { Plugin } from "vite";
+import { defineConfig } from "vitest/config";
+
+/** serviceWorker builds sw/sw.js into the output as sw.js, with the list of
+ *  files it keeps for offline use (the bundle and everything in public/, not
+ *  the page, which it fetches itself) and a version that is a digest of those
+ *  files. A new build is a new worker, so an installed app picks it up, and
+ *  the worker drops what the old one kept. */
+function serviceWorker(): Plugin {
+  return {
+    name: "tpp-admin-service-worker",
+    apply: "build",
+    generateBundle(_options, bundle) {
+      const hash = createHash("sha256");
+      const files: string[] = [];
+      for (const [name, item] of Object.entries(bundle).sort(([a], [b]) => a.localeCompare(b))) {
+        if (name.endsWith(".html")) continue;
+        files.push(name);
+        hash.update(name).update(item.type === "chunk" ? item.code : item.source);
+      }
+      for (const name of readdirSync("public").sort()) {
+        files.push(name);
+        hash.update(name).update(readFileSync(join("public", name)));
+      }
+      const source = readFileSync("sw/sw.js", "utf8")
+        .replace("__VERSION__", hash.digest("hex").slice(0, 12))
+        .replace("__PRECACHE__", JSON.stringify(files.map((f) => `/admin/${f}`)));
+      this.emitFile({ type: "asset", fileName: "sw.js", source });
+    },
+  };
+}
 
 // The relay to develop against: `npm run dev` serves the UI and forwards its
 // API calls and QR images there, so the session cookie and the CSRF check
@@ -13,7 +46,7 @@ const relay = process.env.TPP_ADMIN_DEV_RELAY ?? "http://127.0.0.1:8080";
 // while keeping the .gitkeep that makes //go:embed compile in a checkout with
 // no UI build.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), serviceWorker()],
   base: "/admin/",
   build: {
     outDir: "../web/admin/dist",

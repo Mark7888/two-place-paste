@@ -41,6 +41,7 @@ export function TagsPage() {
       key: "limit",
       header: "Storage limit",
       firstDir: "desc",
+      className: "wide",
       // Keyed by the stored limit, so a save shows what the relay stored
       // rather than what was typed.
       render: (t) => (

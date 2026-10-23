@@ -60,6 +60,12 @@ TPP_ADMIN_DEV_RELAY=http://127.0.0.1:9090 npm run dev  # a relay elsewhere
 With an `http://` `TPP_PUBLIC_BASE_URL` the session cookie is not marked `Secure`, which is what
 lets this work without TLS.
 
+The service worker that makes the admin installable and lets it open offline is
+`server/ui/sw/sw.js`. `npm run build` writes it into the output as `sw.js`, with the list of
+built files it keeps and a version taken from their contents; the dev server registers none.
+It never touches `/admin/api/` or a token's QR image. Its icons come from
+`assets/icon/generate.py` like every other icon.
+
 `npm test` runs the UI's unit and component tests (Vitest, in a simulated browser) and
 `npm run typecheck` its type check; CI runs both, and the build, for every change under
 `server/ui`.

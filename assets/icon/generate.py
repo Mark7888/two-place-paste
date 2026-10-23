@@ -200,13 +200,23 @@ def main() -> None:
     # at runtime: Windows reads it from a file path, not from the exe.
     save_png(render(96, 1.0, outlined=True), ROOT / "desktop/internal/tray/notify_icon.png")
 
-    # --- Web favicons: the desktop settings UI and the relay's two pages.
-    for web in (ROOT / "desktop/ui/public", ROOT / "server/web/admin", ROOT / "server/web/pair"):
+    # --- Web favicons: the desktop settings UI and the relay's two pages. The
+    # admin UI's live in its React project, whose build copies them out.
+    for web in (ROOT / "desktop/ui/public", ROOT / "server/ui/public", ROOT / "server/web/pair"):
         web.mkdir(parents=True, exist_ok=True)
         (web / "favicon.svg").write_text(svg)
         print("wrote", (web / "favicon.svg").relative_to(ROOT))
         save_ico(web / "favicon.ico", [16, 32, 48], 1.0)
         save_png(render(180, 0.80, "#FFFFFF", "square"), web / "apple-touch-icon.png")
+
+    # --- The relay admin's installable app (web app manifest). "any" icons are
+    # the artwork on a rounded white plate; the maskable one fills its canvas
+    # and keeps the artwork inside the safe zone, a circle of 80% of the size,
+    # because the launcher crops it to its own shape.
+    admin = ROOT / "server/ui/public"
+    for px in (192, 512):
+        save_png(render(px, 0.80, "#FFFFFF", "square", corner=0.18), admin / f"icon-{px}.png")
+    save_png(render(512, 0.66 * 0.97, "#FFFFFF", "square"), admin / "icon-maskable-512.png")
 
 
 if __name__ == "__main__":

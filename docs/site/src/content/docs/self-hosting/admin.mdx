@@ -17,7 +17,24 @@ The page is a web app built into the relay itself, so it needs JavaScript in the
 nothing from anywhere but the relay, and it talks to the relay only through `/admin/api/`.
 
 The header links to six screens: **Dashboard**, **Groups**, **Tags**, **Tokens**, **Audit log**
-and **Settings**. Each group also has a page of its own, reached from **Groups**.
+and **Settings**. Each group also has a page of its own, reached from **Groups**. On a phone the
+screens are behind the **Menu** button, and lists show one card per row; tap a group's card to
+open it.
+
+## Install it as an app
+
+The admin page can be installed on a phone or a computer and opened like an app, in its own
+window, from its own icon. This needs the relay on **HTTPS**: browsers install apps only from
+secure origins, so on a plain-`http` address the page works but does not offer to install.
+
+- **Android, and Chrome or Edge on a computer:** open **Menu → Install app**, or the browser's own
+  *Install* item in its address bar or menu.
+- **iPhone and iPad (Safari):** tap **Share**, then **Add to Home Screen**.
+
+Installed, it keeps only its own files (the page, its script and its icons) so that it can open
+without a network; without one it says the relay could not be reached, and **Try again** reloads
+it. No group, token or audit entry is ever stored on the device, and you still sign in with the
+admin password: signing out works as it does in the browser.
 
 ## Lists: search, sort and pages
 

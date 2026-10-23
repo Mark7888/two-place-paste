@@ -13,6 +13,7 @@ const columns: Column<AuditEntry>[] = [
     key: "when",
     header: "When",
     firstDir: "desc",
+    className: "wide",
     render: (e) => (
       <span className="nowrap">
         {formatDateTime(e.at)} · {ago(Date.now(), e.at, "")}
@@ -21,7 +22,7 @@ const columns: Column<AuditEntry>[] = [
   },
   { key: "action", header: "Action", className: "name", render: (e) => e.label },
   { key: "target", header: "On", render: (e) => e.target || <Dash /> },
-  { key: "detail", header: "Details", sortable: false, render: (e) => e.detail || <Dash /> },
+  { key: "detail", header: "Details", sortable: false, className: "wide", render: (e) => e.detail || <Dash /> },
   { key: "ip", header: "From", render: (e) => (e.ip ? <code>{e.ip}</code> : <Dash />) },
 ];
 
@@ -50,7 +51,7 @@ export function AuditPage() {
         columns={columns}
         rowKey={(e) => `${e.at}|${e.action}|${e.target}|${e.ip}|${e.detail}`}
         defaultSort={defaultSort}
-        searchPlaceholder="Search actions, names, details or addresses"
+        searchPlaceholder="Search the log"
         onResponse={setMeta}
         toolbar={
           <label className="table-filter">

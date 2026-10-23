@@ -47,6 +47,13 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/favicon.svg", s.handleAsset)
 	mux.HandleFunc("GET /admin/favicon.ico", s.handleAsset)
 	mux.HandleFunc("GET /admin/apple-touch-icon.png", s.handleAsset)
+	// The installable app: its manifest, icons and service worker. The worker
+	// is served from /admin/ so that its scope is the admin and nothing else.
+	mux.HandleFunc("GET /admin/manifest.webmanifest", s.handleAsset)
+	mux.HandleFunc("GET /admin/sw.js", s.handleAsset)
+	mux.HandleFunc("GET /admin/icon-192.png", s.handleAsset)
+	mux.HandleFunc("GET /admin/icon-512.png", s.handleAsset)
+	mux.HandleFunc("GET /admin/icon-maskable-512.png", s.handleAsset)
 
 	// The QR image is an <img>, so it is a plain session-checked GET outside
 	// the JSON API.

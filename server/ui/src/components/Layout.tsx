@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useRouter } from "../router";
+import { useInstallPrompt } from "../hooks/useInstallPrompt";
 import { useSession } from "../session";
 import { Notice } from "./Notice";
 
@@ -27,17 +28,44 @@ export function Layout({
   centered?: boolean;
   children?: ReactNode;
 }) {
-  const { notice } = useRouter();
+  const { notice, location } = useRouter();
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  // The menu closes when it has done its job — a screen was chosen — and on
+  // Escape, like any other popup.
+  useEffect(() => setMenuOpen(false), [location.key]);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenuOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [menuOpen]);
+
   return (
     <>
-      <header className="bar">
+      <header className={menuOpen ? "bar open" : "bar"}>
         <span className="brand">
           TwoPlacePaste <span className="muted">admin</span>
         </span>
         {authenticated && (
           <>
-            <Nav />
-            <LogOut />
+            {/* Shown on phones only (styles.css): there the screens fold
+                behind it, and the bar stays one line. */}
+            <button
+              type="button"
+              className="menu-button"
+              aria-expanded={menuOpen}
+              aria-controls="admin-menu"
+              onClick={() => setMenuOpen((o) => !o)}
+            >
+              <span className="menu-icon" aria-hidden="true" />
+              Menu
+            </button>
+            <div className="menu" id="admin-menu">
+              <Nav />
+              <InstallApp />
+              <LogOut />
+            </div>
           </>
         )}
       </header>
@@ -70,6 +98,18 @@ function Nav() {
         </Link>
       ))}
     </nav>
+  );
+}
+
+/** InstallApp offers to install the admin as an app, when the browser has
+ *  made that offer (useInstallPrompt). */
+function InstallApp() {
+  const { install } = useInstallPrompt();
+  if (!install) return null;
+  return (
+    <button type="button" className="link install" onClick={install}>
+      Install app
+    </button>
   );
 }
 

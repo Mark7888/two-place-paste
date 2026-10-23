@@ -439,44 +439,67 @@ h1 .tag, td.name .tag { vertical-align: 0.15em; margin-left: 0.25rem; }
   border-radius: var(--radius);
 }
 
-/* Narrow screens: the table stops being a grid and becomes one card per row,
-   with each cell labelled by the header it belongs to. */
+/* Narrow screens: the table stops being a grid and becomes one card per row.
+   The row's name cell is the card's heading; the other cells sit two to a
+   line, each under the label of the column it belongs to, and the cells that
+   need room — a storage bar, a form, the actions — take the whole width. */
 @media (max-width: 46rem) {
   .table-wrap { border: 0; background: none; border-radius: 0; overflow: visible; }
-  table, tbody, tr, td { display: block; width: 100%; }
+  table, tbody { display: block; width: 100%; }
   thead { display: none; }
 
   tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.7rem 1rem;
+    margin-bottom: 0.75rem;
+    padding: 0.9rem 1rem;
     background: var(--card);
     border: 1px solid var(--line);
     border-radius: var(--radius);
-    margin-bottom: 0.75rem;
-    padding: 0.35rem 0;
   }
 
   tbody tr:hover { background: var(--card); }
 
   td {
     display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 0.45rem 0.9rem;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.1rem;
+    min-width: 0;
+    padding: 0;
     border-bottom: 0;
+    overflow-wrap: anywhere;
   }
 
   td::before {
     content: attr(data-label);
-    flex: 0 0 auto;
-    font-size: 0.72rem;
+    font-size: 0.75rem;
     font-weight: 650;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--muted);
   }
 
-  td.actions { justify-content: flex-end; padding-top: 0.6rem; }
-  td.actions::before { margin-right: auto; }
+  /* The heading: first, whole width, unlabelled — its content names it. */
+  td.name { order: -1; grid-column: 1 / -1; font-size: 1.05rem; }
+  td.name::before { display: none; }
+
+  td.wide, td.usage { grid-column: 1 / -1; }
+  td.usage .stack { align-self: stretch; }
+
+  /* Actions are a row of buttons along the card's foot. They explain
+     themselves, so they carry no label. */
+  td.actions {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding-top: 0.8rem;
+    border-top: 1px solid var(--line-soft);
+  }
+  td.actions::before { display: none; }
+  td.actions .inline-form { display: flex; margin: 0; }
 }
 
 /* --- dashboard ----------------------------------------------------------- */
@@ -571,7 +594,6 @@ td.usage meter { max-width: 12rem; }
 
 @media (max-width: 46rem) {
   td.usage meter { max-width: none; }
-  td.usage .stack { align-items: flex-end; }
 }
 
 /* --- notices ------------------------------------------------------------- */
@@ -979,3 +1001,140 @@ button.link-button:active { transform: none; }
   td.num { text-align: inherit; }
   .table-foot { justify-content: center; }
 }
+
+/* --- phones -------------------------------------------------------------- */
+
+/* The header's menu button and panel. On a wide screen the panel is not a
+   box at all: its links and the log-out button sit in the bar as they always
+   have. On a phone they fold behind one button, so the bar stays one line. */
+.menu { display: contents; }
+.menu-button { display: none; }
+.mobile-only { display: none; }
+
+@media (max-width: 46rem) {
+  .bar { flex-wrap: wrap; row-gap: 0; }
+
+  .menu-button {
+    display: inline-flex;
+    gap: 0.55rem;
+    height: 2.75rem;
+    margin-right: -0.5rem;
+    padding: 0 0.75rem;
+    font-weight: 600;
+    color: var(--fg);
+    background: transparent;
+    border: 0;
+  }
+
+  .menu-button:hover { background: var(--line-soft); filter: none; }
+
+  /* Three bars, drawn rather than fetched: the page loads no image it does
+     not need. They become a cross while the menu is open. */
+  .menu-icon,
+  .menu-icon::before,
+  .menu-icon::after {
+    display: block;
+    width: 1.1rem;
+    height: 2px;
+    border-radius: 1px;
+    background: currentColor;
+    transition: transform 0.15s, background 0.15s;
+  }
+  .menu-icon { position: relative; }
+  .menu-icon::before,
+  .menu-icon::after { content: ""; position: absolute; left: 0; }
+  .menu-icon::before { top: -6px; }
+  .menu-icon::after { top: 6px; }
+  .bar.open .menu-icon { background: transparent; }
+  .bar.open .menu-icon::before { transform: translateY(6px) rotate(45deg); }
+  .bar.open .menu-icon::after { transform: translateY(-6px) rotate(-45deg); }
+
+  .menu { display: none; }
+  .bar.open .menu {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    padding: 0.5rem 0 0.25rem;
+    margin-top: 0.6rem;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .bar.open .nav { flex-direction: column; gap: 0.15rem; margin: 0; }
+  .bar.open .nav a { display: flex; align-items: center; min-height: 3rem; padding: 0 0.75rem; font-size: 1rem; }
+  .bar.open .menu form,
+  .bar.open .menu .install { margin-top: 0.25rem; padding-top: 0.25rem; border-top: 1px solid var(--line-soft); }
+  .bar.open .menu .install + form { margin-top: 0; border-top: 0; }
+  .bar.open .menu button.install { width: 100%; height: 3rem; justify-content: flex-start; padding: 0 0.75rem; font-size: 1rem; color: var(--accent); }
+  .bar.open .menu button.link { width: 100%; height: 3rem; justify-content: flex-start; padding: 0 0.75rem; font-size: 1rem; }
+
+  /* Fields at 16px: below that, iOS zooms the whole page in when one takes
+     the focus, and leaves it zoomed. */
+  input[type="text"],
+  input[type="password"],
+  input[type="number"],
+  input[type="search"],
+  select { height: 2.75rem; font-size: 16px; }
+  .table-filter select,
+  .sort-control select,
+  .page-size select,
+  .limit-form input[type="text"] { height: 2.75rem; font-size: 16px; }
+
+  /* Fingers, not pointers: every control at least 44px tall. */
+  button, a.button { min-height: 2.75rem; }
+  button.small { min-height: 2.75rem; padding: 0 0.85rem; font-size: 0.9rem; }
+  .affix { height: 2.4rem; min-height: 0; }
+  .table-search .clear { width: 2.4rem; height: 2.4rem; min-height: 0; }
+  .pager button { min-width: 2.75rem; }
+  .chips a { display: inline-flex; align-items: center; gap: 0.3rem; min-height: 2.75rem; padding: 0 0.9rem; }
+  .mobile-only { display: inline; }
+  label.check { min-height: 2.75rem; }
+  label.check input { width: 1.25rem; height: 1.25rem; }
+  .crumbs a,
+  .stat .sub a,
+  .section-head a.count,
+  td.name a,
+  td a.nowrap { display: inline-flex; align-items: center; min-height: 2.75rem; }
+  /* A card that opens on a tap anywhere needs no tall link in it. */
+  tr.clickable td.name a { min-height: 0; }
+  .crumbs { margin-bottom: 0; }
+
+  /* Labels and badges at 12px rather than 11.5. */
+  .tag,
+  .stat h2,
+  .facts dt,
+  thead th { font-size: 0.75rem; }
+
+  /* Two small figures to a line; the wide storage card takes both. */
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
+  .stats .wide { grid-column: 1 / -1; }
+  .stat .figure { font-size: 1.45rem; }
+
+  /* A form's button takes the whole width under its field, where a thumb
+     finds it, instead of hanging off the field's end. */
+  .form-row > button { width: 100%; }
+  .form-row.spread > a.button { width: 100%; }
+  .table-toolbar .sort-control { width: 100%; }
+  .table-toolbar .sort-control label { flex: 1; }
+  .table-toolbar .sort-control select { flex: 1; }
+  .table-filter { width: 100%; }
+  .table-filter select { flex: 1; }
+
+  /* A pressed card says so: the whole card is the target. */
+  tr.clickable:active { background: var(--card-sunken); }
+
+  /* A button inside a sentence stays a word in it. */
+  button.link-button { min-height: 0; }
+  .icon-button { width: 2.75rem; height: 2.75rem; }
+
+  dialog { width: calc(100vw - 1.5rem); max-height: calc(100dvh - 1.5rem); }
+}
+
+/* An installed app runs edge to edge: keep the header and the page clear of
+   a notch, rounded corners and the home indicator. */
+.bar {
+  padding-top: max(0.7rem, env(safe-area-inset-top));
+  padding-left: max(clamp(0.9rem, 4vw, 1.75rem), env(safe-area-inset-left));
+  padding-right: max(clamp(0.9rem, 4vw, 1.75rem), env(safe-area-inset-right));
+}
+
+footer { padding-bottom: max(2.5rem, env(safe-area-inset-bottom)); }
