@@ -64,7 +64,9 @@ The service worker that makes the admin installable and lets it open offline is
 `server/ui/sw/sw.js`. `npm run build` writes it into the output as `sw.js`, with the list of
 built files it keeps and a version taken from their contents; the dev server registers none.
 It never touches `/admin/api/` or a token's QR image. Its icons come from
-`assets/icon/generate.py` like every other icon.
+`assets/icon/generate.py` like every other icon, but from their own artwork,
+`assets/icon/icon-admin.svg` (the app's clipboard with a person on it), so an installed admin is
+told apart from the app.
 
 Every build also has a **build id**, a digest of the built files, computed by the same Vite
 plugin (`buildFiles` in `vite.config.ts`). It is written into the bundle (`src/lib/build.ts`),

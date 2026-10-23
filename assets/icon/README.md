@@ -1,7 +1,10 @@
 # App icon
 
 `icon.svg` is the master. Every platform icon is generated from it by
-`generate.py` and checked in:
+`generate.py` and checked in. The relay admin has its own master,
+`icon-admin.svg`: the same clipboard and sync badge, with a person in place of
+the three text lines, so an installed admin is told apart from the app. Edit
+the two together; they share the outline that the code measures.
 
 | Output | Used by |
 | --- | --- |
@@ -12,12 +15,13 @@
 | `desktop/packaging/windows/app.ico` | Windows exe (via `desktop/cmd/tppdesktop/winres`) and installer |
 | `desktop/internal/tray/notify_icon.png` | The app logo on Windows toast notifications |
 | `desktop/ui/public/favicon.*`, `apple-touch-icon.png` | Desktop settings UI |
-| `server/ui/public/favicon.*`, `apple-touch-icon.png`, `server/web/pair/favicon.*`, `apple-touch-icon.png` | Relay admin UI and pairing hand-off page |
-| `server/ui/public/icon-192.png`, `icon-512.png`, `icon-maskable-512.png` | The relay admin UI installed as an app (its web app manifest) |
+| `server/web/pair/favicon.*`, `apple-touch-icon.png` | Relay pairing hand-off page, which users open, so it keeps the app's icon |
+| `server/ui/public/favicon.*`, `apple-touch-icon.png` | Relay admin UI, from `icon-admin.svg` |
+| `server/ui/public/icon-192.png`, `icon-512.png`, `icon-maskable-512.png` | The relay admin UI installed as an app (its web app manifest), from `icon-admin.svg` |
 | `icon-outlined.svg` | The outlined variant the desktop icons and favicons are made from |
 | `icon-1024.png`, `play-store-512.png` | Store listings and anything else that wants a bitmap |
 
-To change the icon, edit `icon.svg`, then:
+To change the icon, edit `icon.svg` (and `icon-admin.svg`), then:
 
     pip install cairosvg pillow
     python3 assets/icon/generate.py
