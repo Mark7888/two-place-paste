@@ -207,9 +207,8 @@ type deviceJSON struct {
 // handleGroup returns one group's page.
 func (s *Server) handleGroup(w http.ResponseWriter, r *http.Request, _ session) {
 	ctx := r.Context()
-	id := r.PathValue("id")
-	g, err := s.store.GetGroup(ctx, id)
-	if !s.groupFound(w, r, id, err, "read group") {
+	g, err := s.groupByHandle(ctx, r.PathValue("handle"))
+	if !s.groupFound(w, r, g.ID, err, "read group") {
 		return
 	}
 	probs := s.problems(ctx, "group page")
@@ -263,14 +262,14 @@ func (s *Server) handleRenameGroup(w http.ResponseWriter, r *http.Request, _ ses
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	id := r.PathValue("id")
 	name, ok := validName(req.Name, maxGroupNameLen)
 	if !ok {
 		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("Give the group a name of at most %d characters.", maxGroupNameLen))
 		return
 	}
 	ctx := r.Context()
-	before, err := s.store.GetGroup(ctx, id)
+	before, err := s.groupByHandle(ctx, r.PathValue("handle"))
+	id := before.ID
 	if err == nil {
 		err = s.store.RenameGroup(ctx, id, name)
 	}
@@ -292,9 +291,9 @@ func (s *Server) handleSetGroupTag(w http.ResponseWriter, r *http.Request, _ ses
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	id := r.PathValue("id")
 	ctx := r.Context()
-	g, err := s.store.GetGroup(ctx, id)
+	g, err := s.groupByHandle(ctx, r.PathValue("handle"))
+	id := g.ID
 	if err == nil {
 		err = s.store.SetGroupTag(ctx, id, req.Tag)
 	}
@@ -323,9 +322,9 @@ func (s *Server) handleSetGroupLimit(w http.ResponseWriter, r *http.Request, _ s
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	id := r.PathValue("id")
 	ctx := r.Context()
-	g, err := s.store.GetGroup(ctx, id)
+	g, err := s.groupByHandle(ctx, r.PathValue("handle"))
+	id := g.ID
 	if !s.groupFound(w, r, id, err, "read group") {
 		return
 	}
@@ -376,13 +375,13 @@ type purgeJSON struct {
 
 // handlePurgeGroup deletes a group's entries now.
 func (s *Server) handlePurgeGroup(w http.ResponseWriter, r *http.Request, _ session) {
-	id := r.PathValue("id")
 	ctx := r.Context()
 	if s.purger == nil {
 		writeJSONError(w, http.StatusNotImplemented, "Purging is not available on this server.")
 		return
 	}
-	g, err := s.store.GetGroup(ctx, id)
+	g, err := s.groupByHandle(ctx, r.PathValue("handle"))
+	id := g.ID
 	if !s.groupFound(w, r, id, err, "read group") {
 		return
 	}
@@ -400,8 +399,14 @@ func (s *Server) handlePurgeGroup(w http.ResponseWriter, r *http.Request, _ sess
 // their own page: each deletion cuts a set of devices off for good, so each
 // is a decision about one group.
 func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request, _ session) {
-	id := r.PathValue("id")
-	name, err := s.deleteGroup(r, id)
+	g, err := s.groupByHandle(r.Context(), r.PathValue("handle"))
+	var name string
+	switch {
+	case err == nil:
+		name, err = s.deleteGroup(r, g.ID)
+	case !errors.Is(err, store.ErrNotFound):
+		s.logger.ErrorContext(r.Context(), "find group to delete", "error", err)
+	}
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, "Nothing was deleted: that group no longer exists.")

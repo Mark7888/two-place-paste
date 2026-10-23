@@ -15,7 +15,8 @@ export class ApiError extends Error {
   }
 }
 
-const BASE = "/admin/api";
+/** BASE is where the admin API lives. */
+export const BASE = "/admin/api";
 
 // The CSRF token of the current session. It lives in memory only: it is
 // fetched from /session when the app loads and dropped on sign-out.

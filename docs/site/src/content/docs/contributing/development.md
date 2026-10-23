@@ -60,8 +60,9 @@ TPP_ADMIN_DEV_RELAY=http://127.0.0.1:9090 npm run dev  # a relay elsewhere
 With an `http://` `TPP_PUBLIC_BASE_URL` the session cookie is not marked `Secure`, which is what
 lets this work without TLS.
 
-`npm test` runs the UI's unit tests and `npm run typecheck` its type check; CI runs both, and the
-build, for every change under `server/ui`.
+`npm test` runs the UI's unit and component tests (Vitest, in a simulated browser) and
+`npm run typecheck` its type check; CI runs both, and the build, for every change under
+`server/ui`.
 
 `make proto` needs no `protoc`: `proto/generate.sh` builds pinned tools from `proto/tools/go.mod`
 and `proto/package-lock.json`. Generated output is committed and must stay byte-identical.

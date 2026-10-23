@@ -1,17 +1,16 @@
 import { useCallback, useId, useState } from "react";
-import { api, type Expiry, type NewToken, type Token } from "../api";
+import { api, type Expiry, type NewToken, type Token, type TokenList } from "../api";
 import { Badge, type BadgeKind } from "../components/Badge";
-import { Empty, SectionHead } from "../components/Card";
-import { CopyButton } from "../components/CopyButton";
+import { Dash } from "../components/Dash";
 import { ErrorNotice } from "../components/Notice";
-import { Cell, Dash, Table } from "../components/Table";
+import { SmartTable, useTableController, type Column, type DefaultSort } from "../components/SmartTable";
 import { TokenDialog, type ShownToken } from "../components/TokenDialog";
 import { useAction, type Action } from "../hooks/useAction";
+import { useCopyFeedback } from "../hooks/useCopyFeedback";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
-import { useResource } from "../hooks/useResource";
 import { ago, formatDateTime } from "../lib/format";
 import { groupPath } from "../lib/paths";
-import { Link } from "../router";
+import { Link, useSearchParams } from "../router";
 
 const statuses: Record<Token["status"], { text: string; kind: BadgeKind }> = {
   unused: { text: "unused", kind: "open" },
@@ -20,70 +19,162 @@ const statuses: Record<Token["status"], { text: string; kind: BadgeKind }> = {
   expired: { text: "expired", kind: "bad" },
 };
 
+const spent = (t: Token) => t.status === "used" || t.status === "group_deleted";
+
+const defaultSort: DefaultSort = { key: "created", dir: "desc" };
+
 /** TokensPage mints creation tokens, lists them and revokes the unused ones.
  *  One token creates exactly one group (SPEC §3.1). */
 export function TokensPage() {
   useDocumentTitle("Creation tokens");
-  const { data, error, version, reload } = useResource((signal) => api.tokens(signal), []);
+  const [params, setParams] = useSearchParams();
+  const status = params.get("status") ?? "";
+  const [meta, setMeta] = useState<TokenList | null>(null);
+  const [created, setCreated] = useState(0);
   const action = useAction();
+  const table = useTableController();
   const [shown, setShown] = useState<ShownToken | null>(null);
   const close = useCallback(() => setShown(null), []);
 
   const create = (token: NewToken) =>
     action.run(async () => {
       const t = await api.createToken(token);
-      reload();
+      setCreated((n) => n + 1);
+      table.refresh();
       // The point of minting a token is to hand it over, and this is the
-      // moment: its code opens straight away. The value came back in the
-      // response body, never in a URL.
-      if (t.url) setShown({ value: t.value, name: t.name, url: t.url });
+      // moment: its code opens straight away.
+      setShown({ handle: t.handle, name: t.name, url: t.url });
     });
+
+  // A token's link is asked for only when it is wanted. If it has stopped
+  // working since the list was loaded, the list is out of date: say why and
+  // reload it.
+  const link = async (t: Token): Promise<string | null> => {
+    let url: string | null = null;
+    await action.run(async () => {
+      try {
+        url = (await api.tokenLink(t.handle)).url;
+      } catch (err) {
+        table.refresh();
+        throw err;
+      }
+    });
+    return url;
+  };
+
+  const show = async (t: Token) => {
+    const url = await link(t);
+    if (url) setShown({ handle: t.handle, name: t.name, url });
+  };
 
   const revoke = (t: Token) =>
     action.run(async () => {
-      await api.revokeToken(t.value);
-      reload();
+      await api.revokeToken(t.handle);
+      table.refresh();
     });
+
+  const columns: Column<Token>[] = [
+    {
+      key: "name",
+      header: "Name",
+      className: "name",
+      render: (t) => (
+        <span className="stack">
+          <span>
+            {t.name}
+            {t.tag && (
+              <>
+                {" "}
+                <Badge kind="open">{t.tag}</Badge>
+              </>
+            )}
+          </span>
+          {t.note && <span className="muted note">{t.note}</span>}
+        </span>
+      ),
+    },
+    { key: "created", header: "Created", firstDir: "desc", render: (t) => formatDateTime(t.created_at) },
+    {
+      key: "status",
+      header: "Status",
+      render: (t) => <Badge kind={statuses[t.status].kind}>{statuses[t.status].text}</Badge>,
+    },
+    { key: "expires", header: "Expires", firstDir: "desc", render: (t) => <Expires token={t} /> },
+    {
+      key: "group",
+      header: "Group",
+      sortable: false,
+      render: (t) =>
+        t.group_handle ? (
+          <Link className="nowrap" to={groupPath(t.group_handle)}>
+            Open group
+          </Link>
+        ) : spent(t) ? (
+          <span className="muted">deleted</span>
+        ) : (
+          <Dash />
+        ),
+    },
+    {
+      key: "actions",
+      header: "Actions",
+      headerHidden: true,
+      className: "actions",
+      render: (t) => (
+        <TokenActions token={t} action={action} onLink={link} onShow={show} onRevoke={() => revoke(t)} />
+      ),
+    },
+  ];
 
   return (
     <>
-      <ErrorNotice error={action.error ?? error?.message} />
+      <ErrorNotice error={action.error} />
       <h1>Creation tokens</h1>
       <p className="lede">
         One token creates exactly one group. Generate one, hand its link or QR code to the first device, and it is
         spent.
       </p>
 
-      <CreateTokenForm key={version} tags={data?.tags ?? []} action={action} onCreate={create} />
+      <CreateTokenForm key={created} tags={meta?.tags ?? []} action={action} onCreate={create} />
 
-      {data && (
-        <>
-          <SectionHead title="Tokens">
-            {data.tokens.length > 0 && <span className="count">{data.tokens.length} total</span>}
-          </SectionHead>
-          {data.tokens.length > 0 ? (
-            <Table
-              columns={[
-                { label: "Name" },
-                { label: "Created" },
-                { label: "Status" },
-                { label: "Group" },
-                { label: "Actions", srOnly: true },
-              ]}
-            >
-              {data.tokens.map((t) => (
-                <TokenRow key={t.value} token={t} action={action} onShow={setShown} onRevoke={() => revoke(t)} />
-              ))}
-            </Table>
-          ) : (
-            <Empty>No tokens yet. Generate one above and send its link to the first device.</Empty>
-          )}
-        </>
-      )}
+      <SmartTable<Token, TokenList>
+        id="tokens"
+        caption="Tokens"
+        noun="tokens"
+        endpoint="/admin/api/tokens"
+        filters={{ status }}
+        columns={columns}
+        rowKey={(t) => t.handle}
+        defaultSort={defaultSort}
+        searchPlaceholder="Search tokens"
+        onResponse={setMeta}
+        controller={table}
+        toolbar={
+          <label className="table-filter">
+            Status{" "}
+            <select value={status} onChange={(e) => setParams({ status: e.target.value || null, page: null })}>
+              <option value="">All</option>
+              <option value="unused">Unused</option>
+              <option value="used">Used</option>
+              <option value="expired">Expired</option>
+            </select>
+          </label>
+        }
+        emptyText={
+          status ? "No tokens with this status." : "No tokens yet. Generate one above and send its link to the first device."
+        }
+      />
 
       <TokenDialog token={shown} onClose={close} />
     </>
   );
+}
+
+function Expires({ token: t }: { token: Token }) {
+  if (spent(t)) return <Dash />;
+  if (!t.expires_at) return <span className="muted">never</span>;
+  if (t.status === "expired") return <>expired {ago(Date.now(), t.expires_at, "")}</>;
+  return <>{formatDateTime(t.expires_at)}</>;
 }
 
 function CreateTokenForm({
@@ -172,87 +263,27 @@ function CreateTokenForm({
   );
 }
 
-function TokenRow({
-  token: t,
-  action,
-  onShow,
-  onRevoke,
-}: {
-  token: Token;
-  action: Action;
-  onShow: (token: ShownToken) => void;
-  onRevoke: () => void;
-}) {
-  const status = statuses[t.status];
-  const spent = t.status === "used" || t.status === "group_deleted";
-  let expires = "";
-  if (!spent && t.expires_at) {
-    expires = t.status === "expired" ? `expired ${ago(Date.now(), t.expires_at, "")}` : `expires ${formatDateTime(t.expires_at)}`;
-  }
-
-  return (
-    <tr>
-      <Cell label="Name" className="name">
-        <span className="stack">
-          <span>
-            {t.name}
-            {t.tag && (
-              <>
-                {" "}
-                <Badge kind="open">{t.tag}</Badge>
-              </>
-            )}
-          </span>
-          {t.note && <span className="muted note">{t.note}</span>}
-        </span>
-      </Cell>
-      <Cell label="Created">{formatDateTime(t.created_at)}</Cell>
-      <Cell label="Status">
-        <span className="stack">
-          <span>
-            <Badge kind={status.kind}>{status.text}</Badge>
-          </span>
-          {expires && <span className="muted small">{expires}</span>}
-        </span>
-      </Cell>
-      <Cell label="Group">
-        {t.group_id ? (
-          <Link className="nowrap" to={groupPath(t.group_id)}>
-            Open group
-          </Link>
-        ) : spent ? (
-          <span className="muted">deleted</span>
-        ) : (
-          <Dash />
-        )}
-      </Cell>
-      <Cell label="Actions" className="actions">
-        <TokenActions token={t} spent={spent} action={action} onShow={onShow} onRevoke={onRevoke} />
-      </Cell>
-    </tr>
-  );
-}
-
 function TokenActions({
   token: t,
-  spent,
   action,
+  onLink,
   onShow,
   onRevoke,
 }: {
   token: Token;
-  spent: boolean;
   action: Action;
-  onShow: (token: ShownToken) => void;
+  onLink: (token: Token) => Promise<string | null>;
+  onShow: (token: Token) => void;
   onRevoke: () => void;
 }) {
-  if (spent) return <span className="muted">Spent</span>;
+  const feedback = useCopyFeedback();
+  if (spent(t)) return <span className="muted">Spent</span>;
 
   // Revoking and removing are the same request; only the question differs.
-  const question =
-    t.status === "expired"
-      ? `Remove the expired token “${t.name}” from the list?`
-      : `Revoke “${t.name}”? Its link and QR code stop working, and this cannot be undone.`;
+  const expired = t.status === "expired";
+  const question = expired
+    ? `Remove the expired token “${t.name}” from the list?`
+    : `Revoke “${t.name}”? Its link and QR code stop working, and this cannot be undone.`;
   const revokeForm = (
     <form
       className="inline-form"
@@ -261,18 +292,23 @@ function TokenActions({
         if (window.confirm(question)) onRevoke();
       }}
     >
-      <button type="submit" className={t.status === "expired" ? "secondary small" : "danger small"} disabled={action.busy}>
-        {t.status === "expired" ? "Remove" : "Revoke"}
+      <button type="submit" className={expired ? "secondary small" : "danger small"} disabled={action.busy}>
+        {expired ? "Remove" : "Revoke"}
       </button>
     </form>
   );
+  if (expired) return revokeForm;
 
-  if (t.status === "expired" || !t.url) return revokeForm;
-  const url = t.url;
+  const copyLink = async () => {
+    const url = await onLink(t);
+    if (url) await feedback.copy(url);
+  };
   return (
     <>
-      <CopyButton text={url} label="Copy link" className="secondary small" />{" "}
-      <button type="button" className="secondary small" onClick={() => onShow({ value: t.value, name: t.name, url })}>
+      <button type="button" className="secondary small" onClick={() => void copyLink()}>
+        <span>{feedback.message ?? "Copy link"}</span>
+      </button>{" "}
+      <button type="button" className="secondary small" onClick={() => onShow(t)}>
         Show code
       </button>{" "}
       {revokeForm}

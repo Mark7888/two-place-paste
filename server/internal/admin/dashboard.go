@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Mark7888/two-place-paste/server/internal/store"
@@ -72,7 +73,9 @@ type sweepJSON struct {
 
 // groupJSON is one group's row: devices, activity, entries and storage.
 type groupJSON struct {
-	ID        string    `json:"id"`
+	// Handle names the group in URLs and requests; its id is the token that
+	// created it, and never leaves the server (handle.go).
+	Handle    string    `json:"handle"`
 	ShortID   string    `json:"short_id"`
 	Name      string    `json:"name"`
 	Tag       string    `json:"tag"`
@@ -105,17 +108,20 @@ type usageJSON struct {
 	OverLimit bool `json:"over_limit"`
 }
 
-// groupsJSON is the groups screen: every group, or those under one tag.
+// groupsJSON is the groups screen: one page of the groups, searched, sorted
+// and filtered, and what the screen shows around the table.
 type groupsJSON struct {
-	Groups []groupJSON `json:"groups"`
+	tablePage[groupJSON]
 
 	// Tags is the filter row: every tag, even an empty one, then the
-	// untagged groups when there are tags at all.
+	// untagged groups when there are tags at all. Its counts ignore the
+	// search, so a filter always says how many groups it holds.
 	Tags []tagChipJSON `json:"tags"`
 
 	// Filter is the tag the list is narrowed to: "" for all, "-" for the
-	// untagged groups, or a tag name.
+	// untagged groups, or a tag name. Stale narrows it to stale groups.
 	Filter string `json:"filter"`
+	Stale  bool   `json:"stale"`
 
 	GroupCount     int  `json:"group_count"`
 	StaleCount     int  `json:"stale_count"`
@@ -202,23 +208,61 @@ func (s *Server) unusedTokens(ctx context.Context, now time.Time, probs *problem
 	return n
 }
 
-// handleGroupList returns the groups screen: every group, or those under one
-// tag (?tag=name, or ?tag=- for the untagged ones), heaviest first.
+// groupItem is a group's row with what the list needs that the row does not
+// show: the id, for a stable order, and the device names, for the search.
+type groupItem struct {
+	row     groupJSON
+	id      string
+	devices []string
+}
+
+func (g groupItem) json() groupJSON { return g.row }
+
+// groupTable is the groups list: searched by name, tag, short id and device
+// name, heaviest first by default.
+var groupTable = table[groupItem]{
+	sorts: map[string]sortKey[groupItem]{
+		"name":        {cmp: func(a, b groupItem) int { return byText(a.row.Name, b.row.Name) }},
+		"tag":         {cmp: func(a, b groupItem) int { return byText(a.row.Tag, b.row.Tag) }},
+		"devices":     {cmp: func(a, b groupItem) int { return byNumber(a.row.Devices, b.row.Devices) }, desc: true},
+		"last_active": {cmp: func(a, b groupItem) int { return byTime(a.row.LastSeen, b.row.LastSeen) }, desc: true},
+		"entries":     {cmp: func(a, b groupItem) int { return byNumber(a.row.Entries, b.row.Entries) }, desc: true},
+		"oldest":      {cmp: func(a, b groupItem) int { return byTime(a.row.Oldest, b.row.Oldest) }, desc: true},
+		"storage":     {cmp: func(a, b groupItem) int { return byNumber(usedBytes(a.row), usedBytes(b.row)) }, desc: true},
+	},
+	defaultSort: "storage",
+	fields: func(g groupItem) []string {
+		return append([]string{g.row.Name, g.row.Tag, g.row.ShortID}, g.devices...)
+	},
+	tie: func(a, b groupItem) int {
+		if c := byText(a.row.Name, b.row.Name); c != 0 {
+			return c
+		}
+		return strings.Compare(a.id, b.id)
+	},
+}
+
+// handleGroupList returns one page of the groups screen. Beyond the list
+// parameters it takes ?tag=name (or ?tag=- for the untagged groups) and
+// ?stale=1.
 func (s *Server) handleGroupList(w http.ResponseWriter, r *http.Request, _ session) {
 	ctx := r.Context()
 	now := s.now()
-	filter := r.URL.Query().Get("tag")
+	query := r.URL.Query()
+	filter := query.Get("tag")
+	staleOnly := query.Get("stale") == "1"
 	probs := s.problems(ctx, "groups")
 	view := groupsJSON{
-		Groups:   []groupJSON{},
 		Tags:     []tagChipJSON{},
 		Filter:   filter,
+		Stale:    staleOnly,
 		HasUsage: s.dashboard.Ledger != nil,
 	}
 
 	groups, err := s.store.ListGroups(ctx)
 	if err != nil {
 		probs.add("the groups", err)
+		view.tablePage = mapPage(groupTable.run(nil, query), groupItem.json)
 		view.Problems = probs.list
 		writeJSON(w, http.StatusOK, view)
 		return
@@ -231,8 +275,9 @@ func (s *Server) handleGroupList(w http.ResponseWriter, r *http.Request, _ sessi
 	view.StaleAfterDays = wholeDays(settings.StaleAfter)
 
 	counts := make(map[string]int)
+	items := make([]groupItem, 0, len(groups))
 	for _, g := range groups {
-		row, _ := s.groupRow(ctx, g, tags, settings, now, probs)
+		row, devices := s.groupRow(ctx, g, tags, settings, now, probs)
 		if row.Stale {
 			view.StaleCount++
 		}
@@ -241,9 +286,14 @@ func (s *Server) handleGroupList(w http.ResponseWriter, r *http.Request, _ sessi
 			key = "-"
 		}
 		counts[key]++
-		if filter == "" || filter == key {
-			view.Groups = append(view.Groups, row)
+		if (filter != "" && filter != key) || (staleOnly && !row.Stale) {
+			continue
 		}
+		item := groupItem{row: row, id: g.ID, devices: make([]string, 0, len(devices))}
+		for _, d := range devices {
+			item.devices = append(item.devices, d.Name)
+		}
+		items = append(items, item)
 	}
 	view.GroupCount = len(groups)
 
@@ -259,10 +309,7 @@ func (s *Server) handleGroupList(w http.ResponseWriter, r *http.Request, _ sessi
 		view.Tags = append(view.Tags, tagChipJSON{Name: "Untagged", Filter: "-", Groups: n})
 	}
 
-	// Heaviest first: the group closest to its limit is the one to look at.
-	sort.SliceStable(view.Groups, func(i, j int) bool {
-		return usedBytes(view.Groups[i]) > usedBytes(view.Groups[j])
-	})
+	view.tablePage = mapPage(groupTable.run(items, query), groupItem.json)
 	view.Problems = probs.list
 	writeJSON(w, http.StatusOK, view)
 }
@@ -291,7 +338,7 @@ func (s *Server) settings(ctx context.Context) store.Settings {
 func (s *Server) groupRow(ctx context.Context, g store.Group, tags map[string]store.Tag, settings store.Settings, now time.Time, probs *problems) (groupJSON, []store.Device) {
 	d := s.dashboard
 	v := groupJSON{
-		ID:        g.ID,
+		Handle:    handleOf(g.ID),
 		ShortID:   shortID(g.ID),
 		Name:      g.Name,
 		Tag:       g.Tag,

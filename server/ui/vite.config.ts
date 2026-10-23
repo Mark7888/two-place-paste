@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 // The relay to develop against: `npm run dev` serves the UI and forwards its
@@ -30,6 +30,12 @@ export default defineConfig({
         assetFileNames: "assets/[name][extname]",
       },
     },
+  },
+  // `npm test`: the UI's unit and component tests, in a simulated browser.
+  test: {
+    environment: "jsdom",
+    include: ["src/**/*.test.{ts,tsx}"],
+    setupFiles: ["src/test/setup.ts"],
   },
   server: {
     port: 5174,

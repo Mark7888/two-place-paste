@@ -1,90 +1,113 @@
 import { useId, useState } from "react";
-import { api, type LimitChange, type Tag } from "../api";
-import { Empty, SectionHead } from "../components/Card";
+import { api, type LimitChange, type Tag, type TagList } from "../api";
 import { useLimitForm } from "../components/LimitFields";
 import { ErrorNotice, Problems } from "../components/Notice";
-import { Cell, Table } from "../components/Table";
+import { SmartTable, useTableController, type Column, type DefaultSort } from "../components/SmartTable";
 import { useAction, type Action } from "../hooks/useAction";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
-import { useResource } from "../hooks/useResource";
 import { humanBytes, limitText } from "../lib/format";
 import { groupsByTag } from "../lib/paths";
 import { Link, useRouter } from "../router";
+
+const defaultSort: DefaultSort = { key: "name", dir: "asc" };
 
 /** TagsPage creates tags, gives a tag a storage limit for every group under
  *  it, and deletes tags. Groups are put under a tag from their own page. */
 export function TagsPage() {
   useDocumentTitle("Tags");
-  const { data, error, version, reload } = useResource((signal) => api.tags(signal), []);
+  const [meta, setMeta] = useState<TagList | null>(null);
+  const [created, setCreated] = useState(0);
   const { notify } = useRouter();
   const action = useAction();
+  const table = useTableController();
 
+  // Every change confirms itself at the top and reloads the table, which
+  // keeps its search, sort and page.
   const change = (save: () => Promise<unknown>, done: string) =>
     action.run(async () => {
       await save();
       notify(done);
-      reload();
+      table.refresh();
     });
+
+  // The cells hold forms that act through this screen, so the columns are
+  // made here rather than once for the module.
+  const columns: Column<Tag>[] = [
+    { key: "name", header: "Tag", className: "name", render: (t) => <Link to={groupsByTag(t.name)}>{t.name}</Link> },
+    { key: "groups", header: "Groups", firstDir: "desc", align: "end", render: (t) => t.groups },
+    { key: "devices", header: "Devices", firstDir: "desc", align: "end", render: (t) => t.devices },
+    { key: "storage", header: "Blob storage", firstDir: "desc", render: (t) => humanBytes(t.used_bytes) },
+    {
+      key: "limit",
+      header: "Storage limit",
+      firstDir: "desc",
+      // Keyed by the stored limit, so a save shows what the relay stored
+      // rather than what was typed.
+      render: (t) => (
+        <TagLimitForm
+          key={`${t.limit.enabled}-${t.limit.bytes}`}
+          tag={t}
+          action={action}
+          onSave={(limit) => change(() => api.setTagLimit(t.name, limit), `Storage limit of “${t.name}” saved.`)}
+        />
+      ),
+    },
+    {
+      key: "delete",
+      header: "Delete",
+      headerHidden: true,
+      className: "actions",
+      render: (t) => (
+        <DeleteTagButton
+          tag={t}
+          action={action}
+          onDelete={() => change(() => api.deleteTag(t.name), `Tag “${t.name}” deleted. Its groups are untagged now.`)}
+        />
+      ),
+    },
+  ];
 
   return (
     <>
-      <ErrorNotice error={action.error ?? error?.message} />
-      {data && (
-        <>
-          <Problems list={data.problems} />
-          <h1>Tags</h1>
-          <p className="lede">
-            Tags put groups together, such as “family” or “friends”. A group has at most one tag. A tag can give every
-            group under it a storage limit, in place of the server default ({limitText(data.default_limit_bytes)}); a
-            group's own limit still wins over its tag's.
-          </p>
+      <ErrorNotice error={action.error} />
+      <Problems list={meta?.problems} />
+      <h1>Tags</h1>
+      <p className="lede">
+        Tags put groups together, such as “family” or “friends”. A group has at most one tag. A tag can give every group
+        under it a storage limit, in place of the server default
+        {meta ? ` (${limitText(meta.default_limit_bytes)})` : ""}; a group's own limit still wins over its tag's.
+      </p>
 
-          <CreateTagForm
-            key={version}
-            action={action}
-            onCreate={(name) =>
-              change(
-                () => api.createTag(name),
-                `Tag “${name.trim()}” created. Put groups under it from each group's page.`,
-              )
-            }
-          />
+      <CreateTagForm
+        key={created}
+        action={action}
+        onCreate={async (name) => {
+          const ok = await change(
+            () => api.createTag(name),
+            `Tag “${name.trim()}” created. Put groups under it from each group's page.`,
+          );
+          if (ok) setCreated((n) => n + 1);
+        }}
+      />
 
-          <SectionHead title="All tags">
-            {data.tags.length > 0 && <span className="count">{data.tags.length} total</span>}
-          </SectionHead>
-
-          {data.tags.length > 0 ? (
-            <>
-              <Table
-                columns={[
-                  { label: "Tag" },
-                  { label: "Groups" },
-                  { label: "Devices" },
-                  { label: "Blob storage" },
-                  { label: "Storage limit" },
-                  { label: "Delete", srOnly: true },
-                ]}
-              >
-                {data.tags.map((t) => (
-                  <TagRow
-                    key={`${t.name}-${version}`}
-                    tag={t}
-                    action={action}
-                    onLimit={(limit) => change(() => api.setTagLimit(t.name, limit), `Storage limit of “${t.name}” saved.`)}
-                    onDelete={() => change(() => api.deleteTag(t.name), `Tag “${t.name}” deleted. Its groups are untagged now.`)}
-                  />
-                ))}
-              </Table>
-              <p className="hint spaced">
-                0 means no per-group limit; the server's total limit ({limitText(data.total_limit_bytes)}) still
-                applies. Unticking keeps the value for later.
-              </p>
-            </>
-          ) : (
-            <Empty>No tags yet. Create one above.</Empty>
-          )}
-        </>
+      <SmartTable<Tag, TagList>
+        id="tags"
+        caption="Tags"
+        noun="tags"
+        endpoint="/admin/api/tags"
+        columns={columns}
+        rowKey={(t) => t.name}
+        defaultSort={defaultSort}
+        searchPlaceholder="Search tags"
+        onResponse={setMeta}
+        controller={table}
+        emptyText="No tags yet. Create one above."
+      />
+      {meta && (
+        <p className="hint spaced">
+          0 means no per-group limit; the server's total limit ({limitText(meta.total_limit_bytes)}) still applies.
+          Unticking keeps the value for later.
+        </p>
       )}
     </>
   );
@@ -125,69 +148,51 @@ function CreateTagForm({ action, onCreate }: { action: Action; onCreate: (name: 
   );
 }
 
-function TagRow({
-  tag,
-  action,
-  onLimit,
-  onDelete,
-}: {
-  tag: Tag;
-  action: Action;
-  onLimit: (limit: LimitChange) => void;
-  onDelete: () => void;
-}) {
+function TagLimitForm({ tag, action, onSave }: { tag: Tag; action: Action; onSave: (limit: LimitChange) => void }) {
   const form = useLimitForm(tag.limit);
   return (
-    <tr>
-      <Cell label="Tag" className="name">
-        <Link to={groupsByTag(tag.name)}>{tag.name}</Link>
-      </Cell>
-      <Cell label="Groups">{tag.groups}</Cell>
-      <Cell label="Devices">{tag.devices}</Cell>
-      <Cell label="Blob storage">{humanBytes(tag.used_bytes)}</Cell>
-      <Cell label="Storage limit">
-        <form
-          className="limit-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            onLimit(form.change);
-          }}
-        >
-          <label className="check">
-            <input type="checkbox" checked={form.enabled} onChange={(e) => form.setEnabled(e.target.checked)} /> Own
-            limit
-          </label>
-          <input
-            type="text"
-            value={form.size}
-            aria-label={`Storage limit for ${tag.name}`}
-            placeholder="e.g. 5 GiB"
-            onChange={(e) => form.setSize(e.target.value)}
-          />
-          <button type="submit" className="secondary small" disabled={action.busy}>
-            Save
-          </button>
-        </form>
-      </Cell>
-      <Cell label="Delete" className="actions">
-        <form
-          className="inline-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (
-              window.confirm(
-                `Delete the tag “${tag.name}”? Its groups stay, untagged, and go back to their own limit or the default.`,
-              )
-            ) {
-              onDelete();
-            }
-          }}
-        >
-          <button type="submit" className="danger small" disabled={action.busy}>
-            Delete
-          </button>
-        </form>
-      </Cell>
-    </tr>
+    <form
+      className="limit-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave(form.change);
+      }}
+    >
+      <label className="check">
+        <input type="checkbox" checked={form.enabled} onChange={(e) => form.setEnabled(e.target.checked)} /> Own limit
+      </label>
+      <input
+        type="text"
+        value={form.size}
+        aria-label={`Storage limit for ${tag.name}`}
+        placeholder="e.g. 5 GiB"
+        onChange={(e) => form.setSize(e.target.value)}
+      />
+      <button type="submit" className="secondary small" disabled={action.busy}>
+        Save
+      </button>
+    </form>
+  );
+}
+
+function DeleteTagButton({ tag, action, onDelete }: { tag: Tag; action: Action; onDelete: () => void }) {
+  return (
+    <form
+      className="inline-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (
+          window.confirm(
+            `Delete the tag “${tag.name}”? Its groups stay, untagged, and go back to their own limit or the default.`,
+          )
+        ) {
+          onDelete();
+        }
+      }}
+    >
+      <button type="submit" className="danger small" disabled={action.busy}>
+        Delete
+      </button>
+    </form>
   );
 }

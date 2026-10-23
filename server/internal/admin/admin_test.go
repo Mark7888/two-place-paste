@@ -476,7 +476,7 @@ func TestChangesRequireCSRF(t *testing.T) {
 }
 
 // TestTokenScreen walks the operator's whole job: sign in, mint a token, see it
-// listed with its creation URL and a scannable QR code.
+// listed, and get its creation URL and a scannable QR code on request.
 func TestTokenScreen(t *testing.T) {
 	t.Parallel()
 
@@ -493,18 +493,37 @@ func TestTokenScreen(t *testing.T) {
 		t.Fatalf("ListTokens() = %d tokens, %v; want 1, nil", len(tokens), err)
 	}
 	tok := tokens[0]
-	// The new token comes back in the response, so the screen can show its
-	// code at once without the value ever being put in a URL.
-	if created.Value != tok.Value || created.URL != "https://tpp.example.com/"+tok.Value || created.Status != "unused" {
-		t.Errorf("created token = %+v, want value %q, its URL and status unused", created, tok.Value)
+	handle := admin.HandleOf(tok.Value)
+	// The new token comes back with its URL, so the screen can show its code
+	// at once without the value ever being put in a URL.
+	if created.Handle != handle || created.URL != "https://tpp.example.com/"+tok.Value || created.Status != "unused" {
+		t.Errorf("created token = %+v, want handle %q, its URL and status unused", created, handle)
 	}
 
-	list := readJSON[tokenList](t, f.get(c, "/admin/api/tokens"))
-	if len(list.Tokens) != 1 || list.Tokens[0].Name != "Anna — laptop" || list.Tokens[0].URL != created.URL {
-		t.Errorf("token list = %+v, want the new token with its URL", list.Tokens)
+	// The list names the token by its handle and holds no credential.
+	resp = f.get(c, "/admin/api/tokens")
+	body := readBody(t, resp)
+	if strings.Contains(body, tok.Value) {
+		t.Errorf("the token list holds a token value: %s", body)
+	}
+	var list tokenList
+	if err := json.Unmarshal([]byte(body), &list); err != nil {
+		t.Fatalf("decode token list: %v", err)
+	}
+	if len(list.Tokens) != 1 || list.Tokens[0].Name != "Anna — laptop" || list.Tokens[0].Handle != handle || list.Tokens[0].URL != "" {
+		t.Errorf("token list = %+v, want the new token by handle, without its URL", list.Tokens)
 	}
 
-	resp = f.get(c, "/admin/tokens/"+tok.Value+"/qr.png")
+	// The URL is handed out on request, one token at a time.
+	resp = f.get(c, "/admin/api/tokens/"+handle+"/link")
+	wantStatus(t, resp, http.StatusOK)
+	if got := readJSON[map[string]string](t, resp)["url"]; got != created.URL {
+		t.Errorf("link = %q, want %q", got, created.URL)
+	}
+	wantStatus(t, f.get(f.client(), "/admin/api/tokens/"+handle+"/link"), http.StatusUnauthorized)
+	wantStatus(t, f.get(c, "/admin/api/tokens/nope/link"), http.StatusNotFound)
+
+	resp = f.get(c, "/admin/tokens/"+handle+"/qr.png")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET qr.png = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
@@ -514,36 +533,42 @@ func TestTokenScreen(t *testing.T) {
 	if png := readBody(t, resp); !strings.HasPrefix(png, "\x89PNG\r\n\x1a\n") {
 		t.Error("qr.png body is not a PNG")
 	}
+	// The raw value does not work as a handle.
+	if got := f.get(c, "/admin/tokens/"+tok.Value+"/qr.png").StatusCode; got != http.StatusNotFound {
+		t.Errorf("GET qr.png by token value = %d, want %d", got, http.StatusNotFound)
+	}
 
-	// A consumed token has no onboarding value left: no QR code, no URL.
+	// A consumed token has no onboarding value left: no QR code, no link.
 	if _, err := f.store.CreateGroup(context.Background(), tok.Value, store.NewDevice{
 		PublicKey: []byte("pk"), WrappedGroupKey: []byte("wk"),
 	}); err != nil {
 		t.Fatalf("CreateGroup() error = %v", err)
 	}
-	if got := f.get(c, "/admin/tokens/"+tok.Value+"/qr.png").StatusCode; got != http.StatusNotFound {
+	if got := f.get(c, "/admin/tokens/"+handle+"/qr.png").StatusCode; got != http.StatusNotFound {
 		t.Errorf("GET qr.png for a used token = %d, want %d", got, http.StatusNotFound)
 	}
+	wantStatus(t, f.get(c, "/admin/api/tokens/"+handle+"/link"), http.StatusNotFound)
 	list = readJSON[tokenList](t, f.get(c, "/admin/api/tokens"))
-	if got := list.Tokens[0]; got.Status != "used" || got.URL != "" || got.GroupID != tok.Value {
-		t.Errorf("used token = %+v, want status used, no URL and its group", got)
+	if got := list.Tokens[0]; got.Status != "used" || got.GroupHandle != handle {
+		t.Errorf("used token = %+v, want status used and its group's handle", got)
 	}
 }
 
 // tokenRow and tokenList are the token API's JSON, as a test reads it.
 type tokenRow struct {
-	Value     string     `json:"value"`
-	Name      string     `json:"name"`
-	Note      string     `json:"note"`
-	Tag       string     `json:"tag"`
-	Status    string     `json:"status"`
-	ExpiresAt *time.Time `json:"expires_at"`
-	URL       string     `json:"url"`
-	GroupID   string     `json:"group_id"`
+	Handle      string     `json:"handle"`
+	Name        string     `json:"name"`
+	Note        string     `json:"note"`
+	Tag         string     `json:"tag"`
+	Status      string     `json:"status"`
+	ExpiresAt   *time.Time `json:"expires_at"`
+	URL         string     `json:"url"`
+	GroupHandle string     `json:"group_handle"`
 }
 
 type tokenList struct {
-	Tokens []tokenRow `json:"tokens"`
+	Tokens []tokenRow `json:"rows"`
+	Total  int        `json:"total"`
 	Tags   []string   `json:"tags"`
 }
 
@@ -561,7 +586,7 @@ func TestRevokeToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateToken() error = %v", err)
 	}
-	revokePath := "/admin/api/tokens/" + unused.Value
+	revokePath := "/admin/api/tokens/" + admin.HandleOf(unused.Value)
 
 	wantStatus(t, f.call(c, "", http.MethodDelete, revokePath, nil), http.StatusForbidden)
 	if _, err := f.store.GetToken(ctx, unused.Value); err != nil {
@@ -590,7 +615,7 @@ func TestRevokeToken(t *testing.T) {
 	if _, err := f.store.ConsumeToken(ctx, used.Value); err != nil {
 		t.Fatalf("ConsumeToken() error = %v", err)
 	}
-	wantStatus(t, f.call(c, csrf, http.MethodDelete, "/admin/api/tokens/"+used.Value, nil), http.StatusConflict)
+	wantStatus(t, f.call(c, csrf, http.MethodDelete, "/admin/api/tokens/"+admin.HandleOf(used.Value), nil), http.StatusConflict)
 	if got, err := f.store.GetToken(ctx, used.Value); err != nil || !got.Used {
 		t.Errorf("used token after a refused revoke = {Used:%v}, %v; want it untouched", got.Used, err)
 	}
@@ -834,7 +859,7 @@ func TestRefusedRequestLogsNoToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateToken() error = %v", err)
 	}
-	wantStatus(t, f.call(c, "", http.MethodDelete, "/admin/api/tokens/"+tok.Value, nil), http.StatusForbidden)
+	wantStatus(t, f.call(c, "", http.MethodDelete, "/admin/api/tokens/"+admin.HandleOf(tok.Value), nil), http.StatusForbidden)
 
 	mu.Lock()
 	defer mu.Unlock()

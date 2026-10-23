@@ -261,6 +261,7 @@ label {
 input[type="text"],
 input[type="password"],
 input[type="number"],
+input[type="search"],
 select {
   /* Width, never flex: see the note at the top of this file. */
   width: 100%;
@@ -781,3 +782,200 @@ tr.current td { background: var(--accent-soft); }
 .chips a:hover { background: var(--line-soft); }
 .chips a[aria-current="page"] { background: var(--accent-soft); border-color: transparent; font-weight: 600; }
 .chips a.manage { border: 0; background: none; color: var(--muted); text-decoration: underline; margin-left: auto; }
+
+/* --- smart table -------------------------------------------------------- */
+
+/* Every list: a toolbar (search, the screen's filters, and on phones the
+   sort), the table, and a footer with the pages. */
+
+.table-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 0.9rem;
+  margin: 0 0 0.9rem;
+}
+
+.table-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 16rem;
+  max-width: 26rem;
+  min-width: 0;
+}
+
+.table-search input { padding-right: 2.3rem; }
+.table-search input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+
+/* The ✕ that clears the search, inside the field's right edge. */
+.table-search .clear {
+  position: absolute;
+  right: 0.3rem;
+  height: 1.9rem;
+  width: 1.9rem;
+  padding: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+}
+
+.table-search .clear:hover { color: var(--fg); background: var(--line-soft); filter: none; }
+
+.table-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.9rem; }
+.table-toolbar .chips { margin: 0; }
+.table-toolbar .chips a.manage { margin-left: 0.2rem; }
+
+/* A labelled select in the toolbar, such as a status filter. */
+.table-filter,
+.sort-control label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 500;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.table-filter select,
+.sort-control select { width: auto; height: 2.1rem; }
+
+/* Phones see cards, not a header row, so the sort is offered here instead. */
+.sort-control { display: none; align-items: center; gap: 0.4rem; }
+
+/* A sortable header is a button that looks like the header it is. */
+th .sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  height: auto;
+  padding: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  white-space: nowrap;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: 3px;
+}
+
+th .sort-button:hover { color: var(--fg); filter: none; }
+th .sort-button:active { transform: none; }
+
+.sort-mark { font-size: 0.8em; opacity: 0; }
+th .sort-button:hover .sort-mark,
+th .sort-button:focus-visible .sort-mark { opacity: 0.45; }
+th[aria-sort] { color: var(--fg); }
+th[aria-sort] .sort-mark { opacity: 1; }
+
+th.num, td.num { text-align: right; }
+
+tr.clickable { cursor: pointer; }
+
+/* A caption taking the focus after a page change shows no ring: it is for
+   the screen reader, and the table is already where the eye is. */
+caption:focus { outline: none; }
+
+/* Loading: the first load shows placeholder rows; a later one keeps the rows
+   on screen, dimmed, under a thin bar. */
+.table-wrap { position: relative; }
+.table-wrap.is-loading tbody { opacity: 0.55; transition: opacity 0.15s; }
+
+.progress {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 1;
+  height: 2px;
+  overflow: hidden;
+}
+
+.progress::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 30%;
+  background: var(--accent);
+  animation: table-progress 1s ease-in-out infinite;
+}
+
+@keyframes table-progress {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(340%); }
+}
+
+.skeleton {
+  display: inline-block;
+  width: 70%;
+  max-width: 8rem;
+  height: 0.8rem;
+  vertical-align: middle;
+  border-radius: 4px;
+  background: var(--line-soft);
+  animation: table-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes table-pulse { 50% { opacity: 0.45; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .progress::before { animation: none; width: 100%; opacity: 0.5; }
+  .skeleton { animation: none; }
+}
+
+tr.skeleton-row:hover { background: none; }
+
+.table-error { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
+
+/* A button that reads as a link, inside a sentence. */
+button.link-button {
+  display: inline;
+  height: auto;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  background: none;
+  border: 0;
+}
+
+button.link-button:hover { filter: none; }
+button.link-button:active { transform: none; }
+.notice.error button.link-button { color: inherit; }
+
+.table-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem 1rem;
+  margin: 0.75rem 0 1.75rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.pager { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; }
+.pager button { min-width: 2.1rem; }
+.pager button:disabled { opacity: 0.45; cursor: default; filter: none; transform: none; }
+/* The current page is never faded: it is where the reader is, not a dead end. */
+.pager button.current:disabled { opacity: 1; }
+.pager .gap { padding: 0 0.25rem; }
+
+.page-size { display: inline-flex; align-items: center; gap: 0.45rem; }
+.page-size label { font-weight: 500; font-size: inherit; }
+.page-size select { width: auto; height: 2.1rem; }
+
+/* The footer follows the table, so the gap a hint or section heading needs
+   after a listing moves below the footer. */
+.table-foot + .hint.spaced { margin-top: -1rem; }
+.empty + .table-foot { margin-top: 0.75rem; }
+
+@media (max-width: 46rem) {
+  .sort-control { display: flex; }
+  .hide-mobile { display: none !important; }
+  .table-search { max-width: none; }
+  td.num { text-align: inherit; }
+  .table-foot { justify-content: center; }
+}

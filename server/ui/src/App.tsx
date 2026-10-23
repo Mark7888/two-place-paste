@@ -21,9 +21,9 @@ const LOGIN = "/admin/login";
 const routes: { path: string; render: (params: Record<string, string>) => ReactNode }[] = [
   { path: "/admin/", render: () => <DashboardPage /> },
   { path: "/admin/groups", render: () => <GroupsPage /> },
-  { path: "/admin/groups/:id", render: (p) => <GroupPage id={p.id} /> },
-  { path: "/admin/groups/:id/purge", render: (p) => <GroupConfirmPage id={p.id} kind="purge" /> },
-  { path: "/admin/groups/:id/delete", render: (p) => <GroupConfirmPage id={p.id} kind="delete" /> },
+  { path: "/admin/groups/:handle", render: (p) => <GroupPage handle={p.handle} /> },
+  { path: "/admin/groups/:handle/purge", render: (p) => <GroupConfirmPage handle={p.handle} kind="purge" /> },
+  { path: "/admin/groups/:handle/delete", render: (p) => <GroupConfirmPage handle={p.handle} kind="delete" /> },
   { path: "/admin/tags", render: () => <TagsPage /> },
   { path: "/admin/tokens", render: () => <TokensPage /> },
   { path: "/admin/audit", render: () => <AuditPage /> },
@@ -81,9 +81,9 @@ function Screens() {
   }
   return (
     <Layout authenticated>
-      {/* Keyed by the navigation, so every visit loads afresh, as a page load
-          used to. */}
-      <PageFrame key={location.key}>{page}</PageFrame>
+      {/* Keyed by the screen, so every visit loads afresh, as a page load
+          used to — but a search or a page change within it does not. */}
+      <PageFrame key={location.mount}>{page}</PageFrame>
     </Layout>
   );
 }

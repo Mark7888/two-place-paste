@@ -3,8 +3,8 @@ package admin
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
-	"sort"
 
 	"github.com/Mark7888/two-place-paste/server/internal/store"
 )
@@ -18,16 +18,44 @@ type tagJSON struct {
 	Limit     limitJSON `json:"limit"`
 }
 
-// tagsJSON is the tag screen.
+// tagsJSON is the tag screen: one page of the tags, and the limits its
+// explanations name.
 type tagsJSON struct {
-	Tags              []tagJSON `json:"tags"`
-	DefaultLimitBytes int64     `json:"default_limit_bytes"`
-	TotalLimitBytes   int64     `json:"total_limit_bytes"`
-	Problems          []string  `json:"problems"`
+	tablePage[tagJSON]
+	DefaultLimitBytes int64    `json:"default_limit_bytes"`
+	TotalLimitBytes   int64    `json:"total_limit_bytes"`
+	Problems          []string `json:"problems"`
 }
 
-// handleTags returns the tag screen: every tag with the groups, devices and
-// storage under it, by name.
+// limitOrder ranks a tag's limit for sorting: off (the default applies)
+// lowest, then the sizes, then "on with 0", which is no per-group limit at all.
+func limitOrder(l limitJSON) int64 {
+	switch {
+	case !l.Enabled:
+		return -1
+	case l.Bytes == 0:
+		return math.MaxInt64
+	default:
+		return l.Bytes
+	}
+}
+
+// tagTable is the tag list: searched by name, by name by default.
+var tagTable = table[tagJSON]{
+	sorts: map[string]sortKey[tagJSON]{
+		"name":    {cmp: func(a, b tagJSON) int { return byText(a.Name, b.Name) }},
+		"groups":  {cmp: func(a, b tagJSON) int { return byNumber(a.Groups, b.Groups) }, desc: true},
+		"devices": {cmp: func(a, b tagJSON) int { return byNumber(a.Devices, b.Devices) }, desc: true},
+		"storage": {cmp: func(a, b tagJSON) int { return byNumber(a.UsedBytes, b.UsedBytes) }, desc: true},
+		"limit":   {cmp: func(a, b tagJSON) int { return byNumber(limitOrder(a.Limit), limitOrder(b.Limit)) }, desc: true},
+	},
+	defaultSort: "name",
+	fields:      func(t tagJSON) []string { return []string{t.Name} },
+	tie:         func(a, b tagJSON) int { return byText(a.Name, b.Name) },
+}
+
+// handleTags returns one page of the tag screen: each tag with the groups,
+// devices and storage under it.
 func (s *Server) handleTags(w http.ResponseWriter, r *http.Request, _ session) {
 	ctx := r.Context()
 	tags, err := s.store.ListTags(ctx)
@@ -42,17 +70,13 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request, _ session) {
 		probs.add("the groups", err)
 	}
 
-	v := tagsJSON{
-		Tags:              make([]tagJSON, 0, len(tags)),
-		DefaultLimitBytes: s.dashboard.GroupLimit,
-		TotalLimitBytes:   s.dashboard.TotalLimit,
-	}
+	rows := make([]tagJSON, 0, len(tags))
 	for _, t := range tags {
-		v.Tags = append(v.Tags, tagJSON{Name: t.Name, Limit: limitJSON{Enabled: t.Limit.Enabled, Bytes: t.Limit.Bytes}})
+		rows = append(rows, tagJSON{Name: t.Name, Limit: limitJSON{Enabled: t.Limit.Enabled, Bytes: t.Limit.Bytes}})
 	}
-	byName := make(map[string]*tagJSON, len(v.Tags))
-	for i := range v.Tags {
-		byName[v.Tags[i].Name] = &v.Tags[i]
+	byName := make(map[string]*tagJSON, len(rows))
+	for i := range rows {
+		byName[rows[i].Name] = &rows[i]
 	}
 	for _, g := range groups {
 		tv := byName[g.Tag]
@@ -69,9 +93,13 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request, _ session) {
 			}
 		}
 	}
-	sort.Slice(v.Tags, func(i, j int) bool { return v.Tags[i].Name < v.Tags[j].Name })
-	v.Problems = probs.list
-	writeJSON(w, http.StatusOK, v)
+
+	writeJSON(w, http.StatusOK, tagsJSON{
+		tablePage:         tagTable.run(rows, r.URL.Query()),
+		DefaultLimitBytes: s.dashboard.GroupLimit,
+		TotalLimitBytes:   s.dashboard.TotalLimit,
+		Problems:          probs.list,
+	})
 }
 
 // handleCreateTag adds a tag.

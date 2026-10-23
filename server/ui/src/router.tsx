@@ -22,15 +22,22 @@ import {
 export interface Location {
   pathname: string;
   search: string;
-  /** key changes on every navigation, even to the same URL, so a screen can
-   *  be mounted afresh and load its data again. */
+  /** key changes on every navigation, even to the same URL. */
   key: number;
+  /** mount changes when the screen does: a navigation to another path, or
+   *  to the same one through a link. It stays the same when only the query
+   *  string changes in place — a search being typed, a table paged — so the
+   *  screen keeps its state and the search box keeps its focus. */
+  mount: number;
 }
 
 export interface NavigateOptions {
   replace?: boolean;
   /** notice is shown on the screen navigated to. */
   notice?: string;
+  /** stay changes the URL without mounting the screen afresh: for state that
+   *  lives in the query string. A notice on screen stays, too. */
+  stay?: boolean;
 }
 
 interface RouterValue {
@@ -43,15 +50,24 @@ interface RouterValue {
 
 const RouterContext = createContext<RouterValue | null>(null);
 
-function here(key: number): Location {
-  return { pathname: window.location.pathname, search: window.location.search, key };
+function here(key: number, mount: number): Location {
+  return { pathname: window.location.pathname, search: window.location.search, key, mount };
 }
 
 export function RouterProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState(() => ({ location: here(0), notice: null as string | null }));
+  const [state, setState] = useState(() => ({ location: here(0, 0), notice: null as string | null }));
 
   useEffect(() => {
-    const onPop = () => setState((s) => ({ location: here(s.location.key + 1), notice: null }));
+    // Back and forward within one screen — through searches and pages — keep
+    // it mounted; to another screen they mount that one.
+    const onPop = () =>
+      setState((s) => {
+        const same = window.location.pathname === s.location.pathname;
+        return {
+          location: here(s.location.key + 1, same ? s.location.mount : s.location.mount + 1),
+          notice: same ? s.notice : null,
+        };
+      });
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
@@ -59,8 +75,11 @@ export function RouterProvider({ children }: { children: ReactNode }) {
   const navigate = useCallback((to: string, options: NavigateOptions = {}) => {
     if (options.replace) window.history.replaceState(null, "", to);
     else window.history.pushState(null, "", to);
-    setState((s) => ({ location: here(s.location.key + 1), notice: options.notice ?? null }));
-    window.scrollTo(0, 0);
+    setState((s) => ({
+      location: here(s.location.key + 1, options.stay ? s.location.mount : s.location.mount + 1),
+      notice: options.stay ? s.notice : (options.notice ?? null),
+    }));
+    if (!options.stay) window.scrollTo(0, 0);
   }, []);
 
   const notify = useCallback((notice: string | null) => {
@@ -82,6 +101,41 @@ export function useRouter(): RouterValue {
   return value;
 }
 
+/** ParamPatch changes query parameters: a string sets one, null removes it. */
+export type ParamPatch = Record<string, string | null>;
+
+/** withParams is the current path with its query string patched. Parameters
+ *  are written in a fixed order, so the same state is always the same URL. */
+export function withParams(location: Pick<Location, "pathname" | "search">, patch: ParamPatch): string {
+  const params = new URLSearchParams(location.search);
+  for (const [name, value] of Object.entries(patch)) {
+    if (value === null || value === "") params.delete(name);
+    else params.set(name, value);
+  }
+  params.sort();
+  const query = params.toString();
+  return query ? `${location.pathname}?${query}` : location.pathname;
+}
+
+/** useSearchParams reads the query string and changes it in place, without
+ *  mounting the screen again. A replace is for state that changes as fast as
+ *  someone types; a push is for steps worth going back to. */
+export function useSearchParams(): [URLSearchParams, (patch: ParamPatch, options?: { replace?: boolean }) => void] {
+  const { location, navigate } = useRouter();
+  const params = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const update = useCallback(
+    (patch: ParamPatch, options: { replace?: boolean } = {}) => {
+      // Read the URL as it is now, not as it was at the last render: two
+      // changes in one tick must not undo each other.
+      const to = withParams(window.location, patch);
+      if (to === window.location.pathname + window.location.search) return;
+      navigate(to, { replace: options.replace, stay: true });
+    },
+    [navigate],
+  );
+  return [params, update];
+}
+
 /** useQueryParam reads one parameter of the current URL's query string. */
 export function useQueryParam(name: string): string {
   const { location } = useRouter();
@@ -89,7 +143,7 @@ export function useQueryParam(name: string): string {
 }
 
 /** matchPath matches a pathname against a pattern such as
- *  "/admin/groups/:id" and returns the decoded parameters, or null. */
+ *  "/admin/groups/:handle" and returns the decoded parameters, or null. */
 export function matchPath(pattern: string, pathname: string): Record<string, string> | null {
   const want = pattern.split("/");
   const got = pathname.split("/");
@@ -112,12 +166,17 @@ export function matchPath(pattern: string, pathname: string): Record<string, str
   return params;
 }
 
-type LinkProps = Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & { to: string };
+type LinkProps = Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
+  to: string;
+  /** stay navigates in place, as useSearchParams does: for links that only
+   *  change the query string, such as a filter. */
+  stay?: boolean;
+};
 
 /** Link is an <a> that navigates inside the app. A click with a modifier key,
  *  or any button but the main one, is left to the browser, so "open in a new
  *  tab" still works. */
-export function Link({ to, onClick, children, ...rest }: LinkProps) {
+export function Link({ to, stay, onClick, children, ...rest }: LinkProps) {
   const { navigate } = useRouter();
   const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
     onClick?.(event);
@@ -133,7 +192,7 @@ export function Link({ to, onClick, children, ...rest }: LinkProps) {
       return;
     }
     event.preventDefault();
-    navigate(to);
+    navigate(to, { stay });
   };
   return (
     <a href={to} onClick={handleClick} {...rest}>

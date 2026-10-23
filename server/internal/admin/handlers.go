@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -106,11 +107,12 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 // tokenJSON is one creation token as the token screen lists it (SPEC §4.4). It
-// carries no clipboard data because the server holds none.
+// carries no clipboard data because the server holds none, and not the token
+// itself either: an unused token is a live credential, so the row names it by
+// its handle (handle.go) and the creation URL is fetched only when the admin
+// asks for it (handleTokenLink).
 type tokenJSON struct {
-	// Value is the token itself. The screen needs it to revoke the token, and
-	// it is also the id of the group the token created.
-	Value     string    `json:"value"`
+	Handle    string    `json:"handle"`
 	Name      string    `json:"name"`
 	Note      string    `json:"note"`
 	Tag       string    `json:"tag"`
@@ -120,24 +122,64 @@ type tokenJSON struct {
 	Status    string     `json:"status"`
 	ExpiresAt *time.Time `json:"expires_at"`
 
-	// URL is the creation URL, for an unused token only: a spent or expired
-	// one creates nothing, so there is nothing to hand out.
-	URL string `json:"url,omitempty"`
-
-	// GroupID is the group the token created, while that group exists.
-	GroupID string `json:"group_id,omitempty"`
+	// GroupHandle names the group the token created, while that group exists.
+	GroupHandle string `json:"group_handle,omitempty"`
 }
 
+// tokensJSON is the token screen: one page of the tokens, and the tags a new
+// token can start its group under.
 type tokensJSON struct {
-	Tokens []tokenJSON `json:"tokens"`
-
-	// Tags are the tags a new token can start its group under.
+	tablePage[tokenJSON]
 	Tags []string `json:"tags"`
+}
+
+// createdTokenJSON is a token just minted. It carries its creation URL, so the
+// screen can show the code straight away: this response is the one place
+// besides the link endpoint the URL travels, and it is never in a URL itself.
+type createdTokenJSON struct {
+	tokenJSON
+	URL string `json:"url"`
+}
+
+// tokenItem is a token's row with its value, which the list sorts ties by
+// and never shows.
+type tokenItem struct {
+	row   tokenJSON
+	value string
+}
+
+func (t tokenItem) json() tokenJSON { return t.row }
+
+// statusOrder ranks token statuses: the ones still to be handed out first.
+var statusOrder = map[string]int{"unused": 0, "expired": 1, "used": 2, "group_deleted": 3}
+
+// statusText is how a status reads, for the search.
+var statusText = map[string]string{"unused": "unused", "expired": "expired", "used": "used", "group_deleted": "group deleted"}
+
+// tokenTable is the token list: searched by name, note, tag and status,
+// newest first by default.
+var tokenTable = table[tokenItem]{
+	sorts: map[string]sortKey[tokenItem]{
+		"name":    {cmp: func(a, b tokenItem) int { return byText(a.row.Name, b.row.Name) }},
+		"created": {cmp: func(a, b tokenItem) int { return a.row.CreatedAt.Compare(b.row.CreatedAt) }, desc: true},
+		"status":  {cmp: func(a, b tokenItem) int { return byNumber(statusOrder[a.row.Status], statusOrder[b.row.Status]) }},
+		"expires": {cmp: func(a, b tokenItem) int { return byTime(a.row.ExpiresAt, b.row.ExpiresAt) }, desc: true},
+	},
+	defaultSort: "created",
+	fields: func(t tokenItem) []string {
+		return []string{t.row.Name, t.row.Note, t.row.Tag, statusText[t.row.Status]}
+	},
+	tie: func(a, b tokenItem) int {
+		if c := byText(a.row.Name, b.row.Name); c != 0 {
+			return c
+		}
+		return strings.Compare(a.value, b.value)
+	},
 }
 
 func (s *Server) tokenView(t store.Token, now time.Time) tokenJSON {
 	v := tokenJSON{
-		Value:     t.Value,
+		Handle:    handleOf(t.Value),
 		Name:      t.Name,
 		Note:      t.Note,
 		Tag:       t.Tag,
@@ -149,17 +191,18 @@ func (s *Server) tokenView(t store.Token, now time.Time) tokenJSON {
 		v.Status = "group_deleted"
 	case t.Used:
 		v.Status = "used"
-		v.GroupID = t.GroupID
+		v.GroupHandle = handleOf(t.GroupID)
 	case t.Expired(now):
 		v.Status = "expired"
 	default:
 		v.Status = "unused"
-		v.URL = s.creationURL(t.Value)
 	}
 	return v
 }
 
-// handleTokens lists the creation tokens, newest first (SPEC §4.4).
+// handleTokens returns one page of the creation tokens (SPEC §4.4). Beyond
+// the list parameters it takes ?status=unused|used|expired; "used" includes
+// tokens whose group has since been deleted.
 func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request, _ session) {
 	ctx := r.Context()
 	tokens, err := s.store.ListTokens(ctx)
@@ -168,23 +211,40 @@ func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request, _ session)
 		writeJSONError(w, http.StatusInternalServerError, "The token list could not be loaded.")
 		return
 	}
-	out := tokensJSON{Tokens: make([]tokenJSON, 0, len(tokens)), Tags: []string{}}
+	out := tokensJSON{Tags: []string{}}
 	if tags, err := s.store.ListTags(ctx); err == nil {
 		for _, t := range tags {
 			out.Tags = append(out.Tags, t.Name)
 		}
+		slices.Sort(out.Tags)
 	}
+
+	query := r.URL.Query()
+	status := query.Get("status")
 	now := s.now()
+	items := make([]tokenItem, 0, len(tokens))
 	for _, t := range tokens {
-		out.Tokens = append(out.Tokens, s.tokenView(t, now))
+		row := s.tokenView(t, now)
+		switch status {
+		case "unused", "expired":
+			if row.Status != status {
+				continue
+			}
+		case "used":
+			if row.Status != "used" && row.Status != "group_deleted" {
+				continue
+			}
+		}
+		items = append(items, tokenItem{row: row, value: t.Value})
 	}
+	out.tablePage = mapPage(tokenTable.run(items, query), tokenItem.json)
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleCreateToken mints a creation token (SPEC §3.1 step 1) and returns it,
-// so the screen can show its code straight away. The value travels in this
-// response body only — never in a URL, where a credential would end up in the
-// browser's history and in every access log on the way.
+// handleCreateToken mints a creation token (SPEC §3.1 step 1) and returns it
+// with its creation URL, so the screen can show its code straight away. The
+// URL travels in this response body only — never in a URL, where a credential
+// would end up in the browser's history and in every access log on the way.
 func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, _ session) {
 	var req struct {
 		Name    string `json:"name"`
@@ -235,7 +295,36 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, _ ses
 	// (docs/internal/conventions.md §2).
 	s.logger.InfoContext(r.Context(), "creation token issued", slog.String("token_name", tok.Name))
 	s.audit(r, "token.create", tok.Name, expiryText(tok.ExpiresAt))
-	writeJSON(w, http.StatusCreated, s.tokenView(tok, s.now()))
+	writeJSON(w, http.StatusCreated, createdTokenJSON{tokenJSON: s.tokenView(tok, s.now()), URL: s.creationURL(tok.Value)})
+}
+
+// liveToken finds the unused, unexpired token a handle names: the only kind
+// with a link or a code to show. On false a response has already been written.
+func (s *Server) liveToken(w http.ResponseWriter, r *http.Request) (store.Token, bool) {
+	tok, err := s.tokenByHandle(r.Context(), r.PathValue("handle"))
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		s.logger.ErrorContext(r.Context(), "read token", "error", err)
+		writeJSONError(w, http.StatusInternalServerError, "The token could not be read.")
+		return store.Token{}, false
+	}
+	if err != nil || tok.Used || tok.Expired(s.now()) {
+		// A consumed or expired token creates nothing; handing out its link
+		// would only invite someone to try.
+		writeJSONError(w, http.StatusNotFound, "That token has no link any more: it was used, revoked or has expired.")
+		return store.Token{}, false
+	}
+	return tok, true
+}
+
+// handleTokenLink returns an unused token's creation URL, for "Copy link" and
+// "Show code". Asking for it is a deliberate act, one token at a time, so a
+// screen of twenty tokens holds none of their credentials.
+func (s *Server) handleTokenLink(w http.ResponseWriter, r *http.Request, _ session) {
+	tok, ok := s.liveToken(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"url": s.creationURL(tok.Value)})
 }
 
 // handleRevokeToken deletes an unused creation token, so the URL that was
@@ -243,10 +332,9 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, _ ses
 // rather than deleted: its group already exists, and removing the record
 // would only hide which token created it.
 func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request, _ session) {
-	value := r.PathValue("token")
-	tok, err := s.store.GetToken(r.Context(), value)
+	tok, err := s.tokenByHandle(r.Context(), r.PathValue("handle"))
 	if err == nil {
-		err = s.store.RevokeToken(r.Context(), value)
+		err = s.store.RevokeToken(r.Context(), tok.Value)
 	}
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -273,8 +361,7 @@ func (s *Server) handleTokenQR(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	value := r.PathValue("token")
-	tok, err := s.store.GetToken(r.Context(), value)
+	tok, err := s.tokenByHandle(r.Context(), r.PathValue("handle"))
 	if errors.Is(err, store.ErrNotFound) {
 		http.NotFound(w, r)
 		return

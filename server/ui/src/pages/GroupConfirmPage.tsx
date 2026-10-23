@@ -1,8 +1,8 @@
 import { useEffect } from "react";
-import { ApiError, api } from "../api";
+import { ApiError, api, type Group } from "../api";
 import { GroupBadges } from "../components/Badge";
 import { ErrorNotice, Problems } from "../components/Notice";
-import { Cell, Table } from "../components/Table";
+import { SmartTable, type Column } from "../components/SmartTable";
 import { useAction } from "../hooks/useAction";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useResource } from "../hooks/useResource";
@@ -11,6 +11,28 @@ import { groupPath } from "../lib/paths";
 import { Link, useRouter } from "../router";
 
 export type ConfirmKind = "purge" | "delete";
+
+// One group, so nothing to sort: the columns have no sortValue.
+const confirmColumns: Column<Group>[] = [
+  {
+    key: "name",
+    header: "Group",
+    className: "name",
+    render: (g) => (
+      <span className="stack">
+        <span>
+          {g.name}
+          <GroupBadges group={{ ...g, stale: false, usage: null }} />
+        </span>
+        <code className="muted">{g.short_id}</code>
+      </span>
+    ),
+  },
+  { key: "devices", header: "Devices", render: (g) => g.devices },
+  { key: "entries", header: "Entries", render: (g) => g.entries },
+  { key: "storage", header: "Blob storage", render: (g) => (g.usage ? humanBytes(g.usage.used_bytes) : "") },
+  { key: "last_active", header: "Last active", render: (g) => ago(Date.now(), g.last_seen, "never") },
+];
 
 const copy = {
   purge: {
@@ -33,10 +55,10 @@ const copy = {
 /** GroupConfirmPage asks before an action that cannot be undone, naming the
  *  group it touches and what it frees (docs/internal/plans/
  *  admin-group-management.md D14). */
-export function GroupConfirmPage({ id, kind }: { id: string; kind: ConfirmKind }) {
+export function GroupConfirmPage({ handle, kind }: { handle: string; kind: ConfirmKind }) {
   const text = copy[kind];
   useDocumentTitle(text.heading);
-  const { data, error } = useResource((signal) => api.group(id, signal), [id]);
+  const { data, error } = useResource((signal) => api.group(handle, signal), [handle]);
   const { navigate } = useRouter();
   const action = useAction();
 
@@ -50,14 +72,14 @@ export function GroupConfirmPage({ id, kind }: { id: string; kind: ConfirmKind }
   const confirm = () =>
     action.run(async () => {
       if (kind === "purge") {
-        const res = await api.purgeGroup(id);
-        navigate(groupPath(id), {
+        const res = await api.purgeGroup(handle);
+        navigate(groupPath(handle), {
           notice: `Purged ${res.entries} ${plural(res.entries, "entry", "entries")}, ${humanBytes(res.bytes)} freed.`,
         });
         return;
       }
       try {
-        const res = await api.deleteGroup(id);
+        const res = await api.deleteGroup(handle);
         navigate("/admin/groups", { notice: `Deleted the group “${res.name}”.` });
       } catch (err) {
         // Deleted meanwhile, by another tab or another admin: say so where
@@ -80,25 +102,14 @@ export function GroupConfirmPage({ id, kind }: { id: string; kind: ConfirmKind }
       <h1>{text.heading}</h1>
       <p className="lede">{text.lede}</p>
 
-      <Table
-        columns={[{ label: "Group" }, { label: "Devices" }, { label: "Entries" }, { label: "Blob storage" }, { label: "Last active" }]}
-      >
-        <tr>
-          <Cell label="Group" className="name">
-            <span className="stack">
-              <span>
-                {g.name}
-                <GroupBadges group={{ ...g, stale: false, usage: null }} />
-              </span>
-              <code className="muted">{g.short_id}</code>
-            </span>
-          </Cell>
-          <Cell label="Devices">{g.devices}</Cell>
-          <Cell label="Entries">{g.entries}</Cell>
-          <Cell label="Blob storage">{g.usage ? humanBytes(g.usage.used_bytes) : ""}</Cell>
-          <Cell label="Last active">{ago(Date.now(), g.last_seen, "never")}</Cell>
-        </tr>
-      </Table>
+      <SmartTable<Group>
+        caption="The group"
+        rows={[g]}
+        columns={confirmColumns}
+        rowKey={(row) => row.handle}
+        defaultSort={{ key: "name", dir: "asc" }}
+        emptyText=""
+      />
       <p className="hint spaced">{`${humanBytes(used)} of blob storage freed.`}</p>
 
       <form
@@ -111,7 +122,7 @@ export function GroupConfirmPage({ id, kind }: { id: string; kind: ConfirmKind }
         <button type="submit" className="danger" disabled={action.busy}>
           {text.button}
         </button>
-        <Link className="button secondary" to={groupPath(id)}>
+        <Link className="button secondary" to={groupPath(handle)}>
           Cancel
         </Link>
       </form>

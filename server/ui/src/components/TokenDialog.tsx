@@ -4,7 +4,8 @@ import { qrPath } from "../lib/paths";
 import { CopyButton } from "./CopyButton";
 
 export interface ShownToken {
-  value: string;
+  /** handle names the token, for its QR image. */
+  handle: string;
   name: string;
   url: string;
 }
@@ -60,7 +61,7 @@ export function TokenDialog({ token, onClose }: { token: ShownToken | null; onCl
         </form>
       </div>
       <div className="dialog-body">
-        {token && <img className="qr" width={200} height={200} alt="QR code for the creation URL" src={qrPath(token.value)} />}
+        {token && <img className="qr" width={200} height={200} alt="QR code for the creation URL" src={qrPath(token.handle)} />}
         <p className="scan-hint">Scan this from the device, or send it the link.</p>
         <div className="copy-row">
           <code className="value mono">{token?.url}</code>

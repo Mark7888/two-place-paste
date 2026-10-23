@@ -1,6 +1,20 @@
 // The admin API's JSON, as server/internal/admin writes it. Sizes are bytes
 // and times are RFC 3339 strings in UTC; null means "none" or "never".
 
+export type SortDir = "asc" | "desc";
+
+/** TablePage is one page of a list, and the search, sort and page the relay
+ *  actually applied after clamping and fallback (server/internal/admin/table.go). */
+export interface TablePage<T> {
+  rows: T[];
+  /** total counts every row matching the search and filters, on all pages. */
+  total: number;
+  page: number;
+  size: number;
+  sort: string;
+  dir: SortDir;
+}
+
 export interface Session {
   csrf: string;
 }
@@ -65,7 +79,9 @@ export interface Health {
 export type LimitSource = "group" | "tag" | "default";
 
 export interface Group {
-  id: string;
+  /** handle names the group in URLs and requests. Its id is the token that
+   *  created it, and never leaves the relay. */
+  handle: string;
   short_id: string;
   name: string;
   tag: string;
@@ -82,10 +98,12 @@ export interface Group {
   usage: { used_bytes: number; over_limit: boolean } | null;
 }
 
-export interface GroupList {
-  groups: Group[];
+export interface GroupList extends TablePage<Group> {
+  /** The tag filter: every tag, then the untagged groups. Counts ignore the
+   *  search. */
   tags: { name: string; filter: string; groups: number }[];
   filter: string;
+  stale: boolean;
   group_count: number;
   stale_count: number;
   stale_after_days: number;
@@ -120,8 +138,7 @@ export interface Tag {
   limit: Limit;
 }
 
-export interface TagList {
-  tags: Tag[];
+export interface TagList extends TablePage<Tag> {
   default_limit_bytes: number;
   total_limit_bytes: number;
   problems: string[];
@@ -130,22 +147,26 @@ export interface TagList {
 export type TokenStatus = "unused" | "used" | "expired" | "group_deleted";
 
 export interface Token {
-  /** The token itself: a credential, and the id of the group it created. */
-  value: string;
+  /** handle names the token. The token itself is a credential and is never
+   *  in a row; its link is fetched on request (api.tokenLink). */
+  handle: string;
   name: string;
   note: string;
   tag: string;
   created_at: string;
   status: TokenStatus;
   expires_at: string | null;
-  /** The creation URL, for an unused token only. */
-  url?: string;
   /** The group the token created, while it exists. */
-  group_id?: string;
+  group_handle?: string;
 }
 
-export interface TokenList {
-  tokens: Token[];
+/** CreatedToken is a token just minted, with its creation URL. */
+export interface CreatedToken extends Token {
+  url: string;
+}
+
+export interface TokenList extends TablePage<Token> {
+  /** The tags a new token can start its group under. */
   tags: string[];
 }
 
@@ -167,12 +188,16 @@ export interface Settings {
 export interface AuditEntry {
   at: string;
   action: string;
+  /** label is the action in plain words. */
+  label: string;
   target: string;
   detail: string;
   ip: string;
 }
 
-export interface AuditLog {
-  entries: AuditEntry[];
+export interface AuditLog extends TablePage<AuditEntry> {
+  /** kept is how many entries the relay keeps in all. */
   kept: number;
+  /** actions are the kinds of entry the filter offers. */
+  actions: { action: string; label: string }[];
 }

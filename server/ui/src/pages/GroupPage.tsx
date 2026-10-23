@@ -1,10 +1,10 @@
 import { useId, useState } from "react";
-import { api, type GroupDetail } from "../api";
+import { api, type Device, type GroupDetail } from "../api";
 import { Badge, GroupBadges } from "../components/Badge";
-import { Empty, SectionHead, StatCard } from "../components/Card";
+import { SectionHead, StatCard } from "../components/Card";
 import { useLimitForm } from "../components/LimitFields";
 import { ErrorNotice, Problems } from "../components/Notice";
-import { Cell, Table } from "../components/Table";
+import { SmartTable, type Column } from "../components/SmartTable";
 import { UsageMeter } from "../components/UsageMeter";
 import { useAction, type Action } from "../hooks/useAction";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
@@ -18,8 +18,8 @@ const limitSources = { group: "this group", tag: "its tag", default: "the server
 /** GroupPage is one group: what it holds, its name, tag and storage limit,
  *  its devices, and the way to purge or delete it. Like every screen it shows
  *  counts, sizes and device names, never content. */
-export function GroupPage({ id }: { id: string }) {
-  const { data, error, version, reload } = useResource((signal) => api.group(id, signal), [id]);
+export function GroupPage({ handle }: { handle: string }) {
+  const { data, error, version, reload } = useResource((signal) => api.group(handle, signal), [handle]);
   const { notify } = useRouter();
   const action = useAction();
   useDocumentTitle(data?.group.name ?? (error ? "No such group" : "Group"));
@@ -47,7 +47,7 @@ export function GroupPage({ id }: { id: string }) {
             key={`name-${version}`}
             name={data.group.name}
             action={action}
-            onSave={(name) => change(() => api.renameGroup(id, name), "Group renamed. Its devices show the new name.")}
+            onSave={(name) => change(() => api.renameGroup(handle, name), "Group renamed. Its devices show the new name.")}
           />
 
           <SectionHead title="Tag">
@@ -59,7 +59,7 @@ export function GroupPage({ id }: { id: string }) {
             key={`tag-${version}`}
             data={data}
             action={action}
-            onSave={(tag) => change(() => api.setGroupTag(id, tag), "Tag saved.")}
+            onSave={(tag) => change(() => api.setGroupTag(handle, tag), "Tag saved.")}
           />
 
           <SectionHead title="Storage limit" />
@@ -67,11 +67,11 @@ export function GroupPage({ id }: { id: string }) {
             key={`limit-${version}`}
             data={data}
             action={action}
-            onSave={(limit) => change(() => api.setGroupLimit(id, limit), "Storage limit saved.")}
+            onSave={(limit) => change(() => api.setGroupLimit(handle, limit), "Storage limit saved.")}
           />
 
           <Devices data={data} />
-          <DangerZone id={id} canPurge={data.can_purge} />
+          <DangerZone handle={handle} canPurge={data.can_purge} />
         </>
       )}
     </>
@@ -240,45 +240,67 @@ function LimitForm({
   );
 }
 
+const deviceColumns: Column<Device>[] = [
+  {
+    key: "name",
+    header: "Device",
+    className: "name",
+    sortValue: (d) => d.name,
+    render: (d) => (
+      <span className="stack">
+        {d.name}
+        <code className="muted">{d.short_id}</code>
+      </span>
+    ),
+  },
+  {
+    key: "paired",
+    header: "Paired",
+    firstDir: "desc",
+    sortValue: (d) => Date.parse(d.created_at),
+    render: (d) => formatDate(d.created_at),
+  },
+  {
+    key: "last_seen",
+    header: "Last seen",
+    firstDir: "desc",
+    sortValue: (d) => (d.last_seen ? Date.parse(d.last_seen) : 0),
+    render: (d) => ago(Date.now(), d.last_seen, "never"),
+  },
+  {
+    key: "status",
+    header: "Status",
+    firstDir: "desc",
+    sortValue: (d) => (d.online ? 1 : 0),
+    render: (d) => (d.online ? <Badge kind="good">online</Badge> : <Badge kind="used">offline</Badge>),
+  },
+];
+
 function Devices({ data }: { data: GroupDetail }) {
-  const now = Date.now();
   return (
     <>
       <SectionHead title="Devices">
         <span className="count">{data.group.devices} total</span>
       </SectionHead>
-      {data.devices.length > 0 ? (
-        <>
-          <Table columns={[{ label: "Device" }, { label: "Paired" }, { label: "Last seen" }, { label: "Status" }]}>
-            {data.devices.map((d) => (
-              <tr key={d.short_id + d.created_at}>
-                <Cell label="Device" className="name">
-                  <span className="stack">
-                    {d.name}
-                    <code className="muted">{d.short_id}</code>
-                  </span>
-                </Cell>
-                <Cell label="Paired">{formatDate(d.created_at)}</Cell>
-                <Cell label="Last seen">{ago(now, d.last_seen, "never")}</Cell>
-                <Cell label="Status">
-                  {d.online ? <Badge kind="good">online</Badge> : <Badge kind="used">offline</Badge>}
-                </Cell>
-              </tr>
-            ))}
-          </Table>
-          <p className="hint spaced">
-            Devices are added by pairing and removed from another device of the group, which re-keys it. The server
-            cannot re-key, so it cannot remove one.
-          </p>
-        </>
-      ) : (
-        <Empty>This group has no devices left.</Empty>
+      <SmartTable<Device>
+        caption="Devices"
+        rows={data.devices}
+        columns={deviceColumns}
+        rowKey={(d) => d.short_id + d.created_at}
+        defaultSort={{ key: "paired", dir: "asc" }}
+        emptyText="This group has no devices left."
+      />
+      {data.devices.length > 0 && (
+        <p className="hint spaced">
+          Devices are added by pairing and removed from another device of the group, which re-keys it. The server
+          cannot re-key, so it cannot remove one.
+        </p>
       )}
     </>
   );
 }
 
-function DangerZone({ id, canPurge }: { id: string; canPurge: boolean }) {
+function DangerZone({ handle, canPurge }: { handle: string; canPurge: boolean }) {
   return (
     <>
       <SectionHead title="Danger zone" />
@@ -290,7 +312,7 @@ function DangerZone({ id, canPurge }: { id: string; canPurge: boolean }) {
               <br />
               <span className="muted">Delete everything the group holds now. Devices keep working.</span>
             </div>
-            <Link className="button secondary" to={`${groupPath(id)}/purge`}>
+            <Link className="button secondary" to={`${groupPath(handle)}/purge`}>
               Purge entries…
             </Link>
           </div>
@@ -301,7 +323,7 @@ function DangerZone({ id, canPurge }: { id: string; canPurge: boolean }) {
             <br />
             <span className="muted">Remove the group, its devices and entries. Cannot be undone.</span>
           </div>
-          <Link className="button danger" to={`${groupPath(id)}/delete`}>
+          <Link className="button danger" to={`${groupPath(handle)}/delete`}>
             Delete group…
           </Link>
         </div>

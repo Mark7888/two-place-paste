@@ -19,6 +19,25 @@ nothing from anywhere but the relay, and it talks to the relay only through `/ad
 The header links to six screens: **Dashboard**, **Groups**, **Tags**, **Tokens**, **Audit log**
 and **Settings**. Each group also has a page of its own, reached from **Groups**.
 
+## Lists: search, sort and pages
+
+The lists on **Groups**, **Tags**, **Tokens** and **Audit log** work the same way:
+
+- **Search** with the box above the list. It ignores case, and every word you type must appear
+  somewhere in the row, so `anna laptop` finds a group named “Anna” with a device called
+  “laptop”. It runs as you pause typing; **Enter** runs it at once and **Esc** or **✕** clears it.
+- **Sort** by clicking a column's header; click it again to reverse it. Names sort A to Z first,
+  and sizes, counts and dates largest or newest first. On a phone, where the list becomes cards,
+  use **Sort by** above it instead.
+- **Pages** of 25, 50 or 100 rows, chosen under the list with **Rows per page**. The browser
+  remembers your choice for each list.
+
+The search, sort, page and filters are part of the address, so a view can be bookmarked or
+shared with another admin, and the browser's back button steps back through them.
+
+Groups and tokens are named in these addresses by an opaque handle, never by their id or value:
+a token is a credential, and a group's id is the token that created it.
+
 ## Hand out a group
 
 A **creation token** lets one device create one group. Make one per person (or per set of devices
@@ -38,7 +57,8 @@ that should share a clipboard).
    <Image src={token} alt="A new creation token with its QR code and link" class="screenshot" />
 
 2. Send the link to its owner — **Copy link** puts it on your clipboard — or let them scan the QR
-   code. They paste it into the app under **Pairing → Create a group**. See
+   code. The link of an unused token can be fetched again from its row with **Copy link** or
+   **Show code**; the list itself never holds it. They paste it into the app under **Pairing → Create a group**. See
    [Create a group](/two-place-paste/guides/create-a-group/).
 
 </Steps>
@@ -50,6 +70,7 @@ that should share a clipboard).
   **expired**, and **Remove** clears it away.
 - An unused token can be **revoked** from the same page. A used one cannot: its group already
   exists. To remove the group, [delete it](#delete-a-group).
+- **Status** above the list shows only the unused, used or expired tokens.
 
 ## The dashboard
 
@@ -72,11 +93,13 @@ If part of the dashboard cannot be read (say Redis is down), it says which part 
 
 <Image src={groups} alt="The Groups screen: a tag filter above a table of groups with their storage" class="screenshot" />
 
-**Groups** lists every group, heaviest first: devices, last activity, live entries, oldest entry and
-storage against the group's limit. The row above the table filters it by tag, or to the untagged
-groups; [**Manage tags**](#tags-and-storage-limits) leads to the Tags screen.
+**Groups** lists every group, heaviest first: its tag, devices, last activity, live entries,
+oldest entry and storage against the group's limit. The search looks at group names, tags, the
+short ids and device names. Next to it, the tag buttons narrow the list to one tag or to the
+untagged groups, and **Stale only** to the stale ones;
+[**Manage tags**](#tags-and-storage-limits) leads to the Tags screen.
 
-Click a name to open the [group's page](#manage-a-group). Badges mark a group that is **stale** (no
+Click a group to open its [page](#manage-a-group). Badges mark a group that is **stale** (no
 device has connected for longer than the [stale threshold](#settings)) or **over limit** (its limit
 was lowered below what it holds). To remove a stale group, open it and
 [delete it](#delete-a-group); groups are deleted one at a time.
@@ -143,7 +166,8 @@ stale. The default is 90 days.
 **Audit log** lists the last 1,000 things done on these screens, newest first: sign-ins (and failed
 or rate-limited ones), tokens created and revoked, groups renamed, tagged, limited, purged and
 deleted, tags and settings changed, and sweeps requested — with the time and the address it came
-from. It names groups and tokens, and never holds a token value, a password or a key.
+from. It names groups and tokens, and never holds a token value, a password or a key. Search it
+by action, name, detail or address, or pick one kind of entry with **Action**.
 
 <Aside>
 	Sign-ins are rate-limited per IP address, and the audit log records the address. Both need your

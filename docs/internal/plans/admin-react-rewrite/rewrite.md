@@ -64,18 +64,21 @@ them.
 |---|---|
 | `GET /dashboard` | Counts, storage, health, problems. |
 | `POST /sweep` | Queues a sweep: `{queued}`. |
-| `GET /groups[?tag=name\|-]` | Groups, heaviest first, with the tag filter row. |
-| `GET /groups/{id}` | One group: its row, devices, limits, tags. |
-| `PUT /groups/{id}/name`, `/tag`, `/limit` | Rename, tag, own storage limit (`{enabled, size}`). |
-| `POST /groups/{id}/purge` | `{entries, bytes}`. |
-| `DELETE /groups/{id}` | `{name}`, or 404 if it was already gone. |
+| `GET /groups[?tag=name\|-][&stale=1]` | One page of the groups, with the tag filter row. |
+| `GET /groups/{handle}` | One group: its row, devices, limits, tags. |
+| `PUT /groups/{handle}/name`, `/tag`, `/limit` | Rename, tag, own storage limit (`{enabled, size}`). |
+| `POST /groups/{handle}/purge` | `{entries, bytes}`. |
+| `DELETE /groups/{handle}` | `{name}`, or 404 if it was already gone. |
 | `GET /tags`, `POST /tags`, `PUT /tags/{name}/limit`, `DELETE /tags/{name}` | Tags. |
-| `GET /tokens`, `POST /tokens`, `DELETE /tokens/{token}` | Tokens. `POST` returns the new token, so the screen opens its code without the value ever being in a URL. |
+| `GET /tokens[?status=…]`, `POST /tokens`, `DELETE /tokens/{handle}` | Tokens. `POST` returns the new token with its URL, so the screen opens its code without the value ever being in a URL. |
+| `GET /tokens/{handle}/link` | An unused token's creation URL, for Copy link and Show code. |
 | `GET /settings`, `PUT /settings` | The stale threshold. |
-| `GET /audit` | The newest 200 entries. |
+| `GET /audit[?action=…]` | One page of the audit log. |
 
-The QR image stays a session-checked `GET /admin/tokens/{token}/qr.png`, since it is an
-`<img>`.
+The four lists take `q`, `sort`, `dir`, `page` and `size` and answer with one page plus what
+was applied (`smart-table.md`). Groups and tokens are named by a handle, never by their id
+or value (`handle.go`). The QR image stays a session-checked
+`GET /admin/tokens/{handle}/qr.png`, since it is an `<img>`.
 
 ## 5. What behaves differently
 

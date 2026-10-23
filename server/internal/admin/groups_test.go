@@ -179,7 +179,7 @@ func TestGroupPageAndRename(t *testing.T) {
 	c := g.client()
 	csrf := g.login(c)
 
-	page := readJSON[groupPage](t, g.get(c, "/admin/api/groups/"+id))
+	page := readJSON[groupPage](t, g.get(c, "/admin/api/groups/"+admin.HandleOf(id)))
 	if page.Group.Name != "Anna" || len(page.Devices) != 1 || page.Devices[0].Name != "Anna's laptop" || !page.Devices[0].Online {
 		t.Errorf("group page = %+v, want Anna with her laptop online", page)
 	}
@@ -187,7 +187,7 @@ func TestGroupPageAndRename(t *testing.T) {
 		t.Errorf("group page = %+v, want purge available and the 1 MiB default limit", page)
 	}
 
-	wantStatus(t, g.call(c, csrf, http.MethodPut, "/admin/api/groups/"+id+"/name", map[string]string{"name": "  Family "}), http.StatusNoContent)
+	wantStatus(t, g.call(c, csrf, http.MethodPut, "/admin/api/groups/"+admin.HandleOf(id)+"/name", map[string]string{"name": "  Family "}), http.StatusNoContent)
 	got, err := g.store.GetGroup(context.Background(), id)
 	if err != nil || got.Name != "Family" {
 		t.Errorf("group name = %q, %v; want Family", got.Name, err)
@@ -201,12 +201,12 @@ func TestGroupPageAndRename(t *testing.T) {
 		"too long":   strings.Repeat("x", 121),
 		"control":    "a\x07b",
 	} {
-		resp := g.call(c, csrf, http.MethodPut, "/admin/api/groups/"+id+"/name", map[string]string{"name": newName})
+		resp := g.call(c, csrf, http.MethodPut, "/admin/api/groups/"+admin.HandleOf(id)+"/name", map[string]string{"name": newName})
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s: status = %d, want %d", name, resp.StatusCode, http.StatusBadRequest)
 		}
 	}
-	wantStatus(t, g.call(c, "", http.MethodPut, "/admin/api/groups/"+id+"/name", map[string]string{"name": "x"}), http.StatusForbidden)
+	wantStatus(t, g.call(c, "", http.MethodPut, "/admin/api/groups/"+admin.HandleOf(id)+"/name", map[string]string{"name": "x"}), http.StatusForbidden)
 
 	resp := g.get(c, "/admin/api/groups/nope")
 	wantStatus(t, resp, http.StatusNotFound)
@@ -243,14 +243,14 @@ func TestStorageLimitPrecedence(t *testing.T) {
 	}{
 		{name: "create tag", method: http.MethodPost, path: "/admin/api/tags", body: map[string]string{"name": "family"}, want: def, wantCode: http.StatusCreated},
 		{name: "tag limit on", method: http.MethodPut, path: "/admin/api/tags/family/limit", body: limit{true, "5 GiB"}, want: def},
-		{name: "tag the group", method: http.MethodPut, path: "/admin/api/groups/" + id + "/tag", body: map[string]string{"tag": "family"}, want: 5 << 30, wantOwn: true},
-		{name: "group limit on", method: http.MethodPut, path: "/admin/api/groups/" + id + "/limit", body: limit{true, "2 GiB"}, want: 2 << 30, wantOwn: true},
-		{name: "group limit off keeps tag", method: http.MethodPut, path: "/admin/api/groups/" + id + "/limit", body: limit{false, ""}, want: 5 << 30, wantOwn: true},
+		{name: "tag the group", method: http.MethodPut, path: "/admin/api/groups/" + admin.HandleOf(id) + "/tag", body: map[string]string{"tag": "family"}, want: 5 << 30, wantOwn: true},
+		{name: "group limit on", method: http.MethodPut, path: "/admin/api/groups/" + admin.HandleOf(id) + "/limit", body: limit{true, "2 GiB"}, want: 2 << 30, wantOwn: true},
+		{name: "group limit off keeps tag", method: http.MethodPut, path: "/admin/api/groups/" + admin.HandleOf(id) + "/limit", body: limit{false, ""}, want: 5 << 30, wantOwn: true},
 		{name: "tag limit off", method: http.MethodPut, path: "/admin/api/tags/family/limit", body: limit{false, ""}, want: def},
-		{name: "group limit zero", method: http.MethodPut, path: "/admin/api/groups/" + id + "/limit", body: limit{true, "0"}, want: 0, wantOwn: true},
-		{name: "above total refused", method: http.MethodPut, path: "/admin/api/groups/" + id + "/limit", body: limit{true, "200 GiB"}, want: 0, wantOwn: true, wantCode: http.StatusBadRequest},
-		{name: "not a size refused", method: http.MethodPut, path: "/admin/api/groups/" + id + "/limit", body: limit{true, "lots"}, want: 0, wantOwn: true, wantCode: http.StatusBadRequest},
-		{name: "group limit off", method: http.MethodPut, path: "/admin/api/groups/" + id + "/limit", body: limit{}, want: def},
+		{name: "group limit zero", method: http.MethodPut, path: "/admin/api/groups/" + admin.HandleOf(id) + "/limit", body: limit{true, "0"}, want: 0, wantOwn: true},
+		{name: "above total refused", method: http.MethodPut, path: "/admin/api/groups/" + admin.HandleOf(id) + "/limit", body: limit{true, "200 GiB"}, want: 0, wantOwn: true, wantCode: http.StatusBadRequest},
+		{name: "not a size refused", method: http.MethodPut, path: "/admin/api/groups/" + admin.HandleOf(id) + "/limit", body: limit{true, "lots"}, want: 0, wantOwn: true, wantCode: http.StatusBadRequest},
+		{name: "group limit off", method: http.MethodPut, path: "/admin/api/groups/" + admin.HandleOf(id) + "/limit", body: limit{}, want: def},
 	}
 	for _, st := range steps {
 		resp := g.call(c, csrf, st.method, st.path, st.body)
@@ -280,7 +280,7 @@ func TestStorageLimitPrecedence(t *testing.T) {
 	if got, _ := g.ledgerLimit(t, id); got != 3<<30 {
 		t.Fatalf("ledger limit = %d, want the tag's 3 GiB", got)
 	}
-	page := readJSON[groupPage](t, g.get(c, "/admin/api/groups/"+id))
+	page := readJSON[groupPage](t, g.get(c, "/admin/api/groups/"+admin.HandleOf(id)))
 	if page.TagLimitBytes == nil || *page.TagLimitBytes != 3<<30 || page.Group.LimitSource != "tag" {
 		t.Errorf("group page = tag limit %v, source %q; want 3 GiB from the tag", page.TagLimitBytes, page.Group.LimitSource)
 	}
@@ -291,7 +291,7 @@ func TestStorageLimitPrecedence(t *testing.T) {
 	if grp, _ := g.store.GetGroup(ctx, id); grp.Tag != "" {
 		t.Errorf("group tag after tag delete = %q, want none", grp.Tag)
 	}
-	wantStatus(t, g.call(c, csrf, http.MethodPut, "/admin/api/groups/"+id+"/tag", map[string]string{"tag": "family"}), http.StatusBadRequest)
+	wantStatus(t, g.call(c, csrf, http.MethodPut, "/admin/api/groups/"+admin.HandleOf(id)+"/tag", map[string]string{"tag": "family"}), http.StatusBadRequest)
 	wantStatus(t, g.call(c, csrf, http.MethodPut, "/admin/api/tags/family/limit", limit{true, "1 GiB"}), http.StatusNotFound)
 	wantStatus(t, g.call(c, csrf, http.MethodDelete, "/admin/api/tags/family", nil), http.StatusNotFound)
 }
@@ -333,7 +333,7 @@ func TestTagScreen(t *testing.T) {
 	csrf := g.login(c)
 	wantStatus(t, g.call(c, csrf, http.MethodPost, "/admin/api/tags", map[string]string{"name": "family"}), http.StatusCreated)
 	wantStatus(t, g.call(c, csrf, http.MethodPost, "/admin/api/tags", map[string]string{"name": "empty"}), http.StatusCreated)
-	wantStatus(t, g.call(c, csrf, http.MethodPut, "/admin/api/groups/"+anna+"/tag", map[string]string{"tag": "family"}), http.StatusNoContent)
+	wantStatus(t, g.call(c, csrf, http.MethodPut, "/admin/api/groups/"+admin.HandleOf(anna)+"/tag", map[string]string{"tag": "family"}), http.StatusNoContent)
 
 	type tagRow struct {
 		Name      string `json:"name"`
@@ -342,7 +342,7 @@ func TestTagScreen(t *testing.T) {
 		UsedBytes int64  `json:"used_bytes"`
 	}
 	got := readJSON[struct {
-		Tags              []tagRow `json:"tags"`
+		Tags              []tagRow `json:"rows"`
 		DefaultLimitBytes int64    `json:"default_limit_bytes"`
 		TotalLimitBytes   int64    `json:"total_limit_bytes"`
 	}](t, g.get(c, "/admin/api/tags"))
@@ -373,7 +373,7 @@ func TestPurgeGroup(t *testing.T) {
 
 	// What the confirmation page shows: the group and the blob storage a purge
 	// frees, and no entry id.
-	body := readBody(t, g.get(c, "/admin/api/groups/"+id))
+	body := readBody(t, g.get(c, "/admin/api/groups/"+admin.HandleOf(id)))
 	if !strings.Contains(body, `"used_bytes":4096`) {
 		t.Errorf("group page does not show the 4 KiB a purge frees: %s", body)
 	}
@@ -383,8 +383,8 @@ func TestPurgeGroup(t *testing.T) {
 		}
 	}
 
-	wantStatus(t, g.call(c, "", http.MethodPost, "/admin/api/groups/"+id+"/purge", nil), http.StatusForbidden)
-	resp := g.call(c, csrf, http.MethodPost, "/admin/api/groups/"+id+"/purge", nil)
+	wantStatus(t, g.call(c, "", http.MethodPost, "/admin/api/groups/"+admin.HandleOf(id)+"/purge", nil), http.StatusForbidden)
+	resp := g.call(c, csrf, http.MethodPost, "/admin/api/groups/"+admin.HandleOf(id)+"/purge", nil)
 	wantStatus(t, resp, http.StatusOK)
 	res := readJSON[struct {
 		Entries int   `json:"entries"`
@@ -415,10 +415,10 @@ func TestPurgeUnavailable(t *testing.T) {
 	if _, err := f.store.CreateGroup(context.Background(), tok.Value, store.NewDevice{PublicKey: []byte("pk"), WrappedGroupKey: []byte("wk")}); err != nil {
 		t.Fatalf("CreateGroup() error = %v", err)
 	}
-	if page := readJSON[groupPage](t, f.get(c, "/admin/api/groups/"+tok.Value)); page.CanPurge {
+	if page := readJSON[groupPage](t, f.get(c, "/admin/api/groups/"+admin.HandleOf(tok.Value))); page.CanPurge {
 		t.Error("group page offers purging without a purger")
 	}
-	wantStatus(t, f.call(c, csrf, http.MethodPost, "/admin/api/groups/"+tok.Value+"/purge", nil), http.StatusNotImplemented)
+	wantStatus(t, f.call(c, csrf, http.MethodPost, "/admin/api/groups/"+admin.HandleOf(tok.Value)+"/purge", nil), http.StatusNotImplemented)
 }
 
 func TestDeleteGroup(t *testing.T) {
@@ -432,16 +432,16 @@ func TestDeleteGroup(t *testing.T) {
 	ctx := context.Background()
 
 	// An override that has to go with the group.
-	wantStatus(t, g.call(c, csrf, http.MethodPut, "/admin/api/groups/"+id+"/limit", map[string]any{"enabled": true, "size": "2 MiB"}), http.StatusNoContent)
+	wantStatus(t, g.call(c, csrf, http.MethodPut, "/admin/api/groups/"+admin.HandleOf(id)+"/limit", map[string]any{"enabled": true, "size": "2 MiB"}), http.StatusNoContent)
 
-	wantStatus(t, g.call(c, "", http.MethodDelete, "/admin/api/groups/"+id, nil), http.StatusForbidden)
-	resp := g.call(c, csrf, http.MethodDelete, "/admin/api/groups/"+id, nil)
+	wantStatus(t, g.call(c, "", http.MethodDelete, "/admin/api/groups/"+admin.HandleOf(id), nil), http.StatusForbidden)
+	resp := g.call(c, csrf, http.MethodDelete, "/admin/api/groups/"+admin.HandleOf(id), nil)
 	wantStatus(t, resp, http.StatusOK)
 	if got := readJSON[map[string]string](t, resp)["name"]; got != "Anna" {
 		t.Errorf("deleted group name = %q, want Anna", got)
 	}
 	// Deleting it again changes nothing and says so.
-	resp = g.call(c, csrf, http.MethodDelete, "/admin/api/groups/"+id, nil)
+	resp = g.call(c, csrf, http.MethodDelete, "/admin/api/groups/"+admin.HandleOf(id), nil)
 	wantStatus(t, resp, http.StatusNotFound)
 	if msg := apiError(t, resp); !strings.Contains(msg, "that group no longer exists") {
 		t.Errorf("a second delete is not reported as a no-op: %q", msg)
@@ -468,7 +468,7 @@ func TestDeleteGroup(t *testing.T) {
 	tokens := readJSON[tokenList](t, g.get(c, "/admin/api/tokens"))
 	var status string
 	for _, tok := range tokens.Tokens {
-		if tok.Value == id {
+		if tok.Handle == admin.HandleOf(id) {
 			status = tok.Status
 		}
 	}
@@ -486,22 +486,19 @@ func TestDeleteGroup(t *testing.T) {
 
 // groupListJSON is the groups endpoint's JSON, as a test reads it.
 type groupListJSON struct {
-	Groups []struct {
-		ID    string `json:"id"`
-		Name  string `json:"name"`
-		Stale bool   `json:"stale"`
-		Usage *struct {
-			UsedBytes int64 `json:"used_bytes"`
-			OverLimit bool  `json:"over_limit"`
-		} `json:"usage"`
-		LimitBytes int64 `json:"limit_bytes"`
-	} `json:"groups"`
-	Tags []struct {
+	Groups []groupRowName `json:"rows"`
+	Total  int            `json:"total"`
+	Page   int            `json:"page"`
+	Size   int            `json:"size"`
+	Sort   string         `json:"sort"`
+	Dir    string         `json:"dir"`
+	Tags   []struct {
 		Name   string `json:"name"`
 		Filter string `json:"filter"`
 		Groups int    `json:"groups"`
 	} `json:"tags"`
 	Filter         string   `json:"filter"`
+	Stale          bool     `json:"stale"`
 	GroupCount     int      `json:"group_count"`
 	StaleCount     int      `json:"stale_count"`
 	StaleAfterDays int      `json:"stale_after_days"`
@@ -641,10 +638,11 @@ func TestTokenNoteTagAndExpiry(t *testing.T) {
 	c = g.client()
 	g.login(c)
 	list = readJSON[tokenList](t, g.get(c, "/admin/api/tokens"))
-	if got := list.Tokens[0]; got.Status != "expired" || got.URL != "" {
-		t.Errorf("expired token = %+v, want status expired and no URL", got)
+	if got := list.Tokens[0]; got.Status != "expired" {
+		t.Errorf("expired token = %+v, want status expired", got)
 	}
-	if resp := g.get(c, "/admin/tokens/"+tok.Value+"/qr.png"); resp.StatusCode != http.StatusNotFound {
+	wantStatus(t, g.get(c, "/admin/api/tokens/"+admin.HandleOf(tok.Value)+"/link"), http.StatusNotFound)
+	if resp := g.get(c, "/admin/tokens/"+admin.HandleOf(tok.Value)+"/qr.png"); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("QR of an expired token: status = %d, want %d", resp.StatusCode, http.StatusNotFound)
 	}
 }
@@ -767,7 +765,7 @@ func TestDashboardTagFilter(t *testing.T) {
 		t.Errorf("tag filter without tags = %+v, want none", list.Tags)
 	}
 	wantStatus(t, g.call(c, csrf, http.MethodPost, "/admin/api/tags", map[string]string{"name": "family"}), http.StatusCreated)
-	wantStatus(t, g.call(c, csrf, http.MethodPut, "/admin/api/groups/"+anna+"/tag", map[string]string{"tag": "family"}), http.StatusNoContent)
+	wantStatus(t, g.call(c, csrf, http.MethodPut, "/admin/api/groups/"+admin.HandleOf(anna)+"/tag", map[string]string{"tag": "family"}), http.StatusNoContent)
 
 	all := readJSON[groupListJSON](t, g.get(c, "/admin/api/groups"))
 	if got := strings.Join(all.names(), ","); len(all.Groups) != 2 || !strings.Contains(got, "Anna") || !strings.Contains(got, "Ben") {
@@ -793,18 +791,18 @@ func TestGroupRoutesRequireASession(t *testing.T) {
 	c := g.client()
 
 	for _, r := range []struct{ method, path string }{
-		{http.MethodPut, "/admin/api/groups/" + id + "/name"},
-		{http.MethodPut, "/admin/api/groups/" + id + "/tag"},
-		{http.MethodPut, "/admin/api/groups/" + id + "/limit"},
-		{http.MethodPost, "/admin/api/groups/" + id + "/purge"},
-		{http.MethodDelete, "/admin/api/groups/" + id},
+		{http.MethodPut, "/admin/api/groups/" + admin.HandleOf(id) + "/name"},
+		{http.MethodPut, "/admin/api/groups/" + admin.HandleOf(id) + "/tag"},
+		{http.MethodPut, "/admin/api/groups/" + admin.HandleOf(id) + "/limit"},
+		{http.MethodPost, "/admin/api/groups/" + admin.HandleOf(id) + "/purge"},
+		{http.MethodDelete, "/admin/api/groups/" + admin.HandleOf(id)},
 		{http.MethodPost, "/admin/api/tags"},
 		{http.MethodPut, "/admin/api/tags/x/limit"},
 		{http.MethodDelete, "/admin/api/tags/x"},
 		{http.MethodPut, "/admin/api/settings"},
 		{http.MethodPost, "/admin/api/sweep"},
 		{http.MethodGet, "/admin/api/groups"},
-		{http.MethodGet, "/admin/api/groups/" + id},
+		{http.MethodGet, "/admin/api/groups/" + admin.HandleOf(id)},
 		{http.MethodGet, "/admin/api/tags"},
 		{http.MethodGet, "/admin/api/settings"},
 	} {

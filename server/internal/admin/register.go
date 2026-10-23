@@ -14,6 +14,9 @@ import "net/http"
 //   - its static files: the bundle under /admin/assets/ and the favicons.
 //   - the JSON API under /admin/api/, which is all the app talks to.
 //
+// Groups and tokens are named in every path by their handle (handle.go),
+// never by their id or value.
+//
 // The two single-segment patterns are what make SPEC §3.1 structural: "GET
 // /{token}" exists only to answer 404, and only "POST /{token}" reaches the
 // store. Every route registered by another component — "GET /ws", "GET
@@ -29,9 +32,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	for _, p := range []string{
 		"/admin/{$}",
 		"/admin/groups",
-		"/admin/groups/{id}",
-		"/admin/groups/{id}/purge",
-		"/admin/groups/{id}/delete",
+		"/admin/groups/{handle}",
+		"/admin/groups/{handle}/purge",
+		"/admin/groups/{handle}/delete",
 		"/admin/tags",
 		"/admin/tokens",
 		"/admin/audit",
@@ -47,7 +50,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 	// The QR image is an <img>, so it is a plain session-checked GET outside
 	// the JSON API.
-	mux.HandleFunc("GET /admin/tokens/{token}/qr.png", s.handleTokenQR)
+	mux.HandleFunc("GET /admin/tokens/{handle}/qr.png", s.handleTokenQR)
 
 	mux.HandleFunc("/admin/api/", s.handleAPINotFound)
 	mux.HandleFunc("POST /admin/api/login", s.handleLogin)
@@ -59,15 +62,16 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /admin/api/tokens", s.read(s.handleTokens))
 	mux.HandleFunc("POST /admin/api/tokens", s.write(s.handleCreateToken))
-	mux.HandleFunc("DELETE /admin/api/tokens/{token}", s.write(s.handleRevokeToken))
+	mux.HandleFunc("GET /admin/api/tokens/{handle}/link", s.read(s.handleTokenLink))
+	mux.HandleFunc("DELETE /admin/api/tokens/{handle}", s.write(s.handleRevokeToken))
 
 	mux.HandleFunc("GET /admin/api/groups", s.read(s.handleGroupList))
-	mux.HandleFunc("GET /admin/api/groups/{id}", s.read(s.handleGroup))
-	mux.HandleFunc("DELETE /admin/api/groups/{id}", s.write(s.handleDeleteGroup))
-	mux.HandleFunc("PUT /admin/api/groups/{id}/name", s.write(s.handleRenameGroup))
-	mux.HandleFunc("PUT /admin/api/groups/{id}/tag", s.write(s.handleSetGroupTag))
-	mux.HandleFunc("PUT /admin/api/groups/{id}/limit", s.write(s.handleSetGroupLimit))
-	mux.HandleFunc("POST /admin/api/groups/{id}/purge", s.write(s.handlePurgeGroup))
+	mux.HandleFunc("GET /admin/api/groups/{handle}", s.read(s.handleGroup))
+	mux.HandleFunc("DELETE /admin/api/groups/{handle}", s.write(s.handleDeleteGroup))
+	mux.HandleFunc("PUT /admin/api/groups/{handle}/name", s.write(s.handleRenameGroup))
+	mux.HandleFunc("PUT /admin/api/groups/{handle}/tag", s.write(s.handleSetGroupTag))
+	mux.HandleFunc("PUT /admin/api/groups/{handle}/limit", s.write(s.handleSetGroupLimit))
+	mux.HandleFunc("POST /admin/api/groups/{handle}/purge", s.write(s.handlePurgeGroup))
 
 	mux.HandleFunc("GET /admin/api/tags", s.read(s.handleTags))
 	mux.HandleFunc("POST /admin/api/tags", s.write(s.handleCreateTag))
