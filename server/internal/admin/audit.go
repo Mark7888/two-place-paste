@@ -3,41 +3,81 @@ package admin
 import (
 	"context"
 	"net/http"
-	"strconv"
+	"time"
 
 	"github.com/Mark7888/two-place-paste/server/internal/store"
 )
 
-// auditPageSize is how many audit entries the audit screen shows.
-const auditPageSize = 200
-
-// auditLabels names each audit action in plain words.
-var auditLabels = map[string]string{
-	"login":           "Signed in",
-	"login.failed":    "Sign-in failed",
-	"login.limited":   "Sign-in rate limited",
-	"logout":          "Signed out",
-	"token.create":    "Token created",
-	"token.revoke":    "Token revoked",
-	"group.rename":    "Group renamed",
-	"group.tag":       "Group tag changed",
-	"group.limit":     "Group storage limit changed",
-	"group.purge":     "Group entries purged",
-	"group.delete":    "Group deleted",
-	"tag.create":      "Tag created",
-	"tag.limit":       "Tag storage limit changed",
-	"tag.delete":      "Tag deleted",
-	"settings.update": "Settings changed",
-	"sweep":           "Sweep requested",
+// auditLabels names each audit action in plain words, in the order the
+// action filter lists them. They live here rather than in the app so that the
+// search matches what the screen shows.
+var auditLabels = []struct{ action, label string }{
+	{"login", "Signed in"},
+	{"login.failed", "Sign-in failed"},
+	{"login.limited", "Sign-in rate limited"},
+	{"logout", "Signed out"},
+	{"token.create", "Token created"},
+	{"token.revoke", "Token revoked"},
+	{"group.rename", "Group renamed"},
+	{"group.tag", "Group tag changed"},
+	{"group.limit", "Group storage limit changed"},
+	{"group.purge", "Group entries purged"},
+	{"group.delete", "Group deleted"},
+	{"tag.create", "Tag created"},
+	{"tag.limit", "Tag storage limit changed"},
+	{"tag.delete", "Tag deleted"},
+	{"settings.update", "Settings changed"},
+	{"sweep", "Sweep requested"},
 }
 
-// auditView is one row of the audit screen.
-type auditView struct {
-	At     string
-	Action string
-	Target string
-	Detail string
-	IP     string
+// auditLabel names an action. One this build does not know, from a newer
+// relay sharing the Redis, is shown as it is stored.
+func auditLabel(action string) string {
+	for _, l := range auditLabels {
+		if l.action == action {
+			return l.label
+		}
+	}
+	return action
+}
+
+// auditJSON is one row of the audit screen.
+type auditJSON struct {
+	At     time.Time `json:"at"`
+	Action string    `json:"action"`
+	Label  string    `json:"label"`
+	Target string    `json:"target"`
+	Detail string    `json:"detail"`
+	IP     string    `json:"ip"`
+}
+
+// auditListJSON is the audit screen: one page of the log, how much the
+// server keeps, and the actions the filter offers.
+type auditListJSON struct {
+	tablePage[auditJSON]
+	Kept    int               `json:"kept"`
+	Actions []auditActionJSON `json:"actions"`
+}
+
+type auditActionJSON struct {
+	Action string `json:"action"`
+	Label  string `json:"label"`
+}
+
+// auditTable is the audit log: searched by action, target, details and
+// address, newest first by default. The log comes newest first and the sort
+// is stable, so entries the sort column calls equal stay newest first.
+var auditTable = table[auditJSON]{
+	sorts: map[string]sortKey[auditJSON]{
+		"when":   {cmp: func(a, b auditJSON) int { return a.At.Compare(b.At) }, desc: true},
+		"action": {cmp: func(a, b auditJSON) int { return byText(a.Label, b.Label) }},
+		"target": {cmp: func(a, b auditJSON) int { return byText(a.Target, b.Target) }},
+		"ip":     {cmp: func(a, b auditJSON) int { return byText(a.IP, b.IP) }},
+	},
+	defaultSort: "when",
+	fields: func(e auditJSON) []string {
+		return []string{e.Action, e.Label, e.Target, e.Detail, e.IP}
+	},
 }
 
 // audit records an admin action. The entry holds names, counts and the
@@ -56,55 +96,48 @@ func (s *Server) auditCtx(ctx context.Context, ip, action, target, detail string
 	}
 }
 
-// handleAudit renders the audit screen.
-func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.session(r)
-	if !ok {
-		s.redirect(w, r, "/admin/login")
-		return
-	}
-	data := s.page(sess, "Audit log", "audit")
-	entries, err := s.store.ListAudit(r.Context(), auditPageSize)
+// handleAudit returns one page of the audit log. Beyond the list parameters
+// it takes ?action=name to show one kind of entry.
+func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, _ session) {
+	entries, err := s.store.ListAudit(r.Context(), store.AuditLimit)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "list audit entries", "error", err)
-		data.Error = "The audit log could not be loaded."
-		s.render(w, r, http.StatusInternalServerError, "audit.html", data)
+		writeJSONError(w, http.StatusInternalServerError, "The audit log could not be loaded.")
 		return
 	}
-	now := s.now()
+	query := r.URL.Query()
+	action := query.Get("action")
+	rows := make([]auditJSON, 0, len(entries))
 	for _, e := range entries {
-		label := auditLabels[e.Action]
-		if label == "" {
-			label = e.Action
+		if action != "" && e.Action != action {
+			continue
 		}
-		data.Audit = append(data.Audit, auditView{
-			At:     e.At.UTC().Format("2006-01-02 15:04 UTC") + " · " + ago(now, e.At, ""),
-			Action: label,
-			Target: e.Target,
-			Detail: e.Detail,
-			IP:     e.IP,
-		})
+		rows = append(rows, auditJSON{At: e.At.UTC(), Action: e.Action, Label: auditLabel(e.Action), Target: e.Target, Detail: e.Detail, IP: e.IP})
 	}
-	data.AuditLimit = strconv.Itoa(store.AuditLimit)
-	s.render(w, r, http.StatusOK, "audit.html", data)
+	out := auditListJSON{
+		tablePage: auditTable.run(rows, query),
+		Kept:      store.AuditLimit,
+		Actions:   make([]auditActionJSON, 0, len(auditLabels)),
+	}
+	for _, l := range auditLabels {
+		out.Actions = append(out.Actions, auditActionJSON{Action: l.action, Label: l.label})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// sweepResultJSON says whether the sweep asked for was queued, or one was
+// already waiting.
+type sweepResultJSON struct {
+	Queued bool `json:"queued"`
 }
 
 // handleSweep asks for a blob sweep now.
-func (s *Server) handleSweep(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.formSession(w, r)
-	if !ok {
-		return
-	}
+func (s *Server) handleSweep(w http.ResponseWriter, r *http.Request, _ session) {
 	if s.sweep == nil {
-		s.sessions.setNotice(sess.id, "Sweeping is not available on this server.")
-		s.redirect(w, r, "/admin/")
+		writeJSONError(w, http.StatusNotImplemented, "Sweeping is not available on this server.")
 		return
 	}
-	if s.sweep() {
-		s.sessions.setNotice(sess.id, "Sweep started. Reload in a moment to see its result.")
-	} else {
-		s.sessions.setNotice(sess.id, "A sweep is already waiting to run.")
-	}
+	queued := s.sweep()
 	s.audit(r, "sweep", "", "")
-	s.redirect(w, r, "/admin/")
+	writeJSON(w, http.StatusOK, sweepResultJSON{Queued: queued})
 }

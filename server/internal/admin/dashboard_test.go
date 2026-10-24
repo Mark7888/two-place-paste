@@ -2,8 +2,10 @@ package admin_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -75,6 +77,37 @@ func (d *dashboardFixture) put(t *testing.T, groupID, entryID string, size int) 
 	}
 }
 
+// dashboardJSON is the dashboard endpoint's JSON, as a test reads it.
+type dashboardJSON struct {
+	GroupCount   int `json:"group_count"`
+	DeviceCount  int `json:"device_count"`
+	UnusedTokens int `json:"unused_tokens"`
+	StaleCount   int `json:"stale_count"`
+	Storage      *struct {
+		Backend         string `json:"backend"`
+		Location        string `json:"location"`
+		UsedBytes       int64  `json:"used_bytes"`
+		LimitBytes      int64  `json:"limit_bytes"`
+		Entries         int64  `json:"entries"`
+		GroupLimitBytes int64  `json:"group_limit_bytes"`
+		EntryMaxBytes   int64  `json:"entry_max_bytes"`
+		InlineMaxBytes  int64  `json:"inline_max_bytes"`
+		Evictions       int64  `json:"evictions"`
+		EvictedBytes    int64  `json:"evicted_bytes"`
+		Uploads         *struct {
+			Count         int   `json:"count"`
+			ReservedBytes int64 `json:"reserved_bytes"`
+		} `json:"uploads"`
+		LastSweep *struct {
+			At     time.Time `json:"at"`
+			TookMS int64     `json:"took_ms"`
+			Error  string    `json:"error"`
+		} `json:"last_sweep"`
+	} `json:"storage"`
+	CanSweep bool     `json:"can_sweep"`
+	Problems []string `json:"problems"`
+}
+
 func TestDashboard(t *testing.T) {
 	t.Parallel()
 
@@ -94,56 +127,61 @@ func TestDashboard(t *testing.T) {
 	d.put(t, big, "ben-3", 20<<10) // evicts ben-1: the group limit is 40 KiB
 	d.sweep = blob.SweepStatus{At: time.Date(2026, 9, 9, 11, 50, 0, 0, time.UTC), Took: 3 * time.Millisecond}
 
-	resp := d.get(c, "/admin/")
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /admin/ = %d, want %d", resp.StatusCode, http.StatusOK)
-	}
+	resp := d.get(c, "/admin/api/dashboard")
+	wantStatus(t, resp, http.StatusOK)
 	body := readBody(t, resp)
-
-	for _, want := range []string{
-		`aria-current="page">Dashboard`,
-		"50.0 KiB <span class=\"muted\">of 100 KiB</span>", // 10 + 2×20 KiB stored
-		"3 stored entries · 2 uploads in progress, 30.0 MiB reserved",
-		">2</p>",                 // groups
-		"1 unused token",         // the spare
-		">3</p>",                 // devices: 2 + 1
-		">1</p>",                 // evictions
-		"20.0 KiB removed early", // ben-1
-		`<a href="/admin/groups">View groups</a>`,
-		"http://minio:9000/tpp/",
-		"<dd>40.0 KiB</dd>", // per-group limit
-		"10 min ago, took 3ms",
-		`<span class="tag good">ok</span>`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("dashboard does not contain %q", want)
-		}
+	var dash dashboardJSON
+	if err := json.Unmarshal([]byte(body), &dash); err != nil {
+		t.Fatalf("decode dashboard: %v", err)
 	}
 
-	// The groups are on their own screen now, not on the dashboard.
-	if strings.Contains(body, ">Anna</a>") || strings.Contains(body, ">Ben</a>") {
-		t.Errorf("dashboard still lists the groups")
+	if dash.GroupCount != 2 || dash.DeviceCount != 3 || dash.UnusedTokens != 1 {
+		t.Errorf("counts = %d groups, %d devices, %d unused tokens; want 2, 3 (2 + 1), 1 (the spare)",
+			dash.GroupCount, dash.DeviceCount, dash.UnusedTokens)
+	}
+	st := dash.Storage
+	if st == nil {
+		t.Fatal("dashboard has no storage section")
+	}
+	if st.UsedBytes != 50<<10 || st.LimitBytes != 100<<10 || st.Entries != 3 {
+		t.Errorf("storage = %d of %d bytes in %d entries; want 50 KiB (10 + 2×20) of 100 KiB in 3", st.UsedBytes, st.LimitBytes, st.Entries)
+	}
+	if st.Uploads == nil || st.Uploads.Count != 2 || st.Uploads.ReservedBytes != 30<<20 {
+		t.Errorf("uploads = %+v, want 2 holding 30 MiB", st.Uploads)
+	}
+	if st.Evictions != 1 || st.EvictedBytes != 20<<10 {
+		t.Errorf("evictions = %d (%d bytes), want ben-1: 1 (20 KiB)", st.Evictions, st.EvictedBytes)
+	}
+	if st.Backend != "s3" || st.Location != "http://minio:9000/tpp/" || st.GroupLimitBytes != 40<<10 || st.EntryMaxBytes != 1<<20 || st.InlineMaxBytes != 1024 {
+		t.Errorf("storage settings = %+v", st)
+	}
+	if st.LastSweep == nil || !st.LastSweep.At.Equal(d.sweep.At) || st.LastSweep.TookMS != 3 || st.LastSweep.Error != "" {
+		t.Errorf("last sweep = %+v, want 11:50 taking 3ms, no error", st.LastSweep)
 	}
 
-	groups := readBody(t, d.get(c, "/admin/groups"))
-	for _, want := range []string{
-		`aria-current="page">Groups`,
-		"Anna", "Ben",
-		"40.0 KiB <span class=\"muted\">· 100%</span>", // Ben at his limit
-	} {
-		if !strings.Contains(groups, want) {
-			t.Errorf("groups screen does not contain %q", want)
-		}
-	}
-	// Heaviest group first.
-	if strings.Index(groups, "Ben") > strings.Index(groups, "Anna") {
-		t.Errorf("groups screen lists Anna before Ben; want the heavier group first")
+	// The groups are on their own screen, not on the dashboard.
+	if strings.Contains(body, "Anna") || strings.Contains(body, "Ben") {
+		t.Errorf("dashboard lists the groups")
 	}
 
-	// Sizes and counts only: no entry id reaches either page.
+	groups := readJSON[groupListJSON](t, d.get(c, "/admin/api/groups"))
+	if len(groups.Groups) != 2 || !groups.HasUsage {
+		t.Fatalf("groups = %+v, want two with storage", groups.Groups)
+	}
+	// Heaviest group first, Ben at his limit.
+	ben := groups.Groups[0]
+	if ben.Name != "Ben" || ben.Usage == nil || ben.Usage.UsedBytes != 40<<10 || ben.LimitBytes != 40<<10 || ben.Usage.OverLimit {
+		t.Errorf("first group = %+v, want Ben at his 40 KiB limit", ben)
+	}
+	if groups.Groups[1].Name != "Anna" {
+		t.Errorf("second group = %q, want Anna", groups.Groups[1].Name)
+	}
+
+	// Sizes and counts only: no entry id reaches either screen.
+	raw := readBody(t, d.get(c, "/admin/api/groups"))
 	for _, id := range []string{"anna-inline", "anna-blob", "ben-1", "ben-2", "ben-3"} {
-		if strings.Contains(body, id) || strings.Contains(groups, id) {
-			t.Errorf("an admin page shows entry id %q; it must show counts only", id)
+		if strings.Contains(body, id) || strings.Contains(raw, id) {
+			t.Errorf("an admin endpoint shows entry id %q; it must show counts only", id)
 		}
 	}
 }
@@ -156,11 +194,12 @@ func TestDashboardSweepFailure(t *testing.T) {
 	d.login(c)
 	d.sweep = blob.SweepStatus{At: time.Date(2026, 9, 9, 11, 0, 0, 0, time.UTC), Err: errors.New("blob sweep: bucket unreachable")}
 
-	body := readBody(t, d.get(c, "/admin/"))
-	for _, want := range []string{`<span class="tag bad">failed</span>`, "blob sweep: bucket unreachable", "no limit"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("dashboard does not contain %q", want)
-		}
+	dash := readJSON[dashboardJSON](t, d.get(c, "/admin/api/dashboard"))
+	if dash.Storage == nil || dash.Storage.LastSweep == nil || dash.Storage.LastSweep.Error != "blob sweep: bucket unreachable" {
+		t.Errorf("last sweep = %+v, want the sweep's error", dash.Storage)
+	}
+	if dash.Storage.LimitBytes != 0 {
+		t.Errorf("total limit = %d, want none", dash.Storage.LimitBytes)
 	}
 }
 
@@ -178,7 +217,7 @@ func (failingLedger) Evictions(context.Context) (quota.Evictions, error) {
 }
 
 // TestDashboardDegrades: a part that cannot be read is named, and the rest of
-// the page still renders.
+// the screen still renders.
 func TestDashboardDegrades(t *testing.T) {
 	t.Parallel()
 
@@ -193,20 +232,25 @@ func TestDashboardDegrades(t *testing.T) {
 		t.Fatalf("ConsumeToken() error = %v", err)
 	}
 
-	resp := f.get(c, "/admin/")
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /admin/ = %d, want %d", resp.StatusCode, http.StatusOK)
-	}
-	body := readBody(t, resp)
-	for _, want := range []string{"Could not read the storage usage.", "Could not read the storage of Carla.", "Carla"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("dashboard does not contain %q", want)
+	resp := f.get(c, "/admin/api/dashboard")
+	wantStatus(t, resp, http.StatusOK)
+	dash := readJSON[dashboardJSON](t, resp)
+	for _, want := range []string{"Could not read the storage usage.", "Could not read the storage of Carla."} {
+		if !slices.Contains(dash.Problems, want) {
+			t.Errorf("dashboard problems = %v, want %q", dash.Problems, want)
 		}
+	}
+	if dash.GroupCount != 1 {
+		t.Errorf("group count = %d, want Carla's group counted anyway", dash.GroupCount)
+	}
+	groups := readJSON[groupListJSON](t, f.get(c, "/admin/api/groups"))
+	if len(groups.Groups) != 1 || groups.Groups[0].Name != "Carla" || !slices.Contains(groups.Problems, "Could not read the storage of Carla.") {
+		t.Errorf("groups = %+v, problems %v; want Carla listed and the problem named", groups.Groups, groups.Problems)
 	}
 }
 
-// TestDashboardWithoutStorage: with nothing wired but the store, the page
-// shows groups and devices and no storage sections.
+// TestDashboardWithoutStorage: with nothing wired but the store, the screens
+// show groups and devices and no storage.
 func TestDashboardWithoutStorage(t *testing.T) {
 	t.Parallel()
 
@@ -214,13 +258,15 @@ func TestDashboardWithoutStorage(t *testing.T) {
 	c := f.client()
 	f.login(c)
 
-	body := readBody(t, f.get(c, "/admin/"))
-	if groups := readBody(t, f.get(c, "/admin/groups")); !strings.Contains(groups, "No groups yet") {
-		t.Errorf("groups screen without groups does not say so")
+	dash := readJSON[dashboardJSON](t, f.get(c, "/admin/api/dashboard"))
+	if dash.Storage != nil {
+		t.Errorf("dashboard without a ledger has storage %+v", dash.Storage)
 	}
-	for _, absent := range []string{"Blob storage", "Evictions", "Last sweep"} {
-		if strings.Contains(body, absent) {
-			t.Errorf("dashboard without a ledger shows %q", absent)
-		}
+	if len(dash.Problems) != 0 {
+		t.Errorf("dashboard problems = %v, want none", dash.Problems)
+	}
+	groups := readJSON[groupListJSON](t, f.get(c, "/admin/api/groups"))
+	if len(groups.Groups) != 0 || groups.HasUsage {
+		t.Errorf("groups = %+v (usage %v), want none and no storage column", groups.Groups, groups.HasUsage)
 	}
 }

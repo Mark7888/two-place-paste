@@ -28,7 +28,7 @@ make build test lint      # every Go module
 make help                 # everything else
 ```
 
-Each npm project (`desktop/ui`, `mobile`, `docs/site`, `proto`) has its own
+Each npm project (`desktop/ui`, `server/ui`, `mobile`, `docs/site`, `proto`) has its own
 `npm ci`, and CI runs lint, typecheck, test and build for each of them. Run
 the checks for the parts you changed before you push.
 

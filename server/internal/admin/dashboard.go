@@ -5,148 +5,320 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Mark7888/two-place-paste/server/internal/store"
 )
 
-// dashboardView is everything the dashboard renders. It is built from counts
-// and sizes only: no entry id, content type or filename reaches it, because
-// the server has none of those to give (SPEC §2.3, §4.4).
-type dashboardView struct {
-	GroupCount   int
-	DeviceCount  int
-	UnusedTokens int
+// The views below are what the admin API returns. They are built from counts,
+// sizes and names only: no entry id, content type or filename reaches them,
+// because the server has none of those to give (SPEC §2.3, §4.4). Sizes are
+// bytes and times are RFC 3339 UTC; the app formats both.
+
+// dashboardJSON is the dashboard: summary counts, storage and health.
+type dashboardJSON struct {
+	GroupCount     int `json:"group_count"`
+	DeviceCount    int `json:"device_count"`
+	UnusedTokens   int `json:"unused_tokens"`
+	StaleCount     int `json:"stale_count"`
+	StaleAfterDays int `json:"stale_after_days"`
 
 	// Storage is nil when no ledger is wired.
-	Storage *storageView
+	Storage *storageJSON `json:"storage"`
 
-	// Health is the state of the server and of Redis.
-	Health *healthView
-
-	// Groups are the rows shown: every group, or the ones under Filter.
-	Groups []groupView
-
-	// Tags totals every tag, plus the untagged groups, whatever the filter.
-	Tags []tagSummary
-
-	// Filter is the tag the table is narrowed to: "" for all, "-" for the
-	// untagged groups, or a tag name. FilterName is how the page says it.
-	Filter     string
-	FilterName string
-
-	// StaleCount is how many of all groups are stale, and StaleAfter how
-	// long that means.
-	StaleCount int
-	StaleAfter string
+	Health *healthJSON `json:"health"`
 
 	// CanSweep shows the "Sweep now" button.
-	CanSweep bool
-
-	// HasUsage is set when blob storage is accounted, so the groups table
-	// has a storage column.
-	HasUsage bool
+	CanSweep bool `json:"can_sweep"`
 
 	// Problems lists the parts that could not be read. The rest of the page
 	// still renders: a dashboard that fails whole when one Redis call does
 	// is useless exactly when it is needed.
-	Problems []string
+	Problems []string `json:"problems"`
 }
 
-// tagSummary is one row of the dashboard's per-tag totals.
-type tagSummary struct {
-	Name    string
-	Filter  string
-	Current bool
-	Groups  int
-	Devices int
-	Used    string
-	Limit   string
+type storageJSON struct {
+	Backend  string `json:"backend"`
+	Location string `json:"location"`
+
+	UsedBytes  int64 `json:"used_bytes"`
+	LimitBytes int64 `json:"limit_bytes"`
+	Entries    int64 `json:"entries"`
+
+	GroupLimitBytes int64 `json:"group_limit_bytes"`
+	EntryMaxBytes   int64 `json:"entry_max_bytes"`
+	InlineMaxBytes  int64 `json:"inline_max_bytes"`
+
+	Evictions    int64 `json:"evictions"`
+	EvictedBytes int64 `json:"evicted_bytes"`
+
+	// Uploads is nil when the upload tracker is not wired.
+	Uploads *uploadsJSON `json:"uploads"`
+
+	// LastSweep is nil until the first sweep has run.
+	LastSweep *sweepJSON `json:"last_sweep"`
 }
 
-type storageView struct {
-	Backend  string
-	Location string
-
-	Used       string
-	UsedBytes  int64
-	Limit      string
-	LimitBytes int64
-	HighBytes  int64
-	Percent    int
-	Entries    int64
-
-	GroupLimit string
-	EntryMax   string
-	InlineMax  string
-
-	Evictions    int64
-	EvictedBytes string
-
-	HasUploads    bool
-	Uploads       int
-	ReservedBytes string
-
-	Swept     bool
-	SweepAt   string
-	SweepTook string
-	SweepErr  string
+type uploadsJSON struct {
+	Count         int   `json:"count"`
+	ReservedBytes int64 `json:"reserved_bytes"`
 }
 
-type groupView struct {
-	ID      string
-	Path    string
-	Name    string
-	Tag     string
-	ShortID string
-	Created string
+type sweepJSON struct {
+	At     time.Time `json:"at"`
+	TookMS int64     `json:"took_ms"`
+	Error  string    `json:"error,omitempty"`
+}
 
-	Devices  int
-	LastSeen string
+// groupJSON is one group's row: devices, activity, entries and storage.
+type groupJSON struct {
+	// Handle names the group in URLs and requests; its id is the token that
+	// created it, and never leaves the server (handle.go).
+	Handle    string    `json:"handle"`
+	ShortID   string    `json:"short_id"`
+	Name      string    `json:"name"`
+	Tag       string    `json:"tag"`
+	CreatedAt time.Time `json:"created_at"`
+
+	Devices  int        `json:"devices"`
+	LastSeen *time.Time `json:"last_seen"`
 
 	// Stale marks a group none of whose devices has connected for longer
 	// than the stale threshold.
-	Stale bool
+	Stale bool `json:"stale"`
 
-	Entries int64
-	Oldest  string
+	Entries int64      `json:"entries"`
+	Oldest  *time.Time `json:"oldest"`
 
-	// Blob storage against the group's effective limit. HasUsage is false
-	// when no ledger is wired.
-	HasUsage    bool
-	Used        string
-	UsedBytes   int64
-	LimitBytes  int64
-	HighBytes   int64
-	Percent     int
-	LimitText   string
-	LimitSource string
+	// LimitBytes is the cap the group runs into (zero: none), and LimitSource
+	// where it comes from: "group", "tag" or "default".
+	LimitBytes  int64  `json:"limit_bytes"`
+	LimitSource string `json:"limit_source"`
+
+	// Usage is nil when blob storage is not accounted.
+	Usage *usageJSON `json:"usage"`
+}
+
+type usageJSON struct {
+	UsedBytes int64 `json:"used_bytes"`
 
 	// OverLimit marks a group holding more than its limit, which happens
 	// after the limit is lowered: its next upload evicts down to it.
-	OverLimit bool
+	OverLimit bool `json:"over_limit"`
 }
 
-// renderDashboard renders the dashboard for an authenticated session: the
-// summary cards, the health card and storage. The groups are on their own
-// screen (handleGroupList).
-func (s *Server) renderDashboard(w http.ResponseWriter, r *http.Request, sess session) {
-	data := s.page(sess, "Dashboard", "dashboard")
-	data.Dashboard = s.buildDashboard(r.Context(), "", true)
-	s.render(w, r, http.StatusOK, "dashboard.html", data)
+// groupsJSON is the groups screen: one page of the groups, searched, sorted
+// and filtered, and what the screen shows around the table.
+type groupsJSON struct {
+	tablePage[groupJSON]
+
+	// Tags is the filter row: every tag, even an empty one, then the
+	// untagged groups when there are tags at all. Its counts ignore the
+	// search, so a filter always says how many groups it holds.
+	Tags []tagChipJSON `json:"tags"`
+
+	// Filter is the tag the list is narrowed to: "" for all, "-" for the
+	// untagged groups, or a tag name. Stale narrows it to stale groups.
+	Filter string `json:"filter"`
+	Stale  bool   `json:"stale"`
+
+	GroupCount     int  `json:"group_count"`
+	StaleCount     int  `json:"stale_count"`
+	StaleAfterDays int  `json:"stale_after_days"`
+	HasUsage       bool `json:"has_usage"`
+
+	Problems []string `json:"problems"`
 }
 
-// handleGroupList renders the groups screen: every group, or those under one
-// tag (?tag=name, or ?tag=- for the untagged ones).
-func (s *Server) handleGroupList(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.session(r)
-	if !ok {
-		s.redirect(w, r, "/admin/login")
+// tagChipJSON is one entry of the groups screen's tag filter.
+type tagChipJSON struct {
+	Name   string `json:"name"`
+	Filter string `json:"filter"`
+	Groups int    `json:"groups"`
+}
+
+// problems collects the parts of a view that could not be read, and logs
+// each one.
+type problems struct {
+	s    *Server
+	ctx  context.Context
+	view string
+	list []string
+}
+
+func (s *Server) problems(ctx context.Context, view string) *problems {
+	return &problems{s: s, ctx: ctx, view: view, list: []string{}}
+}
+
+func (p *problems) add(what string, err error) {
+	p.s.logger.ErrorContext(p.ctx, p.view+": "+what, "error", err)
+	p.list = append(p.list, "Could not read "+what+".")
+}
+
+// handleDashboard returns the dashboard (SPEC §4.4): the summary cards, the
+// health card and storage. The groups are on their own screen.
+func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, _ session) {
+	ctx := r.Context()
+	d := s.dashboard
+	now := s.now()
+	probs := s.problems(ctx, "dashboard")
+	view := dashboardJSON{CanSweep: s.sweep != nil}
+
+	if d.Ledger != nil {
+		view.Storage = s.storageView(ctx, probs)
+	}
+	view.Health = s.health(ctx, now)
+	view.UnusedTokens = s.unusedTokens(ctx, now, probs)
+
+	settings := s.settings(ctx)
+	view.StaleAfterDays = wholeDays(settings.StaleAfter)
+	if groups, err := s.store.ListGroups(ctx); err != nil {
+		probs.add("the groups", err)
+	} else {
+		tags, err := s.tagMap(ctx)
+		if err != nil {
+			probs.add("the tags", err)
+		}
+		for _, g := range groups {
+			row, _ := s.groupRow(ctx, g, tags, settings, now, probs)
+			view.DeviceCount += row.Devices
+			if row.Stale {
+				view.StaleCount++
+			}
+		}
+		view.GroupCount = len(groups)
+	}
+	view.Problems = probs.list
+	writeJSON(w, http.StatusOK, view)
+}
+
+func (s *Server) unusedTokens(ctx context.Context, now time.Time, probs *problems) int {
+	tokens, err := s.store.ListTokens(ctx)
+	if err != nil {
+		probs.add("the tokens", err)
+		return 0
+	}
+	n := 0
+	for _, t := range tokens {
+		if !t.Used && !t.Expired(now) {
+			n++
+		}
+	}
+	return n
+}
+
+// groupItem is a group's row with what the list needs that the row does not
+// show: the id, for a stable order, and the device names, for the search.
+type groupItem struct {
+	row     groupJSON
+	id      string
+	devices []string
+}
+
+func (g groupItem) json() groupJSON { return g.row }
+
+// groupTable is the groups list: searched by name, tag, short id and device
+// name, heaviest first by default.
+var groupTable = table[groupItem]{
+	sorts: map[string]sortKey[groupItem]{
+		"name":        {cmp: func(a, b groupItem) int { return byText(a.row.Name, b.row.Name) }},
+		"tag":         {cmp: func(a, b groupItem) int { return byText(a.row.Tag, b.row.Tag) }},
+		"devices":     {cmp: func(a, b groupItem) int { return byNumber(a.row.Devices, b.row.Devices) }, desc: true},
+		"last_active": {cmp: func(a, b groupItem) int { return byTime(a.row.LastSeen, b.row.LastSeen) }, desc: true},
+		"entries":     {cmp: func(a, b groupItem) int { return byNumber(a.row.Entries, b.row.Entries) }, desc: true},
+		"oldest":      {cmp: func(a, b groupItem) int { return byTime(a.row.Oldest, b.row.Oldest) }, desc: true},
+		"storage":     {cmp: func(a, b groupItem) int { return byNumber(usedBytes(a.row), usedBytes(b.row)) }, desc: true},
+	},
+	defaultSort: "storage",
+	fields: func(g groupItem) []string {
+		return append([]string{g.row.Name, g.row.Tag, g.row.ShortID}, g.devices...)
+	},
+	tie: func(a, b groupItem) int {
+		if c := byText(a.row.Name, b.row.Name); c != 0 {
+			return c
+		}
+		return strings.Compare(a.id, b.id)
+	},
+}
+
+// handleGroupList returns one page of the groups screen. Beyond the list
+// parameters it takes ?tag=name (or ?tag=- for the untagged groups) and
+// ?stale=1.
+func (s *Server) handleGroupList(w http.ResponseWriter, r *http.Request, _ session) {
+	ctx := r.Context()
+	now := s.now()
+	query := r.URL.Query()
+	filter := query.Get("tag")
+	staleOnly := query.Get("stale") == "1"
+	probs := s.problems(ctx, "groups")
+	view := groupsJSON{
+		Tags:     []tagChipJSON{},
+		Filter:   filter,
+		Stale:    staleOnly,
+		HasUsage: s.dashboard.Ledger != nil,
+	}
+
+	groups, err := s.store.ListGroups(ctx)
+	if err != nil {
+		probs.add("the groups", err)
+		view.tablePage = mapPage(groupTable.run(nil, query), groupItem.json)
+		view.Problems = probs.list
+		writeJSON(w, http.StatusOK, view)
 		return
 	}
-	data := s.page(sess, "Groups", "groups")
-	data.Dashboard = s.buildDashboard(r.Context(), r.URL.Query().Get("tag"), false)
-	s.render(w, r, http.StatusOK, "groups.html", data)
+	tags, err := s.tagMap(ctx)
+	if err != nil {
+		probs.add("the tags", err)
+	}
+	settings := s.settings(ctx)
+	view.StaleAfterDays = wholeDays(settings.StaleAfter)
+
+	counts := make(map[string]int)
+	items := make([]groupItem, 0, len(groups))
+	for _, g := range groups {
+		row, devices := s.groupRow(ctx, g, tags, settings, now, probs)
+		if row.Stale {
+			view.StaleCount++
+		}
+		key := g.Tag
+		if key == "" {
+			key = "-"
+		}
+		counts[key]++
+		if (filter != "" && filter != key) || (staleOnly && !row.Stale) {
+			continue
+		}
+		item := groupItem{row: row, id: g.ID, devices: make([]string, 0, len(devices))}
+		for _, d := range devices {
+			item.devices = append(item.devices, d.Name)
+		}
+		items = append(items, item)
+	}
+	view.GroupCount = len(groups)
+
+	names := make([]string, 0, len(tags))
+	for name := range tags {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		view.Tags = append(view.Tags, tagChipJSON{Name: name, Filter: name, Groups: counts[name]})
+	}
+	if n := counts["-"]; n > 0 && len(names) > 0 {
+		view.Tags = append(view.Tags, tagChipJSON{Name: "Untagged", Filter: "-", Groups: n})
+	}
+
+	view.tablePage = mapPage(groupTable.run(items, query), groupItem.json)
+	view.Problems = probs.list
+	writeJSON(w, http.StatusOK, view)
+}
+
+func usedBytes(g groupJSON) int64 {
+	if g.Usage == nil {
+		return 0
+	}
+	return g.Usage.UsedBytes
 }
 
 // settings reads the runtime settings, falling back to the defaults when they
@@ -163,20 +335,19 @@ func (s *Server) settings(ctx context.Context) store.Settings {
 
 // groupRow builds one group's row: devices, activity, entries and storage. It
 // also returns the devices, which the group page lists.
-func (s *Server) groupRow(ctx context.Context, g store.Group, tags map[string]store.Tag, settings store.Settings, now time.Time, problem func(string, error)) (groupView, []store.Device) {
+func (s *Server) groupRow(ctx context.Context, g store.Group, tags map[string]store.Tag, settings store.Settings, now time.Time, probs *problems) (groupJSON, []store.Device) {
 	d := s.dashboard
-	v := groupView{
-		ID:      g.ID,
-		Path:    groupPath(g.ID),
-		Name:    g.Name,
-		Tag:     g.Tag,
-		ShortID: shortID(g.ID),
-		Created: g.CreatedAt.UTC().Format("2006-01-02"),
+	v := groupJSON{
+		Handle:    handleOf(g.ID),
+		ShortID:   shortID(g.ID),
+		Name:      g.Name,
+		Tag:       g.Tag,
+		CreatedAt: g.CreatedAt.UTC(),
 	}
 
 	devices, err := s.store.ListDevices(ctx, g.ID)
 	if err != nil {
-		problem("the devices of "+g.Name, err)
+		probs.add("the devices of "+g.Name, err)
 	}
 	v.Devices = len(devices)
 	var last time.Time
@@ -185,200 +356,76 @@ func (s *Server) groupRow(ctx context.Context, g store.Group, tags map[string]st
 			last = dev.LastSeen
 		}
 	}
-	v.LastSeen = ago(now, last, "never")
+	v.LastSeen = timeOrNil(last)
 	v.Stale = isStale(now, lastActive(g, devices), settings.StaleAfter)
 
 	if d.Entries != nil {
 		st, err := d.Entries.GroupStats(ctx, g.ID)
 		if err != nil {
-			problem("the entries of "+g.Name, err)
+			probs.add("the entries of "+g.Name, err)
 		}
 		v.Entries = st.Entries
-		v.Oldest = ago(now, st.Oldest, "—")
+		v.Oldest = timeOrNil(st.Oldest)
 	}
 
 	l := s.effectiveLimit(g, tags)
 	limit := s.shownLimit(l)
 	v.LimitBytes = limit
-	v.LimitText = limitText(limit)
 	v.LimitSource = l.Source
 	if d.Ledger != nil {
 		u, err := d.Ledger.GroupUsage(ctx, g.ID)
 		if err != nil {
-			problem("the storage of "+g.Name, err)
+			probs.add("the storage of "+g.Name, err)
 		}
-		v.HasUsage = true
-		v.Used = humanBytes(u.Bytes)
-		v.UsedBytes = u.Bytes
-		v.HighBytes = limit * 9 / 10
-		v.Percent = percent(u.Bytes, limit)
-		v.OverLimit = limit > 0 && u.Bytes > limit
+		v.Usage = &usageJSON{UsedBytes: u.Bytes, OverLimit: limit > 0 && u.Bytes > limit}
 	}
 	return v, devices
 }
 
-// buildDashboard reads what the dashboard and the groups screen show. The
-// groups are always read, for the counts; withStatus adds the storage and
-// health cards, which only the dashboard shows.
-func (s *Server) buildDashboard(ctx context.Context, filter string, withStatus bool) *dashboardView {
-	d := s.dashboard
-	now := s.now()
-	view := &dashboardView{CanSweep: s.sweep != nil, HasUsage: d.Ledger != nil}
-	problem := func(what string, err error) {
-		s.logger.ErrorContext(ctx, "dashboard: "+what, "error", err)
-		view.Problems = append(view.Problems, "Could not read "+what+".")
-	}
+// wholeDays is a duration in whole days.
+func wholeDays(d time.Duration) int { return int(d / (24 * time.Hour)) }
 
-	if withStatus {
-		if d.Ledger != nil {
-			view.Storage = s.storageView(ctx, now, problem)
-		}
-		view.Health = s.health(ctx, now)
-	}
-
-	tokens, err := s.store.ListTokens(ctx)
-	if err != nil {
-		problem("the tokens", err)
-	}
-	for _, t := range tokens {
-		if !t.Used && !t.Expired(now) {
-			view.UnusedTokens++
-		}
-	}
-
-	groups, err := s.store.ListGroups(ctx)
-	if err != nil {
-		problem("the groups", err)
-		return view
-	}
-	tags, err := s.tagMap(ctx)
-	if err != nil {
-		problem("the tags", err)
-	}
-	settings := s.settings(ctx)
-	view.StaleAfter = days(settings.StaleAfter)
-
-	type total struct {
-		groups, devices int
-		used            int64
-	}
-	totals := make(map[string]*total)
-	for _, g := range groups {
-		row, _ := s.groupRow(ctx, g, tags, settings, now, problem)
-		view.DeviceCount += row.Devices
-		if row.Stale {
-			view.StaleCount++
-		}
-		key := g.Tag
-		if key == "" {
-			key = "-"
-		}
-		t := totals[key]
-		if t == nil {
-			t = &total{}
-			totals[key] = t
-		}
-		t.groups++
-		t.devices += row.Devices
-		t.used += row.UsedBytes
-
-		if filter == "" || filter == key {
-			view.Groups = append(view.Groups, row)
-		}
-	}
-	view.GroupCount = len(groups)
-
-	// Every tag, even an empty one, then the untagged groups.
-	names := make([]string, 0, len(tags))
-	for name := range tags {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		t := totals[name]
-		if t == nil {
-			t = &total{}
-		}
-		lim := "default"
-		if tag := tags[name]; tag.Limit.Enabled {
-			lim = limitText(tag.Limit.Bytes)
-		}
-		view.Tags = append(view.Tags, tagSummary{
-			Name: name, Filter: name, Current: filter == name,
-			Groups: t.groups, Devices: t.devices, Used: humanBytes(t.used), Limit: lim,
-		})
-	}
-	if t := totals["-"]; t != nil && len(names) > 0 {
-		view.Tags = append(view.Tags, tagSummary{
-			Name: "Untagged", Filter: "-", Current: filter == "-",
-			Groups: t.groups, Devices: t.devices, Used: humanBytes(t.used), Limit: "default",
-		})
-	}
-
-	switch filter {
-	case "":
-	case "-":
-		view.Filter, view.FilterName = filter, "untagged groups"
-	default:
-		view.Filter, view.FilterName = filter, "tag “"+filter+"”"
-	}
-
-	// Heaviest first: the group closest to its limit is the one to look at.
-	sort.SliceStable(view.Groups, func(i, j int) bool {
-		return view.Groups[i].UsedBytes > view.Groups[j].UsedBytes
-	})
-	return view
-}
-
-// days renders a duration as whole days.
+// days renders a duration as whole days, for the audit log.
 func days(d time.Duration) string {
-	n := int(d / (24 * time.Hour))
+	n := wholeDays(d)
 	return fmt.Sprintf("%d %s", n, plural(n, "day", "days"))
 }
 
-func (s *Server) storageView(ctx context.Context, now time.Time, problem func(string, error)) *storageView {
+func (s *Server) storageView(ctx context.Context, probs *problems) *storageJSON {
 	d := s.dashboard
-	v := &storageView{
-		Backend:    d.Backend,
-		Location:   d.Location,
-		Limit:      limitText(d.TotalLimit),
-		LimitBytes: d.TotalLimit,
-		HighBytes:  d.TotalLimit * 9 / 10,
-		GroupLimit: limitText(d.GroupLimit),
-		EntryMax:   humanBytes(d.EntryMaxBytes),
-		InlineMax:  humanBytes(d.InlineMaxBytes),
+	v := &storageJSON{
+		Backend:         d.Backend,
+		Location:        d.Location,
+		LimitBytes:      d.TotalLimit,
+		GroupLimitBytes: d.GroupLimit,
+		EntryMaxBytes:   d.EntryMaxBytes,
+		InlineMaxBytes:  d.InlineMaxBytes,
 	}
 
 	if u, err := d.Ledger.Usage(ctx); err != nil {
-		problem("the storage usage", err)
+		probs.add("the storage usage", err)
 	} else {
-		v.Used = humanBytes(u.Bytes)
 		v.UsedBytes = u.Bytes
 		v.Entries = u.Entries
-		v.Percent = percent(u.Bytes, d.TotalLimit)
 	}
 	if ev, err := d.Ledger.Evictions(ctx); err != nil {
-		problem("the eviction counts", err)
+		probs.add("the eviction counts", err)
 	} else {
 		v.Evictions = ev.Count
-		v.EvictedBytes = humanBytes(ev.Bytes)
+		v.EvictedBytes = ev.Bytes
 	}
 
 	if d.Uploads != nil {
 		n, reserved := d.Uploads()
-		v.HasUploads = true
-		v.Uploads = n
-		v.ReservedBytes = humanBytes(reserved)
+		v.Uploads = &uploadsJSON{Count: n, ReservedBytes: reserved}
 	}
 
 	if d.SweepStatus != nil {
 		st := d.SweepStatus()
 		if !st.At.IsZero() {
-			v.Swept = true
-			v.SweepAt = ago(now, st.At, "")
-			v.SweepTook = st.Took.Round(time.Millisecond).String()
+			v.LastSweep = &sweepJSON{At: st.At.UTC(), TookMS: st.Took.Round(time.Millisecond).Milliseconds()}
 			if st.Err != nil {
-				v.SweepErr = st.Err.Error()
+				v.LastSweep.Error = st.Err.Error()
 			}
 		}
 	}
@@ -386,6 +433,7 @@ func (s *Server) storageView(ctx context.Context, now time.Time, problem func(st
 }
 
 // humanBytes renders a byte count in binary units: "0 B", "512 B", "3.4 MiB".
+// The app formats sizes itself; this is for the audit log and for messages.
 func humanBytes(n int64) string {
 	const unit = 1024
 	if n < unit {
@@ -410,40 +458,9 @@ func limitText(n int64) string {
 	return humanBytes(n)
 }
 
-// percent is used/limit as a whole percentage, capped at 100; 0 when there is
-// no limit.
-func percent(used, limit int64) int {
-	if limit <= 0 || used <= 0 {
-		return 0
-	}
-	p := used * 100 / limit
-	if p > 100 {
-		p = 100
-	}
-	return int(p)
-}
-
-// ago renders how long before now t was, coarsely: "just now", "12 min ago",
-// "3 h ago", "2 days ago". A zero t renders as zero.
-func ago(now, t time.Time, zero string) string {
-	if t.IsZero() {
-		return zero
-	}
-	d := now.Sub(t)
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		return fmt.Sprintf("%d min ago", int(d/time.Minute))
-	case d < 48*time.Hour:
-		return fmt.Sprintf("%d h ago", int(d/time.Hour))
-	default:
-		return fmt.Sprintf("%d days ago", int(d/(24*time.Hour)))
-	}
-}
-
-// shortID is enough of a group id to tell groups apart on screen. The full id
-// is the creation token's value; the token screen already shows it.
+// shortID is enough of an id to tell groups or devices apart on screen. The
+// full group id is the creation token's value; the token screen already
+// shows it.
 func shortID(id string) string {
 	if len(id) <= 8 {
 		return id

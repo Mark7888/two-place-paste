@@ -8,7 +8,7 @@ description: Build, test and run TwoPlacePaste from a checkout.
 | Tool | Version | Needed for |
 |---|---|---|
 | Go | 1.26 | Every Go module. `GOTOOLCHAIN=auto` (the Makefile's default) lets an older `go` fetch it. |
-| Node.js | 26 (24 works) | The desktop UI, this documentation site, and the TypeScript protobuf bindings. |
+| Node.js | 26 (24 works) | The desktop UI, the relay's admin UI, this documentation site, and the TypeScript protobuf bindings. |
 | golangci-lint | v2.6.2+, built with Go 1.26 | `make lint`. |
 | Docker | any recent | Redis and the deployment stack. |
 
@@ -35,6 +35,51 @@ make help         # everything else
 
 `make run-server` reads `.env` from `server/` and needs a Redis it can reach (`TPP_REDIS_ADDR`,
 default `127.0.0.1:6379`).
+
+## Run the relay's admin UI from a checkout
+
+The admin page is a React app in `server/ui`. The relay binary embeds its build, so build it
+**before** the binary (or before `make run-server`) if you want the real page; without it the
+admin screens show a page saying the UI is not built. The Go tests do not need it.
+
+```sh
+cd server/ui && npm ci && npm run build   # builds into ../web/admin/dist
+cd .. && go run ./cmd/tpp
+```
+
+For UI work, run Vite next to a running relay. It serves the app at
+`http://127.0.0.1:5174/admin/` and forwards `/admin/api/`, the token QR images and `/source` to
+the relay, so sign-in, the session cookie and the CSRF check behave as in production:
+
+```sh
+make run-server                                        # the relay, on :8080
+cd server/ui && npm run dev                            # http://127.0.0.1:5174/admin/
+TPP_ADMIN_DEV_RELAY=http://127.0.0.1:9090 npm run dev  # a relay elsewhere
+```
+
+With an `http://` `TPP_PUBLIC_BASE_URL` the session cookie is not marked `Secure`, which is what
+lets this work without TLS.
+
+The service worker that makes the admin installable and lets it open offline is
+`server/ui/sw/sw.js`. `npm run build` writes it into the output as `sw.js`, with the list of
+built files it keeps and a version taken from their contents; the dev server registers none.
+It never touches `/admin/api/` or a token's QR image. Its icons come from
+`assets/icon/generate.py` like every other icon, but from their own artwork,
+`assets/icon/icon-admin.svg` (the app's clipboard with a person on it), so an installed admin is
+told apart from the app.
+
+Every build also has a **build id**, a digest of the built files, computed by the same Vite
+plugin (`buildFiles` in `vite.config.ts`). It is written into the bundle (`src/lib/build.ts`),
+into `version.json`, which the relay serves as `/admin/version.json`, and into the worker as its
+version. The running app polls `version.json` and shows an **Update** bar at the bottom when the
+relay serves a different id (`src/hooks/useUpdateCheck.ts`, `src/components/UpdateBar.tsx`). A
+rebuild with any change to the UI is a new id, wherever it was built; the dev server has no id
+and never checks. To try it, build and run the relay, open the admin, change something in
+`server/ui`, rebuild and restart the relay, and come back to the tab after half a minute.
+
+`npm test` runs the UI's unit and component tests (Vitest, in a simulated browser) and
+`npm run typecheck` its type check; CI runs both, and the build, for every change under
+`server/ui`.
 
 `make proto` needs no `protoc`: `proto/generate.sh` builds pinned tools from `proto/tools/go.mod`
 and `proto/package-lock.json`. Generated output is committed and must stay byte-identical.

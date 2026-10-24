@@ -1,10 +1,10 @@
 # Plan — SmartTable, the admin UI's data table
 
-**Status:** proposed, for the React rewrite of the admin UI. Nothing here is built yet:
-today's admin UI is server-rendered Go templates (`server/web/admin`) with plain
-tables, and this is the component that should replace them.
-**Touches (when built):** the admin UI's new React project and the admin server's JSON
-endpoints under `server/internal/admin`.
+**Status:** done. The component is `server/ui/src/components/SmartTable/`; the server side
+is `server/internal/admin/table.go` (search, sort and paging for every list) and
+`handle.go` (§12). §14 lists where the build differs from this plan.
+**Touches:** `server/ui` and the admin server's JSON endpoints under
+`server/internal/admin`.
 
 ---
 
@@ -164,3 +164,38 @@ Small tables (a group's devices, confirmation pages) use the same component with
 - **Component:** URL round trip, debounce, a stale response being dropped, footer
   states (one page, many pages, empty), sorting from the keyboard, the phone layout's
   sort control.
+
+## 14. As built
+
+Where the build differs from the plan above, or fills in what it left open:
+
+- **Handles (§12).** Rows used to carry token values, and group pages had the full group id
+  in their URL. Both are now named by a handle: 16 bytes of SHA-256 over the id, in
+  base64url (`handle.go`). It is deterministic, so URLs survive restarts, and a token and
+  the group it created share one. Old `/admin/groups/<id>` bookmarks stop working. An
+  unused token's creation URL is fetched only by **Copy link** and **Show code**
+  (`GET /admin/api/tokens/{handle}/link`); the list never holds it.
+- **Columns.** `Column` also takes `className` (the existing cell styles), `headerHidden`
+  (an actions column, announced but not shown or sorted), `firstDir` (the natural first
+  direction of §7) and `sortValue` (for tables given their rows).
+- **Two modes.** A table is given an `endpoint` (server-side search, sort and pages, state
+  in the URL) or `rows` (sorted in memory, nothing in the URL): the group's devices and the
+  confirmation pages. `filters` are the screen's own URL parameters, passed along to the
+  endpoint; `toolbar` holds their controls; `onResponse` hands the screen everything the
+  endpoint returns beyond the rows (tag counts, problems, the token form's tags).
+- **Refresh** is a controller object rather than a ref: `useTableController()`, passed as
+  `controller`, then `table.refresh()`.
+- **Groups** gained a Tag column (to sort by) and a **Stale only** checkbox (`?stale=1`).
+  **Tokens** gained an Expires column; its status filter's "used" includes tokens whose
+  group was since deleted. **Audit log** action labels moved to the server, so the search
+  matches the words on screen; the action filter is `?action=`.
+- **URLs** leave out parameters at their default, so the default view's URL is plain. A
+  search, a sort and a page-size change go back to page 1, except that a new page size keeps
+  the first visible row on screen (§8). The relay's applied page, sort and size replace the
+  URL's when they differ, without a history entry.
+- **Empty and error states** replace the table with the empty message; the footer stays.
+- **Tests:** server per endpoint in `server/internal/admin/lists_test.go`, the engine in
+  `table_test.go`; the component in `SmartTable.test.tsx` and its pure rules in
+  `state.test.ts`, run by Vitest with jsdom and Testing Library (new dev dependencies,
+  build-only).
+

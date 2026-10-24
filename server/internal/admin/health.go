@@ -4,42 +4,44 @@ import (
 	"bufio"
 	"context"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 )
 
-// healthView is the dashboard's health card: the running build, and whether
+// healthJSON is the dashboard's health card: the running build, and whether
 // Redis is set up the way SPEC §4.2 needs it. A relay on `allkeys-lru` or
 // without AOF looks healthy until the day it silently loses every group, so
 // the card says so up front.
-type healthView struct {
-	Version   string
-	Uptime    string
-	GoVersion string
+type healthJSON struct {
+	Version       string `json:"version"`
+	UptimeSeconds int64  `json:"uptime_seconds"`
+	GoVersion     string `json:"go_version"`
 
-	HasRedis bool
+	// Redis is nil when no Redis client is wired.
+	Redis *redisHealthJSON `json:"redis"`
+}
 
-	Policy      string
-	PolicyState string // good, warn, bad or unknown
-	PolicyNote  string
+type redisHealthJSON struct {
+	Policy      string `json:"policy"`
+	PolicyState string `json:"policy_state"` // good, warn, bad or unknown
+	PolicyNote  string `json:"policy_note"`
 
-	AOF      string
-	AOFState string
-	AOFNote  string
+	AOF      string `json:"aof"`
+	AOFState string `json:"aof_state"` // good, bad or unknown
+	AOFNote  string `json:"aof_note"`
 
-	Memory    string
-	MaxMemory string
+	Memory    string `json:"memory"`
+	MaxMemory string `json:"max_memory"`
 }
 
 // health reads the health card. Every Redis read is allowed to fail: a
 // managed Redis may refuse CONFIG, and the card then says "unknown" rather
 // than taking the dashboard down with it.
-func (s *Server) health(ctx context.Context, now time.Time) *healthView {
-	v := &healthView{
-		Version:   s.version,
-		Uptime:    uptime(now.Sub(s.startedAt)),
-		GoVersion: runtime.Version(),
+func (s *Server) health(ctx context.Context, now time.Time) *healthJSON {
+	v := &healthJSON{
+		Version:       s.version,
+		UptimeSeconds: int64(now.Sub(s.startedAt) / time.Second),
+		GoVersion:     runtime.Version(),
 	}
 	if v.Version == "" {
 		v.Version = "unknown"
@@ -47,43 +49,44 @@ func (s *Server) health(ctx context.Context, now time.Time) *healthView {
 	if s.redis == nil {
 		return v
 	}
-	v.HasRedis = true
+	rv := &redisHealthJSON{}
+	v.Redis = rv
 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	v.Policy, v.PolicyState, v.PolicyNote = "unknown", "unknown", "Redis did not allow reading its configuration."
+	rv.Policy, rv.PolicyState, rv.PolicyNote = "unknown", "unknown", "Redis did not allow reading its configuration."
 	if cfg, err := s.redis.ConfigGet(ctx, "maxmemory-policy").Result(); err == nil {
 		if p, ok := cfg["maxmemory-policy"]; ok {
-			v.Policy = p
-			v.PolicyState, v.PolicyNote = policyState(p)
+			rv.Policy = p
+			rv.PolicyState, rv.PolicyNote = policyState(p)
 		}
 	}
 
-	v.AOF, v.AOFState, v.AOFNote = "unknown", "unknown", "Redis did not allow reading its configuration."
+	rv.AOF, rv.AOFState, rv.AOFNote = "unknown", "unknown", "Redis did not allow reading its configuration."
 	if cfg, err := s.redis.ConfigGet(ctx, "appendonly").Result(); err == nil {
 		if a, ok := cfg["appendonly"]; ok {
-			v.AOF = a
+			rv.AOF = a
 			if a == "yes" {
-				v.AOFState, v.AOFNote = "good", ""
+				rv.AOFState, rv.AOFNote = "good", ""
 			} else {
-				v.AOFState, v.AOFNote = "bad", "Without AOF a Redis restart can lose groups and pairings. Set appendonly yes."
+				rv.AOFState, rv.AOFNote = "bad", "Without AOF a Redis restart can lose groups and pairings. Set appendonly yes."
 			}
 		}
 	}
 
-	v.Memory, v.MaxMemory = "unknown", "unknown"
+	rv.Memory, rv.MaxMemory = "unknown", "unknown"
 	if info, err := s.redis.Info(ctx, "memory").Result(); err == nil {
 		fields := infoFields(info)
 		if m := fields["used_memory_human"]; m != "" {
-			v.Memory = m
+			rv.Memory = m
 		}
 		switch m := fields["maxmemory_human"]; m {
 		case "":
 		case "0B":
-			v.MaxMemory = "no limit"
+			rv.MaxMemory = "no limit"
 		default:
-			v.MaxMemory = m
+			rv.MaxMemory = m
 		}
 	}
 	return v
@@ -117,20 +120,4 @@ func infoFields(info string) map[string]string {
 		}
 	}
 	return out
-}
-
-// uptime renders how long the server has run, coarsely.
-func uptime(d time.Duration) string {
-	switch {
-	case d < time.Minute:
-		return "less than a minute"
-	case d < time.Hour:
-		n := int(d / time.Minute)
-		return plural(n, "1 minute", strconv.Itoa(n)+" minutes")
-	case d < 48*time.Hour:
-		n := int(d / time.Hour)
-		return plural(n, "1 hour", strconv.Itoa(n)+" hours")
-	default:
-		return strconv.Itoa(int(d/(24*time.Hour))) + " days"
-	}
 }

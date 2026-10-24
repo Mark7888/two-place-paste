@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Generate every platform icon from assets/icon/icon.svg.
+"""Generate every platform icon from assets/icon/icon.svg, and the relay admin's
+from assets/icon/icon-admin.svg.
 
     pip install cairosvg pillow
     python3 assets/icon/generate.py
 
-Re-run it after changing icon.svg and commit what it writes. The outputs are
+Re-run it after changing either and commit what it writes. The outputs are
 checked in so no build needs Python. The one step this script leaves out is the
 Windows resource object that puts app.ico into tppdesktop.exe, which Go tooling
 builds (see desktop/cmd/tppdesktop/winres/README.md).
@@ -23,6 +24,11 @@ from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "assets/icon/icon.svg"
+# The relay admin's variant: the same clipboard and badge, with a person where
+# the text lines are, so an installed admin is told apart from the app on the
+# same phone or desktop. It shares the silhouette, so everything below that
+# measures the artwork (ART_*, SILHOUETTE) holds for both.
+ADMIN_SRC = ROOT / "assets/icon/icon-admin.svg"
 SVG_NS = "{http://www.w3.org/2000/svg}"
 
 # The artwork's bounding box in the SVG's 512-unit viewBox, after its group
@@ -38,10 +44,10 @@ ANDROID_RES = ROOT / "mobile/android/app/src/main/res"
 ANDROID_BG = "#FFFFFF"
 
 
-def clean_svg() -> str:
+def clean_svg(src: Path = SRC) -> str:
     """The source SVG minus its embedded provenance manifest, which is several
     kilobytes that browsers would download with every favicon."""
-    text = SRC.read_text()
+    text = src.read_text()
     text = re.sub(r"<metadata>.*?</metadata>", "", text, flags=re.S)
     text = re.sub(r'\s+xmlns:c2pa="[^"]*"', "", text)
     return text
@@ -64,27 +70,27 @@ SILHOUETTE = (
 )
 
 
-def outlined_svg() -> str:
+def outlined_svg(src: Path = SRC) -> str:
     """The artwork on its white sticker."""
-    text = clean_svg()
-    _, tx, ty = svg_paths()
+    text = clean_svg(src)
+    _, tx, ty = svg_paths(src)
     halo = (f'\n  <path fill="{HALO_FILL}" stroke="{HALO_FILL}" stroke-width="{2 * HALO}" '
             f'stroke-linejoin="round" transform="translate({tx:g} {ty:g})" d="{SILHOUETTE}"/>')
     return re.sub(r"(<svg[^>]*>)", lambda m: m.group(1) + halo, text, count=1)
 
 
 def render(size: int, scale: float = 1.0, background: str | None = None, shape: str = "none",
-           corner: float = 0.0, outlined: bool = False) -> Image.Image:
+           corner: float = 0.0, outlined: bool = False, src: Path = SRC) -> Image.Image:
     """Render the artwork centred in a size×size canvas.
 
     scale is the artwork's radius as a fraction of the canvas's half-width;
     shape is the background plate: none, square (with corner radius as a
-    fraction of the size) or circle.
+    fraction of the size) or circle. src is the artwork to draw.
     """
     # Render the SVG large, then place it: cairosvg has no notion of padding.
     radius = ART_RADIUS + HALO if outlined else ART_RADIUS
     art_px = round(size * scale * 512 / (2 * radius))
-    source = outlined_svg() if outlined else clean_svg()
+    source = outlined_svg(src) if outlined else clean_svg(src)
     png = cairosvg.svg2png(bytestring=source.encode(), output_width=art_px * 2,
                            output_height=art_px * 2)
     art = Image.open(io.BytesIO(png)).convert("RGBA").resize((art_px, art_px), Image.LANCZOS)
@@ -111,16 +117,16 @@ def save_png(img: Image.Image, path: Path) -> None:
     print("wrote", path.relative_to(ROOT))
 
 
-def save_ico(path: Path, sizes: list[int], scale: float) -> None:
+def save_ico(path: Path, sizes: list[int], scale: float, src: Path = SRC) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    frames = [render(s, scale, outlined=True) for s in sizes]
+    frames = [render(s, scale, outlined=True, src=src) for s in sizes]
     frames[-1].save(path, format="ICO", sizes=[(s, s) for s in sizes], append_images=frames[:-1])
     print("wrote", path.relative_to(ROOT))
 
 
-def svg_paths():
+def svg_paths(src: Path = SRC):
     """The SVG's paths as (d, fill, even_odd), and its group's translate."""
-    tree = ET.fromstring(SRC.read_text())
+    tree = ET.fromstring(src.read_text())
     group = tree.find(f"{SVG_NS}g")
     tx, ty = map(float, re.match(r"translate\(([-\d.]+)[ ,]+([-\d.]+)\)", group.get("transform")).groups())
     paths = []
@@ -200,13 +206,26 @@ def main() -> None:
     # at runtime: Windows reads it from a file path, not from the exe.
     save_png(render(96, 1.0, outlined=True), ROOT / "desktop/internal/tray/notify_icon.png")
 
-    # --- Web favicons: the desktop settings UI and the relay's two pages.
-    for web in (ROOT / "desktop/ui/public", ROOT / "server/web/admin", ROOT / "server/web/pair"):
+    # --- Web favicons: the desktop settings UI, the relay's pairing page (which
+    # a user, not an admin, opens, so it carries the app's icon) and the relay
+    # admin, which has its own. The admin UI's live in its React project, whose
+    # build copies them out.
+    for web, src in ((ROOT / "desktop/ui/public", SRC), (ROOT / "server/web/pair", SRC),
+                     (ROOT / "server/ui/public", ADMIN_SRC)):
         web.mkdir(parents=True, exist_ok=True)
-        (web / "favicon.svg").write_text(svg)
+        (web / "favicon.svg").write_text(outlined_svg(src))
         print("wrote", (web / "favicon.svg").relative_to(ROOT))
-        save_ico(web / "favicon.ico", [16, 32, 48], 1.0)
-        save_png(render(180, 0.80, "#FFFFFF", "square"), web / "apple-touch-icon.png")
+        save_ico(web / "favicon.ico", [16, 32, 48], 1.0, src)
+        save_png(render(180, 0.80, "#FFFFFF", "square", src=src), web / "apple-touch-icon.png")
+
+    # --- The relay admin's installable app (web app manifest). "any" icons are
+    # the artwork on a rounded white plate; the maskable one fills its canvas
+    # and keeps the artwork inside the safe zone, a circle of 80% of the size,
+    # because the launcher crops it to its own shape.
+    admin = ROOT / "server/ui/public"
+    for px in (192, 512):
+        save_png(render(px, 0.80, "#FFFFFF", "square", corner=0.18, src=ADMIN_SRC), admin / f"icon-{px}.png")
+    save_png(render(512, 0.66 * 0.97, "#FFFFFF", "square", src=ADMIN_SRC), admin / "icon-maskable-512.png")
 
 
 if __name__ == "__main__":

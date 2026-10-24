@@ -1,0 +1,8 @@
+# Node dependencies of the admin UI (server/ui).
+ui/node_modules/
+
+# The built admin UI is written into the Go package that embeds it. It is a
+# build artefact: the Docker build and CI build it before they build the
+# binary, and only the .gitkeep that keeps the directory present is committed.
+web/admin/dist/*
+!web/admin/dist/.gitkeep

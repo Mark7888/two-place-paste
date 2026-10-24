@@ -29,6 +29,8 @@ on:
       - "go.work"
       - "go.work.sum"
       - "deploy/Dockerfile"
+      - "deploy/Dockerfile.dockerignore"
+      - "scripts/notices/**"
       - ".github/workflows/docker.yml"
   pull_request:
     paths:
@@ -37,6 +39,8 @@ on:
       - "go.work"
       - "go.work.sum"
       - "deploy/Dockerfile"
+      - "deploy/Dockerfile.dockerignore"
+      - "scripts/notices/**"
       - ".github/workflows/docker.yml"
   workflow_dispatch:
   # release.yml builds a release by calling this workflow from a tag push.

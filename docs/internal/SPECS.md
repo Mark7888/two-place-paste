@@ -341,6 +341,11 @@ Served on the public domain. Credentials from `.env`.
   any unknown token). An expired token is treated as unknown. A used token cannot be
   revoked: its group already exists, and is removed by deleting it (§3.4).
 - **Settings** — runtime settings stored in Redis: the stale threshold.
+
+Every list (groups, tags, tokens, the audit log) is searched, sorted and paged by the
+server, and its view is kept in the URL. A token is named in the UI — in rows, URLs and
+requests — by an opaque handle derived from it, never by its value, and so is a group,
+whose id is its token; a token's creation URL is sent only when the admin asks for it.
 - **Audit log** — the last 1000 admin actions and sign-ins, with time and client
   address. It never holds a token value, a password, a cookie or a key.
 

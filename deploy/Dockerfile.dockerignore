@@ -1,0 +1,11 @@
+# The build context of deploy/Dockerfile is the repository root. BuildKit reads
+# this file because it sits next to the Dockerfile and shares its name.
+#
+# Dependencies and UI builds are made inside the image, for its platform. A
+# developer's own copies — node_modules with native binaries for their OS, a
+# stale UI build — must never be copied over them.
+**/node_modules
+server/web/admin/dist/*
+!server/web/admin/dist/.gitkeep
+desktop/internal/localui/dist/*
+!desktop/internal/localui/dist/.gitkeep
