@@ -211,3 +211,28 @@ func TestOneTransferGlyphReplacesAnotherAtOnce(t *testing.T) {
 		t.Errorf("painted %v when a download joined an upload, want %v", got, StatusSyncing)
 	}
 }
+
+func TestNothingIsPaintedOnceTheTrayHasGone(t *testing.T) {
+	t.Parallel()
+
+	tr := New(nil)
+	var p paints
+	tr.attach(p.paint)
+	var revealed []bool
+	tr.setChoiceItems(func(show bool) { revealed = append(revealed, show) })
+	_, before := p.last()
+
+	// What Run does when the platform's loop ends: from here a paint would
+	// wait forever on macOS for a main thread that no longer runs one.
+	tr.gone.Store(true)
+	tr.SetStatus(StatusDisconnected)
+	tr.SetGroupName("Home")
+	tr.withdrawChoice()
+
+	if _, after := p.last(); after != before {
+		t.Errorf("paints = %d after the tray went, want %d", after, before)
+	}
+	if len(revealed) != 0 {
+		t.Errorf("menu items changed %d times after the tray went, want 0", len(revealed))
+	}
+}

@@ -24,6 +24,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -197,6 +198,14 @@ type Tray struct {
 	onDirection  func(Direction)
 	revealChoice func(bool) // shows or hides the menu's direction items
 	choiceTimer  *time.Timer
+
+	// gone is set once the platform's event loop has ended. From then on
+	// nothing may touch the icon or the menu: on macOS every such call waits
+	// for the main thread to run it, and the main thread has left the loop
+	// that would. A status change during shutdown — the relay connection
+	// closing, most often — would block forever, and with it the shutdown
+	// that waits for it, leaving a frozen icon in the menu bar.
+	gone atomic.Bool
 }
 
 // New returns a tray that has not been shown yet.
@@ -220,6 +229,7 @@ func (t *Tray) Run(ctx context.Context, opts Options) {
 	}
 	t.mu.Unlock()
 	run(ctx, t, opts)
+	t.gone.Store(true)
 }
 
 // SetStatus changes what the icon shows.
@@ -297,7 +307,11 @@ func (t *Tray) tooltipLocked(s Status) string {
 func (t *Tray) attach(paint func(Status)) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.paint = paint
+	t.paint = func(s Status) {
+		if !t.gone.Load() {
+			paint(s)
+		}
+	}
 	t.showLocked(t.want)
 }
 
@@ -368,5 +382,9 @@ func (t *Tray) withdrawChoice() {
 func (t *Tray) setChoiceItems(reveal func(bool)) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.revealChoice = reveal
+	t.revealChoice = func(show bool) {
+		if !t.gone.Load() {
+			reveal(show)
+		}
+	}
 }
