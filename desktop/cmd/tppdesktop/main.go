@@ -46,6 +46,12 @@ const (
 	envUpdateAllowLocal = "TPP_DESKTOP_UPDATE_ALLOW_LOCAL"
 )
 
+// shutdownTimeout bounds closing the client core once the tray has gone. A
+// process that cannot finish shutting down must still exit: on macOS it would
+// otherwise linger with its icon in the menu bar and nothing answering it, and
+// after an update the new build's icon would sit beside the frozen one.
+const shutdownTimeout = 5 * time.Second
+
 // idleAfter is how long after the last sync an automatic update may restart
 // the service, when the screen is not locked.
 const idleAfter = 10 * time.Minute
@@ -174,7 +180,7 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("build the client core: %w", err)
 	}
-	defer func() { _ = client.Close() }()
+	defer closeClient(logger, client, shutdownTimeout)
 	svc.Attach(service.NewRelay(client))
 
 	srv, listenErr := localui.Listen(ctx, localui.Options{
@@ -266,6 +272,24 @@ func run(logger *slog.Logger) error {
 	})
 	cancel()
 	return nil
+}
+
+// closeClient closes the client core, giving up after timeout. Close waits
+// for the client's goroutines, and the process should not wait on them
+// forever: once run returns, main exits and takes whatever is left with it.
+func closeClient(logger *slog.Logger, client *tppclient.Client, timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = client.Close()
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		logger.Warn("the client core did not close in time; exiting anyway", "timeout", timeout)
+	}
 }
 
 // syncFromTray runs a sync the user started from the tray, and answers it
