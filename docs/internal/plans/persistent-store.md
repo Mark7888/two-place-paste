@@ -1,7 +1,7 @@
 # Plan — Persistent store
 
-**Status:** draft, second round. Decisions from the first review are folded in;
-§9 lists what is still open.
+**Status:** agreed design, ready for the spec PR (§10 step 1). §9 records the
+answered questions; §11 keeps the server-side copy as a later option.
 **Touches:** `/spec/**` (store section, header v2, vectors), `/proto/**`,
 `/server/**`, `/pkg/tppclient/**`, `/desktop/**`, `/mobile/**`, `/deploy/**`,
 `/docs/**`.
@@ -20,8 +20,9 @@
 - The store is **off by default** and turned on per group by the admin. Clients
   show that it is off instead of a Store tab that fails.
 - Every store item is a blob, however small.
-- **Copying from history happens on the server.** The content does not travel
-  to the client and back; on S3 it does not even leave the bucket.
+- Saving from history is done by the client: it fetches and opens the entry,
+  then seals and uploads it again as a store item. A server-side copy is kept
+  possible (§11) but not built now.
 - Sources: a history entry, the current clipboard, or a file (desktop: drop zone
   or file browser in a modal; Android: the system file picker).
 - A **Store** tab on desktop and Android: list, text search over name and
@@ -46,20 +47,21 @@
 | Chunked upload and fetch | SPEC §4.3, `entries/uploads.go` | Reused for uploads from clipboard or file, and for reading items. |
 | Quota with group/tag overrides, eviction | `server/internal/quota` | Store gets its own, without eviction. |
 | Group delete → `PurgeGroup`, entry by entry, in the request | `admin/groups.go`, `entries/service.go` | Fine for 24 h of history; the store needs async reclaim (§6.4). |
-| `minio-go` `CopyObject` | already a dependency | Server-side copy on S3 with no new module. |
+| `minio-go` `CopyObject` | already a dependency | Would allow the later server-side copy on S3 with no new module (§11). |
 
 ## 3. Decisions
 
 | # | Decision | Why |
 |---|---|---|
 | D1 | Store is **off** per group by default; the admin enables it on the group page. Calls to a disabled store fail with a new `STORE_DISABLED` error code, and `StoreLimitsResponse.enabled` lets a client show "The store is turned off for this group" before trying. | Operator control over disk; explicit opt-in. |
-| D2 | A store blob is an **entry container** (`spec/crypto.md` §5.2), byte for byte. The item record keeps the container's `content_id` and `content_epoch`, the two values its AAD binds. Copied from history, they are the entry's id and epoch; uploaded directly, the item's own id and the current epoch. | This is what makes a server-side copy possible: the server copies bytes it cannot read, and nothing needs re-encrypting. One blob format for both paths. |
+| D2 | A store blob is an **entry container** (`spec/crypto.md` §5.2), byte for byte. The item record keeps the container's `content_id` and `content_epoch`, the two values its AAD binds. In v1 the client always seals a fresh container, so they are the item's own id and the epoch it was saved at. | No second blob format to specify and test, and it keeps the server-side copy of §11 open without a format change: a copied entry would simply carry the entry's id and epoch instead. |
+| D2a | **Saving from history is download + upload** in v1: the client fetches the entry (it already does for Copy), opens it, and uploads it as a new item through the chunked flow. | Simplest path; the metadata comes from the frame the client actually opened, so it is verified rather than taken from the header. |
 | D3 | The key to a blob is its **content key** (§5.1), wrapped under the **store key** of the epoch it was saved in. Each rekey uploads a **link**: the previous store key sealed under the new one, forming a backward chain. | Items survive a rekey with O(1) work per rekey, sent in the same atomic request. |
 | D4 | A revoked device keeps nothing new: links point only backwards, and it never learns a later store key. | Keeps the "rekey is a hard break" property for everything saved after a revocation. |
 | D5 | Name, description, tags, content type, filename, size and hash live in a **sealed, fixed-size metadata record**. Search, filter and sort run on the client over the decrypted records. | SPEC §2.3. Fixed size so names leak no length. |
 | D6 | **Header v2** adds `sha256(body)` and room for a 255-byte filename: 512 bytes encoded, 553 sealed. Duplicates are found by the client against the hashes in its decrypted store index; no hash is ever visible to the server. | History rows can show "saved" and the save dialog can warn, without fetching. A server-visible hash would let the server confirm guesses. |
 | D7 | A duplicate is a **warning**, not a refusal: the dialog names the existing item(s) and offers "Save anyway". | Same content under another name or tags is useful. |
-| D8 | Store blobs live in their own namespace, `store/<group_id>/<item_id>.bin`, on the same volume (disk) or bucket (S3) as history blobs. | Group deletion becomes a prefix delete; same volume allows hard links. |
+| D8 | Store blobs live in their own namespace, `store/<group_id>/<item_id>.bin`, on the same volume (disk) or bucket (S3) as history blobs. | Group deletion becomes a prefix delete; the same volume or bucket keeps §11 possible (hard link, `CopyObject`). |
 | D9 | The store never evicts; a full store is `QUOTA_EXCEEDED` with the free space in the error details. | Persistent means persistent. |
 | D10 | Group deletion reclaims the store **asynchronously** (§6.4). | No admin request stalls on a big store. |
 | D11 | A newly paired device can read the whole store. | The store exists to outlive devices. Amends SPEC §3.2 "new devices start empty" for the store only. |
@@ -81,7 +83,7 @@ store_key[E]  = HKDF(ikm = group_key[E], salt = <empty>,
 content_key   = HKDF(group_key[C], entry_nonce, "tpp/v1/entry" || u64be(C))   -- §5.1
                 where C = content_epoch and the AAD binds content_id (§5.3)
 
--- per item, made by the saving device at its current epoch W (W = C in practice)
+-- per item, made by the saving device at its current epoch W (W = C in v1)
 wrapped_key   = u8(1) || wrap_nonce[24] || XChaCha20-Poly1305(
                   key   = HKDF(store_key[W], wrap_nonce, "tpp/v1/store-wrap" || u64be(W)),
                   nonce = wrap_nonce,
@@ -120,11 +122,10 @@ and the old links become unused.
 store, old store keys are reachable only from the newest one, which a revoked
 device never gets. The spec section says so explicitly.
 
-**What a copy trusts.** In a server-side copy the saving device never opens the
-container, so the metadata (type, filename, hash, size) comes from the entry's
-sealed header. The header is advisory (§5.5) and any group member can write one,
-the same trust as today. The first device that opens the item checks the frame
-against the metadata and corrects the metadata if they differ.
+**Where the metadata comes from.** In v1 the saving device has opened the frame,
+so type, filename, size and hash in the metadata come from the frame itself. The
+header's hash is used only to show "saved" on history rows and to warn early;
+the save dialog checks again with the hash of the frame it fetched.
 
 ### 4.1 Header v2 (`spec/crypto.md` §5.5)
 
@@ -139,43 +140,39 @@ encoded_header_v2 =                                  exactly 512 bytes
 header_container_v2 = 553 bytes, sealed exactly as v1
 ```
 
-- 255 bytes fits any real filename, so the store gets the full name from a copy.
+- 255 bytes fits any real filename, so listings no longer cut names short (and
+  §11 would get full names without a fetch).
 - The server accepts headers of 0, 297 or 553 bytes. The header version is inside
   the ciphertext, so its size reveals only which version wrote it.
 - Readers decode v1 and v2. A client that predates v2 rejects the unknown version
   and shows the type as unknown until fetched, the behaviour §5.5 already
   specifies. Writers switch to v2 once the server reports support (§7).
-- An entry with no header or a v1 header carries no hash. Saving it falls back to
-  fetching it first, which also checks for duplicates; the copy itself is still
-  done on the server.
+- An entry with no header or a v1 header carries no hash, so its row shows no
+  "saved" mark; the save dialog still finds duplicates from the fetched frame.
 
 ## 5. Save flows
 
-**From history (server-side copy):**
+Every source ends in the same upload: the client seals an entry container with
+`content_id = item_id` at its current epoch, wraps its content key, seals the
+metadata, and uploads through the chunked flow with a store target, sending the
+wrapped key and metadata at begin. Small text goes the same way and becomes a
+blob like everything else.
 
-1. The client has the entry's v2 header from the history listing: hash, type,
-   filename, size. It looks the hash up in its store index and warns if found.
-2. The dialog asks for name (pre-filled from the filename or the first line of
-   text), description and tags, and shows store space left.
-3. `StoreCopyBegin{entry_id, item_id}`: the server checks that the store is
-   enabled, the entry belongs to the caller's group and is at the current epoch,
-   and that it fits; then it copies the bytes into `store/<group_id>/<item_id>.bin`
-   and writes a `pending` record. It answers with the entry's 24-byte nonce
-   (container bytes 1–25) and its epoch.
-   - S3: `CopyObject`, inside the bucket.
-   - Disk: a hard link (`os.Link`), falling back to a file copy. A hard link is
-     safe because the history sweep only unlinks its own name.
-   - Inline entry (≤ 256 KB, in Redis): the server writes those bytes to the store
-     path.
-4. The client derives the content key from its group key and that nonce, wraps it,
-   seals the metadata and sends `StoreCopyCommit{item_id, wrapped_key, sealed_meta}`.
+**From history:**
 
-The entry may be evicted between 1 and 3: that is not-found, and the dialog says the
-entry is gone. Once step 3 has copied it, eviction no longer matters.
+1. The row already shows "saved" if the v2 header's hash is in the store index.
+2. On **Save to store**, the client fetches and opens the entry (as Copy does) and
+   hashes the body; a match in the index shows the duplicate warning with
+   **Save anyway**.
+3. The dialog asks for name (pre-filled from the filename or the first line of
+   text), description and tags, and shows store space left. The client checks
+   the size against it before uploading; the server checks again at begin.
+4. Upload as above. The history entry is not touched.
 
-**From the clipboard or a file:** the client seals an entry container with
-`content_id = item_id` at its current epoch, and uploads it through the chunked flow
-with a store target, sending the wrapped key and metadata at begin.
+If the entry expires or is evicted before the fetch, the dialog says it is gone.
+Once fetched, eviction no longer matters.
+
+**From the clipboard or a file:** the same, starting from the local bytes.
 
 ## 6. Server
 
@@ -198,7 +195,7 @@ so, and the item count per group is limited (§6.5).
 ### 6.2 Write ordering
 
 1. Begin: write the record as `pending`, add it to `store:pending`, reserve room.
-2. Bytes land: copied, linked, or uploaded through `.uploads/` staging and moved.
+2. Bytes land: uploaded through `.uploads/` staging and moved into place.
 3. Commit: mark the record `committed`, add it to the group zset, drop it from
    `store:pending`.
 
@@ -209,8 +206,13 @@ failed blob delete goes to a small retry set the sweep drains.
 
 ### 6.3 Enabling and disabling
 
-The group page gets a **Store** switch and the store limits. Enabling is
-immediate. Disabling: see Q1.
+Only the **group page** has the switch (no tag-level or token-level setting).
+Enabling is immediate. Disabling blocks every store call with `STORE_DISABLED`
+but keeps the items and their records; enabling again brings them back as they
+were. Deleting them is the separate **Purge store** button (§6.6). The disable
+confirmation says how much the store still holds. Rekeys keep requiring the
+link while items exist, enabled or not, so a disabled store survives a
+revocation. Connected devices get `StoreStateChanged` either way.
 
 ### 6.4 Group deletion
 
@@ -235,9 +237,7 @@ immediate. Disabling: see Q1.
 | `TPP_STORE_MAX_ITEM_BYTES` | = entry cap (50 MiB) | |
 | `TPP_STORE_MAX_GROUP_ITEMS` | 1 000 | Bounds Redis memory and the index a client downloads (~1 MB). |
 
-Counted: blob size plus the metadata record. A hard-linked copy is counted in
-full against the store even though the disk holds it once while the history
-entry lives; the overcount lasts at most 24 hours.
+Counted: blob size plus the metadata record.
 
 ### 6.6 Admin UI
 
@@ -251,8 +251,7 @@ New `proto/tpp/v1/store.proto`:
 
 - `StoreLimitsRequest/Response` — enabled, limits, usage, and whether the server
   accepts header v2.
-- `StoreCopyBegin/Commit` — server-side copy from history (§5).
-- `StoreUploadBegin/Chunk/Commit/Abort` — upload from clipboard or file.
+- `StoreUploadBegin/Chunk/Commit/Abort` — every save (§5).
 - `StoreListRequest/Response` — paged by `saved_at`; per item: id, saved_at, size,
   content_id, content_epoch, wrap_epoch, wrapped_key, sealed_meta, meta_rev.
 - `StoreLinksRequest/Response` — the link chain.
@@ -292,15 +291,16 @@ Desktop (`desktop/ui`) and Android:
 The docs site gains a Store page (user), and the configuration, admin and
 upgrading pages (operator), with screenshots, in the same PRs.
 
-## 9. Open questions
+## 9. Answered questions
 
-| # | Question | Proposal |
+| # | Question | Answer |
 |---|---|---|
-| Q1 | What does **disabling** a store that has items do? | Keep the items but block every store call; re-enabling brings them back. Deleting them is a separate **Purge store**. The admin confirmation says how much stays on disk. |
-| Q2 | Should a **tag** be able to turn the store on for its groups (like tag storage limits), or only the group page? | Group page only, as asked. A creation token's starting tag could carry it later. |
-| Q3 | Rollout order: header v2 needs the new server first. | One release for server and both clients; clients write v2 only when `StoreLimitsResponse` says the server accepts it. |
-| Q4 | Should editing metadata or deleting an item need a confirmation? | Delete: yes. Edit: no. |
-| Q5 | Default store limits (100 MiB, 1 000 items per group)? | As in §6.5. |
+| Q1 | What does **disabling** a store that has items do? | It only disables: items are kept, every store call is refused. **Purge store** is a separate button (§6.3, §6.6). |
+| Q2 | Can a **tag** turn the store on for its groups? | No, the group page only. |
+| Q3 | Should deleting or editing an item ask for confirmation? | Delete asks; edit does not. |
+| Q4 | Server-side copy from history? | Not now: download + upload (D2a). Kept as a later option (§11). |
+| Q5 | Rollout order for header v2. | One release for the server and both clients; clients write v2 only when `StoreLimitsResponse` says the server accepts it. |
+| Q6 | Default limits. | 100 MiB and 1 000 items per group (§6.5), adjustable per group and tag. |
 
 ## 10. Order of work (one PR each)
 
@@ -308,9 +308,41 @@ upgrading pages (operator), with screenshots, in the same PRs.
    `spec/crypto.md` store section and header v2, with vectors.
 2. **Proto** — `store.proto`, `RekeyRequest.store_link`, `STORE_DISABLED`,
    `make proto`.
-3. **Server** — header v2 acceptance, store records, namespace and quota, copy and
-   upload, reaper and sweep, rekey check, enable switch, config, admin API and UI.
+3. **Server** — header v2 acceptance, store records, namespace and quota, upload
+   and fetch, reaper and sweep, rekey check, enable switch, config, admin API and UI.
 4. **Go client core** — header v2, store crypto, calls and index; interop tests.
 5. **Desktop** — Store tab, save flows, header v2 writing, docs and screenshots.
 6. **Android** — the same, plus `npm run interop` coverage.
 7. ROADMAP status update.
+
+## 11. Later: server-side copy from history
+
+Not built in v1; recorded so the v1 formats do not rule it out.
+
+Saving a large entry from a phone costs a download and an upload of up to the
+entry cap. Because a store blob is an entry container (D2), the server could copy
+the entry's bytes unread instead:
+
+1. `StoreCopyBegin{entry_id, item_id}`: the server checks the store is enabled,
+   the entry is the caller's group's and at the current epoch, and that it fits;
+   copies the bytes to `store/<group_id>/<item_id>.bin` — S3 `CopyObject` inside
+   the bucket, a hard link on disk (a file copy across volumes), or the inline
+   bytes from Redis — and writes a `pending` record. It answers with the entry's
+   24-byte nonce and its epoch.
+2. The client derives the content key from its group key and that nonce, wraps
+   it, and commits with the sealed metadata. The record's `content_id` and
+   `content_epoch` are the entry's.
+
+What it costs, and why it waits:
+
+- The saving device never opens the content, so the metadata comes from the
+  header v2 (advisory, any member can write it) rather than the frame; the first
+  device that opens the item would have to check and correct it.
+- The store must read that entry format for as long as the item lives, and a
+  history-format change would need a migration story for copied items.
+- A hard-linked copy is counted twice by the quotas while the history entry
+  lives (at most 24 hours).
+- Two more wire messages, a copy path per backend, and their tests.
+
+None of it changes a v1 byte layout: header v2 already carries the full filename
+and the hash, and the item record already carries `content_id`/`content_epoch`.
