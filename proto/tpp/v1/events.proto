@@ -7,6 +7,7 @@ syntax = "proto3";
 package tpp.v1;
 
 import "tpp/v1/entry.proto";
+import "tpp/v1/store.proto";
 
 option go_package = "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1";
 
@@ -70,4 +71,32 @@ message GroupRenamed {
   // The new name, with the same meaning as GroupInfoResponse.name. Empty
   // means the label was cleared.
   string name = 1;
+}
+
+// StoreItemAdded tells every other connected device of the group that an item
+// was saved, so an open Store tab can show it without listing again. Metadata
+// only, as EntryAdded is. A device that was offline sees it in its next
+// listing.
+message StoreItemAdded {
+  StoreItemMeta item = 1;
+}
+
+// StoreItemUpdated tells every other connected device of the group that an
+// item's metadata changed: item.meta_rev is the new revision.
+message StoreItemUpdated {
+  StoreItemMeta item = 1;
+}
+
+// StoreItemDeleted tells every other connected device of the group that an
+// item was deleted. Fetching it now answers ERROR_CODE_NOT_FOUND.
+message StoreItemDeleted {
+  string item_id = 1;
+}
+
+// StoreStateChanged tells every connected device of the group that the admin
+// turned its store on or off (SPEC §4.6). Turning it off keeps the items; a
+// client hides the Store tab's contents and its Save actions until it is
+// turned on again.
+message StoreStateChanged {
+  bool enabled = 1;
 }

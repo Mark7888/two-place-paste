@@ -346,11 +346,199 @@ func (x *GroupRenamed) GetName() string {
 	return ""
 }
 
+// StoreItemAdded tells every other connected device of the group that an item
+// was saved, so an open Store tab can show it without listing again. Metadata
+// only, as EntryAdded is. A device that was offline sees it in its next
+// listing.
+type StoreItemAdded struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Item          *StoreItemMeta         `protobuf:"bytes,1,opt,name=item,proto3" json:"item,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StoreItemAdded) Reset() {
+	*x = StoreItemAdded{}
+	mi := &file_tpp_v1_events_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StoreItemAdded) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StoreItemAdded) ProtoMessage() {}
+
+func (x *StoreItemAdded) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_events_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StoreItemAdded.ProtoReflect.Descriptor instead.
+func (*StoreItemAdded) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_events_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *StoreItemAdded) GetItem() *StoreItemMeta {
+	if x != nil {
+		return x.Item
+	}
+	return nil
+}
+
+// StoreItemUpdated tells every other connected device of the group that an
+// item's metadata changed: item.meta_rev is the new revision.
+type StoreItemUpdated struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Item          *StoreItemMeta         `protobuf:"bytes,1,opt,name=item,proto3" json:"item,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StoreItemUpdated) Reset() {
+	*x = StoreItemUpdated{}
+	mi := &file_tpp_v1_events_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StoreItemUpdated) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StoreItemUpdated) ProtoMessage() {}
+
+func (x *StoreItemUpdated) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_events_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StoreItemUpdated.ProtoReflect.Descriptor instead.
+func (*StoreItemUpdated) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_events_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *StoreItemUpdated) GetItem() *StoreItemMeta {
+	if x != nil {
+		return x.Item
+	}
+	return nil
+}
+
+// StoreItemDeleted tells every other connected device of the group that an
+// item was deleted. Fetching it now answers ERROR_CODE_NOT_FOUND.
+type StoreItemDeleted struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ItemId        string                 `protobuf:"bytes,1,opt,name=item_id,json=itemId,proto3" json:"item_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StoreItemDeleted) Reset() {
+	*x = StoreItemDeleted{}
+	mi := &file_tpp_v1_events_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StoreItemDeleted) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StoreItemDeleted) ProtoMessage() {}
+
+func (x *StoreItemDeleted) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_events_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StoreItemDeleted.ProtoReflect.Descriptor instead.
+func (*StoreItemDeleted) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_events_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *StoreItemDeleted) GetItemId() string {
+	if x != nil {
+		return x.ItemId
+	}
+	return ""
+}
+
+// StoreStateChanged tells every connected device of the group that the admin
+// turned its store on or off (SPEC §4.6). Turning it off keeps the items; a
+// client hides the Store tab's contents and its Save actions until it is
+// turned on again.
+type StoreStateChanged struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Enabled       bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StoreStateChanged) Reset() {
+	*x = StoreStateChanged{}
+	mi := &file_tpp_v1_events_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StoreStateChanged) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StoreStateChanged) ProtoMessage() {}
+
+func (x *StoreStateChanged) ProtoReflect() protoreflect.Message {
+	mi := &file_tpp_v1_events_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StoreStateChanged.ProtoReflect.Descriptor instead.
+func (*StoreStateChanged) Descriptor() ([]byte, []int) {
+	return file_tpp_v1_events_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *StoreStateChanged) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
 var File_tpp_v1_events_proto protoreflect.FileDescriptor
 
 const file_tpp_v1_events_proto_rawDesc = "" +
 	"\n" +
-	"\x13tpp/v1/events.proto\x12\x06tpp.v1\x1a\x12tpp/v1/entry.proto\"P\n" +
+	"\x13tpp/v1/events.proto\x12\x06tpp.v1\x1a\x12tpp/v1/entry.proto\x1a\x12tpp/v1/store.proto\"P\n" +
 	"\fEpochChanged\x12\x14\n" +
 	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12*\n" +
 	"\x11revoked_device_id\x18\x02 \x01(\tR\x0frevokedDeviceId\"W\n" +
@@ -366,7 +554,15 @@ const file_tpp_v1_events_proto_rawDesc = "" +
 	"\fEntryEvicted\x12\x19\n" +
 	"\bentry_id\x18\x01 \x01(\tR\aentryId\"\"\n" +
 	"\fGroupRenamed\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04nameBHZFgithub.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1b\x06proto3"
+	"\x04name\x18\x01 \x01(\tR\x04name\";\n" +
+	"\x0eStoreItemAdded\x12)\n" +
+	"\x04item\x18\x01 \x01(\v2\x15.tpp.v1.StoreItemMetaR\x04item\"=\n" +
+	"\x10StoreItemUpdated\x12)\n" +
+	"\x04item\x18\x01 \x01(\v2\x15.tpp.v1.StoreItemMetaR\x04item\"+\n" +
+	"\x10StoreItemDeleted\x12\x17\n" +
+	"\aitem_id\x18\x01 \x01(\tR\x06itemId\"-\n" +
+	"\x11StoreStateChanged\x12\x18\n" +
+	"\aenabled\x18\x01 \x01(\bR\aenabledBHZFgithub.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1b\x06proto3"
 
 var (
 	file_tpp_v1_events_proto_rawDescOnce sync.Once
@@ -380,7 +576,7 @@ func file_tpp_v1_events_proto_rawDescGZIP() []byte {
 	return file_tpp_v1_events_proto_rawDescData
 }
 
-var file_tpp_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_tpp_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_tpp_v1_events_proto_goTypes = []any{
 	(*EpochChanged)(nil),        // 0: tpp.v1.EpochChanged
 	(*WrappedKeyAvailable)(nil), // 1: tpp.v1.WrappedKeyAvailable
@@ -388,15 +584,22 @@ var file_tpp_v1_events_proto_goTypes = []any{
 	(*EntryAdded)(nil),          // 3: tpp.v1.EntryAdded
 	(*EntryEvicted)(nil),        // 4: tpp.v1.EntryEvicted
 	(*GroupRenamed)(nil),        // 5: tpp.v1.GroupRenamed
-	(*EntryMeta)(nil),           // 6: tpp.v1.EntryMeta
+	(*StoreItemAdded)(nil),      // 6: tpp.v1.StoreItemAdded
+	(*StoreItemUpdated)(nil),    // 7: tpp.v1.StoreItemUpdated
+	(*StoreItemDeleted)(nil),    // 8: tpp.v1.StoreItemDeleted
+	(*StoreStateChanged)(nil),   // 9: tpp.v1.StoreStateChanged
+	(*EntryMeta)(nil),           // 10: tpp.v1.EntryMeta
+	(*StoreItemMeta)(nil),       // 11: tpp.v1.StoreItemMeta
 }
 var file_tpp_v1_events_proto_depIdxs = []int32{
-	6, // 0: tpp.v1.EntryAdded.meta:type_name -> tpp.v1.EntryMeta
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	10, // 0: tpp.v1.EntryAdded.meta:type_name -> tpp.v1.EntryMeta
+	11, // 1: tpp.v1.StoreItemAdded.item:type_name -> tpp.v1.StoreItemMeta
+	11, // 2: tpp.v1.StoreItemUpdated.item:type_name -> tpp.v1.StoreItemMeta
+	3,  // [3:3] is the sub-list for method output_type
+	3,  // [3:3] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_tpp_v1_events_proto_init() }
@@ -405,13 +608,14 @@ func file_tpp_v1_events_proto_init() {
 		return
 	}
 	file_tpp_v1_entry_proto_init()
+	file_tpp_v1_store_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_tpp_v1_events_proto_rawDesc), len(file_tpp_v1_events_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

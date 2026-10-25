@@ -3,8 +3,9 @@
 **Status:** agreed design. Step 1 of §10 (spec, vectors, client crypto) landed
 in #40. Header v2 is rolled out on its own, ahead of the store: the relay accepts
 it and says so in `EntryLimitsResponse.header_v2`, and both clients write it to
-a relay that does. §9 records the
-answered questions; §11 keeps the server-side copy as a later option.
+a relay that does (#42). The store's wire schema is in `store.proto`, and both
+clients send the store link with every rekey (#43). §9 records the answered
+questions; §11 keeps the server-side copy as a later option.
 **Touches:** `/spec/**` (store section, header v2, vectors), `/proto/**`,
 `/server/**`, `/pkg/tppclient/**`, `/desktop/**`, `/mobile/**`, `/deploy/**`,
 `/docs/**`.
@@ -236,28 +237,35 @@ total store usage. Sizes and counts only.
 
 ## 7. Wire
 
-New `proto/tpp/v1/store.proto`:
+`proto/tpp/v1/store.proto`, with numbers 70–85 for requests and 56–59 for
+events (#43). A store upload mirrors an entry's, so the relay reuses that code:
 
-- `StoreLimitsRequest/Response` — enabled, limits, usage, and whether the server
-  accepts header v2.
-- `StoreUploadBegin/Chunk/Commit/Abort` — every save (§5).
-- `StoreListRequest/Response` — paged by `saved_at`; per item: id, saved_at, size,
-  content_id, content_epoch, wrap_epoch, wrapped_key, sealed_meta, meta_rev.
-- `StoreLinksRequest/Response` — the link chain.
-- `StoreFetchRequest` — chunked range read.
-- `StoreUpdateMetaRequest` — new sealed metadata with `expected_meta_rev`, so two
-  devices editing at once cannot silently lose an edit.
-- `StoreDeleteRequest`.
-- Events `StoreItemAdded/Updated/Deleted` (ids only), and `StoreStateChanged`
-  when the admin turns the store on or off.
+| Message | Carries |
+|---|---|
+| `StoreLimitsRequest/Response` | enabled; byte limit, used, available now; item limit, used; max item size. Answered when the store is off too. |
+| `StoreListRequest/Response` | newest first, paged by an opaque cursor (a time cursor could skip items saved in the same millisecond, and the client needs every item) |
+| `StoreLinksRequest/Response` | every `(epoch, link)`, oldest first |
+| `StoreUploadBeginRequest/Response` | item id, epoch, size → handle and chunk size. Chunks and aborts are `EntryUploadChunkRequest` / `EntryUploadAbortRequest`. |
+| `StorePutRequest/Response` | item id, epoch, size, wrapped item keys (105), sealed record (2089), and either the blob or the upload handle |
+| `StoreFetchChunkRequest/Response` | a range of the blob |
+| `StoreUpdateMetaRequest/Response` | a new sealed record against `expected_meta_rev` |
+| `StoreDeleteRequest/Response` | item id |
+| Events `StoreItemAdded`, `StoreItemUpdated` | the item's metadata |
+| Events `StoreItemDeleted`, `StoreStateChanged` | the item id; whether the store is on |
+
+`StoreItemMeta` is what a listing returns per item: id, `saved_at`, size,
+`wrap_epoch`, `content_id`, `content_epoch`, wrapped item keys, sealed record,
+`meta_rev`.
 
 Changes to existing messages:
 
-- `RekeyRequest` gains `bytes store_link`. The server refuses a rekey without it
-  when the group has store items, so a client that predates the store cannot
-  orphan them ("update the app" error). Clients always send it.
-- `EntryPutRequest.header` and the upload begin accept 553 bytes.
-- `ErrorCode` gains `STORE_DISABLED` (a new enum number, permanent).
+- `RekeyRequest.store_link` (field 4). Both clients send it on every rekey from
+  #43 on, and refuse to rekey from a key older than the relay's epoch, which
+  would seal a wrong link. The relay will refuse a rekey without it while the
+  group has store items.
+- `ErrorCode`: `STORE_DISABLED` (13), `CLIENT_OUTDATED` (14) for that rekey,
+  and `REVISION_CONFLICT` (15) for an edit against an old revision.
+- `EntryPutRequest.header` and `EntryLimitsResponse.header_v2`: landed in #42.
 
 ## 8. Clients
 

@@ -7,6 +7,7 @@
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { EntryMeta } from "./entry";
+import { StoreItemMeta } from "./store";
 
 export const protobufPackage = "tpp.v1";
 
@@ -88,6 +89,42 @@ export interface GroupRenamed {
    * means the label was cleared.
    */
   name: string;
+}
+
+/**
+ * StoreItemAdded tells every other connected device of the group that an item
+ * was saved, so an open Store tab can show it without listing again. Metadata
+ * only, as EntryAdded is. A device that was offline sees it in its next
+ * listing.
+ */
+export interface StoreItemAdded {
+  item?: StoreItemMeta | undefined;
+}
+
+/**
+ * StoreItemUpdated tells every other connected device of the group that an
+ * item's metadata changed: item.meta_rev is the new revision.
+ */
+export interface StoreItemUpdated {
+  item?: StoreItemMeta | undefined;
+}
+
+/**
+ * StoreItemDeleted tells every other connected device of the group that an
+ * item was deleted. Fetching it now answers ERROR_CODE_NOT_FOUND.
+ */
+export interface StoreItemDeleted {
+  itemId: string;
+}
+
+/**
+ * StoreStateChanged tells every connected device of the group that the admin
+ * turned its store on or off (SPEC §4.6). Turning it off keeps the items; a
+ * client hides the Store tab's contents and its Save actions until it is
+ * turned on again.
+ */
+export interface StoreStateChanged {
+  enabled: boolean;
 }
 
 function createBaseEpochChanged(): EpochChanged {
@@ -560,6 +597,284 @@ export const GroupRenamed: MessageFns<GroupRenamed> = {
   fromPartial<I extends Exact<DeepPartial<GroupRenamed>, I>>(object: I): GroupRenamed {
     const message = createBaseGroupRenamed();
     message.name = object.name ?? "";
+    return message;
+  },
+};
+
+function createBaseStoreItemAdded(): StoreItemAdded {
+  return { item: undefined };
+}
+
+export const StoreItemAdded: MessageFns<StoreItemAdded> = {
+  encode(message: StoreItemAdded, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.item !== undefined) {
+      StoreItemMeta.encode(message.item, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): StoreItemAdded {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseStoreItemAdded();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.item = StoreItemMeta.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): StoreItemAdded {
+    return { item: isSet(object.item) ? StoreItemMeta.fromJSON(object.item) : undefined };
+  },
+
+  toJSON(message: StoreItemAdded): unknown {
+    const obj: any = {};
+    if (message.item !== undefined) {
+      obj.item = StoreItemMeta.toJSON(message.item);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<StoreItemAdded>, I>>(base?: I): StoreItemAdded {
+    return StoreItemAdded.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<StoreItemAdded>, I>>(object: I): StoreItemAdded {
+    const message = createBaseStoreItemAdded();
+    message.item = (object.item !== undefined && object.item !== null)
+      ? StoreItemMeta.fromPartial(object.item)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseStoreItemUpdated(): StoreItemUpdated {
+  return { item: undefined };
+}
+
+export const StoreItemUpdated: MessageFns<StoreItemUpdated> = {
+  encode(message: StoreItemUpdated, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.item !== undefined) {
+      StoreItemMeta.encode(message.item, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): StoreItemUpdated {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseStoreItemUpdated();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.item = StoreItemMeta.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): StoreItemUpdated {
+    return { item: isSet(object.item) ? StoreItemMeta.fromJSON(object.item) : undefined };
+  },
+
+  toJSON(message: StoreItemUpdated): unknown {
+    const obj: any = {};
+    if (message.item !== undefined) {
+      obj.item = StoreItemMeta.toJSON(message.item);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<StoreItemUpdated>, I>>(base?: I): StoreItemUpdated {
+    return StoreItemUpdated.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<StoreItemUpdated>, I>>(object: I): StoreItemUpdated {
+    const message = createBaseStoreItemUpdated();
+    message.item = (object.item !== undefined && object.item !== null)
+      ? StoreItemMeta.fromPartial(object.item)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseStoreItemDeleted(): StoreItemDeleted {
+  return { itemId: "" };
+}
+
+export const StoreItemDeleted: MessageFns<StoreItemDeleted> = {
+  encode(message: StoreItemDeleted, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.itemId !== "") {
+      writer.uint32(10).string(message.itemId);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): StoreItemDeleted {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseStoreItemDeleted();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.itemId = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): StoreItemDeleted {
+    return {
+      itemId: isSet(object.itemId)
+        ? globalThis.String(object.itemId)
+        : isSet(object.item_id)
+        ? globalThis.String(object.item_id)
+        : "",
+    };
+  },
+
+  toJSON(message: StoreItemDeleted): unknown {
+    const obj: any = {};
+    if (message.itemId !== "") {
+      obj.itemId = message.itemId;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<StoreItemDeleted>, I>>(base?: I): StoreItemDeleted {
+    return StoreItemDeleted.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<StoreItemDeleted>, I>>(object: I): StoreItemDeleted {
+    const message = createBaseStoreItemDeleted();
+    message.itemId = object.itemId ?? "";
+    return message;
+  },
+};
+
+function createBaseStoreStateChanged(): StoreStateChanged {
+  return { enabled: false };
+}
+
+export const StoreStateChanged: MessageFns<StoreStateChanged> = {
+  encode(message: StoreStateChanged, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.enabled !== false) {
+      writer.uint32(8).bool(message.enabled);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): StoreStateChanged {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseStoreStateChanged();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.enabled = reader.bool();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): StoreStateChanged {
+    return { enabled: isSet(object.enabled) ? globalThis.Boolean(object.enabled) : false };
+  },
+
+  toJSON(message: StoreStateChanged): unknown {
+    const obj: any = {};
+    if (message.enabled !== false) {
+      obj.enabled = message.enabled;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<StoreStateChanged>, I>>(base?: I): StoreStateChanged {
+    return StoreStateChanged.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<StoreStateChanged>, I>>(object: I): StoreStateChanged {
+    const message = createBaseStoreStateChanged();
+    message.enabled = object.enabled ?? false;
     return message;
   },
 };

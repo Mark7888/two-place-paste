@@ -54,6 +54,8 @@ enum ErrorCode {
 
   // The ciphertext exceeds the per-entry cap or a storage limit, or is too
   // large for the single-frame path it was sent or requested on (SPEC §4.3).
+  // For the store: the blob is over max_item_bytes, or over the group's store
+  // limit on its own (SPEC §4.6).
   ERROR_CODE_TOO_LARGE = 8;
 
   // Rate limited. The caller backs off and retries.
@@ -70,5 +72,24 @@ enum ErrorCode {
   // room, because what remains is held by uploads still in progress. The
   // caller may retry later. An entry larger than a storage limit on its own
   // gets ERROR_CODE_TOO_LARGE instead (SPEC §4.3).
+  //
+  // For the store: the item does not fit in the group's store, or the relay's
+  // total store limit, or would pass the item limit. The store never evicts
+  // to make room; StoreLimitsResponse says how much is left (SPEC §4.6).
   ERROR_CODE_QUOTA_EXCEEDED = 12;
+
+  // The admin has not turned the store on for this group, or has turned it
+  // off. The items, if any, are kept (SPEC §4.6).
+  ERROR_CODE_STORE_DISABLED = 13;
+
+  // The request is one this client's version cannot make correctly any more.
+  // A RekeyRequest without store_link, for a group that has store items, gets
+  // this: applying it would leave every item unreadable (SPEC §3.3). The
+  // client tells the user to update the app.
+  ERROR_CODE_CLIENT_OUTDATED = 14;
+
+  // StoreUpdateMetaRequest.expected_meta_rev is not the item's current
+  // revision: another device edited it first. The caller lists the item
+  // again, shows the user the newer version, and retries from it.
+  ERROR_CODE_REVISION_CONFLICT = 15;
 }
