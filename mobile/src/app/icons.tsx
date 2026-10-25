@@ -25,7 +25,16 @@ export type IconName =
   | 'check'
   | 'alert'
   | 'close'
-  | 'open';
+  | 'open'
+  | 'store'
+  | 'plus'
+  | 'tag'
+  | 'edit'
+  | 'trash'
+  | 'search'
+  | 'text'
+  | 'image'
+  | 'file';
 
 const paths: Record<IconName, string> = {
   sync: 'M3 12a9 9 0 0 1 15.5-6.2M21 12a9 9 0 0 1-15.5 6.2M18 3v3h-3M6 21v-3h3',
@@ -40,6 +49,15 @@ const paths: Record<IconName, string> = {
   alert: 'M12 8v5M12 17h.01M10.3 3.9 2.4 17.5A2 2 0 0 0 4.1 20.5h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z',
   close: 'M6 6l12 12M18 6 6 18',
   open: 'M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5',
+  store: 'M3 4h18v4H3zM5 8v12h14V8M10 12h4',
+  plus: 'M12 5v14M5 12h14',
+  tag: 'M3 12V3h9l9 9-9 9zM7.5 7.5h.01',
+  edit: 'M4 20h4L19 9l-4-4L4 16zM14 6l4 4',
+  trash: 'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3',
+  search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4',
+  text: 'M5 6h14M5 11h14M5 16h9',
+  image: 'M4 5h16v14H4zM4 16l4.5-4.5 4 4L16 12l4 4M9.5 9.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z',
+  file: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5',
 };
 
 export function Icon({

@@ -11,9 +11,10 @@
 
 import { PermissionsAndroid, Platform } from 'react-native';
 
+import { decodeBase64StdAsync } from '../core/bytes';
 import { toStandardBase64 } from './clipboard.android';
 import { TppFiles } from './native';
-import type { ClipboardItem, FilesPort, SavedFile } from './types';
+import type { ClipboardItem, FilesPort, PickedFile, SavedFile } from './types';
 
 /**
  * ensureLegacyWrite asks for storage access on Android 9 and older, the only
@@ -60,5 +61,24 @@ export const files: FilesPort = {
       throw new Error('this build cannot open files');
     }
     await TppFiles.open(await toStandardBase64(item.body), item.filename, item.contentType);
+  },
+
+  async pick(maxBytes: number): Promise<PickedFile | null> {
+    if (TppFiles === null) {
+      throw new Error('this build cannot pick files');
+    }
+    const picked = await TppFiles.pickFile(maxBytes);
+    if (picked === null) {
+      return null;
+    }
+    if (picked.tooLarge === true || picked.base64 === undefined) {
+      return { tooLarge: true, name: picked.name, size: picked.size };
+    }
+    return {
+      tooLarge: false,
+      name: picked.name,
+      contentType: picked.contentType ?? 'application/octet-stream',
+      body: await decodeBase64StdAsync(picked.base64),
+    };
   },
 };

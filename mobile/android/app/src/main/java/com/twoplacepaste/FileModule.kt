@@ -1,5 +1,6 @@
 package com.twoplacepaste
 
+import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.ContentValues
 import android.content.Context
@@ -9,11 +10,13 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.util.Base64
 import android.webkit.MimeTypeMap
 import androidx.annotation.RequiresApi
 import androidx.core.content.FileProvider
 import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.BaseActivityEventListener
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -31,11 +34,137 @@ import java.io.File
  * cache and handed over as a FileProvider `content://` URI with a one-off read
  * grant, the same way a received image goes onto the clipboard. Each open
  * replaces the last one, so the cache never holds more than one file.
+ *
+ * It also goes the other way: [pickFile] lets the user choose a file to save
+ * to the group's store, through the system's own picker.
  */
 class FileModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
     override fun getName(): String = NAME
+
+    /** The pick in progress, and the most it may read. One at a time. */
+    private var pickPromise: Promise? = null
+    private var pickMaxBytes: Long = 0
+
+    private val pickListener = object : BaseActivityEventListener() {
+        override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
+            if (requestCode != PICK_REQUEST) {
+                return
+            }
+            val promise = pickPromise ?: return
+            pickPromise = null
+            val uri = data?.data
+            if (resultCode != Activity.RESULT_OK || uri == null) {
+                // Backing out of the picker is an answer, not a failure.
+                promise.resolve(null)
+                return
+            }
+            val max = pickMaxBytes
+            // Off the main thread: a file can be tens of megabytes.
+            Thread { readPicked(uri, max, promise) }.start()
+        }
+    }
+
+    init {
+        reactContext.addActivityEventListener(pickListener)
+    }
+
+    /**
+     * pickFile opens the system's file picker and resolves with the chosen
+     * file as `{ name, contentType, size, base64 }`, with `{ name, size,
+     * tooLarge: true }` and no bytes when it is over [maxBytes], or with null
+     * when the user backed out. Only the file the user picked is read, and
+     * only through the one-off grant the picker hands this app.
+     */
+    @ReactMethod
+    fun pickFile(maxBytes: Double, promise: Promise) {
+        val activity = reactApplicationContext.currentActivity
+        if (activity == null) {
+            promise.reject(ERROR_CODE, "the file picker needs the app in the foreground")
+            return
+        }
+        if (pickPromise != null) {
+            promise.reject(ERROR_CODE, "a file is already being picked")
+            return
+        }
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }
+        pickPromise = promise
+        pickMaxBytes = maxBytes.toLong()
+        try {
+            activity.startActivityForResult(intent, PICK_REQUEST)
+        } catch (e: ActivityNotFoundException) {
+            pickPromise = null
+            promise.reject(ERROR_CODE, "this device has no file picker", e)
+        }
+    }
+
+    private fun readPicked(uri: Uri, maxBytes: Long, promise: Promise) {
+        try {
+            val resolver = reactApplicationContext.contentResolver
+            var name = ""
+            var size = -1L
+            resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use {
+                if (it.moveToFirst()) {
+                    name = it.getString(0) ?: ""
+                    if (!it.isNull(1)) {
+                        size = it.getLong(1)
+                    }
+                }
+            }
+            if (size > maxBytes) {
+                promise.resolve(
+                    Arguments.createMap().apply {
+                        putString("name", name)
+                        putDouble("size", size.toDouble())
+                        putBoolean("tooLarge", true)
+                    },
+                )
+                return
+            }
+            // The size a provider reports can be missing or wrong, so the read
+            // is bounded too.
+            val bytes = resolver.openInputStream(uri)?.use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(64 * 1024)
+                var total = 0L
+                while (true) {
+                    val n = input.read(buffer)
+                    if (n < 0) {
+                        break
+                    }
+                    total += n
+                    if (total > maxBytes) {
+                        promise.resolve(
+                            Arguments.createMap().apply {
+                                putString("name", name)
+                                putDouble("size", total.toDouble())
+                                putBoolean("tooLarge", true)
+                            },
+                        )
+                        return
+                    }
+                    out.write(buffer, 0, n)
+                }
+                out.toByteArray()
+            } ?: throw IllegalStateException("the picked file could not be opened")
+            val mime = resolver.getType(uri) ?: mimeOf("", name)
+            promise.resolve(
+                Arguments.createMap().apply {
+                    putString("name", name)
+                    putString("contentType", mime)
+                    putDouble("size", bytes.size.toDouble())
+                    putString("base64", Base64.encodeToString(bytes, Base64.NO_WRAP))
+                },
+            )
+        } catch (e: Exception) {
+            // The message names the operation, never the bytes or the name.
+            promise.reject(ERROR_CODE, "the picked file could not be read", e)
+        }
+    }
 
     /**
      * saveToDownloads writes the file to [SUBFOLDER] inside the shared
@@ -215,6 +344,7 @@ class FileModule(reactContext: ReactApplicationContext) :
         /** SUBFOLDER is where saved files go, inside Downloads. */
         const val SUBFOLDER = "TwoPlacePaste"
         private const val OPEN_DIRECTORY = "open"
+        private const val PICK_REQUEST = 7301
         private const val ERROR_CODE = "tpp_files"
         private const val OCTET_STREAM = "application/octet-stream"
 

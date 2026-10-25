@@ -63,6 +63,15 @@ export interface TppFilesModule {
    * cache rather than saved anywhere. It rejects when no app opens the type.
    */
   open(base64: string, filename: string, contentType: string): Promise<void>;
+
+  /**
+   * pickFile shows the system's file picker. It resolves with the file, with
+   * `tooLarge` and no bytes when it is over `maxBytes`, or with null when the
+   * user backed out.
+   */
+  pickFile(
+    maxBytes: number,
+  ): Promise<{ name: string; size: number; contentType?: string; base64?: string; tooLarge?: boolean } | null>;
 }
 
 /** TppCacheModule is implemented by `android/app/src/main/java/.../CacheModule.kt`. */

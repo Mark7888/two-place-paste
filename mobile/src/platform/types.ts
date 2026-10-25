@@ -78,7 +78,19 @@ export interface FilesPort {
    * Downloads: it is staged in this app's cache, and the next open replaces it.
    */
   open(item: ClipboardItem): Promise<void>;
+
+  /**
+   * pick lets the user choose a file with the system's picker, for the store.
+   * It resolves with the file, with `tooLarge` when it is over `maxBytes`
+   * (nothing is read then), or with null when the user backed out.
+   */
+  pick(maxBytes: number): Promise<PickedFile | null>;
 }
+
+/** PickedFile is a file the user chose to save to the store. */
+export type PickedFile =
+  | { tooLarge: false; name: string; contentType: string; body: Uint8Array }
+  | { tooLarge: true; name: string; size: number };
 
 /** SecureStorePort is where the device private key and the group key live at rest (spec/crypto.md §10). */
 export interface SecureStorePort {
