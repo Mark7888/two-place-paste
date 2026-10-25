@@ -1,13 +1,14 @@
 package tppclient_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -168,80 +169,109 @@ func startRedis(t *testing.T, dir string) string {
 	return addr
 }
 
-// creationURL signs in to the admin UI, generates a creation token and returns
+// creationURL signs in to the admin, generates a creation token and returns
 // the URL an operator would hand a user (SPEC §3.1, §4.4).
 func (r *relay) creationURL(t *testing.T, name string) string {
+	t.Helper()
+	var created struct {
+		URL string `json:"url"`
+	}
+	r.admin(t).call(t, http.MethodPost, "/admin/api/tokens", map[string]string{"name": name}, http.StatusCreated, &created)
+	// The token is the URL's last path element. The relay builds the URL
+	// from its public base, so it is rebuilt here on the address this test
+	// dialled.
+	i := strings.LastIndex(created.URL, "/")
+	if i < 0 || i == len(created.URL)-1 {
+		t.Fatalf("creation URL %q has no token", created.URL)
+	}
+	return r.baseURL + created.URL[i:]
+}
+
+// adminAPI is a signed-in session on the relay's admin JSON API.
+type adminAPI struct {
+	baseURL string
+	client  *http.Client
+	csrf    string
+}
+
+// admin signs in to the relay's admin API.
+func (r *relay) admin(t *testing.T) *adminAPI {
 	t.Helper()
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		t.Fatalf("cookie jar: %v", err)
 	}
-	c := &http.Client{
-		Jar:     jar,
-		Timeout: 10 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+	a := &adminAPI{baseURL: r.baseURL, client: &http.Client{Jar: jar, Timeout: 10 * time.Second}}
+	var sess struct {
+		CSRF string `json:"csrf"`
 	}
-
-	resp, err := c.PostForm(r.baseURL+"/admin/login", url.Values{"password": {r.adminPass}})
-	if err != nil {
-		t.Fatalf("admin login: %v", err)
+	a.call(t, http.MethodPost, "/admin/api/login", map[string]string{"password": r.adminPass}, http.StatusOK, &sess)
+	if sess.CSRF == "" {
+		t.Fatal("admin login returned no CSRF token")
 	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("admin login = %d, want %d", resp.StatusCode, http.StatusSeeOther)
-	}
-
-	body := r.get(t, c, "/admin/")
-	csrf := between(t, body, `name="csrf" value="`, `"`)
-
-	resp, err = c.PostForm(r.baseURL+"/admin/tokens", url.Values{"name": {name}, "csrf": {csrf}})
-	if err != nil {
-		t.Fatalf("create token: %v", err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("create token = %d, want %d", resp.StatusCode, http.StatusSeeOther)
-	}
-
-	// The token screen renders each unused token's QR image at a URL that
-	// carries the token value, which is the only place the value appears in
-	// the markup.
-	body = r.get(t, c, "/admin/tokens")
-	value := between(t, body, "/admin/tokens/", "/qr.png")
-	return r.baseURL + "/" + value
+	a.csrf = sess.CSRF
+	return a
 }
 
-func (r *relay) get(t *testing.T, c *http.Client, path string) string {
+// call sends one JSON request and expects the given status. out, when not
+// nil, receives the decoded response.
+func (a *adminAPI) call(t *testing.T, method, path string, in any, want int, out any) {
 	t.Helper()
-	resp, err := c.Get(r.baseURL + path)
+	var body io.Reader
+	if in != nil {
+		raw, err := json.Marshal(in)
+		if err != nil {
+			t.Fatalf("encode %s %s: %v", method, path, err)
+		}
+		body = bytes.NewReader(raw)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), method, a.baseURL+path, body)
 	if err != nil {
-		t.Fatalf("GET %s: %v", path, err)
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	if in != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if a.csrf != "" {
+		req.Header.Set("X-CSRF-Token", a.csrf)
+	}
+	resp, err := a.client.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
+		t.Fatalf("read %s %s: %v", method, path, err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET %s = %d, want 200", path, resp.StatusCode)
+	if resp.StatusCode != want {
+		t.Fatalf("%s %s = %d, want %d: %s", method, path, resp.StatusCode, want, raw)
 	}
-	return string(body)
+	if out != nil {
+		if err := json.Unmarshal(raw, out); err != nil {
+			t.Fatalf("decode %s %s: %v", method, path, err)
+		}
+	}
 }
 
-func between(t *testing.T, haystack, prefix, suffix string) string {
+// groupHandle finds the admin's handle for the group with this name. A
+// group's id never reaches the admin API; its handle stands in for it.
+func (a *adminAPI) groupHandle(t *testing.T, name string) string {
 	t.Helper()
-	i := strings.Index(haystack, prefix)
-	if i < 0 {
-		t.Fatalf("no %q in the admin page", prefix)
+	var list struct {
+		Rows []struct {
+			Handle string `json:"handle"`
+			Name   string `json:"name"`
+		} `json:"rows"`
 	}
-	rest := haystack[i+len(prefix):]
-	j := strings.Index(rest, suffix)
-	if j < 0 {
-		t.Fatalf("%q is not terminated by %q", prefix, suffix)
+	a.call(t, http.MethodGet, "/admin/api/groups", nil, http.StatusOK, &list)
+	for _, g := range list.Rows {
+		if g.Name == name {
+			return g.Handle
+		}
 	}
-	return rest[:j]
+	t.Fatalf("no group named %q in the admin's list", name)
+	return ""
 }
 
 // freeAddr returns a loopback address nothing is listening on. There is an

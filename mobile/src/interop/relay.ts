@@ -118,36 +118,35 @@ export class Relay {
   }
 
   /**
-   * creationURL signs in to the admin UI and mints a creation token, which is
+   * creationURL signs in to the admin API and mints a creation token, which is
    * the string an operator hands a user (SPEC §3.1, §4.4).
    */
   async creationURL(name: string): Promise<string> {
     // Node's fetch keeps no cookie jar, so the session cookie is carried by
     // hand. It is one cookie and one flow.
-    const login = await fetch(`${this.baseUrl}/admin/login`, {
+    const login = await fetch(`${this.baseUrl}/admin/api/login`, {
       method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ password: this.adminPassword }),
-      redirect: 'manual',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: this.adminPassword }),
     });
     const cookie = (login.headers.getSetCookie()[0] ?? '').split(';')[0];
-    if (cookie === '') {
+    if (!login.ok || cookie === '') {
       throw new Error(`admin login did not set a session cookie (status ${login.status})`);
     }
+    const { csrf } = (await login.json()) as { csrf: string };
 
-    const page = await (await fetch(`${this.baseUrl}/admin/`, { headers: { cookie } })).text();
-    const csrf = between(page, 'name="csrf" value="', '"');
-    await fetch(`${this.baseUrl}/admin/tokens`, {
+    const created = await fetch(`${this.baseUrl}/admin/api/tokens`, {
       method: 'POST',
-      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ name, csrf }),
-      redirect: 'manual',
+      headers: { cookie, 'content-type': 'application/json', 'x-csrf-token': csrf },
+      body: JSON.stringify({ name }),
     });
-
-    // The token screen renders each unused token's QR image at a URL carrying
-    // the token value, which is the only place it appears in the markup.
-    const withToken = await (await fetch(`${this.baseUrl}/admin/tokens`, { headers: { cookie } })).text();
-    return `${this.baseUrl}/${between(withToken, '/admin/tokens/', '/qr.png')}`;
+    if (created.status !== 201) {
+      throw new Error(`creating a token answered ${created.status}`);
+    }
+    // The token is the URL's last path element. The relay builds the URL from
+    // its public base, so it is rebuilt on the address this test dialled.
+    const { url } = (await created.json()) as { url: string };
+    return `${this.baseUrl}/${url.slice(url.lastIndexOf('/') + 1)}`;
   }
 
   /** stop tears everything down. */
@@ -234,17 +233,4 @@ export class GoPeer {
       };
     });
   }
-}
-
-function between(haystack: string, prefix: string, suffix: string): string {
-  const start = haystack.indexOf(prefix);
-  if (start < 0) {
-    throw new Error(`no ${prefix} in the admin page`);
-  }
-  const rest = haystack.slice(start + prefix.length);
-  const end = rest.indexOf(suffix);
-  if (end < 0) {
-    throw new Error(`${prefix} is not terminated by ${suffix}`);
-  }
-  return rest.slice(0, end);
 }
