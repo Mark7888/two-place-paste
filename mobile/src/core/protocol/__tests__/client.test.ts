@@ -5,6 +5,7 @@
  */
 
 import { fromUTF8, utf8 } from '../../bytes';
+import { HEADER_CONTAINER_SIZE, HEADER_V2_CONTAINER_SIZE } from '../../crypto';
 import { Client } from '../client';
 import { TppError, describe as describeError } from '../errors';
 import { classifyCode, decodePairingPayload, fingerprint } from '../pairing';
@@ -310,6 +311,33 @@ describe('entries (SPEC §6)', () => {
       filename: 'shot.png',
       size: 1234,
     });
+  });
+
+  // spec/crypto.md §5.5.1: a version 2 header only to a relay that says it
+  // takes one, and a version 1 header to any other. The filename is 300 bytes:
+  // a v1 header keeps what fits beside the content type, a v2 one 255.
+  const limitsWith = (headerV2: boolean) => ({
+    maxEntryBytes: '10485760',
+    singleFrameMaxBytes: '10485760',
+    chunkBytes: '0',
+    inlineMaxBytes: '0',
+    headerV2,
+  });
+  test.each([
+    ['a relay that predates the limits request', null, HEADER_CONTAINER_SIZE, 228],
+    ['a relay without version 2 headers', limitsWith(false), HEADER_CONTAINER_SIZE, 228],
+    ['a relay with version 2 headers', limitsWith(true), HEADER_V2_CONTAINER_SIZE, 255],
+  ])('the header written to %s', async (_name, limits, size, kept) => {
+    const relay = new FakeRelay();
+    relay.limits = limits;
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const filename = 'f'.repeat(296) + '.pdf';
+    await laptop.putEntry({ contentType: 'application/pdf', filename, body: utf8('%PDF-') });
+
+    expect(relay.lastHeader()).toHaveLength(size);
+    const page = await laptop.getHistory({ limit: 10 });
+    expect(page.entries[0].header?.filename).toBe(filename.slice(0, kept));
   });
 });
 

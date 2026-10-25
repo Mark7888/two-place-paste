@@ -231,6 +231,42 @@ export function sealEntryHeader(
   return sealHeader(groupKey, randomBytes(NONCE_SIZE), epoch, entryID, encodeHeader(h));
 }
 
+/**
+ * sealEntryHeaderV2 encodes and seals a v2 header under a fresh nonce. `h`
+ * must carry the body's hash. Send it only to a relay that reports it accepts
+ * v2; an older one refuses the 553 bytes.
+ */
+export function sealEntryHeaderV2(
+  groupKey: Uint8Array,
+  epoch: bigint,
+  entryID: string,
+  h: EntryHeader,
+): Uint8Array {
+  return sealHeader(groupKey, randomBytes(NONCE_SIZE), epoch, entryID, encodeHeaderV2(h));
+}
+
+/** HASH_SLICE_BYTES is how much `sha256Sliced` hashes between yields. */
+const HASH_SLICE_BYTES = 256 * 1024;
+
+/**
+ * sha256Sliced hashes a body a slice at a time, letting the event loop run in
+ * between: on the phone's engine, hashing a large entry in one call would stop
+ * the app answering taps for seconds, as `openEntrySliced` explains.
+ */
+export async function sha256Sliced(
+  body: Uint8Array,
+  pause: () => Promise<void> = () => new Promise((resolve) => setTimeout(resolve, 0)),
+): Promise<Uint8Array> {
+  const h = sha256.create();
+  for (let off = 0; off < body.length; off += HASH_SLICE_BYTES) {
+    h.update(body.subarray(off, Math.min(off + HASH_SLICE_BYTES, body.length)));
+    if (off + HASH_SLICE_BYTES < body.length) {
+      await pause();
+    }
+  }
+  return h.digest();
+}
+
 /** openEntryHeader opens and decodes a sealed header. */
 export function openEntryHeader(
   groupKey: Uint8Array,

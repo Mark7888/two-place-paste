@@ -3,54 +3,12 @@ package tppclient_test
 import (
 	"errors"
 	"net/http"
-	"net/http/cookiejar"
-	"net/url"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Mark7888/two-place-paste/pkg/tppclient"
 )
-
-// adminSession signs in to the relay's admin UI and returns a client that
-// carries the session, with the session's CSRF token.
-func (r *relay) adminSession(t *testing.T) (*http.Client, string) {
-	t.Helper()
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		t.Fatalf("cookie jar: %v", err)
-	}
-	c := &http.Client{
-		Jar:     jar,
-		Timeout: 10 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	resp, err := c.PostForm(r.baseURL+"/admin/login", url.Values{"password": {r.adminPass}})
-	if err != nil {
-		t.Fatalf("admin login: %v", err)
-	}
-	_ = resp.Body.Close()
-	body := r.get(t, c, "/admin/")
-	return c, between(t, body, `name="csrf" value="`, `"`)
-}
-
-// adminPost submits one admin form and expects the redirect that means it
-// was accepted.
-func (r *relay) adminPost(t *testing.T, path string, form url.Values) {
-	t.Helper()
-	c, csrf := r.adminSession(t)
-	form.Set("csrf", csrf)
-	resp, err := c.PostForm(r.baseURL+path, form)
-	if err != nil {
-		t.Fatalf("POST %s: %v", path, err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("POST %s = %d, want %d", path, resp.StatusCode, http.StatusSeeOther)
-	}
-}
 
 // TestGroupNameAndDeletion follows a group through the admin's hands: the
 // devices learn its name, hear a rename, and are told — not merely refused —
@@ -91,8 +49,9 @@ func TestGroupNameAndDeletion(t *testing.T) {
 	// The group starts with its creation token's name.
 	wantName("Anna")
 
-	groupID := desktop.State().GroupID
-	relay.adminPost(t, "/admin/groups/"+groupID+"/rename", url.Values{"name": {"Family"}})
+	admin := relay.admin(t)
+	handle := admin.groupHandle(t, "Anna")
+	admin.call(t, http.MethodPut, "/admin/api/groups/"+handle+"/name", map[string]string{"name": "Family"}, http.StatusNoContent, nil)
 	wantName("Family")
 	if got := desktop.GroupName(); got != "Family" {
 		t.Errorf("GroupName() = %q, want Family", got)
@@ -108,7 +67,7 @@ func TestGroupNameAndDeletion(t *testing.T) {
 		t.Errorf("stored group name = %q, want Family", saved.GroupName)
 	}
 
-	relay.adminPost(t, "/admin/groups/"+groupID+"/delete", url.Values{})
+	admin.call(t, http.MethodDelete, "/admin/api/groups/"+handle, nil, http.StatusOK, nil)
 	waitFor(t, "the client to hear its group was deleted", deleted.Load)
 	if revoked.Load() {
 		t.Error("OnRevoked fired as well as OnGroupDeleted")

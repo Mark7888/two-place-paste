@@ -590,7 +590,7 @@ func (s *Server) handleEntryPut(ctx context.Context, env *tppv1.Envelope, device
 			"entry_id must match [A-Za-z0-9_-]{1,%d}", entries.MaxIDLen)
 	case errors.Is(err, entries.ErrInvalidHeader):
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
-			"header must be empty or %d bytes", entries.HeaderSize)
+			"header must be empty, %d or %d bytes", entries.HeaderSize, entries.HeaderV2Size)
 	case errors.Is(err, entries.ErrEntryExists):
 		// Not a collision a client should ever hit with 128 bits of
 		// randomness, and not something to paper over: retrying with a new id
@@ -754,6 +754,7 @@ func (s *Server) handleEntryLimits(env *tppv1.Envelope) ([]byte, error) {
 		SingleFrameMaxBytes: uint64(l.SingleFrameMaxBytes), //nolint:gosec // configured, positive
 		ChunkBytes:          uint64(l.ChunkBytes),          //nolint:gosec // configured, positive
 		InlineMaxBytes:      uint64(l.InlineMaxBytes),      //nolint:gosec // configured, positive
+		HeaderV2:            true,
 	})
 }
 
@@ -852,7 +853,7 @@ func (s *Server) uploadError(err error) error {
 			"entry_id must match [A-Za-z0-9_-]{1,%d}", entries.MaxIDLen)
 	case errors.Is(err, entries.ErrInvalidHeader):
 		return wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
-			"header must be empty or %d bytes", entries.HeaderSize)
+			"header must be empty, %d or %d bytes", entries.HeaderSize, entries.HeaderV2Size)
 	case errors.Is(err, entries.ErrEntryExists):
 		return wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "entry_id is already in use")
 	case errors.Is(err, entries.ErrTooLarge):

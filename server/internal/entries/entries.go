@@ -55,9 +55,13 @@ var (
 // MaxIDLen bounds a client-chosen entry id.
 const MaxIDLen = 64
 
-// HeaderSize is the length of every sealed entry header (/spec/crypto.md
-// §5.5). It is fixed, so the server learns nothing from it.
-const HeaderSize = 297
+// HeaderSize and HeaderV2Size are the two lengths a sealed entry header has:
+// version 1 (/spec/crypto.md §5.5) and version 2 (§5.5.1). Each is fixed, so
+// the server learns only which version wrote a header, and nothing else.
+const (
+	HeaderSize   = 297
+	HeaderV2Size = 553
+)
 
 // ValidID reports whether an id may be used as an entry id.
 //

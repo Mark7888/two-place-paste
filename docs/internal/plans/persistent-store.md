@@ -1,7 +1,9 @@
 # Plan — Persistent store
 
-**Status:** agreed design; step 1 of §10 (spec, vectors, client crypto) is in
-review. §9 records the
+**Status:** agreed design. Step 1 of §10 (spec, vectors, client crypto) landed
+in #40. Header v2 is rolled out on its own, ahead of the store: the relay accepts
+it and says so in `EntryLimitsResponse.header_v2`, and both clients write it to
+a relay that does. §9 records the
 answered questions; §11 keeps the server-side copy as a later option.
 **Touches:** `/spec/**` (store section, header v2, vectors), `/proto/**`,
 `/server/**`, `/pkg/tppclient/**`, `/desktop/**`, `/mobile/**`, `/deploy/**`,

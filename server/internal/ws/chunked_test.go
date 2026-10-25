@@ -51,7 +51,7 @@ func TestChunkedTransfer(t *testing.T) {
 	var limits tppv1.EntryLimitsResponse
 	laptop.await(tppv1.MessageType_MESSAGE_TYPE_ENTRY_LIMITS_RESPONSE, &limits)
 	if limits.GetMaxEntryBytes() != testMaxBytes || limits.GetSingleFrameMaxBytes() != testFrameMax ||
-		limits.GetChunkBytes() != testChunk || limits.GetInlineMaxBytes() != testInlineMax {
+		limits.GetChunkBytes() != testChunk || limits.GetInlineMaxBytes() != testInlineMax || !limits.GetHeaderV2() {
 		t.Errorf("EntryLimitsResponse = %+v", &limits)
 	}
 
@@ -242,7 +242,9 @@ func TestEntryHeaderTravelsWithTheEntry(t *testing.T) {
 		var ack tppv1.EntryUploadChunkResponse
 		laptop.await(tppv1.MessageType_MESSAGE_TYPE_ENTRY_UPLOAD_CHUNK_RESPONSE, &ack)
 	}
-	large := payload(entries.HeaderSize)
+	// A version 2 header on the chunked path, a version 1 on the single-frame
+	// one: the relay takes either size on both.
+	large := payload(entries.HeaderV2Size)
 	large[0] ^= 0xff
 	laptop.send("commit", tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST, &tppv1.EntryPutRequest{
 		EntryId: "large-with-header", Epoch: 1, Size: uint64(len(data)), Header: large,
@@ -267,5 +269,12 @@ func TestEntryHeaderTravelsWithTheEntry(t *testing.T) {
 	})
 	if got := laptop.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT {
 		t.Errorf("short header = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT)
+	}
+	laptop.send("between", tppv1.MessageType_MESSAGE_TYPE_ENTRY_PUT_REQUEST, &tppv1.EntryPutRequest{
+		Epoch: 1, Size: uint64(len(body)), Header: payload(entries.HeaderSize + 1),
+		Body: &tppv1.EntryPutRequest_Ciphertext{Ciphertext: body},
+	})
+	if got := laptop.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT {
+		t.Errorf("298-byte header = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT)
 	}
 }

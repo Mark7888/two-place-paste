@@ -3,6 +3,7 @@ package tppclient
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"math"
@@ -141,13 +142,15 @@ func (c *Client) PutEntry(ctx context.Context, item Item) (EntryMeta, error) {
 	if err != nil {
 		return EntryMeta{}, fmt.Errorf("tppclient: seal the entry: %w", err)
 	}
-	header, err := tppcrypto.SealEntryHeader(state.GroupKey, state.Epoch, entryID, tppcrypto.Header{
-		ContentType: item.ContentType,
-		Filename:    item.Filename,
-		BodyLen:     uint64(len(item.Body)),
-	})
+	// The limits say which header version the relay takes, and whether a
+	// large entry can be chunked. They are asked once per connection.
+	l, err := c.Limits(ctx)
 	if err != nil {
-		return EntryMeta{}, fmt.Errorf("tppclient: seal the entry header: %w", err)
+		return EntryMeta{}, err
+	}
+	header, err := sealHeader(state.GroupKey, state.Epoch, entryID, item, l.HeaderV2)
+	if err != nil {
+		return EntryMeta{}, err
 	}
 	resp := &tppv1.EntryPutResponse{}
 	if len(container) > SingleFrameMaxBytes {
@@ -155,10 +158,6 @@ func (c *Client) PutEntry(ctx context.Context, item Item) (EntryMeta, error) {
 		// rather than by the relay when it cannot, or when the entry is over
 		// its cap: the cap is on the ciphertext, and the caller deserves the
 		// answer before the upload rather than after it.
-		l, lerr := c.Limits(ctx)
-		if lerr != nil {
-			return EntryMeta{}, lerr
-		}
 		if !l.Chunked() || int64(len(container)) > l.MaxEntryBytes {
 			return EntryMeta{}, fmt.Errorf("tppclient: ciphertext is %d bytes, the relay accepts %d: %w",
 				len(container), l.MaxEntryBytes, ErrTooLarge)
@@ -337,6 +336,30 @@ func (c *Client) entryMeta(m *tppv1.EntryMeta) EntryMeta {
 		Inline:    m.GetInline(),
 		Header:    c.openHeader(m),
 	}
+}
+
+// sealHeader seals an entry's header: version 2, with the body's hash, when
+// the relay accepts it, and version 1 otherwise (/spec/crypto.md §5.5.1).
+func sealHeader(groupKey []byte, epoch uint64, entryID string, item Item, v2 bool) ([]byte, error) {
+	h := tppcrypto.Header{
+		ContentType: item.ContentType,
+		Filename:    item.Filename,
+		BodyLen:     uint64(len(item.Body)),
+	}
+	var (
+		header []byte
+		err    error
+	)
+	if v2 {
+		h.SHA256, h.HasSHA256 = sha256.Sum256(item.Body), true
+		header, err = tppcrypto.SealEntryHeaderV2(groupKey, epoch, entryID, h)
+	} else {
+		header, err = tppcrypto.SealEntryHeader(groupKey, epoch, entryID, h)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("tppclient: seal the entry header: %w", err)
+	}
+	return header, nil
 }
 
 // openHeader reads an entry's sealed header, or returns nil. A header that

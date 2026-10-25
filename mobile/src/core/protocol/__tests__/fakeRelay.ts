@@ -37,6 +37,7 @@ import {
   EntryHistoryResponse,
   EntryLatestResponse,
   EntryMeta,
+  EntryLimitsResponse,
   EntryPutRequest,
   EntryPutResponse,
 } from '../../../protocol/gen/tpp/v1/entry';
@@ -383,6 +384,17 @@ export class FakeRelay {
         return;
       }
 
+      case MessageType.MESSAGE_TYPE_ENTRY_LIMITS_REQUEST: {
+        // A relay that predates the limits request does not know it; the
+        // client then falls back to the limits such a relay always had.
+        if (this.limits === null) {
+          fail(ErrorCode.ERROR_CODE_UNSUPPORTED_MESSAGE, 'unsupported message');
+          return;
+        }
+        reply(MessageType.MESSAGE_TYPE_ENTRY_LIMITS_RESPONSE, EntryLimitsResponse.encode(this.limits).finish());
+        return;
+      }
+
       case MessageType.MESSAGE_TYPE_GROUP_INFO_REQUEST: {
         reply(
           MessageType.MESSAGE_TYPE_GROUP_INFO_RESPONSE,
@@ -394,6 +406,14 @@ export class FakeRelay {
       default:
         fail(ErrorCode.ERROR_CODE_UNSUPPORTED_MESSAGE, 'unsupported message');
     }
+  }
+
+  /** limits are what the relay answers EntryLimitsRequest with; null answers as a relay that predates it. */
+  limits: EntryLimitsResponse | null = null;
+
+  /** lastHeader is the sealed header of the newest entry, as the relay stores it. */
+  lastHeader(): Uint8Array {
+    return this.entries[this.entries.length - 1].meta.header;
   }
 
   /** groupName is what the admin has called the group. */

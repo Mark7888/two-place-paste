@@ -107,9 +107,12 @@ export interface EntryPutRequest {
   /**
    * The sealed entry header (/spec/crypto.md §5.5): content type, filename
    * and plaintext size, encrypted under the group key, so a reader can show
-   * what the entry is without fetching it. It is exactly 297 bytes for every
-   * entry, so its length tells the server nothing; any other non-empty length
-   * is refused with ERROR_CODE_INVALID_ARGUMENT. Optional: an entry without
+   * what the entry is without fetching it. A version 1 header is exactly 297
+   * bytes and a version 2 header (§5.5.1, which adds the body's hash) exactly
+   * 553, so its length tells the server only which version wrote it; any
+   * other non-empty length is refused with ERROR_CODE_INVALID_ARGUMENT. A
+   * relay that predates version 2 refuses 553 bytes too: a client sends one
+   * only when EntryLimitsResponse.header_v2 is set. Optional: an entry without
    * one is stored and delivered normally, and readers show it as of unknown
    * type. On a chunked upload it is sent with the commit.
    */
@@ -155,6 +158,12 @@ export interface EntryLimitsResponse {
    * their metadata; the chunked path is for entries above it.
    */
   inlineMaxBytes: string;
+  /**
+   * The relay accepts version 2 entry headers (553 bytes, /spec/crypto.md
+   * §5.5.1). False from a relay that predates them, which refuses them: a
+   * client then writes version 1 headers.
+   */
+  headerV2: boolean;
 }
 
 /**
@@ -776,7 +785,7 @@ export const EntryLimitsRequest: MessageFns<EntryLimitsRequest> = {
 };
 
 function createBaseEntryLimitsResponse(): EntryLimitsResponse {
-  return { maxEntryBytes: "0", singleFrameMaxBytes: "0", chunkBytes: "0", inlineMaxBytes: "0" };
+  return { maxEntryBytes: "0", singleFrameMaxBytes: "0", chunkBytes: "0", inlineMaxBytes: "0", headerV2: false };
 }
 
 export const EntryLimitsResponse: MessageFns<EntryLimitsResponse> = {
@@ -792,6 +801,9 @@ export const EntryLimitsResponse: MessageFns<EntryLimitsResponse> = {
     }
     if (message.inlineMaxBytes !== "0") {
       writer.uint32(32).uint64(message.inlineMaxBytes);
+    }
+    if (message.headerV2 !== false) {
+      writer.uint32(40).bool(message.headerV2);
     }
     return writer;
   },
@@ -841,6 +853,14 @@ export const EntryLimitsResponse: MessageFns<EntryLimitsResponse> = {
             message.inlineMaxBytes = reader.uint64().toString();
             continue;
           }
+          case 5: {
+            if (tag !== 40) {
+              break;
+            }
+
+            message.headerV2 = reader.bool();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -875,6 +895,11 @@ export const EntryLimitsResponse: MessageFns<EntryLimitsResponse> = {
         : isSet(object.inline_max_bytes)
         ? globalThis.String(object.inline_max_bytes)
         : "0",
+      headerV2: isSet(object.headerV2)
+        ? globalThis.Boolean(object.headerV2)
+        : isSet(object.header_v2)
+        ? globalThis.Boolean(object.header_v2)
+        : false,
     };
   },
 
@@ -892,6 +917,9 @@ export const EntryLimitsResponse: MessageFns<EntryLimitsResponse> = {
     if (message.inlineMaxBytes !== "0") {
       obj.inlineMaxBytes = message.inlineMaxBytes;
     }
+    if (message.headerV2 !== false) {
+      obj.headerV2 = message.headerV2;
+    }
     return obj;
   },
 
@@ -904,6 +932,7 @@ export const EntryLimitsResponse: MessageFns<EntryLimitsResponse> = {
     message.singleFrameMaxBytes = object.singleFrameMaxBytes ?? "0";
     message.chunkBytes = object.chunkBytes ?? "0";
     message.inlineMaxBytes = object.inlineMaxBytes ?? "0";
+    message.headerV2 = object.headerV2 ?? false;
     return message;
   },
 };
