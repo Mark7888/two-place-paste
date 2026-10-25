@@ -28,6 +28,12 @@
 //	devices                 list the group roster
 //	revoke <device-id>      prepare and confirm a revocation
 //	epoch                   report this client's epoch
+//	join <payload>          join a group with a pairing payload
+//	store-save <json>       save {name, description, tags, content_type, filename, body} to the store
+//	store-list              list the store, opened
+//	store-fetch <item-id>   fetch an item; report its body, length and SHA-256
+//	store-edit <json>       edit {id, name, description, tags}
+//	store-delete <item-id>  delete an item
 //	quit                    close and exit
 package main
 
@@ -274,6 +280,115 @@ func run() error {
 
 		case "epoch":
 			reply(map[string]any{"ok": true, "epoch": client.Epoch()})
+
+		case "join":
+			if err := client.JoinPairing(ctx, argument); err != nil {
+				reply(failure(err))
+				break
+			}
+			reply(map[string]any{"ok": true, "epoch": client.Epoch(), "device_id": client.State().DeviceID})
+
+		case "store-save":
+			var req struct {
+				Name        string   `json:"name"`
+				Description string   `json:"description"`
+				Tags        []string `json:"tags"`
+				ContentType string   `json:"content_type"`
+				Filename    string   `json:"filename"`
+				Body        string   `json:"body"`
+			}
+			if err := json.Unmarshal([]byte(argument), &req); err != nil {
+				reply(failure(err))
+				break
+			}
+			it, err := client.SaveToStore(ctx,
+				tppclient.Item{ContentType: req.ContentType, Filename: req.Filename, Body: []byte(req.Body)},
+				tppclient.StoreDetails{Name: req.Name, Description: req.Description, Tags: req.Tags})
+			if err != nil {
+				reply(failure(err))
+				break
+			}
+			reply(map[string]any{"ok": true, "id": it.ID, "wrap_epoch": it.WrapEpoch})
+
+		case "store-list":
+			listing, err := client.ListStore(ctx)
+			if err != nil {
+				reply(failure(err))
+				break
+			}
+			items := make([]map[string]any, 0, len(listing.Items))
+			for _, it := range listing.Items {
+				tags := it.Tags
+				if tags == nil {
+					tags = []string{}
+				}
+				items = append(items, map[string]any{
+					"id": it.ID, "name": it.Name, "description": it.Description, "tags": tags,
+					"content_type": it.ContentType, "filename": it.Filename, "body_size": it.BodySize,
+					"sha256": hex.EncodeToString(it.SHA256[:]), "meta_rev": it.MetaRev, "wrap_epoch": it.WrapEpoch,
+				})
+			}
+			reply(map[string]any{"ok": true, "items": items, "unreadable": len(listing.Unreadable)})
+
+		case "store-fetch", "store-edit", "store-delete":
+			// The client opens an item from a listing, which carries its keys.
+			id := argument
+			var edit struct {
+				ID          string   `json:"id"`
+				Name        string   `json:"name"`
+				Description string   `json:"description"`
+				Tags        []string `json:"tags"`
+			}
+			if command == "store-edit" {
+				if err := json.Unmarshal([]byte(argument), &edit); err != nil {
+					reply(failure(err))
+					break
+				}
+				id = edit.ID
+			}
+			if command == "store-delete" {
+				if err := client.DeleteStoreItem(ctx, id); err != nil {
+					reply(failure(err))
+					break
+				}
+				reply(map[string]any{"ok": true})
+				break
+			}
+			listing, err := client.ListStore(ctx)
+			if err != nil {
+				reply(failure(err))
+				break
+			}
+			var found *tppclient.StoreItem
+			for i := range listing.Items {
+				if listing.Items[i].ID == id {
+					found = &listing.Items[i]
+				}
+			}
+			if found == nil {
+				reply(map[string]any{"ok": false, "error": "no such readable item " + id})
+				break
+			}
+			if command == "store-edit" {
+				edited, err := client.EditStoreItem(ctx, *found,
+					tppclient.StoreDetails{Name: edit.Name, Description: edit.Description, Tags: edit.Tags})
+				if err != nil {
+					reply(failure(err))
+					break
+				}
+				reply(map[string]any{"ok": true, "meta_rev": edited.MetaRev})
+				break
+			}
+			item, err := client.FetchStoreItem(ctx, *found)
+			if err != nil {
+				reply(failure(err))
+				break
+			}
+			sum := sha256.Sum256(item.Body)
+			reply(map[string]any{
+				"ok": true, "body": string(item.Body), "length": len(item.Body),
+				"sha256": hex.EncodeToString(sum[:]), "content_type": item.ContentType, "filename": item.Filename,
+			})
 
 		case "quit":
 			reply(map[string]any{"ok": true})

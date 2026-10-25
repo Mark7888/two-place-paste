@@ -165,10 +165,13 @@ describeInterop('the phone and the Go client are one implementation of one contr
     // The phone reads what Go sealed...
     const page = await phone.getHistory({ limit: 10 });
     const fromGo = page.entries[page.entries.length - 1];
+    // A version 2 header carries the body's hash, which marks an entry the
+    // store already holds.
     expect(fromGo.header).toEqual({
       contentType: 'text/plain; charset=utf-8',
       filename: '',
       size: utf8('hello from the Go client — ünïcode, 日本語').length,
+      sha256Hex: toHex(sha256(utf8('hello from the Go client — ünïcode, 日本語'))),
     });
 
     // ...and Go reads what the phone sealed.

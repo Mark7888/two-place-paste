@@ -117,13 +117,8 @@ export class Relay {
     return relay;
   }
 
-  /**
-   * creationURL signs in to the admin API and mints a creation token, which is
-   * the string an operator hands a user (SPEC §3.1, §4.4).
-   */
-  async creationURL(name: string): Promise<string> {
-    // Node's fetch keeps no cookie jar, so the session cookie is carried by
-    // hand. It is one cookie and one flow.
+  /** admin signs in to the admin API. Node's fetch keeps no cookie jar, so the session cookie is carried by hand. */
+  private async admin(): Promise<{ cookie: string; csrf: string }> {
     const login = await fetch(`${this.baseUrl}/admin/api/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -134,6 +129,34 @@ export class Relay {
       throw new Error(`admin login did not set a session cookie (status ${login.status})`);
     }
     const { csrf } = (await login.json()) as { csrf: string };
+    return { cookie, csrf };
+  }
+
+  /** enableStore turns on the store of the group with this name, as the admin does on its page (SPEC §4.6). */
+  async enableStore(groupName: string): Promise<void> {
+    const { cookie, csrf } = await this.admin();
+    const list = await fetch(`${this.baseUrl}/admin/api/groups`, { headers: { cookie } });
+    const { rows } = (await list.json()) as { rows: { handle: string; name: string }[] };
+    const group = rows.find((g) => g.name === groupName);
+    if (group === undefined) {
+      throw new Error(`no group named ${groupName}`);
+    }
+    const put = await fetch(`${this.baseUrl}/admin/api/groups/${group.handle}/store`, {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json', 'x-csrf-token': csrf },
+      body: JSON.stringify({ enabled: true }),
+    });
+    if (put.status !== 204) {
+      throw new Error(`turning the store on answered ${put.status}`);
+    }
+  }
+
+  /**
+   * creationURL signs in to the admin API and mints a creation token, which is
+   * the string an operator hands a user (SPEC §3.1, §4.4).
+   */
+  async creationURL(name: string): Promise<string> {
+    const { cookie, csrf } = await this.admin();
 
     const created = await fetch(`${this.baseUrl}/admin/api/tokens`, {
       method: 'POST',
