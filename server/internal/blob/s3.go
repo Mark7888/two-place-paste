@@ -349,14 +349,15 @@ func (s *S3) BeginUpload(ctx context.Context, entryID string, expiresAt time.Tim
 	if err != nil {
 		return nil, fmt.Errorf("begin upload for entry %s: %w", entryID, err)
 	}
-	return &s3Upload{s: s, entryID: entryID, bucket: bucket, key: key, uploadID: id, size: size}, nil
+	return &s3Upload{s: s, entryID: entryID, key: key, ref: refFor(bucket, entryID), uploadID: id, size: size}, nil
 }
 
 type s3Upload struct {
-	s        *S3
+	s *S3
+	// entryID names the upload in errors: an entry id, or an item id.
 	entryID  string
-	bucket   string
 	key      string
+	ref      string
 	uploadID string
 	size     int64
 	written  int64
@@ -392,7 +393,7 @@ func (u *s3Upload) Complete(ctx context.Context) (string, error) {
 		}
 		return "", fmt.Errorf("complete upload for entry %s: %w", u.entryID, err)
 	}
-	return refFor(u.bucket, u.entryID), nil
+	return u.ref, nil
 }
 
 func (u *s3Upload) Abort(ctx context.Context) error {

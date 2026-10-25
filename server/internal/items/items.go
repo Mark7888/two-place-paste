@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/Mark7888/two-place-paste/server/internal/blob"
 	"github.com/Mark7888/two-place-paste/server/internal/store"
 )
 
@@ -46,8 +47,32 @@ var (
 	ErrTooLarge = errors.New("items: item is too large")
 
 	// ErrInvalid is returned for a request whose fields are out of range: an
-	// id outside the alphabet, keys or metadata of the wrong length.
+	// id outside the alphabet, keys or metadata of the wrong length, a
+	// cursor that is not one.
 	ErrInvalid = errors.New("items: invalid item")
+
+	// ErrUploadNotFound is returned for an upload handle that does not
+	// exist, has finished, has timed out, or belongs to another device.
+	ErrUploadNotFound = errors.New("items: no such upload")
+
+	// ErrInvalidChunk is returned for a chunk out of order or of the wrong
+	// size, and for a commit before every chunk has arrived.
+	ErrInvalidChunk = errors.New("items: chunk does not fit the upload")
+
+	// ErrUploadMismatch is returned when a commit names an item, epoch or
+	// size other than the ones its upload was begun with.
+	ErrUploadMismatch = errors.New("items: commit does not match the upload")
+
+	// ErrTooManyUploads is returned when a device already has the maximum
+	// number of uploads in progress.
+	ErrTooManyUploads = errors.New("items: too many uploads in progress")
+
+	// ErrInvalidRange is returned for a ranged fetch past the end of a blob.
+	ErrInvalidRange = errors.New("items: range is outside the item")
+
+	// ErrStorageFull is returned when the blob backend itself is out of
+	// room, whatever the limits allow.
+	ErrStorageFull = errors.New("items: storage is full")
 )
 
 // Config bounds the store and the transport it uses.
@@ -64,6 +89,21 @@ type Config struct {
 
 	// MaxGroupItems is how many items one group may hold.
 	MaxGroupItems int
+
+	// ChunkBytes and SingleFrameMaxBytes are the transport's, shared with
+	// entries: a blob larger than one frame is uploaded and read in chunks
+	// of ChunkBytes. UploadTTL is how long an upload may sit idle.
+	ChunkBytes          int64
+	SingleFrameMaxBytes int64
+	UploadTTL           time.Duration
+}
+
+// Hooks are called after a change, for the transport to tell the group's
+// other connected devices. deviceID is the device that made it.
+type Hooks struct {
+	OnSaved   func(ctx context.Context, groupID, deviceID string, it store.Item)
+	OnUpdated func(ctx context.Context, groupID, deviceID string, it store.Item)
+	OnDeleted func(ctx context.Context, groupID, deviceID, itemID string)
 }
 
 // Registry is what the service needs of the persistent zone.
@@ -76,7 +116,9 @@ type Registry interface {
 // Options configures a Service.
 type Options struct {
 	Registry Registry
+	Blobs    blob.Items
 	Config   Config
+	Hooks    Hooks
 	Logger   *slog.Logger
 
 	// Now is the clock; tests replace it. Defaults to the wall clock in UTC.
@@ -86,9 +128,13 @@ type Options struct {
 // Service is the store. It is safe for concurrent use.
 type Service struct {
 	reg    Registry
+	blobs  blob.Items
 	cfg    Config
+	hooks  Hooks
 	logger *slog.Logger
 	now    func() time.Time
+
+	uploads uploads
 }
 
 // New returns a store service.
@@ -97,16 +143,28 @@ func New(opts Options) *Service {
 		panic("items: a registry is required")
 	}
 	s := &Service{
-		reg:    opts.Registry,
-		cfg:    opts.Config,
-		logger: opts.Logger,
-		now:    opts.Now,
+		reg:     opts.Registry,
+		blobs:   opts.Blobs,
+		cfg:     opts.Config,
+		hooks:   opts.Hooks,
+		logger:  opts.Logger,
+		now:     opts.Now,
+		uploads: uploads{byHandle: make(map[string]*uploadSession)},
 	}
 	if s.logger == nil {
 		s.logger = slog.Default()
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
+	}
+	if s.cfg.ChunkBytes <= 0 {
+		s.cfg.ChunkBytes = 8 << 20
+	}
+	if s.cfg.SingleFrameMaxBytes <= 0 {
+		s.cfg.SingleFrameMaxBytes = 10 << 20
+	}
+	if s.cfg.UploadTTL <= 0 {
+		s.cfg.UploadTTL = 10 * time.Minute
 	}
 	return s
 }

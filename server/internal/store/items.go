@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // The store's records (SPEC §4.6): one record per item, a per-group index of
@@ -58,6 +59,65 @@ type ItemLink struct {
 	Link  []byte
 }
 
+// Item is one store item as the relay knows it: sizes, times, epochs and
+// ciphertext it cannot read (/spec/crypto.md §7a).
+type Item struct {
+	ID      string
+	GroupID string
+
+	// Size is the length of the item's blob. Accounted is what it counts
+	// against the store's limits: the blob and its fixed record.
+	Size      int64
+	Accounted int64
+
+	// WrapEpoch is the epoch whose store key wraps WrappedKeys;
+	// ContentID and ContentEpoch are what the blob's associated data binds.
+	WrapEpoch    uint64
+	ContentID    string
+	ContentEpoch uint64
+
+	WrappedKeys []byte
+	SealedMeta  []byte
+	MetaRev     uint64
+
+	// Pending is true from the reservation until the commit, while the blob
+	// is being uploaded. A pending item is not listed.
+	Pending   bool
+	StartedAt time.Time
+
+	// SavedAt is when the commit happened: what listings are ordered by.
+	SavedAt time.Time
+}
+
+// ItemReservation is room asked for an item about to be uploaded.
+type ItemReservation struct {
+	GroupID string
+	ItemID  string
+
+	// Epoch is the epoch the item is sealed at; it must be the group's.
+	Epoch uint64
+
+	Size      int64
+	Accounted int64
+	StartedAt time.Time
+}
+
+// ItemCommit completes a reserved item.
+type ItemCommit struct {
+	GroupID     string
+	ItemID      string
+	Epoch       uint64
+	WrappedKeys []byte
+	SealedMeta  []byte
+	SavedAt     time.Time
+}
+
+// ItemRef is an item's place in its group's list.
+type ItemRef struct {
+	ID      string
+	SavedAt time.Time
+}
+
 // Items is the persistent zone's view of the store. Implementations must be
 // safe for concurrent use, and every write that checks a limit or an epoch
 // must make the check and the write one atomic step.
@@ -71,4 +131,49 @@ type Items interface {
 	// StoreLinks returns the links every rekey of the group sent, oldest
 	// first. A group that was never re-keyed has none.
 	StoreLinks(ctx context.Context, groupID string) ([]ItemLink, error)
+
+	// ReserveItem claims room for an item and writes its record as pending,
+	// in one step that checks the group's store is on and not being emptied,
+	// that the epoch is the group's, that the id is free and that the item
+	// fits every limit. It returns ErrNotFound, ErrStoreDisabled,
+	// ErrStoreBusy, ErrEpochConflict, ErrItemExists or ErrStoreFull, and on
+	// any error changes nothing.
+	ReserveItem(ctx context.Context, r ItemReservation, limits ItemLimits) error
+
+	// CommitItem completes a pending item: its keys and metadata are written
+	// and it is listed. It checks again that the store is on, not being
+	// emptied, and at the item's epoch — the same check a rekey's link
+	// requirement serialises with. On ErrStoreDisabled, ErrStoreBusy or
+	// ErrEpochConflict the item stays pending, for the caller to release.
+	CommitItem(ctx context.Context, c ItemCommit) (Item, error)
+
+	// ReleaseItem forgets a pending item and gives its room back. It reports
+	// false for an item that is not pending in the group, and changes
+	// nothing then.
+	ReleaseItem(ctx context.Context, groupID, itemID string) (bool, error)
+
+	// GetItem returns one committed item of the group, or ErrNotFound.
+	GetItem(ctx context.Context, groupID, itemID string) (Item, error)
+
+	// ItemRefs returns every committed item of the group, newest first, ties
+	// broken by id, descending.
+	ItemRefs(ctx context.Context, groupID string) ([]ItemRef, error)
+
+	// GetItems returns the committed items named, in the order given,
+	// leaving out any that no longer exist.
+	GetItems(ctx context.Context, groupID string, ids []string) ([]Item, error)
+
+	// UpdateItemMeta replaces a committed item's sealed metadata when its
+	// revision is still expectedRev, and returns it at expectedRev+1. A
+	// moved-on item is ErrRevisionConflict.
+	UpdateItemMeta(ctx context.Context, groupID, itemID string, expectedRev uint64, sealedMeta []byte) (Item, error)
+
+	// DeleteItem deletes a committed item's record and gives its room back.
+	// The caller deletes the blob.
+	DeleteItem(ctx context.Context, groupID, itemID string) (Item, error)
+
+	// ReleaseAllPending forgets every pending item, everywhere, and returns
+	// them. The relay calls it at startup: uploads live in its memory, so any
+	// item pending then was left by the previous process.
+	ReleaseAllPending(ctx context.Context) ([]Item, error)
 }

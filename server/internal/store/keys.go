@@ -50,4 +50,5 @@ func tagKey(name string) string        { return tagPrefix + name }
 func tombstoneKey(id string) string    { return tombstonePrefix + id }
 func storeUsageKeyOf(id string) string { return groupPrefix + id + storeUsageSuffix }
 func storeIndexKey(id string) string   { return groupPrefix + id + storeIndexSuffix }
+func storeItemKey(id string) string    { return storeItemPrefix + id }
 func storeLinksKey(id string) string   { return groupPrefix + id + storeLinksSuffix }

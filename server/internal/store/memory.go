@@ -37,8 +37,11 @@ type MemoryStore struct {
 	// The store's records (items_memory.go).
 	storeUsage map[string]ItemUsage
 	storeTotal ItemUsage
-	storeItems map[string]memItem
+	storeItems map[string]Item
 	storeLinks map[string]map[uint64][]byte
+
+	// storeReclaim are the groups whose store is being emptied.
+	storeReclaim map[string]bool
 }
 
 // NewMemoryStore returns an empty in-memory Store.
@@ -57,8 +60,10 @@ func NewMemoryStore() *MemoryStore {
 		tombstones: make(map[string]time.Time),
 
 		storeUsage: make(map[string]ItemUsage),
-		storeItems: make(map[string]memItem),
+		storeItems: make(map[string]Item),
 		storeLinks: make(map[string]map[uint64][]byte),
+
+		storeReclaim: make(map[string]bool),
 	}
 }
 

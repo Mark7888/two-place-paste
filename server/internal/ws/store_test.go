@@ -35,15 +35,29 @@ func newStoreHarness(t *testing.T, cfg items.Config) *storeHarness {
 	t.Helper()
 
 	st := store.NewMemoryStore()
-	svc := entries.NewService(entries.NewMemoryStore(), blob.NewDisk(t.TempDir(), testMaxBytes), entries.Options{
+	blobs := blob.NewDisk(t.TempDir(), testMaxBytes)
+	svc := entries.NewService(entries.NewMemoryStore(), blobs, entries.Options{
 		InlineMaxBytes:      testInlineMax,
 		MaxBytes:            testMaxBytes,
 		SingleFrameMaxBytes: testFrameMax,
 		ChunkBytes:          testChunk,
 		Logger:              slog.New(slog.DiscardHandler),
 	})
-	storeSvc := items.New(items.Options{Registry: st, Config: cfg, Logger: slog.New(slog.DiscardHandler)})
-	server := ws.New(st, svc, ws.Options{Logger: slog.New(slog.DiscardHandler), Items: storeSvc})
+	cfg.ChunkBytes = testChunk
+	cfg.SingleFrameMaxBytes = testFrameMax
+	var server *ws.Server
+	storeSvc := items.New(items.Options{
+		Registry: st,
+		Blobs:    blobs,
+		Config:   cfg,
+		Logger:   slog.New(slog.DiscardHandler),
+		Hooks: items.Hooks{
+			OnSaved:   func(ctx context.Context, g, d string, it store.Item) { server.AnnounceItemSaved(ctx, g, d, it) },
+			OnUpdated: func(ctx context.Context, g, d string, it store.Item) { server.AnnounceItemUpdated(ctx, g, d, it) },
+			OnDeleted: func(ctx context.Context, g, d, id string) { server.AnnounceItemDeleted(ctx, g, d, id) },
+		},
+	})
+	server = ws.New(st, svc, ws.Options{Logger: slog.New(slog.DiscardHandler), Items: storeSvc})
 
 	mux := http.NewServeMux()
 	server.Register(mux)

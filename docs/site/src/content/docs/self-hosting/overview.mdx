@@ -17,7 +17,7 @@ cannot read anything it stores.
 |---|---|---|
 | `tpp` | One static Go binary: the relay (`/ws`), the admin page (`/admin/`), group creation and a health check (`/healthz`). | Nothing on its own. |
 | Redis 7 | The only database. | Groups, devices, public keys, wrapped group keys, creation tokens — and entries up to 256 KB. |
-| Blob store | A disk directory or an S3 bucket. | Entries larger than 256 KB, at most 24 hours' worth. |
+| Blob store | A disk directory or an S3 bucket. | Entries larger than 256 KB, at most 24 hours' worth, and the store items of groups that have one. |
 
 ## What you need
 

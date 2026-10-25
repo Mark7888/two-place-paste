@@ -803,6 +803,16 @@ func (s *Server) handleUploadChunk(ctx context.Context, env *tppv1.Envelope, dev
 	if err := decode(env, &req); err != nil {
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "payload could not be decoded")
 	}
+	// The store's uploads share this message: the handle says whose it is.
+	if s.items != nil && s.items.OwnsUpload(req.GetUploadHandle()) {
+		received, err := s.items.WriteChunk(ctx, groupID, deviceID, req.GetUploadHandle(), req.GetIndex(), req.GetData())
+		if err != nil {
+			return nil, storeWireError(err)
+		}
+		return encode(env.GetId(), tppv1.MessageType_MESSAGE_TYPE_ENTRY_UPLOAD_CHUNK_RESPONSE, &tppv1.EntryUploadChunkResponse{
+			ReceivedBytes: uint64(received), //nolint:gosec // non-negative
+		})
+	}
 	received, err := s.entries.WriteChunk(ctx, groupID, deviceID, req.GetUploadHandle(), req.GetIndex(), req.GetData())
 	if err != nil {
 		return nil, s.uploadError(err)
@@ -818,7 +828,11 @@ func (s *Server) handleUploadAbort(ctx context.Context, env *tppv1.Envelope, dev
 	if err := decode(env, &req); err != nil {
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "payload could not be decoded")
 	}
-	if err := s.entries.AbortUpload(ctx, groupID, deviceID, req.GetUploadHandle()); err != nil {
+	if s.items != nil && s.items.OwnsUpload(req.GetUploadHandle()) {
+		if err := s.items.AbortUpload(ctx, groupID, deviceID, req.GetUploadHandle()); err != nil {
+			return nil, fmt.Errorf("abort store upload: %w", err)
+		}
+	} else if err := s.entries.AbortUpload(ctx, groupID, deviceID, req.GetUploadHandle()); err != nil {
 		return nil, fmt.Errorf("abort upload: %w", err)
 	}
 	return encode(env.GetId(), tppv1.MessageType_MESSAGE_TYPE_ENTRY_UPLOAD_ABORT_RESPONSE, &tppv1.EntryUploadAbortResponse{})
