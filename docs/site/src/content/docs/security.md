@@ -20,9 +20,10 @@ confidentiality.
 | Wrapped (encrypted) copies of the group key | The group key itself |
 | Group membership | Device private keys |
 
-Each entry carries a **sealed header** — type, filename and size, encrypted under the group key —
-so History can describe an entry without downloading it. Every header is exactly 297 bytes, so it
-leaks nothing.
+Each entry carries a **sealed header** — type, filename, size and a hash of the content, encrypted
+under the group key — so History can describe an entry without downloading it. Every header is
+exactly 553 bytes (297 from apps and relays that predate the hash), so its length tells the relay
+nothing about the entry.
 
 ## Keys
 

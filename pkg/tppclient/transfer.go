@@ -79,6 +79,11 @@ type Limits struct {
 
 	// InlineMaxBytes is the inline threshold; zero when not reported.
 	InlineMaxBytes int64
+
+	// HeaderV2 reports that the relay accepts version 2 entry headers
+	// (/spec/crypto.md §5.5.1). A relay that predates them refuses them, so
+	// this client writes version 1 to it.
+	HeaderV2 bool
 }
 
 // Chunked reports whether the relay accepts entries larger than one frame.
@@ -138,6 +143,7 @@ func (c *Client) Limits(ctx context.Context) (Limits, error) {
 			SingleFrameMaxBytes: int64(resp.GetSingleFrameMaxBytes()), //nolint:gosec // a relay's own limits
 			ChunkBytes:          int64(resp.GetChunkBytes()),          //nolint:gosec // a relay's own limits
 			InlineMaxBytes:      int64(resp.GetInlineMaxBytes()),      //nolint:gosec // a relay's own limits
+			HeaderV2:            resp.GetHeaderV2(),
 		}
 		// Never trust a relay to raise the frame cap: the read limit on
 		// this side is fixed.

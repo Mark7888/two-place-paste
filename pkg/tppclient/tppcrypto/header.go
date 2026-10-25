@@ -264,6 +264,21 @@ func SealEntryHeader(groupKey []byte, epoch uint64, entryID string, h Header) ([
 	return SealHeader(groupKey, nonce, epoch, entryID, encoded)
 }
 
+// SealEntryHeaderV2 encodes and seals h as a v2 header under a fresh nonce.
+// h must carry the body's hash. Send it only to a relay that reports it
+// accepts v2; an older one refuses the 553 bytes.
+func SealEntryHeaderV2(groupKey []byte, epoch uint64, entryID string, h Header) ([]byte, error) {
+	encoded, err := EncodeHeaderV2(h)
+	if err != nil {
+		return nil, err
+	}
+	nonce, err := GenerateNonce()
+	if err != nil {
+		return nil, err
+	}
+	return SealHeader(groupKey, nonce, epoch, entryID, encoded)
+}
+
 // OpenEntryHeader opens and decodes a sealed header.
 func OpenEntryHeader(groupKey, container []byte, epoch uint64, entryID string) (Header, error) {
 	encoded, err := OpenHeader(groupKey, container, epoch, entryID)

@@ -169,9 +169,12 @@ type EntryPutRequest struct {
 	Body isEntryPutRequest_Body `protobuf_oneof:"body"`
 	// The sealed entry header (/spec/crypto.md §5.5): content type, filename
 	// and plaintext size, encrypted under the group key, so a reader can show
-	// what the entry is without fetching it. It is exactly 297 bytes for every
-	// entry, so its length tells the server nothing; any other non-empty length
-	// is refused with ERROR_CODE_INVALID_ARGUMENT. Optional: an entry without
+	// what the entry is without fetching it. A version 1 header is exactly 297
+	// bytes and a version 2 header (§5.5.1, which adds the body's hash) exactly
+	// 553, so its length tells the server only which version wrote it; any
+	// other non-empty length is refused with ERROR_CODE_INVALID_ARGUMENT. A
+	// relay that predates version 2 refuses 553 bytes too: a client sends one
+	// only when EntryLimitsResponse.header_v2 is set. Optional: an entry without
 	// one is stored and delivered normally, and readers show it as of unknown
 	// type. On a chunked upload it is sent with the commit.
 	Header        []byte `protobuf:"bytes,6,opt,name=header,proto3" json:"header,omitempty"`
@@ -386,8 +389,12 @@ type EntryLimitsResponse struct {
 	// Entries at or below this size are stored inline and delivered with
 	// their metadata; the chunked path is for entries above it.
 	InlineMaxBytes uint64 `protobuf:"varint,4,opt,name=inline_max_bytes,json=inlineMaxBytes,proto3" json:"inline_max_bytes,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// The relay accepts version 2 entry headers (553 bytes, /spec/crypto.md
+	// §5.5.1). False from a relay that predates them, which refuses them: a
+	// client then writes version 1 headers.
+	HeaderV2      bool `protobuf:"varint,5,opt,name=header_v2,json=headerV2,proto3" json:"header_v2,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *EntryLimitsResponse) Reset() {
@@ -446,6 +453,13 @@ func (x *EntryLimitsResponse) GetInlineMaxBytes() uint64 {
 		return x.InlineMaxBytes
 	}
 	return 0
+}
+
+func (x *EntryLimitsResponse) GetHeaderV2() bool {
+	if x != nil {
+		return x.HeaderV2
+	}
+	return false
 }
 
 // EntryUploadBeginRequest starts a chunked upload. The relay reserves room for
@@ -1235,13 +1249,14 @@ const file_tpp_v1_entry_proto_rawDesc = "" +
 	"\x04body\"9\n" +
 	"\x10EntryPutResponse\x12%\n" +
 	"\x04meta\x18\x01 \x01(\v2\x11.tpp.v1.EntryMetaR\x04meta\"\x14\n" +
-	"\x12EntryLimitsRequest\"\xbd\x01\n" +
+	"\x12EntryLimitsRequest\"\xda\x01\n" +
 	"\x13EntryLimitsResponse\x12&\n" +
 	"\x0fmax_entry_bytes\x18\x01 \x01(\x04R\rmaxEntryBytes\x123\n" +
 	"\x16single_frame_max_bytes\x18\x02 \x01(\x04R\x13singleFrameMaxBytes\x12\x1f\n" +
 	"\vchunk_bytes\x18\x03 \x01(\x04R\n" +
 	"chunkBytes\x12(\n" +
-	"\x10inline_max_bytes\x18\x04 \x01(\x04R\x0einlineMaxBytes\"^\n" +
+	"\x10inline_max_bytes\x18\x04 \x01(\x04R\x0einlineMaxBytes\x12\x1b\n" +
+	"\theader_v2\x18\x05 \x01(\bR\bheaderV2\"^\n" +
 	"\x17EntryUploadBeginRequest\x12\x19\n" +
 	"\bentry_id\x18\x01 \x01(\tR\aentryId\x12\x14\n" +
 	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\x12\x12\n" +

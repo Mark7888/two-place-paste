@@ -85,9 +85,12 @@ message EntryPutRequest {
 
   // The sealed entry header (/spec/crypto.md §5.5): content type, filename
   // and plaintext size, encrypted under the group key, so a reader can show
-  // what the entry is without fetching it. It is exactly 297 bytes for every
-  // entry, so its length tells the server nothing; any other non-empty length
-  // is refused with ERROR_CODE_INVALID_ARGUMENT. Optional: an entry without
+  // what the entry is without fetching it. A version 1 header is exactly 297
+  // bytes and a version 2 header (§5.5.1, which adds the body's hash) exactly
+  // 553, so its length tells the server only which version wrote it; any
+  // other non-empty length is refused with ERROR_CODE_INVALID_ARGUMENT. A
+  // relay that predates version 2 refuses 553 bytes too: a client sends one
+  // only when EntryLimitsResponse.header_v2 is set. Optional: an entry without
   // one is stored and delivered normally, and readers show it as of unknown
   // type. On a chunked upload it is sent with the commit.
   bytes header = 6;
@@ -132,6 +135,10 @@ message EntryLimitsResponse {
   // Entries at or below this size are stored inline and delivered with
   // their metadata; the chunked path is for entries above it.
   uint64 inline_max_bytes = 4;
+  // The relay accepts version 2 entry headers (553 bytes, /spec/crypto.md
+  // §5.5.1). False from a relay that predates them, which refuses them: a
+  // client then writes version 1 headers.
+  bool header_v2 = 5;
 }
 
 // EntryUploadBeginRequest starts a chunked upload. The relay reserves room for

@@ -95,6 +95,8 @@ import {
   publicKey as derivePublicKey,
   sealEntry,
   sealEntryHeader,
+  sealEntryHeaderV2,
+  sha256Sliced,
   unwrap,
   wrap,
 } from '../crypto';
@@ -141,6 +143,12 @@ export interface Limits {
   /** chunkBytes is zero when the relay predates chunked transfer. */
   chunkBytes: number;
   inlineMaxBytes: number;
+  /**
+   * headerV2 is set when the relay accepts version 2 entry headers
+   * (spec/crypto.md §5.5.1). One that predates them refuses them, so this
+   * client writes version 1 to it.
+   */
+  headerV2: boolean;
 }
 
 /** LEGACY_LIMITS are what a relay that predates chunked transfer allows. */
@@ -149,6 +157,7 @@ const LEGACY_LIMITS: Limits = {
   singleFrameMaxBytes: SINGLE_FRAME_MAX_BYTES,
   chunkBytes: 0,
   inlineMaxBytes: 0,
+  headerV2: false,
 };
 
 /** Progress reports a chunked transfer of an entry larger than one frame, in ciphertext bytes. */
@@ -1357,18 +1366,23 @@ export class Client {
     const entryId = newEntryID();
     const epoch = this.state.epoch;
     const container = sealEntry(this.state.groupKey, generateNonce(), epoch, entryId, frame);
-    const header = sealEntryHeader(this.state.groupKey, epoch, entryId, {
+    // The limits say which header version the relay takes, and whether a
+    // large entry can be chunked. They are asked once per connection.
+    const limits = await this.limits();
+    const summary = {
       contentType: item.contentType,
       filename: item.filename ?? '',
       bodyLen: BigInt(item.body.length),
-    });
+    };
+    const header = limits.headerV2
+      ? sealEntryHeaderV2(this.state.groupKey, epoch, entryId, { ...summary, sha256: await sha256Sliced(item.body) })
+      : sealEntryHeader(this.state.groupKey, epoch, entryId, summary);
 
     let response: EntryPutResponse;
     if (container.length > SINGLE_FRAME_MAX_BYTES) {
       // Larger than one frame: chunked, if the relay can. Refused here rather
       // than by the relay when it cannot, or when the entry is over its cap:
       // the caller deserves the answer before the upload, not after it.
-      const limits = await this.limits();
       if (limits.chunkBytes === 0 || container.length > limits.maxEntryBytes) {
         throw new TppError(
           'too-large',
@@ -1525,6 +1539,7 @@ export class Client {
         singleFrameMaxBytes: Math.min(Math.max(Number(resp.singleFrameMaxBytes), 1), SINGLE_FRAME_MAX_BYTES),
         chunkBytes: Math.min(Number(resp.chunkBytes), SINGLE_FRAME_MAX_BYTES),
         inlineMaxBytes: Number(resp.inlineMaxBytes),
+        headerV2: resp.headerV2,
       };
     } catch (err) {
       if (!isCode(err, ErrorCode.ERROR_CODE_UNSUPPORTED_MESSAGE)) {

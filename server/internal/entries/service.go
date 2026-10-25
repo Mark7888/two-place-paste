@@ -282,13 +282,14 @@ func (s *Service) PutWithHeader(ctx context.Context, groupID string, epoch uint6
 	return meta, nil
 }
 
-// checkHeader accepts no header or a sealed one of the one size every header
-// has. The server cannot check anything more: the header is ciphertext.
+// checkHeader accepts no header or a sealed one of either version's size.
+// The server cannot check anything more: the header is ciphertext.
 func checkHeader(header []byte) error {
-	if len(header) != 0 && len(header) != HeaderSize {
-		return fmt.Errorf("%w: header is %d bytes, want %d", ErrInvalidHeader, len(header), HeaderSize)
+	switch len(header) {
+	case 0, HeaderSize, HeaderV2Size:
+		return nil
 	}
-	return nil
+	return fmt.Errorf("%w: header is %d bytes, want %d or %d", ErrInvalidHeader, len(header), HeaderSize, HeaderV2Size)
 }
 
 // reserve claims room for a blob-backed entry and evicts whatever the ledger
