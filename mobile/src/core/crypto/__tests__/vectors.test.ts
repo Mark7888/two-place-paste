@@ -26,10 +26,16 @@ import {
   entryInfo,
   headerAAD,
   headerKey,
+  decodeStoreMeta,
   openEntry,
   openEntryHeader,
   openEntrySliced,
+  openEntrySlicedWithKey,
+  openEntryWithKey,
   openHeader,
+  openStoreLink,
+  openStoreMeta,
+  unwrapItemKeys,
   publicKey,
   sealEntry,
   sealHeader,
@@ -270,7 +276,17 @@ describe('entry headers (spec/crypto.md §5.5)', () => {
 describe('inputs that must be rejected (spec/vectors/failure.json)', () => {
   const suite = load<{
     name: string;
-    operation: 'unwrap' | 'open_entry' | 'decode_frame' | 'open_header' | 'decode_header';
+    operation:
+      | 'unwrap'
+      | 'open_entry'
+      | 'decode_frame'
+      | 'open_header'
+      | 'decode_header'
+      | 'open_entry_with_key'
+      | 'open_store_link'
+      | 'unwrap_item_keys'
+      | 'open_store_meta'
+      | 'decode_store_meta';
     expect: string;
     epoch_hex: string;
     recipient_private_key?: string;
@@ -280,6 +296,15 @@ describe('inputs that must be rejected (spec/vectors/failure.json)', () => {
     entry_id?: string;
     encoded_frame?: string;
     encoded_header?: string;
+    store_key?: string;
+    link?: string;
+    item_id?: string;
+    wrapped_item_keys?: string;
+    content_key?: string;
+    meta_key?: string;
+    meta_rev?: number;
+    sealed_meta?: string;
+    encoded_meta?: string;
   }>('failure.json');
 
   test.each(suite.vectors.map((v) => [v.name, v] as const))('%s', async (_name, v) => {
@@ -309,6 +334,30 @@ describe('inputs that must be rejected (spec/vectors/failure.json)', () => {
         break;
       case 'decode_header':
         expect(() => decodeHeader(fromHex(v.encoded_header!))).toThrow();
+        break;
+      case 'open_entry_with_key':
+        expect(() =>
+          openEntryWithKey(fromHex(v.content_key!), fromHex(v.container!), epochOf(v), v.entry_id!),
+        ).toThrow();
+        await expect(
+          openEntrySlicedWithKey(fromHex(v.content_key!), fromHex(v.container!), epochOf(v), v.entry_id!),
+        ).rejects.toThrow();
+        break;
+      case 'open_store_link':
+        expect(() => openStoreLink(fromHex(v.store_key!), fromHex(v.link!), epochOf(v))).toThrow();
+        break;
+      case 'unwrap_item_keys':
+        expect(() =>
+          unwrapItemKeys(fromHex(v.store_key!), fromHex(v.wrapped_item_keys!), epochOf(v), v.item_id!),
+        ).toThrow();
+        break;
+      case 'open_store_meta':
+        expect(() =>
+          openStoreMeta(fromHex(v.meta_key!), fromHex(v.sealed_meta!), v.item_id!, BigInt(v.meta_rev ?? 0)),
+        ).toThrow();
+        break;
+      case 'decode_store_meta':
+        expect(() => decodeStoreMeta(fromHex(v.encoded_meta!))).toThrow();
         break;
       default:
         throw new Error(`unknown operation ${v.operation as string}`);

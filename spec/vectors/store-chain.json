@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "profile": "tpp-crypto-v1",
+  "suite": "store-chain",
+  "spec": "spec/crypto.md §7a.1, §7a.2",
+  "description": "Store keys and the links a rekey uploads. Each vector is one epoch: its store key derived from its group key and, from epoch 2 on, the link that seals the previous epoch's store key (previous_store_key) under this one. Every link is exactly 49 bytes.",
+  "vectors": [
+    {
+      "name": "chain-epoch-1",
+      "description": "the first epoch of a group: a store key and no link",
+      "group_key": "505abcdc4dc90541dc9f315f75ba7355d35f17743c5a00994b558854edbed651",
+      "epoch": 1,
+      "epoch_hex": "0000000000000001",
+      "store_key_info": "7470702f76312f73746f72650000000000000001",
+      "store_key": "f0cf17f7af82c883a6e4428311240e4ae78cc4d4ed3f6f45c6f0e5422e1743cb"
+    },
+    {
+      "name": "chain-epoch-2",
+      "description": "the first rekey: the link seals epoch 1's store key under epoch 2's",
+      "group_key": "b4ed9bac5f78c7e648108b9e98f7349e803a66f855c95a062f8a4eba9d7c23e7",
+      "epoch": 2,
+      "epoch_hex": "0000000000000002",
+      "store_key_info": "7470702f76312f73746f72650000000000000002",
+      "store_key": "d94b2ca13afa166f05a099ba723110b847ee4aac3a3f05fba809dbf6c15c8adf",
+      "previous_store_key": "f0cf17f7af82c883a6e4428311240e4ae78cc4d4ed3f6f45c6f0e5422e1743cb",
+      "link_key_info": "7470702f76312f73746f72652d6c696e6b0000000000000002",
+      "link_key": "9afbae7e31adc2e7b1ab3787e31eaff44b5f490b773a949c876860c99894da6b",
+      "link_aad": "7470702f76312f73746f72652d6c696e6b2d6161640100000000000000010000000000000002",
+      "link": "01c2715cb7e22193b9b74c0c1757087e6478ef0d59e07fbbc3d477219a735b1f4905a0484189315042b53711b25cc266b0"
+    },
+    {
+      "name": "chain-epoch-3",
+      "description": "the second rekey; with chain-epoch-2 a client at epoch 3 reaches epoch 1",
+      "group_key": "fe89be2e009301650efff1a9229673eb8aa8e1c30be27034d8e0770c16da86e7",
+      "epoch": 3,
+      "epoch_hex": "0000000000000003",
+      "store_key_info": "7470702f76312f73746f72650000000000000003",
+      "store_key": "629a994e5bd749143cc130599e409e24d1d01316cc8fffa7dcdadc3989a26c41",
+      "previous_store_key": "d94b2ca13afa166f05a099ba723110b847ee4aac3a3f05fba809dbf6c15c8adf",
+      "link_key_info": "7470702f76312f73746f72652d6c696e6b0000000000000003",
+      "link_key": "9c0fb4ffc8520e65f2063a15371701a423b874954eba41474dbb23f9e454c1e8",
+      "link_aad": "7470702f76312f73746f72652d6c696e6b2d6161640100000000000000020000000000000003",
+      "link": "01e73526d18cf6416854edf024691cb0358da7d9f3f8ded946a25ea4d709a486898d35a5e8f1ca94da4093680ace868611"
+    },
+    {
+      "name": "chain-epoch-max",
+      "description": "the last epoch a u64 can hold, to pin the big-endian encoding of both epochs",
+      "group_key": "a5711488435b427d895863fd289667d03c03549ac5609ed910b189a30e6398b5",
+      "epoch": 18446744073709551615,
+      "epoch_hex": "ffffffffffffffff",
+      "store_key_info": "7470702f76312f73746f7265ffffffffffffffff",
+      "store_key": "a2e21fece50a58e1723248ea92c1b2eff12029dd99f06fb4922b8566f7a62cd5",
+      "previous_store_key": "8b2c1713f6dda4ff42c2459dd0c994c1e273d6bf497ce8b34f23a91eb50f6f41",
+      "link_key_info": "7470702f76312f73746f72652d6c696e6bffffffffffffffff",
+      "link_key": "53174bc740d6d9fcece1afe26d9d896b4de200f43faa1d1dcc531670caa93eee",
+      "link_aad": "7470702f76312f73746f72652d6c696e6b2d61616401fffffffffffffffeffffffffffffffff",
+      "link": "01aba823b134c095c675d43e380e6392531a20defc2b5359b834d855b713d55cb50c45ec8f7e23e7360dd711a7a0314bc3"
+    }
+  ]
+}

@@ -34,6 +34,10 @@ another. The server relays ciphertext and never sees clipboard content.
 - **Entry** — a single clipboard item (text, image, or file) stored as ciphertext.
 - **Epoch** — a monotonically increasing counter identifying the current group key
   generation. Incremented on every rekey.
+- **Store** — a group's shelf of items that do not expire, beside its 24-hour
+  history (§6b). Off unless the admin turns it on for the group.
+- **Store item** — one thing saved to the store: a copy of an entry, the clipboard
+  or a file, with a name, an optional description and tags.
 
 ---
 
@@ -58,6 +62,9 @@ priority, but the design does not require trusting it for confidentiality.
   group key. The group key is never used directly as a content key.
 - The group key is stored server-side only in **wrapped** form: one copy per device,
   encrypted to that device's public key.
+- Each epoch also has a **store key**, derived from its group key. A rekey seals the
+  previous store key under the new one, so store items stay readable across
+  revocations while a revoked device never learns a later key (`spec/crypto.md` §7a).
 
 Per-message keys wrapped per device were considered and rejected: for a single user
 with 2–4 devices and roughly two revocations a year, the added roster-trust
@@ -74,7 +81,14 @@ Each entry may carry a **sealed header**: content type, filename and plaintext s
 encrypted under the group key, so a history listing can say what an entry is without
 fetching it (`spec/crypto.md` §5.5). Every header is 297 bytes, whatever the entry, so
 the server learns nothing from it; it stores it and hands it back with the entry's
-metadata.
+metadata. A version 2 header is 553 bytes and adds the body's hash (`spec/crypto.md` §5.5.1); its size
+tells the server only which version wrote it.
+
+For a store item the server sees its size, when it was saved, the epochs its keys were
+sealed at, and how many items and bytes a group holds. Its name, description, tags,
+content type and filename are inside a fixed-size sealed record (`spec/crypto.md`
+§7a.5), and the content hash used to spot duplicates is too: the server never sees a
+hash it could test guesses against.
 
 ---
 
@@ -122,7 +136,8 @@ string — but the payload and protocol are the same.
 Pairing tokens are short-lived (suggested: 5 minutes) and single-use.
 
 **New devices start empty.** They cannot decrypt entries created before they joined
-and do not attempt to fetch them.
+and do not attempt to fetch them. The store is the exception: a new device reads every
+store item, because the store exists to outlive devices (§6b).
 
 #### Joiner-emitted pairing
 
@@ -178,8 +193,9 @@ all devices belong to the same person.
 2. The client **displays a confirmation listing the devices it is about to re-key
    for**, by name. The user confirms.
 3. The revoking device generates a new group key and wraps it once per remaining
-   device using each device's stored public key.
-4. It uploads all wrapped keys **in a single request**. The server applies them and
+   device using each device's stored public key. It also seals the previous epoch's
+   store key under the new one: the **store link** (`spec/crypto.md` §7a.2).
+4. It uploads all wrapped keys and the link **in a single request**. The server applies them and
    increments the epoch **atomically** (Redis `MULTI` or a Lua script) — either every
    device receives the new epoch, or none do. A client dying mid-upload leaves the
    group at the old epoch, unchanged.
@@ -194,9 +210,13 @@ their current one, and those entries expire naturally within 24 hours.
 **The local clipboard is never touched by a rekey.** If a device has `asd123` on its
 OS clipboard, it stays there.
 
+A rekey that carries no link is refused while the group has store items: accepting it
+would leave every item unreadable. A client that predates the store is told to update.
+
 **Known limitation:** revocation requires a device holding the current group key. A
 user with only one remaining device that has lost access should leave and create a new
-group. Nothing of value is lost given the 24-hour TTL.
+group. Nothing in history is lost given the 24-hour TTL; the **store is lost**, since
+its keys exist only on devices.
 
 ### 3.4 Deletion by the admin
 
@@ -209,6 +229,8 @@ is nothing left to re-key for — so deletion is a server operation:
 2. The server closes the group's open sockets with WebSocket close code **4410**.
 3. The group's entries and blobs are deleted. A blob whose delete fails is reclaimed by
    the bucket sweep (§4.5) like any other.
+4. The group's store is reclaimed in the background (§4.6): step 1 also queues the
+   group for it, and the admin request does not wait.
 
 A device of a deleted group that connects later is refused with **410 Gone** while its
 tombstone lasts, and with 401 after that, exactly like a revoked device (§3.3 step 5).
@@ -233,7 +255,9 @@ TLS is expected to be terminated by a reverse proxy in front of the server.
 Redis is the only datastore, but it holds **two zones with different rules**:
 
 **Persistent zone** — group records, device records, public keys, wrapped group keys,
-epochs, creation tokens. No TTL. Must survive restarts; requires AOF persistence.
+epochs, creation tokens, store links and store item records. No TTL. Must survive
+restarts; requires AOF persistence. Store records grow with the store (about 2 KB per
+item), which the per-group item limit bounds (§4.6).
 
 **Ephemeral zone** — clipboard entries and inline blobs. 24-hour TTL from creation.
 
@@ -252,6 +276,11 @@ entry:<entry_id>                    hash    epoch, size, created_at, storage_ref
 entry:<entry_id>:blob               string  inline ciphertext if ≤256KB           [TTL 24h]
 token:<token>                       hash    name, created_at, used, group_id
 pairing:<pairing_token>             hash    group_id, inviter_device_id           [TTL 5m]
+group:<group_id>:store              zset    store item ids scored by saved_at
+group:<group_id>:store:links        hash    epoch -> store link
+store:<item_id>                     hash    group_id, size, saved_at, wrap_epoch,
+                                            content_id, content_epoch, wrapped keys,
+                                            sealed record, meta_rev, state
 ```
 
 ### 4.3 Storage of blobs
@@ -309,6 +338,9 @@ online device of each affected group receives `EntryEvicted`. Uploads still in
 progress are never evicted; when only they hold the room, the write is refused with
 `QUOTA_EXCEEDED`. An entry larger than a limit on its own is `TOO_LARGE`.
 
+The store has limits of its own and never evicts (§4.6); history and store never evict
+each other.
+
 The accounting is kept in Redis, outside the ephemeral zone's TTLs. Every accounted
 entry carries its expiry and is forgotten by the sweep after it, so a crash between
 reserving room and storing the entry costs that room for at most one lifetime.
@@ -331,9 +363,12 @@ Served on the public domain. Credentials from `.env`.
   deleted from its own page, one at a time.
 - **Group** — one page per group: rename it, put it under a tag, set its own storage
   limit, list its devices (name, paired, last seen, online), purge its entries early, and
-  delete it (§3.4). Purge and delete go through a confirmation page.
+  delete it (§3.4). Purge and delete go through a confirmation page. The same page turns
+  the group's **store** on or off, shows its store bytes and items against their own
+  limits, sets store limit overrides, and has a separate **Purge store** (§4.6).
 - **Tags** — create and delete tags; a group has at most one. A tag may carry a storage
-  limit for its groups. A group's blob limit is its own override if enabled, else its
+  limit for its groups, and a store limit. It cannot turn the store on: that is decided
+  per group. A group's blob limit is its own override if enabled, else its
   tag's if enabled, else `TPP_BLOB_MAX_GROUP_BYTES`.
 - **Tokens** — creation tokens with name, note, starting tag, created date, optional
   expiry (1, 7 or 30 days), status, and the resulting group if used. Token generation,
@@ -444,6 +479,49 @@ blobs and Redis entries and reports orphans. This is a **diagnostic tool for use
 Redis data loss or migration**, run by hand. It is never scheduled and is not part of
 the normal reclamation path.
 
+**The store is outside this scheme.** Store items do not expire, so they are never in an
+hour bucket and nothing here touches them; §4.6 reclaims them. The invariant above is
+about entries, and the store does not weaken it: saving an entry to the store copies
+it, and the entry keeps its own lifetime.
+
+### 4.6 Store storage and reclamation
+
+The store (§6b) is a separate namespace beside the hour buckets:
+
+```
+store/<group_id>/<item_id>.bin              disk, under the blob root's volume
+<prefix>/store/<group_id>/<item_id>.bin     S3, in the same bucket
+```
+
+Every store item is stored there, however small: none is inline in Redis.
+
+**Limits.** A group's store has its own byte limit and item limit, apart from its blob
+limit, with the same precedence: the group's override, else its tag's, else the
+server default. There is an optional total limit for every store together. **The store
+never evicts.** A save that would not fit is refused with `QUOTA_EXCEEDED`, and the
+client tells the user how much room is left. An item larger than the limit on its own
+is `TOO_LARGE`.
+
+**Write ordering.** An upload writes the item's record as *pending* first and lists it
+in a small in-flight set, then writes the blob, then marks the record committed and
+adds it to the group's list. The sweep (§4.5's schedule) deletes the blob and record of
+any pending item older than an hour, so a crash costs nothing permanent, and
+reconciliation never lists the whole store. A deleted item loses its record first,
+then its blob; a blob whose delete fails goes to a retry set the sweep drains.
+
+**Group deletion and Purge store.** Removing a group's store is a prefix delete, not
+one delete per item: `RemoveAll` on disk, a listing and batched multi-object deletes on
+S3. It runs in the background, from a queue that group deletion (§3.4) and **Purge
+store** add to and that survives a restart. As a backstop, each sweep lists the group
+prefixes under `store/` — one name per group, not per item — and reclaims any whose
+group no longer exists. Unlike the hour-bucket sweep, this one reads Redis, once per
+group.
+
+**Turning a store off** blocks every store request with `STORE_DISABLED` and keeps the
+items; turning it on again brings them back as they were. Deleting them is **Purge
+store**. A disabled store still holds its link chain, and a rekey still has to carry a
+link while the group has items (§3.3).
+
 ---
 
 ## 5. Transport
@@ -541,6 +619,40 @@ Three properties, each load-bearing:
 The relay serves `GET /pair`: a static page that reads the fragment client-side
 and offers "Open in TwoPlacePaste", plus the bare code to copy for anyone
 without the app.
+
+---
+
+## 6b. Store
+
+The store is a group's shelf of items that do not expire: the few things a user wants
+on the clipboard again and again, kept apart from the 24-hour history. It is not bulk
+storage, and its default limits are small.
+
+- **Off by default.** The admin turns it on per group (§4.4). A client asks the relay
+  whether the store is on and, when it is not, says so in place of the Store tab and
+  hides every **Save to store** action.
+- **Saving copies.** A history entry, the current clipboard, or a file (desktop: a drop
+  zone or file browser; Android: the system file picker) is saved as a new item with a
+  name, an optional description and any number of tags up to the limit. Saving from
+  history fetches and opens the entry, then seals and uploads it again; the entry is not
+  touched, and still leaves history when it expires or is evicted.
+- **Duplicates warn.** A client compares the content's hash with those of the items it
+  holds. A match names the existing items and offers **Save anyway**: the same content
+  under another name or tags is legitimate. History rows whose header carries a hash
+  (`spec/crypto.md` §5.5.1) are marked as saved without being fetched.
+- **The relay cannot search.** Opening the Store tab fetches the list of items — sealed
+  records, not content — and the client decrypts it and does all searching (name and
+  description), tag filtering and sorting (by date saved or by name) itself. An item's
+  content is fetched when the user copies or saves it, as in history (§6).
+- **Edits and deletes** are open to every device of the group, as revocation is (§3.3).
+  Deleting asks for confirmation; editing does not. An edit names the revision it
+  replaces, so two devices editing at once cannot silently lose one.
+- **Rekeys keep items readable** (§3.3 step 3) and a newly paired device reads them all
+  (§3.2). Items saved before a revocation stay exposed to the revoked device, which held
+  their keys; a rekey does not re-encrypt the store (`spec/crypto.md` §11.4).
+- **Header v2 waits for the relay.** A client writes version 2 entry headers only once
+  the relay reports it accepts them; until then it writes version 1, which every relay
+  accepts.
 
 ---
 

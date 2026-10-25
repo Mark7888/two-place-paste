@@ -262,12 +262,28 @@ func OpenEntry(groupKey, container []byte, epoch uint64, entryID string) ([]byte
 	if container[0] != Version {
 		return nil, fmt.Errorf("open entry: %w", ErrVersion)
 	}
-	nonce := container[1 : 1+NonceSize]
-	key, err := ContentKey(groupKey, nonce, epoch)
+	key, err := ContentKey(groupKey, container[1:1+NonceSize], epoch)
 	if err != nil {
 		return nil, fmt.Errorf("open entry: %w", err)
 	}
-	aead, err := chacha20poly1305.NewX(key)
+	return OpenEntryWithKey(key, container, epoch, entryID)
+}
+
+// OpenEntryWithKey opens an entry container with its content key rather than
+// the group key (spec/crypto.md §7a.4): a store item is read this way, by a
+// client that may no longer hold the group key of the epoch it was sealed at.
+func OpenEntryWithKey(contentKey, container []byte, epoch uint64, entryID string) ([]byte, error) {
+	if len(contentKey) != ContentKeySize {
+		return nil, fmt.Errorf("open entry: %w", ErrMalformed)
+	}
+	if len(container) < 1+NonceSize+TagSize {
+		return nil, fmt.Errorf("open entry: %w", ErrMalformed)
+	}
+	if container[0] != Version {
+		return nil, fmt.Errorf("open entry: %w", ErrVersion)
+	}
+	nonce := container[1 : 1+NonceSize]
+	aead, err := chacha20poly1305.NewX(contentKey)
 	if err != nil {
 		return nil, fmt.Errorf("open entry: %w", err)
 	}
@@ -282,25 +298,35 @@ func OpenEntry(groupKey, container []byte, epoch uint64, entryID string) ([]byte
 // §5.5 Entry header
 // ---------------------------------------------------------------------------
 
-// HeaderSize is the fixed length of an encoded header, and HeaderContainerSize
-// that of its container: every header is the same size, so its length tells
-// the server nothing.
+// HeaderSize is the fixed length of an encoded v1 header, and HeaderContainerSize
+// that of its container; HeaderV2Size and HeaderV2ContainerSize are the same
+// for v2. Every header of one version is the same size, so its length tells
+// the server nothing but the version.
 const (
-	HeaderSize          = 256
-	HeaderContainerSize = 1 + NonceSize + HeaderSize + TagSize // 297
+	HeaderSize            = 256
+	HeaderContainerSize   = 1 + NonceSize + HeaderSize + TagSize // 297
+	HeaderV2Size          = 512
+	HeaderV2ContainerSize = 1 + NonceSize + HeaderV2Size + TagSize // 553
+
+	headerV2 = 0x02
 
 	// headerMaxContentType is the longest content type a header carries; a
 	// longer one is written as fallbackContentType.
 	headerMaxContentType = 128
 	fallbackContentType  = "application/octet-stream"
 	headerFixed          = 1 + 2 + 2 + 8 // version, two length prefixes, body length
+	// headerV2MaxFilename is the longest filename a v2 header carries.
+	headerV2MaxFilename = 255
 )
 
-// Header is what a client may know about an entry before fetching it.
+// Header is what a client may know about an entry before fetching it. SHA256
+// is the hash of the frame's body; only a v2 header carries it, and it is nil
+// for v1.
 type Header struct {
 	ContentType string
 	Filename    string
 	BodyLen     uint64
+	SHA256      []byte
 }
 
 // EncodeHeader serializes a header into exactly HeaderSize bytes
@@ -326,6 +352,32 @@ func EncodeHeader(h Header) ([]byte, error) {
 	return append(out, make([]byte, HeaderSize-len(out))...), nil
 }
 
+// EncodeHeaderV2 serializes a v2 header into exactly HeaderV2Size bytes
+// (spec/crypto.md §5.5.1): the v1 fields, a filename of up to 255 bytes, and
+// the SHA-256 of the body.
+func EncodeHeaderV2(h Header) ([]byte, error) {
+	ct := h.ContentType
+	if ct == "" {
+		return nil, fmt.Errorf("encode header content type: %w", ErrMalformed)
+	}
+	if len(h.SHA256) != sha256.Size {
+		return nil, fmt.Errorf("encode header hash: %w", ErrMalformed)
+	}
+	if len(ct) > headerMaxContentType {
+		ct = fallbackContentType
+	}
+	fn := truncateUTF8(h.Filename, headerV2MaxFilename)
+	out := make([]byte, 0, HeaderV2Size)
+	out = append(out, headerV2)
+	out = binary.BigEndian.AppendUint16(out, uint16(len(ct)))
+	out = append(out, ct...)
+	out = binary.BigEndian.AppendUint16(out, uint16(len(fn)))
+	out = append(out, fn...)
+	out = binary.BigEndian.AppendUint64(out, h.BodyLen)
+	out = append(out, h.SHA256...)
+	return append(out, make([]byte, HeaderV2Size-len(out))...), nil
+}
+
 // truncateUTF8 cuts s to at most n bytes without splitting a code point.
 func truncateUTF8(s string, n int) string {
 	if len(s) <= n {
@@ -337,21 +389,26 @@ func truncateUTF8(s string, n int) string {
 	return s[:n]
 }
 
-// DecodeHeader parses an encoded header. It is canonical: exactly HeaderSize
-// bytes, a known version, a non-empty content type, lengths that fit, and
-// zero padding.
+// DecodeHeader parses an encoded header of either version. It is canonical:
+// a known version, exactly that version's size, a non-empty content type,
+// lengths that fit, a v2 filename of at most 255 bytes, and zero padding.
 func DecodeHeader(b []byte) (Header, error) {
-	if len(b) != HeaderSize {
+	if len(b) == 0 {
 		return Header{}, fmt.Errorf("decode header: %w", ErrMalformed)
 	}
-	r := &reader{b: b}
-	v, err := r.u8()
-	if err != nil {
-		return Header{}, err
-	}
-	if v != headerV1 {
+	var size int
+	switch b[0] {
+	case headerV1:
+		size = HeaderSize
+	case headerV2:
+		size = HeaderV2Size
+	default:
 		return Header{}, fmt.Errorf("decode header: %w", ErrVersion)
 	}
+	if len(b) != size {
+		return Header{}, fmt.Errorf("decode header: %w", ErrMalformed)
+	}
+	r := &reader{b: b, i: 1}
 	ct, err := r.str16()
 	if err != nil {
 		return Header{}, err
@@ -367,12 +424,23 @@ func DecodeHeader(b []byte) (Header, error) {
 	if err != nil {
 		return Header{}, err
 	}
+	h := Header{ContentType: ct, Filename: fn, BodyLen: n}
+	if b[0] == headerV2 {
+		if len(fn) > headerV2MaxFilename {
+			return Header{}, fmt.Errorf("decode header filename: %w", ErrMalformed)
+		}
+		sum, err := r.bytes(sha256.Size)
+		if err != nil {
+			return Header{}, err
+		}
+		h.SHA256 = append([]byte(nil), sum...)
+	}
 	for _, c := range b[r.i:] {
 		if c != 0 {
 			return Header{}, fmt.Errorf("decode header padding: %w", ErrMalformed)
 		}
 	}
-	return Header{ContentType: ct, Filename: fn, BodyLen: n}, nil
+	return h, nil
 }
 
 // HeaderInfo returns the HKDF info string for a header key:
@@ -408,11 +476,11 @@ func HeaderKey(groupKey, nonce []byte, epoch uint64) ([]byte, error) {
 	return key, nil
 }
 
-// SealHeader encrypts an encoded header:
+// SealHeader encrypts an encoded header of either version:
 //
-//	u8(version) || header_nonce[24] || ciphertext[256] || tag[16]
+//	u8(version) || header_nonce[24] || ciphertext[256 or 512] || tag[16]
 func SealHeader(groupKey, nonce []byte, epoch uint64, entryID string, encoded []byte) ([]byte, error) {
-	if len(encoded) != HeaderSize {
+	if len(encoded) != HeaderSize && len(encoded) != HeaderV2Size {
 		return nil, fmt.Errorf("seal header: %w", ErrMalformed)
 	}
 	key, err := HeaderKey(groupKey, nonce, epoch)
@@ -423,7 +491,7 @@ func SealHeader(groupKey, nonce []byte, epoch uint64, entryID string, encoded []
 	if err != nil {
 		return nil, fmt.Errorf("seal header: %w", err)
 	}
-	out := make([]byte, 0, HeaderContainerSize)
+	out := make([]byte, 0, 1+NonceSize+len(encoded)+TagSize)
 	out = append(out, Version)
 	out = append(out, nonce...)
 	return aead.Seal(out, nonce, encoded, HeaderAAD(epoch, entryID)), nil
@@ -431,7 +499,7 @@ func SealHeader(groupKey, nonce []byte, epoch uint64, entryID string, encoded []
 
 // OpenHeader reverses SealHeader, returning the encoded header.
 func OpenHeader(groupKey, container []byte, epoch uint64, entryID string) ([]byte, error) {
-	if len(container) != HeaderContainerSize {
+	if len(container) != HeaderContainerSize && len(container) != HeaderV2ContainerSize {
 		return nil, fmt.Errorf("open header: %w", ErrMalformed)
 	}
 	if container[0] != Version {

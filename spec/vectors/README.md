@@ -18,7 +18,11 @@ run them; a client that cannot reproduce every vector does not ship
 | `derive.json` | HKDF content key derivation (§5.1) | 5 |
 | `frame.json` | plaintext frame serialization (§6) | 5 |
 | `entry.json` | end-to-end entry encryption (§5) | 5 |
-| `failure.json` | inputs that MUST be rejected (§7) | 18 |
+| `header.json` | entry headers, version 1 (§5.5) | 4 |
+| `header-v2.json` | entry headers, version 2 (§5.5.1) | 4 |
+| `store-chain.json` | store keys and the links a rekey uploads (§7a.1, §7a.2) | 4 |
+| `store-item.json` | store items end to end (§7a.3 – §7a.5) | 4 |
+| `failure.json` | inputs that MUST be rejected | 65 |
 
 ## Reading a vector
 
@@ -35,15 +39,19 @@ Every file has the same shape:
 }
 ```
 
-- **Every byte string is lowercase, unprefixed hex.** `entry_id`,
-  `content_type` and `filename` are the exceptions: they are the UTF-8 strings
-  themselves, because that is how an implementation will hold them.
+- **Every byte string is lowercase, unprefixed hex.** `entry_id`, `item_id`,
+  `content_type`, `filename`, `name`, `description` and `tags` are the
+  exceptions: they are the UTF-8 strings themselves, because that is how an
+  implementation will hold them.
 - **Read the epoch from `epoch_hex`, not `epoch`.** `epoch_hex` is the `u64be`
   encoding and is authoritative; `epoch` is the same value as a JSON number, for
   readability only. One vector uses `2^64-1`, which does not survive
   JavaScript's `JSON.parse`.
 - `failure.json` vectors carry `operation` (`unwrap`, `open_entry`,
-  `decode_frame`) and `expect: "error"`. The only correct outcome is an error.
+  `decode_frame`, `open_header`, `decode_header`, `open_entry_with_key`,
+  `open_store_link`, `unwrap_item_keys`, `open_store_meta`,
+  `decode_store_meta`) and `expect: "error"`; `meta_rev` is omitted when it
+  is 0. The only correct outcome is an error.
   An implementation that returns plaintext for one of these is broken, not
   lenient.
 - Intermediate values (`shared_secret`, `hkdf_info`, `wrap_key`, `content_key`,

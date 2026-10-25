@@ -1,10 +1,10 @@
 # TwoPlacePaste — Cryptography Specification
 
 **Profile:** `tpp-crypto-v1`
-**Version:** 1.2
+**Version:** 1.3
 **Status:** normative for MVP
 **Companion to:** [`docs/internal/SPECS.md`](../docs/internal/SPECS.md) §2, §3
-**Vectors:** [`spec/vectors/`](vectors/) — 42 vectors, 6 suites
+**Vectors:** [`spec/vectors/`](vectors/) — 105 vectors, 10 suites
 
 This document defines every byte of TwoPlacePaste cryptography. It exists so
 that the Go client (`pkg/tppclient`, Phase 4) and the TypeScript client
@@ -27,6 +27,7 @@ defined here and cannot read any of them (SPEC §2.1).
 | Group key generation and wrapping | Server-side authentication of devices (Phase 3c) |
 | Entry encryption and the plaintext frame | Admin session cookies (Phase 3d) |
 | Epoch handling across rekey | Desktop localhost UI tokens (SPEC §7.2) |
+| Store items and their keys across rekey | Searching and sorting the store (client-side, SPEC §6b) |
 | What every implementation must reject | Key storage at rest (§10) |
 
 ---
@@ -72,7 +73,7 @@ to this document (§12).
 
 ### 2.3 Domain separation
 
-Seven ASCII strings, each used for exactly one purpose. No string is a prefix of
+Fourteen ASCII strings, each used for exactly one purpose. No string is a prefix of
 another **in a position where it could be confused**, and every variable-length
 value that follows one carries an explicit length prefix.
 
@@ -84,6 +85,13 @@ value that follows one carries an explicit length prefix.
 | `tpp/v1/entry-aad` | AEAD associated data prefix, entries | §5.3 |
 | `tpp/v1/header` | HKDF `info` prefix, header key | §5.5 |
 | `tpp/v1/header-aad` | AEAD associated data prefix, entry headers | §5.5 |
+| `tpp/v1/store` | HKDF `info` prefix, store key | §7a.1 |
+| `tpp/v1/store-link` | HKDF `info` prefix, link key | §7a.2 |
+| `tpp/v1/store-link-aad` | AEAD associated data prefix, links | §7a.2 |
+| `tpp/v1/store-wrap` | HKDF `info` prefix, item wrap key | §7a.3 |
+| `tpp/v1/store-wrap-aad` | AEAD associated data prefix, wrapped item keys | §7a.3 |
+| `tpp/v1/store-meta` | HKDF `info`, metadata seal key | §7a.5 |
+| `tpp/v1/store-meta-aad` | AEAD associated data prefix, metadata records | §7a.5 |
 | `tpp/v1/vectors` | HKDF `ikm` for deterministic test material only | §9.2 |
 
 ### 2.4 Version byte
@@ -374,6 +382,52 @@ Rules:
 Vectors: [`header.json`](vectors/header.json), and the `header-*` cases in
 [`failure.json`](vectors/failure.json).
 
+#### 5.5.1 Header version 2
+
+Version 2 adds the SHA-256 of the frame's body, so a client can tell from a
+history listing alone whether an entry is already in the store (§7a), and gives
+the filename room for the full name any real filesystem allows.
+
+```
+encoded_header_v2 =                              exactly 512 bytes
+    u8(0x02)                                     header version
+ || u16be(len(content_type)) || content_type     UTF-8, MUST be non-empty
+ || u16be(len(filename))     || filename         UTF-8, at most 255 bytes, 0 means absent
+ || u64be(body_len)                              length of the frame's body
+ || sha256(body)[32]                             SHA-256 of the frame's body
+ || zero[...]                                    padding to 512 bytes
+
+header_container_v2 =                            exactly 553 bytes
+    u8(0x01) || header_nonce[24] || XChaCha20-Poly1305(header_key, header_nonce,
+                                                       header_aad, encoded_header_v2)
+```
+
+- **Sealed exactly as v1.** The container version byte is still `0x01`; the
+  nonce, `header_key` and `header_aad` are those of §5.5. Only the encoded
+  header inside the ciphertext differs.
+- **Each version has one size.** A decoder reads the version byte first and
+  MUST reject an encoded header that is not exactly that version's size (256
+  for v1, 512 for v2), an unknown version, an empty content type, a length
+  prefix that runs past the end, a v2 filename over 255 bytes, and any non-zero
+  padding byte. A container is 297 bytes for v1 and 553 for v2, and nothing
+  else. The server therefore learns which version wrote a header, and nothing
+  more.
+- **Writers cut as v1 does.** A content type over 128 bytes is written as
+  `application/octet-stream`; a filename over 255 bytes is cut to 255, never
+  inside a UTF-8 sequence.
+- **The hash is advisory too.** It is what the writer claims, like the rest of
+  the header. A reader uses it to mark history entries already saved; the
+  store's own record of an item (§7a.5) is computed from the frame the saving
+  device actually opened.
+- **Readers before writers.** A reader that implements this section decodes
+  both versions. A client that predates it rejects version 2 under the rule
+  above and shows the entry's type as unknown until it is fetched, which is the
+  "optional on the wire" behaviour of §5.5. A writer switches to v2 only once
+  the relay reports that it accepts 553-byte headers (SPEC §6b).
+
+Vectors: [`header-v2.json`](vectors/header-v2.json), and the `header-v2-*`
+cases in [`failure.json`](vectors/failure.json).
+
 ---
 
 ## 6. Plaintext frame
@@ -440,8 +494,208 @@ A client MUST NOT retain group keys from previous epochs in order to read older
 entries. Forward secrecy across revocation is the entire point of the rekey
 (SPEC §3.3), and a client that keeps old keys silently defeats it.
 
+The store (§7a) is the one place older keys are reachable, and it is scoped so
+that this rule still holds for history: what a client can reach is the old
+**store** keys, not old group keys, and only by opening links with the store
+key of its current epoch. Nothing in §7a lets a client open a history entry of
+an older epoch.
+
 **Local clipboard is never touched by a rekey** (SPEC §3.3): installing a new
 epoch is a key operation only.
+
+---
+
+## 7a. Store
+
+The store (SPEC §6b) holds items that do not expire. An item saved at epoch 3
+must still open at epoch 9, on a device that joined at epoch 7 and never held
+the group key of epoch 3. And a device revoked at epoch 5 must not be able to
+open anything saved at epoch 5 or later. Three constructions do this without a
+fourth primitive:
+
+- every epoch has a **store key**, derived from its group key (§7a.1);
+- every rekey uploads a **link**, the previous epoch's store key sealed under
+  the new one, so a client can walk back from its current store key to any
+  earlier one (§7a.2);
+- every item has its own keys, **wrapped** under the store key of the epoch it
+  was saved at (§7a.3), so its blob is encrypted once and never again.
+
+### 7a.1 Store keys
+
+```
+store_key[E] = HKDF-SHA256(ikm = group_key[E], salt = <empty>,
+                           info = "tpp/v1/store" || u64be(E), L = 32)
+```
+
+A store key is never used to encrypt anything directly; it is only ever an HKDF
+input (§7a.2, §7a.3). Like a group key it is held in memory and MUST NOT be
+logged or put in an error (§10).
+
+### 7a.2 Links
+
+When a rekey moves a group from epoch `E-1` to epoch `E` (SPEC §3.3), the
+revoking device holds both group keys. It seals the old store key under the new
+one and sends the result with the rekey, in the same atomic request:
+
+```
+link_key[E]  = HKDF-SHA256(ikm = store_key[E], salt = <empty>,
+                           info = "tpp/v1/store-link" || u64be(E), L = 32)
+link_aad[E]  = "tpp/v1/store-link-aad" || u8(0x01) || u64be(E-1) || u64be(E)
+
+link[E] =                                        exactly 49 bytes
+    u8(0x01)
+ || XChaCha20-Poly1305(key = link_key[E], nonce = 24 zero bytes,
+                       aad = link_aad[E], plaintext = store_key[E-1])
+```
+
+- **The zero nonce is safe** for the reason §4.3 gives: `link_key[E]` is derived
+  from `store_key[E]`, which is fresh for every epoch, and seals exactly one
+  message — the previous store key.
+- **Both epochs are bound**, so the server cannot present a link as joining two
+  other epochs. Epoch 1 has no link.
+- **Links only lead backwards.** From `store_key[E]` a client opens `link[E]` to
+  get `store_key[E-1]`, then `link[E-1]`, and so on. Nothing yields a newer key
+  than the one the client derived from its own group key.
+- A link is 49 bytes and opening one is one HKDF and one AEAD. At the
+  revocation rate SPEC §2.2 expects, a group's whole chain stays well under a
+  kilobyte. A client MAY cache the store keys it has opened for the life of a
+  session; it MUST NOT persist them.
+- A link MUST be rejected unless it is exactly 49 bytes with version `0x01`, and
+  for an epoch below 2.
+
+**What a revoked device keeps.** A device revoked at the rekey into epoch `E`
+held every store key up to `E-1`, and could have downloaded every item saved
+before `E`. Those items are exposed to it, as history entries of those epochs
+were. It never learns `store_key[E]`, so it cannot open `link[E]`, any later
+link, or any item wrapped at `E` or later. Re-encrypting the older items is not
+part of a rekey (§11.4).
+
+### 7a.3 Item keys
+
+An item has two keys: the **content key** of its blob (§7a.4) and a random
+32-byte **metadata key** for its record (§7a.5). Both are wrapped together under
+the store key of the epoch `W` the item is saved at:
+
+```
+wrap_nonce  = 24 random bytes from the CSPRNG, fresh for every wrap
+wrap_key    = HKDF-SHA256(ikm = store_key[W], salt = wrap_nonce,
+                          info = "tpp/v1/store-wrap" || u64be(W), L = 32)
+wrap_aad    = "tpp/v1/store-wrap-aad" || u8(0x01) || u64be(W)
+              || u32be(len(item_id)) || item_id
+
+wrapped_item_keys =                              exactly 105 bytes
+    u8(0x01) || wrap_nonce[24]
+ || XChaCha20-Poly1305(key = wrap_key, nonce = wrap_nonce, aad = wrap_aad,
+                       plaintext = content_key[32] || meta_key[32])
+```
+
+`item_id` follows the rules §5.3 gives entry ids: chosen by the writing client
+from the CSPRNG with at least 128 bits of entropy, `[A-Za-z0-9_-]`, 1 to 64
+bytes, never reused. The server reports `W` (the *wrap epoch*) with the item; a
+reader MUST use that value and MUST NOT try others. Re-wrapping an item at a
+later epoch changes only these 105 bytes.
+
+The two keys are separate so that neither is used for two purposes: the content
+key is only ever an AEAD key, and the metadata key only ever an HKDF input.
+
+### 7a.4 The blob
+
+A store item's blob is an **entry container**, exactly as §5.2 defines it, with
+the frame of §6 inside. The item record keeps the two values its AAD binds: the
+**content id** (in the place of `entry_id`) and the **content epoch**.
+
+- A client saving an item seals a fresh container at its current epoch, with
+  `content_id = item_id` and `content_epoch = W`. Its content key is the §5.1
+  content key of that container.
+- The body is copied in full, whatever its size: a store item is always a blob,
+  never inline.
+- A reader opens the container with the unwrapped content key, skipping §5.4
+  step 3, which needs the group key of the content epoch:
+
+```
+1. Reject unless len(container) >= 41 and container[0] == 0x01.
+2. entry_nonce = container[1..25]
+3. frame       = XChaCha20-Poly1305-Open(content_key, entry_nonce,
+                     entry_aad(content_epoch, content_id), container[25..])
+4. Decode the frame per §6.
+```
+
+Keeping the entry container as the store's blob format means a later server-side
+copy from history — the server copying an entry's bytes unread, the client
+wrapping that entry's content key — needs no new format. It is not part of this
+revision.
+
+### 7a.5 Metadata record
+
+What the Store tab shows and searches — name, description, tags — and what it
+needs to know before fetching — type, filename, size, hash — is one fixed-size
+record, sealed under the metadata key:
+
+```
+encoded_meta =                                   exactly 2048 bytes
+    u8(0x01)                                     record version
+ || u64be(body_len)                              length of the frame's body
+ || sha256(body)[32]                             SHA-256 of the frame's body
+ || u16be(len(content_type)) || content_type     UTF-8, 1 to 128 bytes
+ || u16be(len(filename))     || filename         UTF-8, 0 to 255 bytes, 0 means absent
+ || u16be(len(name))         || name             UTF-8, 1 to 200 bytes
+ || u16be(len(description))  || description      UTF-8, 0 to 800 bytes
+ || u8(tag_count)                                0 to 16
+ || tag_count × ( u8(len(tag)) || tag )          UTF-8, 1 to 32 bytes each, no repeats
+ || zero[...]                                    padding to 2048 bytes
+
+meta_nonce = 24 random bytes from the CSPRNG, fresh for every seal
+meta_seal_key = HKDF-SHA256(ikm = meta_key, salt = meta_nonce,
+                            info = "tpp/v1/store-meta", L = 32)
+meta_aad = "tpp/v1/store-meta-aad" || u8(0x01)
+           || u32be(len(item_id)) || item_id || u64be(meta_rev)
+
+sealed_meta =                                    exactly 2089 bytes
+    u8(0x01) || meta_nonce[24]
+ || XChaCha20-Poly1305(meta_seal_key, meta_nonce, meta_aad, encoded_meta)
+```
+
+Rules:
+
+- **Fixed size**, so the server learns nothing from how long a name,
+  description or tag list is. The largest legal record is 1961 bytes.
+- **Writers refuse rather than cut** what the user typed: an empty name, a
+  field over its limit, more than 16 tags, an empty or repeated tag. A UI shows
+  the limits as counters. Tags compare as bytes; a client MAY normalise case or
+  Unicode before writing, and then always does. A content type over 128 bytes
+  is written as `application/octet-stream`, and a filename over 255 bytes is cut
+  at a UTF-8 boundary, as in §5.5.1.
+- **The values come from the frame.** The saving device fills type, filename,
+  size and hash from the frame it opened, not from a header.
+- **Canonical.** A decoder MUST reject anything but exactly 2048 bytes, an
+  unknown version, any limit above broken, a repeated tag, a length prefix that
+  runs past the end, and any non-zero padding byte.
+- **Revisions.** `meta_rev` starts at 0 and is assigned by the server, which
+  increments it on every accepted edit. An edit seals a new record under the
+  same metadata key with a fresh nonce at the next revision. Binding it means
+  the server cannot replay an older edit as the current one; a reader uses the
+  revision the server reports and MUST NOT try others.
+
+### 7a.6 Reading an item
+
+Given its current epoch `E`, its group key, the chain of links and an item
+record (`item_id`, wrap epoch `W`, `content_id`, content epoch, wrapped item
+keys, sealed metadata, `meta_rev`):
+
+```
+1. If W > E, the client is behind a rekey: catch up as §7 says, or skip.
+2. sk = store_key[E]; for e = E down to W+1: sk = open(link[e]) with sk.
+3. content_key, meta_key = unwrap(wrapped_item_keys) with sk at W.
+4. meta  = decode(open(sealed_meta) with meta_key at meta_rev).
+5. frame = §7a.4 open of the blob, when the user copies or saves the item.
+```
+
+A listing needs only steps 1–4: the blob is fetched when the user asks for it,
+as for history (SPEC §6).
+
+Vectors: [`store-chain.json`](vectors/store-chain.json),
+[`store-item.json`](vectors/store-item.json), and the `store-*` cases in
+[`failure.json`](vectors/failure.json).
 
 ---
 
@@ -458,10 +712,12 @@ Mapping this document onto the group lifecycle in SPEC §3:
 | §3.2 step 5 — joiner is a member | unwrap, install `(epoch, group_key)` | §4.4 |
 | §3.2 joiner-emitted step 1 — joiner offers | generate device keypair, send public key | §3 |
 | §3.2 joiner-emitted step 4 — member accepts | wrap the current group key at the current epoch | §4.2 |
-| §3.3 step 3 — rekey | generate a new group key at epoch+1, wrap once per remaining device | §4.1, §4.2 |
+| §3.3 step 3 — rekey | generate a new group key at epoch+1, wrap once per remaining device, seal the store link | §4.1, §4.2, §7a.2 |
 | §3.3 step 4 — atomic upload | all wrapped keys in one request; the server applies them or none | server-side, Phase 3a |
 | §6 — put an entry | choose the entry id, frame, derive content key, seal | §5.3, §6, §5.1, §5.2 |
 | §6 — read an entry | epoch check, open, decode | §7, §5.4, §6 |
+| §6b — save a store item | seal a container, wrap its keys, seal the record | §7a.4, §7a.3, §7a.5 |
+| §6b — read a store item | walk the links, unwrap, open the record, open the blob | §7a.6 |
 
 Note that the pairing ephemeral keypair of SPEC §3.2 step 1 (transported inside
 the QR payload) and the wrap ephemeral keypair of §4.2 are **different keys with
@@ -492,7 +748,7 @@ is the user reading a name and a fingerprint that catches that, exactly as
 
 ### 9.1 Corpus
 
-[`spec/vectors/`](vectors/) holds 56 vectors in 7 suites, indexed by
+[`spec/vectors/`](vectors/) holds 105 vectors in 10 suites, indexed by
 [`index.json`](vectors/index.json). Every byte string is lowercase hex. A client
 that cannot reproduce every vector does not ship (`docs/internal/conventions.md` §11).
 
@@ -504,12 +760,17 @@ that cannot reproduce every vector does not ship (`docs/internal/conventions.md`
 | `frame.json` | 5 | §6 encoding, including Unicode, binary, filename and empty body |
 | `entry.json` | 5 | §5 end to end |
 | `header.json` | 4 | §5.5 encode and seal end to end, including the content-type fallback and a cut filename |
-| `failure.json` | 28 | inputs every implementation MUST reject |
+| `header-v2.json` | 4 | §5.5.1 the same for version 2, with the body hash and a filename cut at 255 bytes |
+| `store-chain.json` | 4 | §7a.1–7a.2 store keys and links, including epoch `2^64-1`; three of them chain back to epoch 1 |
+| `store-item.json` | 4 | §7a.3–7a.5 end to end — container, wrapped keys, metadata — including every field at its limit |
+| `failure.json` | 65 | inputs every implementation MUST reject |
 
 The failure suite is the important half. Wrong recipient, wrong epoch, wrong
 entry id, wrong group key, tampered ciphertext, tampered nonce, tampered
 ephemeral key, truncation, unknown version, trailing bytes, non-zero `pad_len`,
-empty content type — for each, the only correct outcome is an error. **An
+empty content type, a link opened as the wrong epochs, item keys moved to
+another item, a metadata record replayed as another revision, a repeated tag —
+for each, the only correct outcome is an error. **An
 implementation that returns plaintext for any of these is broken, not lenient.**
 
 `epoch` is emitted both as a JSON number and as `epoch_hex` (its `u64be`
@@ -541,7 +802,7 @@ vector actually fails before writing anything.
 
 [`vectors/verify.mjs`](vectors/verify.mjs) is a reference consumer: an
 independent Node implementation of this document, written against the pinned
-`@noble/*` libraries, that reproduces all 42 vectors. It is not part of any
+`@noble/*` libraries, that reproduces every vector. It is not part of any
 build — it exists to demonstrate that the corpus is genuinely language-neutral
 and to give Phase 6a a worked starting point.
 
@@ -616,6 +877,12 @@ dependency this profile requires is `golang.org/x/crypto/chacha20poly1305`.
   devices before the rekey — not cryptographically.
 - **Compromise of a device.** It holds the group key and can read everything in
   the group until revoked and re-keyed.
+- **Store items saved before a revocation.** The revoked device held their keys
+  (§7a.2). A rekey protects what is saved afterwards; it does not re-encrypt
+  the store. A client that wants the older items out of a stolen device's reach
+  has to save them again, as new items, and delete the old ones.
+- **Losing every device.** The store keys exist only on devices. With none left,
+  the store cannot be read by anyone, including its owner.
 
 ---
 
@@ -638,3 +905,4 @@ cannot be confused on the wire.
 | 1.0 | Initial profile. |
 | 1.1 | §5.3: the entry id bound into the AAD is chosen by the writing client, not assigned by the server, with the form and uniqueness rules a server enforces. No byte layout, derivation or primitive changed, so the profile is still `tpp-crypto-v1`, the version byte is still `0x01` and every vector in `spec/vectors/` is byte-identical — this states who supplies a value the format always had. It lands with the `EntryPutRequest.entry_id` field that makes it constructible. |
 | 1.2 | §8: two rows for joiner-emitted pairing, where the code travels from the device without a group key to a member, and a note that the wrap target may be learned from either side's out-of-band code. The wrap is §4.2 exactly as it stands: no byte layout, domain-separation string, derivation or primitive changed, the profile is still `tpp-crypto-v1`, the version byte is still `0x01`, and every vector in `spec/vectors/` is byte-identical. It lands with the `PairingOffer` message types that make the other direction expressible. |
+| 1.3 | Additions only, for the store (SPEC §6b): §5.5.1 header version 2, §7a store keys, links, item keys and the metadata record, a note in §7, rows in §1, §2.3, §8 and §11.4, and three vector suites. No existing byte layout, domain-separation string, derivation or primitive changed, so the profile is still `tpp-crypto-v1` and the version byte is still `0x01`: the header has carried its own version byte since §5.5 so that it could grow this way, and the new strings name new purposes. Every existing vector is byte-identical except two failure vectors: `header-decode-unknown-version` now uses `0xff`, because `0x02` is a version now, and `header-wrong-length` says "neither 297 nor 553 bytes". A v1.2 reader rejects a v2 header and shows the entry's type as unknown, the behaviour §5.5 already specified. |

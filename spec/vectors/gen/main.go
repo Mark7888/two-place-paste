@@ -165,6 +165,15 @@ type failureVector struct {
 	WrappedKey       string `json:"wrapped_key,omitempty"`
 	Encoded          string `json:"encoded_frame,omitempty"`
 	EncodedHeader    string `json:"encoded_header,omitempty"`
+	StoreKey         string `json:"store_key,omitempty"`
+	Link             string `json:"link,omitempty"`
+	ItemID           string `json:"item_id,omitempty"`
+	WrappedItemKeys  string `json:"wrapped_item_keys,omitempty"`
+	ContentKey       string `json:"content_key,omitempty"`
+	MetaKey          string `json:"meta_key,omitempty"`
+	MetaRev          uint64 `json:"meta_rev,omitempty"`
+	SealedMeta       string `json:"sealed_meta,omitempty"`
+	EncodedMeta      string `json:"encoded_meta,omitempty"`
 }
 
 type manifestSuite struct {

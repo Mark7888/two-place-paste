@@ -10,3 +10,4 @@ export * from './wrap';
 export * from './entry';
 export * from './frame';
 export * from './header';
+export * from './store';

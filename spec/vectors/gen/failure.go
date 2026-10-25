@@ -207,6 +207,12 @@ func buildFailure() ([]byte, int, error) {
 	}
 	vs = append(vs, hf...)
 
+	sf, err := storeFailures()
+	if err != nil {
+		return nil, 0, err
+	}
+	vs = append(vs, sf...)
+
 	for i := range vs {
 		vs[i].Expect = "error"
 		if vs[i].Epoch != 0 {
@@ -283,6 +289,16 @@ func assertFails(v failureVector) error {
 		_, err = OpenHeader(unhex(v.GroupKey), unhex(v.Container), v.Epoch, v.EntryID)
 	case "decode_header":
 		_, err = DecodeHeader(unhex(v.EncodedHeader))
+	case "open_entry_with_key":
+		_, err = OpenEntryWithKey(unhex(v.ContentKey), unhex(v.Container), v.Epoch, v.EntryID)
+	case "open_store_link":
+		_, err = OpenStoreLink(unhex(v.StoreKey), unhex(v.Link), v.Epoch)
+	case "unwrap_item_keys":
+		_, _, err = UnwrapItemKeys(unhex(v.StoreKey), unhex(v.WrappedItemKeys), v.Epoch, v.ItemID)
+	case "open_store_meta":
+		_, err = OpenStoreMeta(unhex(v.MetaKey), unhex(v.SealedMeta), v.ItemID, v.MetaRev)
+	case "decode_store_meta":
+		_, err = DecodeStoreMeta(unhex(v.EncodedMeta))
 	default:
 		return fmt.Errorf("vector %s: unknown operation %q", v.Name, v.Operation)
 	}

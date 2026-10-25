@@ -343,12 +343,30 @@ func OpenEntry(groupKey, container []byte, epoch uint64, entryID string) ([]byte
 	if container[0] != Version {
 		return nil, fmt.Errorf("tppcrypto: open entry: %w", ErrVersion)
 	}
-	nonce := container[1 : 1+NonceSize]
-	key, err := ContentKey(groupKey, nonce, epoch)
+	key, err := ContentKey(groupKey, container[1:1+NonceSize], epoch)
 	if err != nil {
 		return nil, fmt.Errorf("tppcrypto: open entry: %w", err)
 	}
-	aead, err := chacha20poly1305.NewX(key)
+	return OpenEntryWithKey(key, container, epoch, entryID)
+}
+
+// OpenEntryWithKey opens an entry container with its content key instead of
+// the group key (spec §7a.4). A store item is read this way: the reader
+// unwraps the content key from the store, and may no longer hold the group key
+// of the epoch the item was sealed at.
+func OpenEntryWithKey(contentKey, container []byte, epoch uint64, entryID string) ([]byte, error) {
+	if len(contentKey) != ContentKeySize {
+		return nil, fmt.Errorf("tppcrypto: open entry: %w: content key is %d bytes", ErrMalformed, len(contentKey))
+	}
+	if len(container) < EntryOverhead {
+		return nil, fmt.Errorf("tppcrypto: open entry: %w: container is %d bytes, minimum is %d",
+			ErrMalformed, len(container), EntryOverhead)
+	}
+	if container[0] != Version {
+		return nil, fmt.Errorf("tppcrypto: open entry: %w", ErrVersion)
+	}
+	nonce := container[1 : 1+NonceSize]
+	aead, err := chacha20poly1305.NewX(contentKey)
 	if err != nil {
 		return nil, fmt.Errorf("tppcrypto: open entry: %w", err)
 	}
