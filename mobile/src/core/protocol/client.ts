@@ -96,7 +96,9 @@ import {
   sealEntry,
   sealEntryHeader,
   sealEntryHeaderV2,
+  sealStoreLink,
   sha256Sliced,
+  storeKey,
   unwrap,
   wrap,
 } from '../crypto';
@@ -1301,16 +1303,28 @@ export class Client {
       if (done) {
         throw new TppError('invalid', 'this revocation has already been carried out');
       }
+      // The store link below seals the store key of the epoch being
+      // replaced, so this device must hold that epoch's group key. One behind
+      // a rekey it has not picked up would seal the wrong key and break the
+      // chain for every device; it catches up first.
+      if (this.state.epoch !== roster.epoch) {
+        throw new TppError(
+          'epoch-ahead',
+          `this device holds the key of epoch ${this.state.epoch}, the group is at ${roster.epoch}`,
+        );
+      }
       // A brand-new group key at epoch+1 — never a ratchet from the old one,
       // because revocation must be a hard break — wrapped once per remaining
       // device with a fresh ephemeral key each time, and sent in one frame the
-      // relay applies atomically.
+      // relay applies atomically, with the store link into the new epoch
+      // (spec/crypto.md §7a.2). A relay that predates the store ignores it.
       const newKey = generateGroupKey();
       const epoch = roster.epoch + 1n;
       const wrappedKeys: WrappedKey[] = remaining.map((d) => ({
         deviceId: d.id,
         wrappedGroupKey: wrap(newKey, d.publicKey, epoch),
       }));
+      const storeLink = sealStoreLink(storeKey(newKey, epoch), storeKey(this.state.groupKey, roster.epoch), epoch);
 
       const conn = await this.connection();
       const response = await conn.call(
@@ -1321,6 +1335,7 @@ export class Client {
             revokedDeviceId: target.id,
             expectedEpoch: roster.epoch.toString(),
             wrappedKeys,
+            storeLink,
           },
         },
         RekeyResponse,
