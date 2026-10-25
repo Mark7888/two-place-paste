@@ -140,6 +140,15 @@ export interface RekeyRequest {
   expectedEpoch: string;
   /** Exactly one entry per remaining device, including the caller itself. */
   wrappedKeys: WrappedKey[];
+  /**
+   * The store link into the new epoch: the old epoch's store key sealed under
+   * the new one, exactly 49 bytes (/spec/crypto.md §7a.2). It is applied in
+   * the same atomic step as the wrapped keys. A client always sends it, store
+   * or no store. A relay with a store refuses a rekey without it, with
+   * ERROR_CODE_CLIENT_OUTDATED, while the group has store items; a relay that
+   * predates the store ignores it.
+   */
+  storeLink: Uint8Array;
 }
 
 /** RekeyResponse reports the epoch the group now runs at. */
@@ -885,7 +894,7 @@ export const WrappedKey: MessageFns<WrappedKey> = {
 };
 
 function createBaseRekeyRequest(): RekeyRequest {
-  return { revokedDeviceId: "", expectedEpoch: "0", wrappedKeys: [] };
+  return { revokedDeviceId: "", expectedEpoch: "0", wrappedKeys: [], storeLink: new Uint8Array(0) };
 }
 
 export const RekeyRequest: MessageFns<RekeyRequest> = {
@@ -898,6 +907,9 @@ export const RekeyRequest: MessageFns<RekeyRequest> = {
     }
     for (const v of message.wrappedKeys) {
       WrappedKey.encode(v!, writer.uint32(26).fork()).join();
+    }
+    if (message.storeLink.length !== 0) {
+      writer.uint32(34).bytes(message.storeLink);
     }
     return writer;
   },
@@ -939,6 +951,14 @@ export const RekeyRequest: MessageFns<RekeyRequest> = {
             message.wrappedKeys.push(WrappedKey.decode(reader, reader.uint32()));
             continue;
           }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.storeLink = reader.bytes();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -968,6 +988,11 @@ export const RekeyRequest: MessageFns<RekeyRequest> = {
         : globalThis.Array.isArray(object?.wrapped_keys)
         ? object.wrapped_keys.map((e: any) => WrappedKey.fromJSON(e))
         : [],
+      storeLink: isSet(object.storeLink)
+        ? bytesFromBase64(object.storeLink)
+        : isSet(object.store_link)
+        ? bytesFromBase64(object.store_link)
+        : new Uint8Array(0),
     };
   },
 
@@ -982,6 +1007,9 @@ export const RekeyRequest: MessageFns<RekeyRequest> = {
     if (message.wrappedKeys?.length) {
       obj.wrappedKeys = message.wrappedKeys.map((e) => WrappedKey.toJSON(e));
     }
+    if (message.storeLink.length !== 0) {
+      obj.storeLink = base64FromBytes(message.storeLink);
+    }
     return obj;
   },
 
@@ -993,6 +1021,7 @@ export const RekeyRequest: MessageFns<RekeyRequest> = {
     message.revokedDeviceId = object.revokedDeviceId ?? "";
     message.expectedEpoch = object.expectedEpoch ?? "0";
     message.wrappedKeys = object.wrappedKeys?.map((e) => WrappedKey.fromPartial(e)) || [];
+    message.storeLink = object.storeLink ?? new Uint8Array(0);
     return message;
   },
 };

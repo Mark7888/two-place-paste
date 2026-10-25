@@ -117,6 +117,14 @@ message RekeyRequest {
 
   // Exactly one entry per remaining device, including the caller itself.
   repeated WrappedKey wrapped_keys = 3;
+
+  // The store link into the new epoch: the old epoch's store key sealed under
+  // the new one, exactly 49 bytes (/spec/crypto.md §7a.2). It is applied in
+  // the same atomic step as the wrapped keys. A client always sends it, store
+  // or no store. A relay with a store refuses a rekey without it, with
+  // ERROR_CODE_CLIENT_OUTDATED, while the group has store items; a relay that
+  // predates the store ignores it.
+  bytes store_link = 4;
 }
 
 // RekeyResponse reports the epoch the group now runs at.

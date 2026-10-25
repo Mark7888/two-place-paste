@@ -31,6 +31,7 @@ leaves every other message in this package untouched. That is the reason SPEC
 | `tpp/v1/group.proto` | group creation, device roster, rekey (SPEC §3.1, §3.3) |
 | `tpp/v1/pairing.proto` | pairing exchange and the QR/paste payload (SPEC §3.2) |
 | `tpp/v1/entry.proto` | put / latest / history / fetch (SPEC §4.3, §6) |
+| `tpp/v1/store.proto` | the store: limits, list, links, save, fetch, edit, delete (SPEC §4.6, §6b) |
 | `tpp/v1/events.proto` | server-pushed events |
 
 Conventions inside the schema:
@@ -57,7 +58,9 @@ on an unauthenticated connection, and that is already stated in their comments.
 
 **Anything resembling pin, favourite or extend-TTL.** `EntryMeta.expires_at` is
 fixed at write time. The blob garbage collector depends entirely on entry
-lifetimes being immutable (SPEC §4.5, standing prohibition).
+lifetimes being immutable (SPEC §4.5, standing prohibition). The store is not
+an exception: saving an entry to it copies the content into a new item, and
+the entry keeps its own lifetime.
 
 ## Generating
 

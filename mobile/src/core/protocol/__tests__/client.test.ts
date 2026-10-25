@@ -5,7 +5,7 @@
  */
 
 import { fromUTF8, utf8 } from '../../bytes';
-import { HEADER_CONTAINER_SIZE, HEADER_V2_CONTAINER_SIZE } from '../../crypto';
+import { HEADER_CONTAINER_SIZE, HEADER_V2_CONTAINER_SIZE, openStoreLink, storeKey } from '../../crypto';
 import { Client } from '../client';
 import { TppError, describe as describeError } from '../errors';
 import { classifyCode, decodePairingPayload, fingerprint } from '../pairing';
@@ -342,6 +342,36 @@ describe('entries (SPEC §6)', () => {
 });
 
 describe('revocation and rekey (SPEC §3.3, spec/crypto.md §7)', () => {
+  test('a rekey sends the store link that leads back to the old epoch (spec/crypto.md §7a.2)', async () => {
+    const relay = new FakeRelay();
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const phone = await open(relay, new MemoryStore(), 'phone');
+    await pair(laptop, phone);
+    const before = laptop.snapshot().groupKey;
+
+    await (await laptop.prepareRevoke(phone.deviceId)).confirm();
+    const after = laptop.snapshot().groupKey;
+    const link = relay.storeLinks.get(2n);
+    expect(link).toHaveLength(49);
+    expect(openStoreLink(storeKey(after, 2n), link!, 2n)).toEqual(storeKey(before, 1n));
+  });
+
+  test('a device behind a rekey does not seal a store link from its old key', async () => {
+    const relay = new FakeRelay();
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const phone = await open(relay, new MemoryStore(), 'phone');
+    await pair(laptop, phone);
+
+    // Another device re-keyed, and the laptop has not picked its key up yet.
+    relay.epoch = 2n;
+    const plan = await laptop.prepareRevoke(phone.deviceId);
+    await expect(plan.confirm()).rejects.toMatchObject({ kind: 'epoch-ahead' });
+    expect(relay.deviceIds).toHaveLength(2);
+    expect(relay.storeLinks.size).toBe(0);
+  });
+
   test('nothing is revoked until the roster the user was shown is confirmed', async () => {
     const relay = new FakeRelay();
     const laptop = await open(relay, new MemoryStore(), 'laptop');

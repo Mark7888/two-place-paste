@@ -51,6 +51,8 @@ const (
 	ErrorCode_ERROR_CODE_EPOCH_CONFLICT ErrorCode = 7
 	// The ciphertext exceeds the per-entry cap or a storage limit, or is too
 	// large for the single-frame path it was sent or requested on (SPEC §4.3).
+	// For the store: the blob is over max_item_bytes, or over the group's store
+	// limit on its own (SPEC §4.6).
 	ErrorCode_ERROR_CODE_TOO_LARGE ErrorCode = 8
 	// Rate limited. The caller backs off and retries.
 	ErrorCode_ERROR_CODE_RATE_LIMITED ErrorCode = 9
@@ -63,7 +65,23 @@ const (
 	// room, because what remains is held by uploads still in progress. The
 	// caller may retry later. An entry larger than a storage limit on its own
 	// gets ERROR_CODE_TOO_LARGE instead (SPEC §4.3).
+	//
+	// For the store: the item does not fit in the group's store, or the relay's
+	// total store limit, or would pass the item limit. The store never evicts
+	// to make room; StoreLimitsResponse says how much is left (SPEC §4.6).
 	ErrorCode_ERROR_CODE_QUOTA_EXCEEDED ErrorCode = 12
+	// The admin has not turned the store on for this group, or has turned it
+	// off. The items, if any, are kept (SPEC §4.6).
+	ErrorCode_ERROR_CODE_STORE_DISABLED ErrorCode = 13
+	// The request is one this client's version cannot make correctly any more.
+	// A RekeyRequest without store_link, for a group that has store items, gets
+	// this: applying it would leave every item unreadable (SPEC §3.3). The
+	// client tells the user to update the app.
+	ErrorCode_ERROR_CODE_CLIENT_OUTDATED ErrorCode = 14
+	// StoreUpdateMetaRequest.expected_meta_rev is not the item's current
+	// revision: another device edited it first. The caller lists the item
+	// again, shows the user the newer version, and retries from it.
+	ErrorCode_ERROR_CODE_REVISION_CONFLICT ErrorCode = 15
 )
 
 // Enum value maps for ErrorCode.
@@ -82,6 +100,9 @@ var (
 		10: "ERROR_CODE_UNSUPPORTED_MESSAGE",
 		11: "ERROR_CODE_INTERNAL",
 		12: "ERROR_CODE_QUOTA_EXCEEDED",
+		13: "ERROR_CODE_STORE_DISABLED",
+		14: "ERROR_CODE_CLIENT_OUTDATED",
+		15: "ERROR_CODE_REVISION_CONFLICT",
 	}
 	ErrorCode_value = map[string]int32{
 		"ERROR_CODE_UNSPECIFIED":         0,
@@ -97,6 +118,9 @@ var (
 		"ERROR_CODE_UNSUPPORTED_MESSAGE": 10,
 		"ERROR_CODE_INTERNAL":            11,
 		"ERROR_CODE_QUOTA_EXCEEDED":      12,
+		"ERROR_CODE_STORE_DISABLED":      13,
+		"ERROR_CODE_CLIENT_OUTDATED":     14,
+		"ERROR_CODE_REVISION_CONFLICT":   15,
 	}
 )
 
@@ -195,7 +219,7 @@ const file_tpp_v1_error_proto_rawDesc = "" +
 	"\x12tpp/v1/error.proto\x12\x06tpp.v1\"H\n" +
 	"\x05Error\x12%\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x11.tpp.v1.ErrorCodeR\x04code\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage*\x93\x03\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage*\xf4\x03\n" +
 	"\tErrorCode\x12\x1a\n" +
 	"\x16ERROR_CODE_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bERROR_CODE_INVALID_ARGUMENT\x10\x01\x12\x1e\n" +
@@ -210,7 +234,10 @@ const file_tpp_v1_error_proto_rawDesc = "" +
 	"\x1eERROR_CODE_UNSUPPORTED_MESSAGE\x10\n" +
 	"\x12\x17\n" +
 	"\x13ERROR_CODE_INTERNAL\x10\v\x12\x1d\n" +
-	"\x19ERROR_CODE_QUOTA_EXCEEDED\x10\fBHZFgithub.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1b\x06proto3"
+	"\x19ERROR_CODE_QUOTA_EXCEEDED\x10\f\x12\x1d\n" +
+	"\x19ERROR_CODE_STORE_DISABLED\x10\r\x12\x1e\n" +
+	"\x1aERROR_CODE_CLIENT_OUTDATED\x10\x0e\x12 \n" +
+	"\x1cERROR_CODE_REVISION_CONFLICT\x10\x0fBHZFgithub.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1b\x06proto3"
 
 var (
 	file_tpp_v1_error_proto_rawDescOnce sync.Once

@@ -280,6 +280,7 @@ export class FakeRelay {
         this.sockets.get(request.revokedDeviceId)?.drop('revoked');
         this.sockets.delete(request.revokedDeviceId);
         this.epoch += 1n;
+        this.storeLinks.set(this.epoch, request.storeLink);
 
         // Applied all at once, as the real relay does in one transaction.
         for (const key of request.wrappedKeys) {
@@ -407,6 +408,9 @@ export class FakeRelay {
         fail(ErrorCode.ERROR_CODE_UNSUPPORTED_MESSAGE, 'unsupported message');
     }
   }
+
+  /** storeLinks are the store links rekeys sent, by the epoch each leads into. */
+  readonly storeLinks = new Map<bigint, Uint8Array>();
 
   /** limits are what the relay answers EntryLimitsRequest with; null answers as a relay that predates it. */
   limits: EntryLimitsResponse | null = null;

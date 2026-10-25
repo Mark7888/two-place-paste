@@ -507,7 +507,14 @@ type RekeyRequest struct {
 	// request with ERROR_CODE_EPOCH_CONFLICT and changes nothing.
 	ExpectedEpoch uint64 `protobuf:"varint,2,opt,name=expected_epoch,json=expectedEpoch,proto3" json:"expected_epoch,omitempty"`
 	// Exactly one entry per remaining device, including the caller itself.
-	WrappedKeys   []*WrappedKey `protobuf:"bytes,3,rep,name=wrapped_keys,json=wrappedKeys,proto3" json:"wrapped_keys,omitempty"`
+	WrappedKeys []*WrappedKey `protobuf:"bytes,3,rep,name=wrapped_keys,json=wrappedKeys,proto3" json:"wrapped_keys,omitempty"`
+	// The store link into the new epoch: the old epoch's store key sealed under
+	// the new one, exactly 49 bytes (/spec/crypto.md §7a.2). It is applied in
+	// the same atomic step as the wrapped keys. A client always sends it, store
+	// or no store. A relay with a store refuses a rekey without it, with
+	// ERROR_CODE_CLIENT_OUTDATED, while the group has store items; a relay that
+	// predates the store ignores it.
+	StoreLink     []byte `protobuf:"bytes,4,opt,name=store_link,json=storeLink,proto3" json:"store_link,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -559,6 +566,13 @@ func (x *RekeyRequest) GetExpectedEpoch() uint64 {
 func (x *RekeyRequest) GetWrappedKeys() []*WrappedKey {
 	if x != nil {
 		return x.WrappedKeys
+	}
+	return nil
+}
+
+func (x *RekeyRequest) GetStoreLink() []byte {
+	if x != nil {
+		return x.StoreLink
 	}
 	return nil
 }
@@ -641,11 +655,13 @@ const file_tpp_v1_group_proto_rawDesc = "" +
 	"\n" +
 	"WrappedKey\x12\x1b\n" +
 	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12*\n" +
-	"\x11wrapped_group_key\x18\x02 \x01(\fR\x0fwrappedGroupKey\"\x98\x01\n" +
+	"\x11wrapped_group_key\x18\x02 \x01(\fR\x0fwrappedGroupKey\"\xb7\x01\n" +
 	"\fRekeyRequest\x12*\n" +
 	"\x11revoked_device_id\x18\x01 \x01(\tR\x0frevokedDeviceId\x12%\n" +
 	"\x0eexpected_epoch\x18\x02 \x01(\x04R\rexpectedEpoch\x125\n" +
-	"\fwrapped_keys\x18\x03 \x03(\v2\x12.tpp.v1.WrappedKeyR\vwrappedKeys\"%\n" +
+	"\fwrapped_keys\x18\x03 \x03(\v2\x12.tpp.v1.WrappedKeyR\vwrappedKeys\x12\x1d\n" +
+	"\n" +
+	"store_link\x18\x04 \x01(\fR\tstoreLink\"%\n" +
 	"\rRekeyResponse\x12\x14\n" +
 	"\x05epoch\x18\x01 \x01(\x04R\x05epochBHZFgithub.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1b\x06proto3"
 

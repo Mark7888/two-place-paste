@@ -203,11 +203,25 @@ func (c *Client) Revoke(ctx context.Context, deviceID string) (*Revocation, erro
 // The wraps are built against the public keys in Roster: a relay that lied
 // about the roster is caught by the user reading the names, not by this code
 // (/spec/crypto.md §11.4).
+//
+// The same frame carries the store link into the new epoch (§7a.2), so store
+// items stay readable after the rekey. A relay that predates the store
+// ignores it.
 func (r *Revocation) Confirm(ctx context.Context) (Roster, error) {
 	if r.done {
 		return Roster{}, fmt.Errorf("tppclient: this revocation has already been carried out")
 	}
 	c := r.client
+
+	// The link seals the store key of the epoch being replaced, so this
+	// device must hold that epoch's group key. One behind a rekey it has not
+	// picked up would seal the wrong key and break the chain for every
+	// device; it catches up first, as after any epoch conflict.
+	state := c.State()
+	if state.Epoch != r.Roster.Epoch {
+		return Roster{}, fmt.Errorf("tppclient: this device holds the key of epoch %d, the group is at %d: %w",
+			state.Epoch, r.Roster.Epoch, ErrEpochConflict)
+	}
 
 	newKey, err := tppcrypto.GenerateGroupKey()
 	if err != nil {
@@ -223,12 +237,17 @@ func (r *Revocation) Confirm(ctx context.Context) (Roster, error) {
 		}
 		keys = append(keys, &tppv1.WrappedKey{DeviceId: d.ID, WrappedGroupKey: wrapped})
 	}
+	link, err := storeLink(state.GroupKey, newKey, epoch)
+	if err != nil {
+		return Roster{}, err
+	}
 
 	var resp tppv1.RekeyResponse
 	err = c.call(ctx, tppv1.MessageType_MESSAGE_TYPE_REKEY_REQUEST, &tppv1.RekeyRequest{
 		RevokedDeviceId: r.Target.ID,
 		ExpectedEpoch:   r.Roster.Epoch,
 		WrappedKeys:     keys,
+		StoreLink:       link,
 	}, &resp)
 	if err != nil {
 		// ErrEpochConflict here means another device rekeyed first: the caller
@@ -250,6 +269,24 @@ func (r *Revocation) Confirm(ctx context.Context) (Roster, error) {
 
 	remaining := Roster{Epoch: epoch, Devices: r.Remaining}
 	return remaining, nil
+}
+
+// storeLink seals the store key of epoch-1 under the store key of epoch, from
+// the two group keys (/spec/crypto.md §7a.2).
+func storeLink(oldGroupKey, newGroupKey []byte, epoch uint64) ([]byte, error) {
+	oldStore, err := tppcrypto.StoreKey(oldGroupKey, epoch-1)
+	if err != nil {
+		return nil, fmt.Errorf("tppclient: derive the store key of epoch %d: %w", epoch-1, err)
+	}
+	newStore, err := tppcrypto.StoreKey(newGroupKey, epoch)
+	if err != nil {
+		return nil, fmt.Errorf("tppclient: derive the store key of epoch %d: %w", epoch, err)
+	}
+	link, err := tppcrypto.SealStoreLink(newStore, oldStore, epoch)
+	if err != nil {
+		return nil, fmt.Errorf("tppclient: seal the store link into epoch %d: %w", epoch, err)
+	}
+	return link, nil
 }
 
 func msToTime(ms int64) time.Time {

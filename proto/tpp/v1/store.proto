@@ -1,0 +1,231 @@
+// The store: a group's items that do not expire (SPEC §4.6, §6b).
+//
+// Every message here is new with the store. A relay that predates it answers
+// each request with ERROR_CODE_UNSUPPORTED_MESSAGE, which a client shows as
+// "this relay has no store" rather than as a failure. A relay that has one
+// but where the admin has not turned it on for the group answers
+// StoreLimitsRequest with enabled = false and every other store request with
+// ERROR_CODE_STORE_DISABLED.
+//
+// Saving to the store copies: no entry is pinned, moved or given a longer
+// life (SPEC §4.5). What the relay holds for an item is ciphertext and sizes
+// only. Its name, description, tags, content type, filename and content hash
+// are inside sealed_meta, and its keys inside wrapped_item_keys; layouts are
+// pinned by /spec/crypto.md §7a.
+syntax = "proto3";
+
+package tpp.v1;
+
+option go_package = "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1";
+
+// StoreItemMeta is what the relay knows about one store item.
+message StoreItemMeta {
+  // Chosen by the writing client, like an entry id: [A-Za-z0-9_-], 1 to 64
+  // bytes, unique. It is bound into wrapped_item_keys and sealed_meta.
+  string item_id = 1;
+
+  // When the relay committed the item, in milliseconds since the Unix epoch,
+  // UTC. Listings are ordered by it, newest first.
+  int64 saved_at_unix_ms = 2;
+
+  // Length of the item's blob, an entry container (/spec/crypto.md §7a.4).
+  uint64 size = 3;
+
+  // The epoch whose store key wraps wrapped_item_keys (§7a.3). A reader walks
+  // the store links down to it.
+  uint64 wrap_epoch = 4;
+
+  // The two values the blob's associated data binds (§7a.4): the id it was
+  // sealed with and the epoch it was sealed at. For an item uploaded by a
+  // client they are item_id and wrap_epoch.
+  string content_id = 5;
+  uint64 content_epoch = 6;
+
+  // The item's content key and metadata key, wrapped under the store key of
+  // wrap_epoch. Exactly 105 bytes (§7a.3).
+  bytes wrapped_item_keys = 7;
+
+  // The item's metadata record, sealed under its metadata key. Exactly 2089
+  // bytes, whatever it holds (§7a.5).
+  bytes sealed_meta = 8;
+
+  // The revision sealed_meta was sealed as. 0 when the item is saved; the
+  // relay adds 1 for every accepted StoreUpdateMetaRequest.
+  uint64 meta_rev = 9;
+}
+
+// StoreLimitsRequest asks whether the group's store is on, and how full it is.
+// It is answered even when the store is off, so a client can say so.
+message StoreLimitsRequest {}
+
+// StoreLimitsResponse is the state of the caller's group's store. Sizes count
+// what the relay stores: blobs and the fixed per-item records. Chunk and frame
+// sizes are those of EntryLimitsResponse.
+message StoreLimitsResponse {
+  // Whether the admin has turned the store on for this group. When false,
+  // every other store request is refused with ERROR_CODE_STORE_DISABLED and
+  // the rest of this response is zero.
+  bool enabled = 1;
+
+  // The group's store limit, and how much of it is used.
+  uint64 max_bytes = 2;
+  uint64 used_bytes = 3;
+
+  // How much a new item may take right now: the group's room, cut to what is
+  // left of the relay's total store limit when that is smaller.
+  uint64 available_bytes = 4;
+
+  // The group's item limit, and how many items it holds.
+  uint64 max_items = 5;
+  uint64 used_items = 6;
+
+  // The largest blob one item may have.
+  uint64 max_item_bytes = 7;
+}
+
+// StoreListRequest lists the group's items, newest first. It is pulled when
+// the user opens the Store tab, never on connect (SPEC §6b).
+message StoreListRequest {
+  // Maximum number of items to return. Zero means the relay's default.
+  uint32 limit = 1;
+
+  // Opaque: next_cursor from the previous page. Empty starts at the newest.
+  // Unlike history, which pages by time, a cursor never skips an item saved
+  // in the same millisecond as the end of a page: a client needs the whole
+  // list to search it and to spot duplicates.
+  string cursor = 2;
+}
+
+// StoreListResponse returns one page of item metadata. Blobs are fetched with
+// StoreFetchChunkRequest when the user copies or saves an item.
+message StoreListResponse {
+  repeated StoreItemMeta items = 1;
+
+  // Pass as the next request's cursor. Empty when the listing reached the
+  // end.
+  string next_cursor = 2;
+}
+
+// StoreLinksRequest asks for the group's store links (/spec/crypto.md §7a.2).
+message StoreLinksRequest {}
+
+// StoreLink is the previous epoch's store key sealed under the store key of
+// epoch. Exactly 49 bytes.
+message StoreLink {
+  // The newer of the two epochs the link joins. Epoch 1 has no link.
+  uint64 epoch = 1;
+  bytes link = 2;
+}
+
+// StoreLinksResponse returns every link the group has, one per rekey.
+message StoreLinksResponse {
+  // Ordered by epoch, oldest first.
+  repeated StoreLink links = 1;
+}
+
+// StoreUploadBeginRequest starts a chunked upload of an item whose blob is
+// larger than one frame. Room is reserved against the store limits here, so a
+// full store refuses before any chunk is sent; the store never evicts, and a
+// save that does not fit is refused with ERROR_CODE_QUOTA_EXCEEDED.
+//
+// The chunks and an abort use EntryUploadChunkRequest and
+// EntryUploadAbortRequest with the handle this returns, exactly as for an
+// entry. The upload is committed with StorePutRequest.
+message StoreUploadBeginRequest {
+  string item_id = 1;
+  // The epoch the blob is sealed at, which must be the group's current one.
+  // Checked again at commit.
+  uint64 epoch = 2;
+  // The exact blob length: more than one frame, at most max_item_bytes.
+  uint64 size = 3;
+}
+
+// StoreUploadBeginResponse returns the handle for the chunks and the commit.
+message StoreUploadBeginResponse {
+  // Opaque. Valid only for the device that began the upload, under the same
+  // timeouts as an entry upload.
+  string upload_handle = 1;
+  // The size every chunk but the last must have.
+  uint64 chunk_bytes = 2;
+}
+
+// StorePutRequest saves an item: in one frame when its blob fits, or as the
+// commit of a chunked upload. The item exists, and is listed, only once this
+// succeeds.
+message StorePutRequest {
+  string item_id = 1;
+
+  // The epoch the blob is sealed at and the item keys are wrapped at. It must
+  // be the group's current epoch: a rekey between begin and commit ends the
+  // upload with ERROR_CODE_EPOCH_CONFLICT.
+  uint64 epoch = 2;
+
+  // The exact blob length.
+  uint64 size = 3;
+
+  // Exactly 105 bytes (/spec/crypto.md §7a.3).
+  bytes wrapped_item_keys = 4;
+
+  // Exactly 2089 bytes, sealed as revision 0 (§7a.5).
+  bytes sealed_meta = 5;
+
+  oneof body {
+    // The whole blob, when it fits in one frame.
+    bytes ciphertext = 6;
+    // The handle of a chunked upload whose every chunk was acknowledged.
+    // item_id, epoch and size must match what it was begun with.
+    string upload_handle = 7;
+  }
+}
+
+// StorePutResponse returns the saved item.
+message StorePutResponse {
+  StoreItemMeta item = 1;
+}
+
+// StoreFetchChunkRequest reads a range of an item's blob.
+message StoreFetchChunkRequest {
+  string item_id = 1;
+  // Where to start, in bytes; less than the item's size.
+  uint64 offset = 2;
+  // How much to read. Zero, or more than the chunk size, means the chunk
+  // size. The range is cut at the end of the blob.
+  uint64 length = 3;
+}
+
+// StoreFetchChunkResponse returns the range.
+message StoreFetchChunkResponse {
+  // The item's metadata, so the first range also says how many follow.
+  StoreItemMeta item = 1;
+  uint64 offset = 2;
+  bytes data = 3;
+}
+
+// StoreUpdateMetaRequest replaces an item's metadata record: a rename, a new
+// description, new tags. The blob and the keys are untouched.
+message StoreUpdateMetaRequest {
+  string item_id = 1;
+
+  // The revision the caller edited. When the item has moved on — another
+  // device edited it first — the relay refuses with
+  // ERROR_CODE_REVISION_CONFLICT and changes nothing, so no edit is silently
+  // lost.
+  uint64 expected_meta_rev = 2;
+
+  // Exactly 2089 bytes, sealed as revision expected_meta_rev + 1.
+  bytes sealed_meta = 3;
+}
+
+// StoreUpdateMetaResponse returns the item at its new revision.
+message StoreUpdateMetaResponse {
+  StoreItemMeta item = 1;
+}
+
+// StoreDeleteRequest deletes an item for every device of the group. Deleting
+// an item that does not exist is ERROR_CODE_NOT_FOUND.
+message StoreDeleteRequest {
+  string item_id = 1;
+}
+
+// StoreDeleteResponse confirms the delete.
+message StoreDeleteResponse {}
