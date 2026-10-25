@@ -78,6 +78,14 @@ type Relay interface {
 
 	// GetEntry returns one entry by id, decrypted.
 	GetEntry(ctx context.Context, entryID string) (tppclient.Item, error)
+
+	// The store (SPEC §6b).
+	StoreLimits(ctx context.Context) (tppclient.StoreLimits, error)
+	ListStore(ctx context.Context) (tppclient.StoreListing, error)
+	SaveToStore(ctx context.Context, item tppclient.Item, d tppclient.StoreDetails) (tppclient.StoreItem, error)
+	FetchStoreItem(ctx context.Context, it tppclient.StoreItem) (tppclient.Item, error)
+	EditStoreItem(ctx context.Context, it tppclient.StoreItem, d tppclient.StoreDetails) (tppclient.StoreItem, error)
+	DeleteStoreItem(ctx context.Context, itemID string) error
 }
 
 // Offer is a pairing offer this device is showing while it waits for a member

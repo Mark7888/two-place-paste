@@ -111,6 +111,7 @@ type Service struct {
 	auto      autostart.Manager
 	updates   Preferences
 	hub       *hub
+	store     *storeState
 	incoming  chan tppclient.EntryMeta
 	logger    *slog.Logger
 	now       func() time.Time
@@ -215,6 +216,7 @@ func New(opts Options) (*Service, error) {
 		listen:     opts.ListenPort,
 		settings:   opts.Settings,
 		incoming:   make(chan tppclient.EntryMeta, 1),
+		store:      newStoreState(),
 		plans:      map[string]*plan{},
 		offerPlans: map[string]*offerPlan{},
 	}
@@ -275,8 +277,11 @@ func (s *Service) Run(ctx context.Context) {
 // local clipboard exactly as the user left it (SPEC §3.3), and the only thing
 // these handlers do with one is refresh the screen that displays it.
 func (s *Service) ClientHandlers() tppclient.Handlers {
-	return tppclient.Handlers{
+	h := tppclient.Handlers{
 		OnConnected: func() {
+			// Store events sent while this device was away were missed: the
+			// store is listed again when next needed.
+			s.store.invalidate()
 			s.setConnected(true, "")
 			s.hub.publish(localui.Event{Kind: localui.EventConnected})
 			// On its own goroutine: this runs before the client's read loop
@@ -339,6 +344,8 @@ func (s *Service) ClientHandlers() tppclient.Handlers {
 			s.hub.publish(localui.Event{Kind: localui.EventGroupName, Name: name})
 		},
 	}
+	s.storeHandlers(&h)
+	return h
 }
 
 // The two ways a device loses its group, in the words the UI and the tray
@@ -762,8 +769,11 @@ func (s *Service) History(ctx context.Context, q localui.HistoryQuery) (localui.
 		Entries:    make([]localui.EntryView, 0, len(page.Entries)),
 		NextBefore: localui.Optional(page.NextBefore),
 	}
+	s.savedMarks(ctx, relay)
 	for _, m := range page.Entries {
-		out.Entries = append(out.Entries, *s.entryView(m))
+		v := s.entryView(m)
+		v.Saved = s.savedMark(m)
+		out.Entries = append(out.Entries, *v)
 	}
 	return out, nil
 }
@@ -1118,6 +1128,7 @@ func (s *Service) Forget(context.Context) error {
 	s.plans = map[string]*plan{}
 	s.offerPlans = map[string]*offerPlan{}
 	s.mu.Unlock()
+	s.store.clear()
 
 	s.activityChanged()
 	s.logger.Info("this device left its group at the user's request")

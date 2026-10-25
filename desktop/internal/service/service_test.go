@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/http"
@@ -34,6 +35,10 @@ type fakeRelay struct {
 	forgot  bool
 
 	reconnects int
+
+	// store is the relay's store; storeLists counts its listings.
+	store      *fakeStore
+	storeLists int
 
 	// putGate and getGate, when set, hold PutEntry and GetEntry until they
 	// are closed or the call's context ends: a transfer still in flight.
@@ -123,7 +128,10 @@ func (f *fakeRelay) PutEntry(ctx context.Context, item tppclient.Item) (tppclien
 		Epoch:     3,
 		Size:      int64(len(item.Body)),
 		CreatedAt: item.CreatedAt,
-		Header:    &tppclient.EntryHeader{ContentType: item.ContentType, Filename: item.Filename, Size: int64(len(item.Body))},
+		Header: &tppclient.EntryHeader{
+			ContentType: item.ContentType, Filename: item.Filename, Size: int64(len(item.Body)),
+			SHA256: sha256.Sum256(item.Body), HasSHA256: true,
+		},
 	}
 	f.entries = append(f.entries, item)
 	return item.Meta, nil

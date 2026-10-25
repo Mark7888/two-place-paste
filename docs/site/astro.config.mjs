@@ -46,6 +46,7 @@ export default defineConfig({
 						'guides/sync',
 						'guides/tray',
 						'guides/history',
+						'guides/store',
 						'guides/devices',
 						'guides/settings',
 						'guides/troubleshooting',

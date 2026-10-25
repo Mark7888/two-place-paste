@@ -1,0 +1,80 @@
+---
+title: Store
+description: Keep things the group needs again — a password hint, an address, a manual — beyond the 24-hour history.
+---
+
+import { Image } from 'astro:assets';
+import { Aside } from '@astrojs/starlight/components';
+import store from '../../../assets/screenshots/desktop-store.webp';
+import duplicate from '../../../assets/screenshots/desktop-store-duplicate.webp';
+
+The **Store** tab keeps items the group saves on purpose. Unlike the
+[History](/two-place-paste/guides/history/), items do not expire: they stay until someone deletes
+them. Every device in the group sees the same store.
+
+<Image src={store} alt="The Store tab: space used, Save clipboard to store and Add file buttons, a search box, tag filters and four saved items" class="screenshot" />
+
+<Aside>
+	The store is off until the server admin turns it on for your group. Until then the Store tab
+	says so and **Save to store** is not offered. If you run your own server, see
+	[The store](/two-place-paste/self-hosting/admin/#the-store) in the admin guide.
+</Aside>
+
+Like everything else, items are encrypted on your devices. The server cannot read an item's
+content, name, description or tags; it only knows how big each one is.
+
+## Save something
+
+There are three ways to put an item in the store:
+
+- **Save clipboard to store** on the Store tab saves whatever you have copied.
+- **Add file…** on the Store tab saves a file: drop it on the window, or choose it.
+- The store button on a [History](/two-place-paste/guides/history/) entry saves that entry, so it
+  outlives its 24 hours. The entry itself still expires as usual.
+
+Each save asks for a **name** (required), a **description** and **tags**. Type a tag and press
+Enter; the tags already in use are suggested as you type. The counters show the limits: a name up
+to 200 bytes, a description up to 800, and up to 16 tags of 32 bytes each.
+
+### Duplicates
+
+If the store already holds exactly the same content, you are told which item it is before
+anything is saved. **Save anyway** saves it again, for example under a different name; **Back**
+returns to the form.
+
+<Image src={duplicate} alt="The save dialog warning that the store already holds this content as Home wifi, with Back and Save anyway buttons" class="screenshot" />
+
+History entries the store already holds are marked **saved**.
+
+## Find an item
+
+- **Search** matches every word you type against names and descriptions, ignoring case.
+- **Tags** under the search box filter the list; pick several to see only items that carry all of
+  them. Each tag shows how many items carry it.
+- **Sort** by newest, oldest, or name.
+
+Searching happens on your device: the server cannot search what it cannot read.
+
+## Use an item
+
+- **Copy** puts the item on this computer's clipboard, like **Copy** in the History. It is not sent
+  to your other devices as a new clipboard entry.
+- The download button saves the item as a file. A file keeps its own name; text and images are
+  named after the item.
+- The pencil edits the name, description and tags. If another device edited the same item first,
+  your change is not saved: the list shows their version, and you can edit again.
+- The bin deletes the item for every device in the group, after asking. This cannot be undone.
+
+## Space
+
+The bar at the top shows how much of the group's store is used, how many items it holds, and the
+largest item that still fits. When the store is full a save is refused — nothing is removed to
+make room, as the History does. Delete items you no longer need, or ask the server admin for more
+room.
+
+## Items this device cannot open
+
+If an item cannot be decrypted on this device — it was saved with a group key this device has not
+received yet, or it is damaged — it is listed under **Items this device cannot open** with a
+**Delete** button. An item saved before a device was removed from the group stays readable for
+everyone still in it.

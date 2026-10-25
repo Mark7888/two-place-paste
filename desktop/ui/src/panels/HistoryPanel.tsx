@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type EntryPreview, type EntryView, type ServiceEvent } from "../api";
+import { StoreDialog } from "../components/StoreDialog";
 import { bytes, relative, useNow, when } from "../format";
 import { Icon } from "../components/Icon";
 import { PreviewBody, entryIcon } from "../preview";
@@ -36,6 +37,11 @@ export function HistoryPanel({
   const [notice, setNotice] = useState("");
   const [open, setOpen] = useState<string | null>(null);
 
+  // The store, as far as this tab needs it: whether Save to store is offered,
+  // the tags the dialog suggests, and the room left. Null until known.
+  const [store, setStore] = useState<{ tags: string[]; available?: number } | null>(null);
+  const [saving, setSaving] = useState<EntryView | null>(null);
+
   useNow();
 
   // Previews are kept per entry id so reopening a row does not decrypt it
@@ -57,9 +63,22 @@ export function HistoryPanel({
     }
   }, []);
 
+  const loadStore = useCallback(async () => {
+    try {
+      const v = await api.store();
+      setStore(v.enabled ? { tags: v.tags.map((t) => t.tag), available: v.limits?.available_bytes } : null);
+    } catch {
+      // No store is not a reason to fail the history.
+      setStore(null);
+    }
+  }, []);
+
   useEffect(() => {
-    if (inGroup) void load();
-  }, [inGroup, load]);
+    if (inGroup) {
+      void load();
+      void loadStore();
+    }
+  }, [inGroup, load, loadStore]);
 
   // A sync, a rekey or a reconnect all change what the listing should say, so
   // the list follows them instead of waiting for a Refresh press.
@@ -68,6 +87,11 @@ export function HistoryPanel({
     if (["sync", "epoch", "connected", "clipboard"].includes(lastEvent.kind)) {
       void load();
     }
+    // The store changed: the "saved" marks and Save to store follow it.
+    if (lastEvent.kind === "store") {
+      void load();
+      void loadStore();
+    }
     // The relay removed an entry early to stay within its storage limit: it
     // is gone, so it leaves the list now rather than failing when opened.
     if (lastEvent.kind === "evicted" && lastEvent.entry_id) {
@@ -75,7 +99,7 @@ export function HistoryPanel({
       setEntries((prev) => prev?.filter((e) => e.id !== gone) ?? prev);
       setOpen((cur) => (cur === gone ? null : cur));
     }
-  }, [inGroup, lastEvent, load]);
+  }, [inGroup, lastEvent, load, loadStore]);
 
   const copy = async (id: string) => {
     setError("");
@@ -181,6 +205,12 @@ export function HistoryPanel({
                           {describe(e)} · {bytes(e.bytes ?? e.size)}
                           {readable ? "" : " · predates the last re-key"}
                         </span>
+                        {e.saved ? (
+                          <span className="saved-mark" title="The store already holds this">
+                            <Icon name="store" size={13} />
+                            saved
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                     <div className="actions">
@@ -204,6 +234,16 @@ export function HistoryPanel({
                         <span className="muted small" title={e.no_preview}>
                           No preview
                         </span>
+                      ) : null}
+                      {store && readable ? (
+                        <button
+                          className="icon-button"
+                          title="Save to store"
+                          aria-label="Save this entry to the store"
+                          onClick={() => setSaving(e)}
+                        >
+                          <Icon name="store" size={16} />
+                        </button>
                       ) : null}
                       <button
                         className="action small"
@@ -238,6 +278,26 @@ export function HistoryPanel({
               );
             })}
           </div>
+
+          <StoreDialog
+            open={saving !== null}
+            title="Save to store"
+            what={saving ? `${describe(saving)} (${bytes(saving.bytes ?? saving.size)}) from the history` : undefined}
+            initial={{ name: saving?.filename ?? "", description: "", tags: [] }}
+            knownTags={store?.tags ?? []}
+            available={store?.available}
+            onClose={() => setSaving(null)}
+            onSubmit={async (details, allowDuplicate) => {
+              if (!saving) return "";
+              const it = await api.saveToStore({ source: "entry", entry_id: saving.id }, details, allowDuplicate);
+              return `saved “${it.name}” to the store`;
+            }}
+            onDone={(message) => {
+              setSaving(null);
+              setNotice(message);
+              setError("");
+            }}
+          />
 
           {nextBefore ? (
             <div className="row" style={{ marginTop: "0.9rem" }}>

@@ -8,12 +8,15 @@ import history from '../../../assets/screenshots/desktop-history.webp';
 
 The **History** tab lists everything the group wrote in the last 24 hours, newest first.
 
-<Image src={history} alt="The History tab listing text, audio, image and file entries, with an audio entry open in a player" class="screenshot" />
+<Image src={history} alt="The History tab listing text, image and file entries, one of them marked saved to the store" class="screenshot" />
 
 - Each row shows when the entry was written, its type and its size. These come from the entry's
   small encrypted header, so listing History downloads none of the entries themselves.
 - **Preview** downloads and decrypts the entry to show it here, without touching your clipboard.
 - **Copy** downloads and decrypts the entry and puts it on this computer's clipboard.
+- The store button saves the entry to the group's [Store](/two-place-paste/guides/store/), where it
+  does not expire. It appears only when the server admin has turned the store on. Entries the
+  store already holds are marked **saved**.
 - **Refresh** reloads the list.
 
 ## What can be previewed

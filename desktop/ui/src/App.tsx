@@ -4,6 +4,7 @@ import { Icon, type IconName } from "./components/Icon";
 import { bytes } from "./format";
 import { SyncPanel } from "./panels/SyncPanel";
 import { HistoryPanel } from "./panels/HistoryPanel";
+import { StorePanel } from "./panels/StorePanel";
 import { DevicesPanel } from "./panels/DevicesPanel";
 import { PairingPanel } from "./panels/PairingPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
@@ -11,6 +12,7 @@ import { SettingsPanel } from "./panels/SettingsPanel";
 const tabs = [
   { id: "sync", label: "Sync", icon: "sync" },
   { id: "history", label: "History", icon: "history" },
+  { id: "store", label: "Store", icon: "store" },
   { id: "devices", label: "Devices", icon: "devices" },
   { id: "pairing", label: "Pairing", icon: "link" },
   { id: "settings", label: "Settings", icon: "settings" },
@@ -158,7 +160,7 @@ export function App() {
           {transfer ? (
             <div className="transfer" role="status">
               <span>
-                {transfer.direction === "upload" ? "Uploading" : "Downloading"} a large entry —{" "}
+                {transfer.direction === "upload" ? "Uploading" : "Downloading"} a large item —{" "}
                 {bytes(transfer.done ?? 0)} of {bytes(transfer.total ?? 0)}
               </span>
               <progress max={transfer.total} value={transfer.done} />
@@ -196,6 +198,9 @@ export function App() {
               epoch={status?.epoch ?? 0}
               lastEvent={lastEvent}
             />
+          ) : null}
+          {tab === "store" ? (
+            <StorePanel inGroup={status?.in_group ?? false} lastEvent={lastEvent} />
           ) : null}
           {tab === "devices" ? (
             <DevicesPanel inGroup={status?.in_group ?? false} onChanged={refresh} />
