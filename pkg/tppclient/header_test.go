@@ -1,6 +1,7 @@
 package tppclient_test
 
 import (
+	"crypto/sha256"
 	"strings"
 	"testing"
 
@@ -41,7 +42,10 @@ func TestHeaderV2KeepsLongFilenames(t *testing.T) {
 	if len(history.Entries) != 1 {
 		t.Fatalf("GetHistory = %d entries, want 1", len(history.Entries))
 	}
-	want := tppclient.EntryHeader{ContentType: "application/pdf", Filename: name, Size: 5}
+	want := tppclient.EntryHeader{
+		ContentType: "application/pdf", Filename: name, Size: 5,
+		SHA256: sha256.Sum256([]byte("%PDF-")), HasSHA256: true,
+	}
 	if h := history.Entries[0].Header; h == nil || *h != want {
 		t.Errorf("Header = %+v, want %+v", h, want)
 	}

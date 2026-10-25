@@ -3,6 +3,7 @@ package tppclient_test
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"sync"
 	"testing"
@@ -116,8 +117,8 @@ func TestLargeEntries(t *testing.T) {
 		t.Fatalf("GetHistory = %d entries, want 2", len(history.Entries))
 	}
 	wantHeaders := []tppclient.EntryHeader{
-		{ContentType: "text/plain; charset=utf-8", Size: 5},
-		{ContentType: "application/octet-stream", Filename: "big.bin", Size: 25 << 20},
+		{ContentType: "text/plain; charset=utf-8", Size: 5, SHA256: sha256.Sum256([]byte("hello")), HasSHA256: true},
+		{ContentType: "application/octet-stream", Filename: "big.bin", Size: 25 << 20, SHA256: sha256.Sum256(body), HasSHA256: true},
 	}
 	for i, want := range wantHeaders {
 		if h := history.Entries[i].Header; h == nil || *h != want {

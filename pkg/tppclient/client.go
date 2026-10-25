@@ -81,10 +81,25 @@ type Handlers struct {
 	// fetch of it now fails with ErrNotFound.
 	OnEntryEvicted func(entryID string)
 
-	// OnProgress reports a chunked upload or download — an entry larger than
-	// one frame — as each chunk completes. It runs on the goroutine doing
-	// the transfer and must not block.
+	// OnProgress reports a chunked upload or download — an entry or store
+	// item larger than one frame — as each chunk completes. It runs on the
+	// goroutine doing the transfer and must not block.
 	OnProgress func(Progress)
+
+	// OnStoreItemAdded and OnStoreItemUpdated fire when another device of the
+	// group saved or edited a store item, with its metadata opened; a
+	// StoreIndex takes them with Put. An item that does not open is logged
+	// and skipped: the next ListStore reports it.
+	OnStoreItemAdded   func(StoreItem)
+	OnStoreItemUpdated func(StoreItem)
+
+	// OnStoreItemDeleted fires when another device deleted a store item.
+	OnStoreItemDeleted func(itemID string)
+
+	// OnStoreState fires when the server admin turned the group's store on
+	// or off, or it closed to be emptied and opened again. A UI lists the
+	// store again when it opens.
+	OnStoreState func(enabled bool)
 }
 
 // Options configures a Client.
@@ -143,9 +158,12 @@ type Client struct {
 
 	// limits are the relay's entry limits, as stated on limitsConn. A new
 	// connection asks again: the relay it reaches may have been reconfigured.
-	limits      Limits
-	limitsConn  *conn
-	ready       chan struct{} // closed while a connection is live
+	limits     Limits
+	limitsConn *conn
+	ready      chan struct{} // closed while a connection is live
+
+	// storeKeys are the store keys and links of the current group key.
+	storeKeys   *storeKeys
 	invitations []*Invitation
 
 	// kick cuts the supervisor's backoff short. It is buffered so Reconnect
@@ -713,6 +731,38 @@ func (c *Client) onEvent(env *tppv1.Envelope) {
 		}
 		if c.handlers.OnEntryEvicted != nil {
 			c.handlers.OnEntryEvicted(ev.GetEntryId())
+		}
+
+	case tppv1.MessageType_MESSAGE_TYPE_STORE_ITEM_ADDED:
+		var ev tppv1.StoreItemAdded
+		if err := proto.Unmarshal(env.GetPayload(), &ev); err != nil {
+			return
+		}
+		c.onStoreItem(ev.GetItem(), c.handlers.OnStoreItemAdded)
+
+	case tppv1.MessageType_MESSAGE_TYPE_STORE_ITEM_UPDATED:
+		var ev tppv1.StoreItemUpdated
+		if err := proto.Unmarshal(env.GetPayload(), &ev); err != nil {
+			return
+		}
+		c.onStoreItem(ev.GetItem(), c.handlers.OnStoreItemUpdated)
+
+	case tppv1.MessageType_MESSAGE_TYPE_STORE_ITEM_DELETED:
+		var ev tppv1.StoreItemDeleted
+		if err := proto.Unmarshal(env.GetPayload(), &ev); err != nil {
+			return
+		}
+		if c.handlers.OnStoreItemDeleted != nil {
+			c.handlers.OnStoreItemDeleted(ev.GetItemId())
+		}
+
+	case tppv1.MessageType_MESSAGE_TYPE_STORE_STATE_CHANGED:
+		var ev tppv1.StoreStateChanged
+		if err := proto.Unmarshal(env.GetPayload(), &ev); err != nil {
+			return
+		}
+		if c.handlers.OnStoreState != nil {
+			c.handlers.OnStoreState(ev.GetEnabled())
 		}
 
 	case tppv1.MessageType_MESSAGE_TYPE_GROUP_RENAMED:

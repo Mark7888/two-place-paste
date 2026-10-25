@@ -41,8 +41,8 @@ const (
 	MinTransferRate = 128 << 10
 )
 
-// entryCallTimeout is the deadline for one entry request, by what it moves;
-// false for a request that is not an entry request and keeps the caller's.
+// entryCallTimeout is the deadline for one entry or store request, by what
+// it moves; false for any other request, which keeps the caller's.
 func entryCallTimeout(msg proto.Message) (time.Duration, bool) {
 	var n int
 	switch m := msg.(type) {
@@ -55,8 +55,14 @@ func entryCallTimeout(msg proto.Message) (time.Duration, bool) {
 	case *tppv1.EntryFetchRequest:
 		// The response is up to one frame; its size is not known in advance.
 		n = SingleFrameMaxBytes
+	case *tppv1.StorePutRequest:
+		n = len(m.GetCiphertext())
+	case *tppv1.StoreFetchChunkRequest:
+		n = int(min(m.GetLength(), SingleFrameMaxBytes)) //nolint:gosec // capped
 	case *tppv1.EntryLimitsRequest, *tppv1.EntryLatestRequest, *tppv1.EntryHistoryRequest,
-		*tppv1.EntryUploadBeginRequest, *tppv1.EntryUploadAbortRequest:
+		*tppv1.EntryUploadBeginRequest, *tppv1.EntryUploadAbortRequest,
+		*tppv1.StoreLimitsRequest, *tppv1.StoreLinksRequest, *tppv1.StoreListRequest,
+		*tppv1.StoreUploadBeginRequest, *tppv1.StoreUpdateMetaRequest, *tppv1.StoreDeleteRequest:
 	default:
 		return 0, false
 	}

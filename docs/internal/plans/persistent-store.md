@@ -7,7 +7,9 @@ a relay that does (#42). The store's wire schema is in `store.proto`, and both
 clients send the store link with every rekey (#43). The relay side of step 3 —
 records, limits, the admin switch and Purge store, the rekey link check, the
 item messages, background reclaim and the sweep — is in its own PR; the clients
-(steps 4–6) do not use it yet. §9 records the answered questions; §11 keeps the
+(steps 4–6) do not use it yet. The relay side landed in #44. Step 4 — the Go
+client core's store calls, events and StoreIndex — is in its own PR; the store's
+cross-client interop test comes with the TypeScript core in step 6. §9 records the answered questions; §11 keeps the
 server-side copy as a later option.
 **Touches:** `/spec/**` (store section, header v2, vectors), `/proto/**`,
 `/server/**`, `/pkg/tppclient/**`, `/desktop/**`, `/mobile/**`, `/deploy/**`,
