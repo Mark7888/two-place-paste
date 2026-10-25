@@ -53,6 +53,8 @@ export interface EntryView {
   no_preview?: string;
   /** How a previewable entry is drawn. */
   render?: Render;
+  /** The store already holds this entry's content. */
+  saved?: boolean;
 }
 
 /**
@@ -307,13 +309,66 @@ export interface ServiceEvent {
   total?: number;
 }
 
+// The store (SPEC §6b): items the group keeps on purpose, beside its 24-hour
+// history. The service opens them; the relay sees none of this.
+
+export type StoreSort = "newest" | "oldest" | "name" | "name_desc";
+
+export interface StoreDetails {
+  name: string;
+  description: string;
+  tags: string[];
+}
+
+export interface StoreItemView extends StoreDetails {
+  id: string;
+  saved_at: string;
+  kind: "text" | "image" | "file";
+  content_type: string;
+  filename?: string;
+  /** The plaintext size. */
+  bytes: number;
+}
+
+export interface StoreLimitsView {
+  max_bytes: number;
+  used_bytes: number;
+  /** The largest item that still fits. */
+  available_bytes: number;
+  max_items: number;
+  used_items: number;
+  max_item_bytes: number;
+}
+
+export interface StoreView {
+  /** False while the server admin has the store off for this group. */
+  enabled: boolean;
+  limits?: StoreLimitsView;
+  items: StoreItemView[];
+  /** Every item, matching the query or not. */
+  total: number;
+  tags: { tag: string; count: number }[];
+  unreadable: { id: string; saved_at: string; reason: string }[];
+}
+
+/** What a save starts from: the clipboard or a history entry. A file goes
+ *  through api.uploadToStore instead. */
+export type StoreSource = { source: "clipboard" } | { source: "entry"; entry_id: string };
+
+/** The limits /spec/crypto.md §7a.5 puts on what the user types, in bytes of
+ *  UTF-8. */
+export const storeLimits = { name: 200, description: 800, tags: 16, tag: 32 } as const;
+
 export class ApiError extends Error {
   readonly status: number;
+  /** A refused save's duplicates, when the store already holds its content. */
+  readonly duplicates?: StoreItemView[];
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, duplicates?: StoreItemView[]) {
     super(message);
     this.status = status;
     this.name = "ApiError";
+    this.duplicates = duplicates;
   }
 }
 
@@ -342,7 +397,11 @@ function failure(status: number, text: string): ApiError {
     typeof parsed === "object" && parsed !== null && "error" in parsed
       ? String((parsed as { error: unknown }).error)
       : `the service answered ${status}`;
-  return new ApiError(status, message);
+  const duplicates =
+    typeof parsed === "object" && parsed !== null && "duplicates" in parsed
+      ? ((parsed as { duplicates: StoreItemView[] }).duplicates ?? undefined)
+      : undefined;
+  return new ApiError(status, message, duplicates);
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -406,7 +465,51 @@ export const api = {
   // The token goes in a body, never a URL, and is never sent back.
   setUpdateToken: (token: string) => request<UpdateView>("PUT", "/api/update/token", { token }),
   deleteUpdateToken: () => request<UpdateView>("DELETE", "/api/update/token"),
+
+  store: (q: { text?: string; tags?: string[]; sort?: StoreSort } = {}) => {
+    const params = new URLSearchParams();
+    if (q.text) params.set("q", q.text);
+    for (const t of q.tags ?? []) params.append("tag", t);
+    if (q.sort && q.sort !== "newest") params.set("sort", q.sort);
+    const qs = params.toString();
+    return request<StoreView>("GET", `/api/store${qs ? `?${qs}` : ""}`);
+  },
+  saveToStore: (src: StoreSource, details: StoreDetails, allowDuplicate = false) =>
+    request<StoreItemView>("POST", "/api/store/save", {
+      ...src,
+      ...details,
+      allow_duplicate: allowDuplicate,
+    }),
+  uploadToStore: (file: File, details: StoreDetails, allowDuplicate = false) =>
+    upload(file, details, allowDuplicate),
+  editStoreItem: (itemId: string, details: StoreDetails) =>
+    request<StoreItemView>("POST", "/api/store/edit", { item_id: itemId, ...details }),
+  deleteStoreItem: (itemId: string) =>
+    request<Record<string, never>>("POST", "/api/store/delete", { item_id: itemId }),
+  copyStoreItem: (itemId: string) => request<SyncResult>("POST", "/api/store/copy", { item_id: itemId }),
+  // Save as file: the decrypted bytes, for the page to hand to the browser's
+  // own download. A POST, for the same reason as previewEntry.
+  storeItemContent: (itemId: string) =>
+    requestBlob("POST", "/api/store/content", { item_id: itemId }),
 };
+
+/** upload sends a file the user dropped or picked as multipart form data. */
+async function upload(file: File, details: StoreDetails, allowDuplicate: boolean): Promise<StoreItemView> {
+  const form = new FormData();
+  form.append("details", JSON.stringify(details));
+  if (allowDuplicate) form.append("allow_duplicate", "true");
+  form.append("file", file, file.name);
+  const res = await fetch("/api/store/upload", {
+    method: "POST",
+    headers: { [TOKEN_HEADER]: token },
+    body: form,
+    credentials: "omit",
+    cache: "no-store",
+  });
+  const text = await res.text();
+  if (!res.ok) throw failure(res.status, text);
+  return JSON.parse(text) as StoreItemView;
+}
 
 // events opens the push stream. The token goes in the query string because a
 // browser cannot set a header on a WebSocket upgrade; the service checks it,

@@ -9,7 +9,8 @@ records, limits, the admin switch and Purge store, the rekey link check, the
 item messages, background reclaim and the sweep — is in its own PR; the clients
 (steps 4–6) do not use it yet. The relay side landed in #44. Step 4 — the Go
 client core's store calls, events and StoreIndex — is in its own PR; the store's
-cross-client interop test comes with the TypeScript core in step 6. §9 records the answered questions; §11 keeps the
+cross-client interop test comes with the TypeScript core in step 6. The Go core
+landed in #45; step 5, the desktop Store tab, is in its own PR. §9 records the answered questions; §11 keeps the
 server-side copy as a later option.
 **Touches:** `/spec/**` (store section, header v2, vectors), `/proto/**`,
 `/server/**`, `/pkg/tppclient/**`, `/desktop/**`, `/mobile/**`, `/deploy/**`,

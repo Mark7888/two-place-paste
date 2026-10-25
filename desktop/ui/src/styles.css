@@ -727,3 +727,120 @@ button.action.choice .choice-why {
 /* A notice with an action at its end, e.g. Dismiss. */
 .notice .grow { flex: 1; }
 .notice > button { flex: none; align-self: center; }
+
+/* ---- Store ------------------------------------------------------------- */
+
+.store-actions { margin-bottom: 1rem; }
+
+.store-filters { display: flex; gap: 0.5rem; margin-bottom: 0.6rem; }
+.store-filters input { flex: 1 1 auto; min-width: 0; }
+.store-filters select { flex: none; width: auto; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.9rem; }
+.chips.small { margin: 0.35rem 0 0; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  height: 1.6rem;
+  padding: 0 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+button.chip { cursor: pointer; }
+button.chip:hover { color: var(--ink); background: var(--surface-sunken); }
+.chips.small .chip { height: 1.35rem; font-size: 0.75rem; }
+.chip.on { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+.chip .count { color: var(--faint); font-variant-numeric: tabular-nums; }
+.chip button {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.store-item { align-items: flex-start; }
+.store-item > svg { flex: none; margin-top: 0.2rem; color: var(--muted); }
+.store-item .description {
+  color: var(--ink);
+  margin: 0.1rem 0 0.2rem;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.icon-button.danger:hover { color: var(--danger); background: var(--danger-soft); }
+.icon-button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.saved-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  margin-left: 0.4rem;
+  color: var(--ok);
+}
+
+.space-bar { margin-bottom: 1rem; }
+.meter {
+  height: 0.4rem;
+  margin-top: 0.4rem;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+.meter > span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
+.meter.high > span { background: var(--warn); }
+
+.store-form label.field,
+.store-form .field { position: relative; display: flex; flex-direction: column; gap: 0.3rem; }
+.store-form .field > .label { font-weight: 600; font-size: 0.85rem; }
+.counter {
+  align-self: flex-end;
+  color: var(--faint);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.counter.over { color: var(--danger); }
+
+.tag-input {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius, 8px);
+  background: var(--surface);
+}
+.tag-input input[type="text"] {
+  flex: 1 1 8rem;
+  min-width: 6rem;
+  height: 1.7rem;
+  border: 0;
+  padding: 0 0.2rem;
+  background: none;
+  box-shadow: none;
+}
+.tag-input input[type="text"]:focus { outline: none; }
+.tag-input:focus-within { border-color: var(--accent); }
+
+.drop-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 2rem 1rem;
+  border: 2px dashed var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+.drop-zone p { margin: 0; }
+.drop-zone.over { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }

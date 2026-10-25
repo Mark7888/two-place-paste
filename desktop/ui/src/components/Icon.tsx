@@ -28,6 +28,10 @@ export type IconName =
   | "info"
   | "close"
   | "chevron"
+  | "store"
+  | "plus"
+  | "tag"
+  | "edit"
   | "refresh"
   | "text"
   | "image"
@@ -59,6 +63,10 @@ const paths: Record<IconName, string> = {
   audio: "M9 18V5l11-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM20 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z",
   video: "M3 6h12v12H3zM15 10l6-3v10l-6-3",
   trash: "M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3",
+  store: "M3 4h18v4H3zM5 8v12h14V8M10 12h4",
+  plus: "M12 5v14M5 12h14",
+  tag: "M3 12V3h9l9 9-9 9zM7.5 7.5h.01",
+  edit: "M4 20h4L19 9l-4-4L4 16zM14 6l4 4",
 };
 
 export function Icon({
