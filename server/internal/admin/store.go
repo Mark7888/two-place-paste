@@ -144,7 +144,7 @@ func (s *Server) handleSetGroupStore(w http.ResponseWriter, r *http.Request, _ s
 	if !req.Enabled {
 		detail = "turned off"
 		if u, err := s.store.StoreUsage(ctx, id); err == nil {
-			detail += fmt.Sprintf(", %d %s kept (%s)", u.Items, plural(int(u.Items), "item", "items"), humanBytes(u.Bytes))
+			detail += fmt.Sprintf(", %d %s kept (%s)", u.Items, plural(u.Items, "item", "items"), humanBytes(u.Bytes))
 		}
 	}
 	s.audit(r, "group.store", groupLabel(g), detail)
@@ -299,6 +299,6 @@ func (s *Server) handlePurgeGroupStore(w http.ResponseWriter, r *http.Request, _
 		return
 	}
 	s.audit(r, "group.storepurge", groupLabel(g),
-		fmt.Sprintf("%d %s (%s)", before.Items, plural(int(before.Items), "item", "items"), humanBytes(before.Bytes)))
+		fmt.Sprintf("%d %s (%s)", before.Items, plural(before.Items, "item", "items"), humanBytes(before.Bytes)))
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -446,7 +446,7 @@ func (s *Server) deleteGroup(r *http.Request, id string) (string, error) {
 		// the next sweep.
 		s.storeSvc.Kick()
 		if u, err := s.store.StoreUsage(ctx, id); err == nil && u.Items > 0 {
-			detail += fmt.Sprintf(", %d store %s", u.Items, plural(int(u.Items), "item", "items"))
+			detail += fmt.Sprintf(", %d store %s", u.Items, plural(u.Items, "item", "items"))
 		}
 	}
 	if s.purger != nil {
@@ -484,7 +484,9 @@ func isStale(now, last time.Time, after time.Duration) bool {
 	return after > 0 && !last.IsZero() && now.Sub(last) > after
 }
 
-func plural(n int, one, many string) string {
+// plural picks the word for a count. It takes any integer type, so a count
+// read as int64 is never narrowed to int just to choose a word.
+func plural[N ~int | ~int64](n N, one, many string) string {
 	if n == 1 {
 		return one
 	}
