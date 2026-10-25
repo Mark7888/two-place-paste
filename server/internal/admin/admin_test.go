@@ -90,6 +90,17 @@ func newFixtureWithDashboard(t *testing.T, baseURL string, dash admin.Dashboard)
 // server — the transport, the purger, the ledger — before it is built.
 func newFixtureWithOptions(t *testing.T, baseURL string, configure func(*admin.Options)) *fixture {
 	t.Helper()
+	return newFixtureWithStore(t, baseURL, func(o *admin.Options, _ *store.MemoryStore) {
+		if configure != nil {
+			configure(o)
+		}
+	})
+}
+
+// newFixtureWithStore is newFixtureWithOptions for a part that needs the
+// fixture's own store, such as the store service.
+func newFixtureWithStore(t *testing.T, baseURL string, configure func(*admin.Options, *store.MemoryStore)) *fixture {
+	t.Helper()
 
 	st := store.NewMemoryStore()
 	clk := newClock()
@@ -102,7 +113,7 @@ func newFixtureWithOptions(t *testing.T, baseURL string, configure func(*admin.O
 		Assets:        testUI,
 	}
 	if configure != nil {
-		configure(&opts)
+		configure(&opts, st)
 	}
 	a, err := admin.New(st, opts)
 	if err != nil {

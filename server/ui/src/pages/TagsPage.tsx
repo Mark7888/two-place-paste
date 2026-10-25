@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { api, type LimitChange, type Tag, type TagList } from "../api";
+import { api, type Limit, type LimitChange, type Tag, type TagList } from "../api";
 import { useLimitForm } from "../components/LimitFields";
 import { ErrorNotice, Problems } from "../components/Notice";
 import { SmartTable, useTableController, type Column, type DefaultSort } from "../components/SmartTable";
@@ -48,11 +48,36 @@ export function TagsPage() {
         <TagLimitForm
           key={`${t.limit.enabled}-${t.limit.bytes}`}
           tag={t}
+          stored={t.limit}
+          label="Storage limit"
+          placeholder="e.g. 5 GiB"
           action={action}
           onSave={(limit) => change(() => api.setTagLimit(t.name, limit), `Storage limit of “${t.name}” saved.`)}
         />
       ),
     },
+    ...(meta?.has_store
+      ? [
+          {
+            key: "store_limit",
+            header: "Store limit",
+            className: "wide",
+            render: (t: Tag) => (
+              <TagLimitForm
+                key={`${t.store_limit.enabled}-${t.store_limit.bytes}`}
+                tag={t}
+                stored={t.store_limit}
+                label="Store limit"
+                placeholder="e.g. 100 MiB"
+                action={action}
+                onSave={(limit) =>
+                  change(() => api.setTagStoreLimit(t.name, limit), `Store limit of “${t.name}” saved.`)
+                }
+              />
+            ),
+          },
+        ]
+      : []),
     {
       key: "delete",
       header: "Delete",
@@ -108,6 +133,14 @@ export function TagsPage() {
         <p className="hint spaced">
           0 means no per-group limit; the server's total limit ({limitText(meta.total_limit_bytes)}) still applies.
           Unticking keeps the value for later.
+          {meta.has_store && (
+            <>
+              {" "}
+              A store limit works the same way for the groups' stores, in place of the server default (
+              {limitText(meta.default_store_limit_bytes)}), within the total store limit (
+              {limitText(meta.total_store_limit_bytes)}). Whether a group has a store at all is set on its own page.
+            </>
+          )}
         </p>
       )}
     </>
@@ -149,8 +182,22 @@ function CreateTagForm({ action, onCreate }: { action: Action; onCreate: (name: 
   );
 }
 
-function TagLimitForm({ tag, action, onSave }: { tag: Tag; action: Action; onSave: (limit: LimitChange) => void }) {
-  const form = useLimitForm(tag.limit);
+function TagLimitForm({
+  tag,
+  stored,
+  label,
+  placeholder,
+  action,
+  onSave,
+}: {
+  tag: Tag;
+  stored: Limit;
+  label: string;
+  placeholder: string;
+  action: Action;
+  onSave: (limit: LimitChange) => void;
+}) {
+  const form = useLimitForm(stored);
   return (
     <form
       className="limit-form"
@@ -165,8 +212,8 @@ function TagLimitForm({ tag, action, onSave }: { tag: Tag; action: Action; onSav
       <input
         type="text"
         value={form.size}
-        aria-label={`Storage limit for ${tag.name}`}
-        placeholder="e.g. 5 GiB"
+        aria-label={`${label} for ${tag.name}`}
+        placeholder={placeholder}
         onChange={(e) => form.setSize(e.target.value)}
       />
       <button type="submit" className="secondary small" disabled={action.busy}>

@@ -57,6 +57,12 @@ const (
 	// defaults to unlimited: only the operator knows how big the volume or
 	// bucket is.
 	DefaultGroupMax = 1 << 30 // 1 GiB
+
+	// DefaultStoreGroupMax and DefaultStoreGroupItems bound one group's store
+	// (SPEC §4.6). The store is a shelf of things wanted again, not bulk
+	// storage, and it never evicts, so its defaults are small.
+	DefaultStoreGroupMax   = 100 << 20 // 100 MiB
+	DefaultStoreGroupItems = 1000
 )
 
 // Config is the fully resolved server configuration.
@@ -81,6 +87,7 @@ type Config struct {
 	Admin AdminConfig
 	Blob  BlobConfig
 	Entry EntryConfig
+	Store StoreConfig
 }
 
 // RedisConfig addresses the single datastore (SPEC §4.2).
@@ -210,6 +217,26 @@ type EntryConfig struct {
 	UploadTTL time.Duration
 }
 
+// StoreConfig bounds the store: a group's items that do not expire
+// (SPEC §4.6). Sizes count blobs and the fixed per-item records. The store
+// never evicts; a save that does not fit is refused.
+type StoreConfig struct {
+	// MaxTotalBytes caps every group's store together. Zero is unlimited.
+	MaxTotalBytes int64
+
+	// MaxGroupBytes is the default limit of one group's store. A tag or the
+	// group itself can override it on the admin screens. Zero is unlimited.
+	MaxGroupBytes int64
+
+	// MaxItemBytes is the largest blob one item may have. It defaults to the
+	// per-entry cap, so anything that fits in history can be saved.
+	MaxItemBytes int64
+
+	// MaxGroupItems caps how many items one group holds. It bounds the Redis
+	// memory the records take and the list a client downloads to search.
+	MaxGroupItems int
+}
+
 // Options controls Load.
 type Options struct {
 	// DotenvPath is the .env file to read. Defaults to ".env". A missing file
@@ -270,6 +297,15 @@ func Load(opts Options) (*Config, error) {
 			ChunkBytes:     r.byteSize("TPP_ENTRY_CHUNK_BYTES", DefaultChunk),
 			UploadTTL:      r.duration("TPP_UPLOAD_SESSION_TTL", DefaultUploadTTL),
 		},
+		Store: StoreConfig{
+			MaxTotalBytes: r.byteSize("TPP_STORE_MAX_TOTAL_BYTES", 0),
+			MaxGroupBytes: r.byteSize("TPP_STORE_MAX_GROUP_BYTES", DefaultStoreGroupMax),
+			MaxItemBytes:  r.byteSize("TPP_STORE_MAX_ITEM_BYTES", 0),
+			MaxGroupItems: r.intVal("TPP_STORE_MAX_GROUP_ITEMS", DefaultStoreGroupItems),
+		},
+	}
+	if cfg.Store.MaxItemBytes == 0 {
+		cfg.Store.MaxItemBytes = cfg.Entry.MaxBytes
 	}
 
 	if err := errors.Join(append(r.errs, cfg.Validate())...); err != nil {
@@ -380,6 +416,24 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Errorf("TPP_ENTRY_CHUNK_BYTES must be between %d and %d bytes for the %s backend, got %d",
 			minChunk, int64(SingleFrameMaxBytes), c.Blob.Backend, c.Entry.ChunkBytes))
 	}
+	for _, lim := range []struct {
+		key string
+		v   int64
+	}{
+		{"TPP_STORE_MAX_TOTAL_BYTES", c.Store.MaxTotalBytes},
+		{"TPP_STORE_MAX_GROUP_BYTES", c.Store.MaxGroupBytes},
+	} {
+		if lim.v < 0 {
+			errs = append(errs, fmt.Errorf("%s must not be negative, got %d", lim.key, lim.v))
+		}
+	}
+	if c.Store.MaxItemBytes <= 0 {
+		errs = append(errs, fmt.Errorf("TPP_STORE_MAX_ITEM_BYTES must be positive, got %d", c.Store.MaxItemBytes))
+	}
+	if c.Store.MaxGroupItems < 1 {
+		errs = append(errs, fmt.Errorf("TPP_STORE_MAX_GROUP_ITEMS must be at least 1, got %d", c.Store.MaxGroupItems))
+	}
+
 	// An idle upload is abandoned after this; the blob sweep then cleans up
 	// after crashed ones at blob.StaleUploadAge (2 h), which must stay longer.
 	if c.Entry.UploadTTL < time.Minute || c.Entry.UploadTTL > time.Hour {

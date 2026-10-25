@@ -312,3 +312,66 @@ func TestSettingsAndAudit(t *testing.T) {
 		}
 	})
 }
+
+// TestGroupStoreSettings: a group's store is off until turned on, and its
+// switch and limit, and a tag's store limit, are kept apart from the blob
+// limits (SPEC §4.6).
+func TestGroupStoreSettings(t *testing.T) {
+	t.Parallel()
+
+	forEachStore(t, func(t *testing.T, s store.Store) {
+		ctx := context.Background()
+		tag := uniqueName(t, "store")
+		if _, err := s.CreateTag(ctx, tag); err != nil {
+			t.Fatalf("CreateTag() error = %v", err)
+		}
+		g, _ := mustGroup(ctx, t, s, store.NewToken{Name: "g", Tag: tag})
+		if g.StoreEnabled || g.StoreLimit != (store.LimitOverride{}) {
+			t.Errorf("new group store = %v, %+v; want off, no override", g.StoreEnabled, g.StoreLimit)
+		}
+
+		limit := store.LimitOverride{Bytes: 5 << 20, Enabled: true}
+		if err := s.SetGroupStore(ctx, g.ID, true); err != nil {
+			t.Fatalf("SetGroupStore() error = %v", err)
+		}
+		if err := s.SetGroupStoreLimit(ctx, g.ID, limit); err != nil {
+			t.Fatalf("SetGroupStoreLimit() error = %v", err)
+		}
+		tagLimit := store.LimitOverride{Bytes: 7 << 20, Enabled: true}
+		if err := s.SetTagStoreLimit(ctx, tag, tagLimit); err != nil {
+			t.Fatalf("SetTagStoreLimit() error = %v", err)
+		}
+
+		got, err := s.GetGroup(ctx, g.ID)
+		if err != nil {
+			t.Fatalf("GetGroup() error = %v", err)
+		}
+		if !got.StoreEnabled || got.StoreLimit != limit || got.Limit != (store.LimitOverride{}) {
+			t.Errorf("GetGroup() store = %v, %+v, blob limit %+v; want on, %+v, none", got.StoreEnabled, got.StoreLimit, got.Limit, limit)
+		}
+		gotTag, err := s.GetTag(ctx, tag)
+		if err != nil {
+			t.Fatalf("GetTag() error = %v", err)
+		}
+		if gotTag.StoreLimit != tagLimit || gotTag.Limit != (store.LimitOverride{}) {
+			t.Errorf("GetTag() store limit = %+v, blob limit %+v; want %+v, none", gotTag.StoreLimit, gotTag.Limit, tagLimit)
+		}
+
+		if err := s.SetGroupStore(ctx, g.ID, false); err != nil {
+			t.Fatalf("SetGroupStore(off) error = %v", err)
+		}
+		if got, _ := s.GetGroup(ctx, g.ID); got.StoreEnabled || got.StoreLimit != limit {
+			t.Errorf("after turning it off, store = %v, %+v; want off with the limit kept", got.StoreEnabled, got.StoreLimit)
+		}
+
+		for name, err := range map[string]error{
+			"set store":       s.SetGroupStore(ctx, "missing", true),
+			"set store limit": s.SetGroupStoreLimit(ctx, "missing", limit),
+			"set tag limit":   s.SetTagStoreLimit(ctx, uniqueName(t, "missing"), limit),
+		} {
+			if !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("%s on a missing record error = %v, want %v", name, err, store.ErrNotFound)
+			}
+		}
+	})
+}

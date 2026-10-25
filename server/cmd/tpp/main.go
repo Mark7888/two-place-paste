@@ -34,6 +34,7 @@ import (
 	"github.com/Mark7888/two-place-paste/server/internal/config"
 	"github.com/Mark7888/two-place-paste/server/internal/entries"
 	"github.com/Mark7888/two-place-paste/server/internal/httpapi"
+	"github.com/Mark7888/two-place-paste/server/internal/items"
 	"github.com/Mark7888/two-place-paste/server/internal/pairlink"
 	"github.com/Mark7888/two-place-paste/server/internal/quota"
 	"github.com/Mark7888/two-place-paste/server/internal/sourcelink"
@@ -176,9 +177,23 @@ func serve(args []string) error {
 			return nil
 		})
 
+	// The store (SPEC §4.6): items that do not expire, off for every group
+	// until the admin turns it on.
+	storeSvc := items.New(items.Options{
+		Registry: persistent,
+		Config: items.Config{
+			MaxTotalBytes: cfg.Store.MaxTotalBytes,
+			MaxGroupBytes: cfg.Store.MaxGroupBytes,
+			MaxItemBytes:  cfg.Store.MaxItemBytes,
+			MaxGroupItems: cfg.Store.MaxGroupItems,
+		},
+		Logger: logger,
+	})
+
 	wsSrv = ws.New(persistent, entrySvc, ws.Options{
 		Logger:     logger,
 		PairingTTL: config.PairingTokenTTL,
+		Items:      storeSvc,
 	})
 	adminSrv, err := admin.New(persistent, admin.Options{
 		PublicBaseURL: cfg.PublicBaseURL,
@@ -189,6 +204,7 @@ func serve(args []string) error {
 		Live:          wsSrv,
 		Purger:        entrySvc,
 		Limits:        ledger,
+		Store:         storeSvc,
 		Sweep:         sweeper.Trigger,
 		Redis:         rdb,
 		Version:       buildVersion(),
@@ -257,7 +273,9 @@ func serve(args []string) error {
 			slog.Int64("entry_max_bytes", cfg.Entry.MaxBytes),
 			slog.Int64("entry_chunk_bytes", cfg.Entry.ChunkBytes),
 			slog.Int64("blob_max_total_bytes", cfg.Blob.MaxTotalBytes),
-			slog.Int64("blob_max_group_bytes", cfg.Blob.MaxGroupBytes))
+			slog.Int64("blob_max_group_bytes", cfg.Blob.MaxGroupBytes),
+			slog.Int64("store_max_group_bytes", cfg.Store.MaxGroupBytes),
+			slog.Int64("store_max_item_bytes", cfg.Store.MaxItemBytes))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- fmt.Errorf("http server: %w", err)
 			return

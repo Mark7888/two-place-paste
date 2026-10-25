@@ -73,6 +73,9 @@ func (s *Server) dispatch(ctx context.Context, c *conn, env *tppv1.Envelope) ([]
 	case tppv1.MessageType_MESSAGE_TYPE_ENTRY_FETCH_CHUNK_REQUEST:
 		return s.handleEntryFetchChunk(ctx, env, groupID)
 	default:
+		if frame, ok, err := s.storeHandler(ctx, env, deviceID, groupID); ok {
+			return frame, err
+		}
 		// An unknown type is answered, never met with a closed socket
 		// (SPEC §5.1).
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_UNSUPPORTED_MESSAGE,

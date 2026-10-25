@@ -191,6 +191,9 @@ type groupDetailJSON struct {
 	// Tags are the tags the group can be put under.
 	Tags []string `json:"tags"`
 
+	// Store is the group's store, or nil when the relay has none.
+	Store *groupStoreJSON `json:"store"`
+
 	CanPurge bool `json:"can_purge"`
 
 	Problems []string `json:"problems"`
@@ -232,6 +235,7 @@ func (s *Server) handleGroup(w http.ResponseWriter, r *http.Request, _ session) 
 		b := t.Limit.Bytes
 		v.TagLimitBytes = &b
 	}
+	v.Store = s.groupStore(ctx, g, tags, probs)
 	for name := range tags {
 		v.Tags = append(v.Tags, name)
 	}

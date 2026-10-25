@@ -230,6 +230,9 @@ func (s *RedisStore) GetGroup(ctx context.Context, groupID string) (Group, error
 		Name:      fields["name"],
 		Tag:       fields["tag"],
 		Limit:     limitFromFields(fields),
+
+		StoreEnabled: fields["store_on"] == "1",
+		StoreLimit:   storeLimitFromFields(fields),
 	}
 	if g.Name == "" {
 		// A group from before names existed: it reads as the token that
@@ -254,6 +257,22 @@ func limitArgs(l LimitOverride) []any {
 		on = "1"
 	}
 	return []any{"limit_bytes", strconv.FormatInt(max(l.Bytes, 0), 10), "limit_on", on}
+}
+
+// storeLimitFromFields and storeLimitArgs are limitFromFields and limitArgs
+// for the store limit, which a group and a tag carry beside their blob limit.
+// A record from before the store has neither field and reads as no override.
+func storeLimitFromFields(fields map[string]string) LimitOverride {
+	n, _ := strconv.ParseInt(fields["store_limit_bytes"], 10, 64)
+	return LimitOverride{Bytes: max(n, 0), Enabled: fields["store_limit_on"] == "1"}
+}
+
+func storeLimitArgs(l LimitOverride) []any {
+	on := "0"
+	if l.Enabled {
+		on = "1"
+	}
+	return []any{"store_limit_bytes", strconv.FormatInt(max(l.Bytes, 0), 10), "store_limit_on", on}
 }
 
 // AddDevice implements Store.
@@ -697,6 +716,26 @@ func (s *RedisStore) SetGroupLimit(ctx context.Context, groupID string, limit Li
 	return nil
 }
 
+// SetGroupStore implements Store.
+func (s *RedisStore) SetGroupStore(ctx context.Context, groupID string, enabled bool) error {
+	on := "0"
+	if enabled {
+		on = "1"
+	}
+	if err := s.setIfExists(ctx, groupKey(groupID), "store_on", on); err != nil {
+		return fmt.Errorf("set store of group %s: %w", groupID, err)
+	}
+	return nil
+}
+
+// SetGroupStoreLimit implements Store.
+func (s *RedisStore) SetGroupStoreLimit(ctx context.Context, groupID string, limit LimitOverride) error {
+	if err := s.setIfExists(ctx, groupKey(groupID), storeLimitArgs(limit)...); err != nil {
+		return fmt.Errorf("set store limit of group %s: %w", groupID, err)
+	}
+	return nil
+}
+
 // DeleteGroup implements Store.
 func (s *RedisStore) DeleteGroup(ctx context.Context, groupID string) (DeletedGroup, error) {
 	group, err := s.GetGroup(ctx, groupID)
@@ -771,7 +810,12 @@ func (s *RedisStore) GetTag(ctx context.Context, name string) (Tag, error) {
 	if len(fields) == 0 {
 		return Tag{}, ErrNotFound
 	}
-	return Tag{Name: name, Limit: limitFromFields(fields), CreatedAt: msTime(fields["created_at"])}, nil
+	return Tag{
+		Name:       name,
+		Limit:      limitFromFields(fields),
+		CreatedAt:  msTime(fields["created_at"]),
+		StoreLimit: storeLimitFromFields(fields),
+	}, nil
 }
 
 // CreateTag implements Store.
@@ -799,6 +843,14 @@ func (s *RedisStore) CreateTag(ctx context.Context, name string) (Tag, error) {
 func (s *RedisStore) SetTagLimit(ctx context.Context, name string, limit LimitOverride) error {
 	if err := s.setIfExists(ctx, tagKey(name), limitArgs(limit)...); err != nil {
 		return fmt.Errorf("set storage limit of tag: %w", err)
+	}
+	return nil
+}
+
+// SetTagStoreLimit implements Store.
+func (s *RedisStore) SetTagStoreLimit(ctx context.Context, name string, limit LimitOverride) error {
+	if err := s.setIfExists(ctx, tagKey(name), storeLimitArgs(limit)...); err != nil {
+		return fmt.Errorf("set store limit of tag %s: %w", name, err)
 	}
 	return nil
 }

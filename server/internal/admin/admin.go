@@ -76,16 +76,23 @@ type Store interface {
 	RenameGroup(ctx context.Context, groupID, name string) error
 	SetGroupTag(ctx context.Context, groupID, tag string) error
 	SetGroupLimit(ctx context.Context, groupID string, limit store.LimitOverride) error
+	SetGroupStore(ctx context.Context, groupID string, enabled bool) error
+	SetGroupStoreLimit(ctx context.Context, groupID string, limit store.LimitOverride) error
 	DeleteGroup(ctx context.Context, groupID string) (store.DeletedGroup, error)
 	ListTags(ctx context.Context) ([]store.Tag, error)
 	GetTag(ctx context.Context, name string) (store.Tag, error)
 	CreateTag(ctx context.Context, name string) (store.Tag, error)
 	SetTagLimit(ctx context.Context, name string, limit store.LimitOverride) error
+	SetTagStoreLimit(ctx context.Context, name string, limit store.LimitOverride) error
 	DeleteTag(ctx context.Context, name string) error
 	GetSettings(ctx context.Context) (store.Settings, error)
 	PutSettings(ctx context.Context, s store.Settings) error
 	AppendAudit(ctx context.Context, e store.AuditEntry) error
 	ListAudit(ctx context.Context, limit int) ([]store.AuditEntry, error)
+
+	// The store's usage (SPEC §4.6): sizes and counts only.
+	StoreUsage(ctx context.Context, groupID string) (store.ItemUsage, error)
+	TotalStoreUsage(ctx context.Context) (store.ItemUsage, error)
 }
 
 // Live is the transport, as far as the admin screens need it: who is online,
@@ -197,6 +204,10 @@ type Options struct {
 	// overrides are stored but change nothing.
 	Limits GroupLimits
 
+	// Store is the store (SPEC §4.6). Without it the screens have no store
+	// section and its endpoints answer 501.
+	Store StoreService
+
 	// Sweep asks for a blob sweep now and reports whether one was queued.
 	// Without it the dashboard has no "Sweep now" button.
 	Sweep func() bool
@@ -276,6 +287,7 @@ type Server struct {
 	live      Live
 	purger    Purger
 	limits    GroupLimits
+	storeSvc  StoreService
 	sweep     func() bool
 	redis     RedisInfo
 	version   string
@@ -345,6 +357,7 @@ func New(st Store, opts Options) (*Server, error) {
 		live:          opts.Live,
 		purger:        opts.Purger,
 		limits:        opts.Limits,
+		storeSvc:      opts.Store,
 		sweep:         opts.Sweep,
 		redis:         opts.Redis,
 		version:       opts.Version,

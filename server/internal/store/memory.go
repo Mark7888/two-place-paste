@@ -33,6 +33,10 @@ type MemoryStore struct {
 	tombstones map[string]time.Time
 	settings   *Settings
 	audit      []AuditEntry
+
+	// The store's records (items_memory.go).
+	storeUsage map[string]ItemUsage
+	storeTotal ItemUsage
 }
 
 // NewMemoryStore returns an empty in-memory Store.
@@ -49,6 +53,8 @@ func NewMemoryStore() *MemoryStore {
 
 		tags:       make(map[string]Tag),
 		tombstones: make(map[string]time.Time),
+
+		storeUsage: make(map[string]ItemUsage),
 	}
 }
 
@@ -562,6 +568,35 @@ func (m *MemoryStore) SetGroupLimit(_ context.Context, groupID string, limit Lim
 	return nil
 }
 
+// SetGroupStore implements Store.
+func (m *MemoryStore) SetGroupStore(_ context.Context, groupID string, enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	g, ok := m.groups[groupID]
+	if !ok {
+		return ErrNotFound
+	}
+	g.StoreEnabled = enabled
+	m.groups[groupID] = g
+	return nil
+}
+
+// SetGroupStoreLimit implements Store.
+func (m *MemoryStore) SetGroupStoreLimit(_ context.Context, groupID string, limit LimitOverride) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	g, ok := m.groups[groupID]
+	if !ok {
+		return ErrNotFound
+	}
+	limit.Bytes = max(limit.Bytes, 0)
+	g.StoreLimit = limit
+	m.groups[groupID] = g
+	return nil
+}
+
 // DeleteGroup implements Store.
 func (m *MemoryStore) DeleteGroup(_ context.Context, groupID string) (DeletedGroup, error) {
 	m.mu.Lock()
@@ -652,6 +687,21 @@ func (m *MemoryStore) SetTagLimit(_ context.Context, name string, limit LimitOve
 	}
 	limit.Bytes = max(limit.Bytes, 0)
 	t.Limit = limit
+	m.tags[name] = t
+	return nil
+}
+
+// SetTagStoreLimit implements Store.
+func (m *MemoryStore) SetTagStoreLimit(_ context.Context, name string, limit LimitOverride) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	t, ok := m.tags[name]
+	if !ok {
+		return ErrNotFound
+	}
+	limit.Bytes = max(limit.Bytes, 0)
+	t.StoreLimit = limit
 	m.tags[name] = t
 	return nil
 }

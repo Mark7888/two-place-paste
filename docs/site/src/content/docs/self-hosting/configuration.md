@@ -78,3 +78,18 @@ These are sizes of **ciphertext**; the relay never knows the plaintext size.
 | `TPP_ENTRY_MAX_BYTES` | `50MiB` | Hard cap per entry. |
 | `TPP_ENTRY_CHUNK_BYTES` | `8MiB` | Chunk size for entries over 10 MiB. At most 10 MiB; with S3 at least 5 MiB. |
 | `TPP_UPLOAD_SESSION_TTL` | `10m` | How long an unfinished chunked upload may sit idle (1m–1h). |
+
+## Store limits
+
+The store keeps items a group saves on purpose, beside its 24-hour history. It is **off for
+every group** until you turn it on from the group's page in the [admin](/two-place-paste/self-hosting/admin/#the-store).
+Its limits are separate from the blob limits above, and **the store never evicts**: a save that
+does not fit is refused, and the app says how much room is left. Sizes count each item's
+ciphertext plus about 2 KiB of fixed record.
+
+| Variable | Default | Description |
+|---|---|---|
+| `TPP_STORE_MAX_TOTAL_BYTES` | `0` (unlimited) | Every group's store together. |
+| `TPP_STORE_MAX_GROUP_BYTES` | `100MiB` | One group's store, unless its tag or the group itself overrides it. `0` is unlimited. |
+| `TPP_STORE_MAX_ITEM_BYTES` | `TPP_ENTRY_MAX_BYTES` | The largest item, so anything that fits in history can be saved. |
+| `TPP_STORE_MAX_GROUP_ITEMS` | `1000` | Items per group. Each one is a record of about 2 KiB in Redis. |
