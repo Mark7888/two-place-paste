@@ -117,6 +117,11 @@ type EntryView struct {
 	// clipboard's word for it: a song is a file when copied, and audio when
 	// played.
 	Render string `json:"render,omitempty"`
+
+	// Saved says the store already holds this entry's content, by the hash
+	// in its header. False when unknown: the header has no hash, or the
+	// store has not been listed yet.
+	Saved bool `json:"saved,omitempty"`
 }
 
 // Optional reports a timestamp that may not exist. A zero time.Time marshals
@@ -387,6 +392,12 @@ const (
 	// EventGroupName says the group's display name was learned or changed;
 	// Name carries it.
 	EventGroupName = "group_name"
+
+	// EventStore says the store changed: an item was saved, edited or
+	// deleted, here or on another device, or the admin turned the store on
+	// or off. A Store tab lists it again; a history view refreshes its
+	// "saved" marks.
+	EventStore = "store"
 )
 
 // DownloadProgress is how far an update download has got, in bytes. Total is

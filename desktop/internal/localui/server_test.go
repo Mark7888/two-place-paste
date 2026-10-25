@@ -192,7 +192,7 @@ func (s *stubAPI) Subscribe() (<-chan Event, func()) {
 func newTestServer(t *testing.T) (*Server, *stubAPI) {
 	t.Helper()
 	api := newStubAPI()
-	srv, err := Listen(context.Background(), Options{API: api, Updates: api, Port: 0, Token: "test-token"})
+	srv, err := Listen(context.Background(), Options{API: api, Updates: api, Store: api, Port: 0, Token: "test-token"})
 	if err != nil {
 		t.Fatalf("Listen() error = %v", err)
 	}
@@ -238,6 +238,13 @@ func TestOriginIsValidatedOnEveryRequest(t *testing.T) {
 		{"POST", "/api/update/rollback", `{}`},
 		{"PUT", "/api/update/token", `{"token":"github_pat_x"}`},
 		{"DELETE", "/api/update/token", ""},
+		{"GET", "/api/store", ""},
+		{"POST", "/api/store/save", `{"source":"clipboard","name":"x"}`},
+		{"POST", "/api/store/upload", ""},
+		{"POST", "/api/store/edit", `{"item_id":"i1","name":"x"}`},
+		{"POST", "/api/store/delete", `{"item_id":"i1"}`},
+		{"POST", "/api/store/copy", `{"item_id":"i1"}`},
+		{"POST", "/api/store/content", `{"item_id":"i1"}`},
 		{"GET", "/api/events", ""},
 		{"GET", "/app", ""},
 		{"GET", "/index.html", ""},

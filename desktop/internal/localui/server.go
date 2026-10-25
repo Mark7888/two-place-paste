@@ -21,6 +21,10 @@ type Options struct {
 	// routes answer 501.
 	Updates UpdateAPI
 
+	// Store is the group's store. Nil means this build has none, and the
+	// store routes answer 501.
+	Store StoreAPI
+
 	// Port is the TCP port on 127.0.0.1 to bind. Zero lets the operating
 	// system choose, which is what tests want and no product should ship.
 	Port int
@@ -42,6 +46,7 @@ type Options struct {
 type Server struct {
 	api      API
 	updates  UpdateAPI
+	store    StoreAPI
 	token    string
 	port     int
 	origins  []string
@@ -94,6 +99,7 @@ func Listen(ctx context.Context, opts Options) (*Server, error) {
 	s := &Server{
 		api:      opts.API,
 		updates:  opts.Updates,
+		store:    opts.Store,
 		token:    token,
 		port:     port,
 		origins:  allowedOrigins(port),
@@ -203,6 +209,13 @@ func (s *Server) routes() http.Handler {
 	api("POST /api/update/rollback", s.handleRollbackUpdate)
 	api("PUT /api/update/token", s.handleSetUpdateToken)
 	api("DELETE /api/update/token", s.handleDeleteUpdateToken)
+	api("GET /api/store", s.handleStore)
+	api("POST /api/store/save", s.handleStoreSave)
+	api("POST /api/store/upload", s.handleStoreUpload)
+	api("POST /api/store/edit", s.handleStoreEdit)
+	api("POST /api/store/delete", s.handleStoreDelete)
+	api("POST /api/store/copy", s.handleStoreCopy)
+	api("POST /api/store/content", s.handleStoreContent)
 
 	// The event stream is a WebSocket, and its upgrade goes through exactly
 	// the same guard as everything else: an upgrade request from a foreign

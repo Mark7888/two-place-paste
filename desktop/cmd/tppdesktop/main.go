@@ -186,6 +186,7 @@ func run(logger *slog.Logger) error {
 	srv, listenErr := localui.Listen(ctx, localui.Options{
 		API:      svc,
 		Updates:  updater,
+		Store:    svc,
 		Port:     settings.ListenPort(),
 		DevProxy: os.Getenv(envUIDev),
 		Logger:   logger,
