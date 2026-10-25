@@ -67,6 +67,10 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.SourceURL != DefaultSourceURL {
 		t.Errorf("SourceURL = %q, want %q", cfg.SourceURL, DefaultSourceURL)
 	}
+	wantStore := StoreConfig{MaxGroupBytes: DefaultStoreGroupMax, MaxItemBytes: DefaultEntryMax, MaxGroupItems: DefaultStoreGroupItems}
+	if cfg.Store != wantStore {
+		t.Errorf("Store = %+v, want %+v", cfg.Store, wantStore)
+	}
 	if cfg.LogLevel != slog.LevelInfo {
 		t.Errorf("LogLevel = %s, want info", cfg.LogLevel)
 	}
@@ -464,6 +468,45 @@ func TestLoadS3Errors(t *testing.T) {
 			for k, v := range tt.set {
 				env[k] = v
 			}
+			_, err := Load(Options{DotenvPath: filepath.Join(t.TempDir(), "absent.env"), Lookup: lookupFrom(env)})
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("Load() error = %v, want it to contain %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestLoadStore: the store limits are read as byte sizes, the item cap
+// follows the entry cap unless set, and nonsense is refused.
+func TestLoadStore(t *testing.T) {
+	t.Parallel()
+
+	env := minimalEnv()
+	env["TPP_STORE_MAX_TOTAL_BYTES"] = "2GiB"
+	env["TPP_STORE_MAX_GROUP_BYTES"] = "10MiB"
+	env["TPP_STORE_MAX_GROUP_ITEMS"] = "50"
+	env["TPP_ENTRY_MAX_BYTES"] = "20MiB"
+	cfg, err := Load(Options{DotenvPath: filepath.Join(t.TempDir(), "absent.env"), Lookup: lookupFrom(env)})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := StoreConfig{MaxTotalBytes: 2 << 30, MaxGroupBytes: 10 << 20, MaxItemBytes: 20 << 20, MaxGroupItems: 50}
+	if cfg.Store != want {
+		t.Errorf("Store = %+v, want %+v", cfg.Store, want)
+	}
+
+	tests := []struct {
+		name, key, value, wantErr string
+	}{
+		{"negative group limit", "TPP_STORE_MAX_GROUP_BYTES", "-1", "TPP_STORE_MAX_GROUP_BYTES must not be negative"},
+		{"no items", "TPP_STORE_MAX_GROUP_ITEMS", "0", "TPP_STORE_MAX_GROUP_ITEMS must be at least 1"},
+		{"negative item cap", "TPP_STORE_MAX_ITEM_BYTES", "-5", "TPP_STORE_MAX_ITEM_BYTES must be positive"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			env := minimalEnv()
+			env[tt.key] = tt.value
 			_, err := Load(Options{DotenvPath: filepath.Join(t.TempDir(), "absent.env"), Lookup: lookupFrom(env)})
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("Load() error = %v, want it to contain %q", err, tt.wantErr)

@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { api, type Device, type GroupDetail } from "../api";
+import { api, type Device, type GroupDetail, type GroupStore, type LimitChange } from "../api";
 import { Badge, GroupBadges } from "../components/Badge";
 import { SectionHead, StatCard } from "../components/Card";
 import { useLimitForm } from "../components/LimitFields";
@@ -9,15 +9,15 @@ import { UsageMeter } from "../components/UsageMeter";
 import { useAction, type Action } from "../hooks/useAction";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useResource } from "../hooks/useResource";
-import { ago, formatDate, humanBytes, limitText } from "../lib/format";
+import { ago, formatDate, humanBytes, limitText, plural } from "../lib/format";
 import { groupPath, groupsByTag } from "../lib/paths";
 import { Link, useRouter } from "../router";
 
 const limitSources = { group: "this group", tag: "its tag", default: "the server default" } as const;
 
 /** GroupPage is one group: what it holds, its name, tag and storage limit,
- *  its devices, and the way to purge or delete it. Like every screen it shows
- *  counts, sizes and device names, never content. */
+ *  its store, its devices, and the way to purge or delete it. Like every
+ *  screen it shows counts, sizes and device names, never content. */
 export function GroupPage({ handle }: { handle: string }) {
   const { data, error, version, reload } = useResource((signal) => api.group(handle, signal), [handle]);
   const { notify } = useRouter();
@@ -70,8 +70,29 @@ export function GroupPage({ handle }: { handle: string }) {
             onSave={(limit) => change(() => api.setGroupLimit(handle, limit), "Storage limit saved.")}
           />
 
+          {data.store && (
+            <StoreSection
+              key={`store-${version}`}
+              store={data.store}
+              action={action}
+              onSwitch={(enabled) =>
+                change(
+                  () => api.setGroupStore(handle, enabled),
+                  enabled
+                    ? "Store turned on. The group's devices can save items now."
+                    : "Store turned off. Its items are kept until it is turned on again or purged.",
+                )
+              }
+              onSaveLimit={(limit) => change(() => api.setGroupStoreLimit(handle, limit), "Store limit saved.")}
+            />
+          )}
+
           <Devices data={data} />
-          <DangerZone handle={handle} canPurge={data.can_purge} />
+          <DangerZone
+            handle={handle}
+            canPurge={data.can_purge}
+            canPurgeStore={!!data.store && data.store.used_items > 0 && !data.store.emptying}
+          />
         </>
       )}
     </>
@@ -240,6 +261,115 @@ function LimitForm({
   );
 }
 
+/** StoreSection is the group's store (SPEC §4.6): off until the admin turns
+ *  it on, its usage against its own limits, and its limit override. The
+ *  store never evicts: a save that does not fit is refused. */
+function StoreSection({
+  store,
+  action,
+  onSwitch,
+  onSaveLimit,
+}: {
+  store: GroupStore;
+  action: Action;
+  onSwitch: (enabled: boolean) => void;
+  onSaveLimit: (limit: LimitChange) => void;
+}) {
+  const form = useLimitForm(store.own_limit);
+  const id = useId();
+  const items = `${store.used_items} ${plural(store.used_items, "item", "items")}`;
+  return (
+    <>
+      <SectionHead title="Store">
+        {store.emptying ? (
+          <Badge kind="used">emptying</Badge>
+        ) : store.enabled ? (
+          <Badge kind="good">on</Badge>
+        ) : (
+          <Badge kind="used">off</Badge>
+        )}
+      </SectionHead>
+      <div className="card">
+        <div className="form-row spread">
+          <div>
+            <strong>{store.enabled ? "The store is on" : "The store is off"}</strong>
+            <br />
+            <span className="muted">
+              {store.emptying
+                ? "It is being emptied in the background, and closed to its devices until then."
+                : store.enabled
+                ? "The group's devices can save items that do not expire, beside their 24-hour history."
+                : store.used_items > 0
+                  ? `It holds ${items} (${humanBytes(store.used_bytes)}), kept while it is off.`
+                  : "Turn it on to let the group's devices save items that do not expire."}
+            </span>
+          </div>
+          <button
+            type="button"
+            className={store.enabled ? "secondary" : undefined}
+            disabled={action.busy}
+            onClick={() => {
+              if (
+                store.enabled &&
+                !window.confirm(
+                  `Turn the store off? Its devices can no longer read or save items. The ${items} it holds are kept until it is turned on again or purged.`,
+                )
+              ) {
+                return;
+              }
+              onSwitch(!store.enabled);
+            }}
+          >
+            {store.enabled ? "Turn store off" : "Turn store on"}
+          </button>
+        </div>
+        <p className="figure">
+          {humanBytes(store.used_bytes)} <span className="muted">of {limitText(store.limit_bytes)}</span>
+        </p>
+        <UsageMeter used={store.used_bytes} limit={store.limit_bytes} label="Store used" />
+        <p className="sub">
+          {items} of {store.max_items} · limit from {limitSources[store.limit_source]} · up to{" "}
+          {humanBytes(store.max_item_bytes)} an item
+        </p>
+      </div>
+      <form
+        className="card"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSaveLimit(form.change);
+        }}
+      >
+        <label className="check">
+          <input type="checkbox" checked={form.enabled} onChange={(e) => form.setEnabled(e.target.checked)} /> Give
+          this group's store its own limit
+        </label>
+        <div className="form-row">
+          <div className="field">
+            <label htmlFor={id}>Store limit</label>
+            <input
+              type="text"
+              id={id}
+              value={form.size}
+              placeholder="e.g. 100 MiB"
+              inputMode="text"
+              onChange={(e) => form.setSize(e.target.value)}
+            />
+          </div>
+          <button type="submit" disabled={action.busy}>
+            Save store limit
+          </button>
+        </div>
+        <span className="hint">
+          Overrides the tag's store limit{store.tag_limit_bytes !== null && ` (${limitText(store.tag_limit_bytes)})`}{" "}
+          and the server default ({limitText(store.default_limit_bytes)}). 0 means no limit of its own. Separate from
+          the storage limit above. Lowering it deletes nothing: the store never evicts, so new saves are refused until
+          it fits.
+        </span>
+      </form>
+    </>
+  );
+}
+
 const deviceColumns: Column<Device>[] = [
   {
     key: "name",
@@ -300,7 +430,15 @@ function Devices({ data }: { data: GroupDetail }) {
   );
 }
 
-function DangerZone({ handle, canPurge }: { handle: string; canPurge: boolean }) {
+function DangerZone({
+  handle,
+  canPurge,
+  canPurgeStore,
+}: {
+  handle: string;
+  canPurge: boolean;
+  canPurgeStore: boolean;
+}) {
   return (
     <>
       <SectionHead title="Danger zone" />
@@ -317,11 +455,23 @@ function DangerZone({ handle, canPurge }: { handle: string; canPurge: boolean })
             </Link>
           </div>
         )}
+        {canPurgeStore && (
+          <div className="form-row spread">
+            <div>
+              <strong>Purge store</strong>
+              <br />
+              <span className="muted">Delete every item in the store. The store stays on.</span>
+            </div>
+            <Link className="button secondary" to={`${groupPath(handle)}/purge-store`}>
+              Purge store…
+            </Link>
+          </div>
+        )}
         <div className="form-row spread">
           <div>
             <strong>Delete group</strong>
             <br />
-            <span className="muted">Remove the group, its devices and entries. Cannot be undone.</span>
+            <span className="muted">Remove the group, its devices, entries and store. Cannot be undone.</span>
           </div>
           <Link className="button danger" to={`${groupPath(handle)}/delete`}>
             Delete group…

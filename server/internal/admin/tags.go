@@ -16,15 +16,25 @@ type tagJSON struct {
 	Devices   int       `json:"devices"`
 	UsedBytes int64     `json:"used_bytes"`
 	Limit     limitJSON `json:"limit"`
+
+	// StoreLimit is the tag's store limit override (SPEC §4.6).
+	StoreLimit limitJSON `json:"store_limit"`
 }
 
 // tagsJSON is the tag screen: one page of the tags, and the limits its
 // explanations name.
 type tagsJSON struct {
 	tablePage[tagJSON]
-	DefaultLimitBytes int64    `json:"default_limit_bytes"`
-	TotalLimitBytes   int64    `json:"total_limit_bytes"`
-	Problems          []string `json:"problems"`
+	DefaultLimitBytes int64 `json:"default_limit_bytes"`
+	TotalLimitBytes   int64 `json:"total_limit_bytes"`
+
+	// HasStore says whether the relay has a store, and the store limits
+	// the tag screen's explanations name.
+	HasStore               bool  `json:"has_store"`
+	DefaultStoreLimitBytes int64 `json:"default_store_limit_bytes"`
+	TotalStoreLimitBytes   int64 `json:"total_store_limit_bytes"`
+
+	Problems []string `json:"problems"`
 }
 
 // limitOrder ranks a tag's limit for sorting: off (the default applies)
@@ -72,7 +82,11 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request, _ session) {
 
 	rows := make([]tagJSON, 0, len(tags))
 	for _, t := range tags {
-		rows = append(rows, tagJSON{Name: t.Name, Limit: limitJSON{Enabled: t.Limit.Enabled, Bytes: t.Limit.Bytes}})
+		rows = append(rows, tagJSON{
+			Name:       t.Name,
+			Limit:      limitJSON{Enabled: t.Limit.Enabled, Bytes: t.Limit.Bytes},
+			StoreLimit: limitJSON{Enabled: t.StoreLimit.Enabled, Bytes: t.StoreLimit.Bytes},
+		})
 	}
 	byName := make(map[string]*tagJSON, len(rows))
 	for i := range rows {
@@ -94,12 +108,19 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request, _ session) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, tagsJSON{
+	v := tagsJSON{
 		tablePage:         tagTable.run(rows, r.URL.Query()),
 		DefaultLimitBytes: s.dashboard.GroupLimit,
 		TotalLimitBytes:   s.dashboard.TotalLimit,
 		Problems:          probs.list,
-	})
+	}
+	if s.storeSvc != nil {
+		cfg := s.storeSvc.Config()
+		v.HasStore = true
+		v.DefaultStoreLimitBytes = cfg.MaxGroupBytes
+		v.TotalStoreLimitBytes = cfg.MaxTotalBytes
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 // handleCreateTag adds a tag.

@@ -33,6 +33,17 @@ type MemoryStore struct {
 	tombstones map[string]time.Time
 	settings   *Settings
 	audit      []AuditEntry
+
+	// The store's records (items_memory.go).
+	storeUsage map[string]ItemUsage
+	storeTotal ItemUsage
+	storeItems map[string]Item
+	storeLinks map[string]map[uint64][]byte
+
+	// storeReclaim are the groups whose store is being emptied.
+	storeReclaim map[string]bool
+	// storeBlobRetry are the blobs whose delete failed.
+	storeBlobRetry map[BlobRetry]bool
 }
 
 // NewMemoryStore returns an empty in-memory Store.
@@ -49,6 +60,13 @@ func NewMemoryStore() *MemoryStore {
 
 		tags:       make(map[string]Tag),
 		tombstones: make(map[string]time.Time),
+
+		storeUsage: make(map[string]ItemUsage),
+		storeItems: make(map[string]Item),
+		storeLinks: make(map[string]map[uint64][]byte),
+
+		storeReclaim:   make(map[string]bool),
+		storeBlobRetry: make(map[BlobRetry]bool),
 	}
 }
 
@@ -288,7 +306,7 @@ func (m *MemoryStore) RemoveDevice(_ context.Context, groupID, deviceID string) 
 
 // ApplyRekey implements Store. Like the Lua script it mirrors, it validates
 // everything before it writes anything.
-func (m *MemoryStore) ApplyRekey(_ context.Context, groupID, revokedDeviceID string, expectedEpoch uint64, keys []RekeyKey) (Group, error) {
+func (m *MemoryStore) ApplyRekey(_ context.Context, groupID, revokedDeviceID string, expectedEpoch uint64, keys []RekeyKey, storeLink []byte) (Group, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -320,8 +338,17 @@ func (m *MemoryStore) ApplyRekey(_ context.Context, groupID, revokedDeviceID str
 			return Group{}, ErrInvalidRekey
 		}
 	}
+	if len(storeLink) == 0 && m.committedItemsLocked(groupID) > 0 {
+		return Group{}, ErrStoreLinkRequired
+	}
 
 	next := expectedEpoch + 1
+	if len(storeLink) > 0 {
+		if m.storeLinks[groupID] == nil {
+			m.storeLinks[groupID] = make(map[uint64][]byte)
+		}
+		m.storeLinks[groupID][next] = append([]byte(nil), storeLink...)
+	}
 	for _, k := range keys {
 		m.wrapped[k.DeviceID] = WrappedKey{Epoch: next, Key: k.Key}
 	}
@@ -562,6 +589,35 @@ func (m *MemoryStore) SetGroupLimit(_ context.Context, groupID string, limit Lim
 	return nil
 }
 
+// SetGroupStore implements Store.
+func (m *MemoryStore) SetGroupStore(_ context.Context, groupID string, enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	g, ok := m.groups[groupID]
+	if !ok {
+		return ErrNotFound
+	}
+	g.StoreEnabled = enabled
+	m.groups[groupID] = g
+	return nil
+}
+
+// SetGroupStoreLimit implements Store.
+func (m *MemoryStore) SetGroupStoreLimit(_ context.Context, groupID string, limit LimitOverride) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	g, ok := m.groups[groupID]
+	if !ok {
+		return ErrNotFound
+	}
+	limit.Bytes = max(limit.Bytes, 0)
+	g.StoreLimit = limit
+	m.groups[groupID] = g
+	return nil
+}
+
 // DeleteGroup implements Store.
 func (m *MemoryStore) DeleteGroup(_ context.Context, groupID string) (DeletedGroup, error) {
 	m.mu.Lock()
@@ -582,6 +638,8 @@ func (m *MemoryStore) DeleteGroup(_ context.Context, groupID string) (DeletedGro
 	slices.Sort(out.DeviceIDs)
 	delete(m.members, groupID)
 	delete(m.groups, groupID)
+	delete(m.storeLinks, groupID)
+	m.storeReclaim[groupID] = true
 	if tok, ok := m.tokens[groupID]; ok {
 		tok.GroupDeleted = true
 		m.tokens[groupID] = tok
@@ -652,6 +710,21 @@ func (m *MemoryStore) SetTagLimit(_ context.Context, name string, limit LimitOve
 	}
 	limit.Bytes = max(limit.Bytes, 0)
 	t.Limit = limit
+	m.tags[name] = t
+	return nil
+}
+
+// SetTagStoreLimit implements Store.
+func (m *MemoryStore) SetTagStoreLimit(_ context.Context, name string, limit LimitOverride) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	t, ok := m.tags[name]
+	if !ok {
+		return ErrNotFound
+	}
+	limit.Bytes = max(limit.Bytes, 0)
+	t.StoreLimit = limit
 	m.tags[name] = t
 	return nil
 }

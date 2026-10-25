@@ -34,6 +34,7 @@ import (
 	"github.com/Mark7888/two-place-paste/server/internal/config"
 	"github.com/Mark7888/two-place-paste/server/internal/entries"
 	"github.com/Mark7888/two-place-paste/server/internal/httpapi"
+	"github.com/Mark7888/two-place-paste/server/internal/items"
 	"github.com/Mark7888/two-place-paste/server/internal/pairlink"
 	"github.com/Mark7888/two-place-paste/server/internal/quota"
 	"github.com/Mark7888/two-place-paste/server/internal/sourcelink"
@@ -176,9 +177,57 @@ func serve(args []string) error {
 			return nil
 		})
 
+	// The store (SPEC §4.6): items that do not expire, off for every group
+	// until the admin turns it on.
+	itemBlobs, ok := blobs.(blob.Items)
+	if !ok {
+		return fmt.Errorf("the %s blob backend cannot hold store items", cfg.Blob.Backend)
+	}
+	storeSvc := items.New(items.Options{
+		Registry: persistent,
+		Blobs:    itemBlobs,
+		Config: items.Config{
+			MaxTotalBytes:       cfg.Store.MaxTotalBytes,
+			MaxGroupBytes:       cfg.Store.MaxGroupBytes,
+			MaxItemBytes:        cfg.Store.MaxItemBytes,
+			MaxGroupItems:       cfg.Store.MaxGroupItems,
+			ChunkBytes:          cfg.Entry.ChunkBytes,
+			SingleFrameMaxBytes: config.SingleFrameMaxBytes,
+			UploadTTL:           cfg.Entry.UploadTTL,
+		},
+		// The transport is built below; the hooks reach it through wsSrv,
+		// which is set before the server accepts a connection.
+		Hooks: items.Hooks{
+			OnSaved: func(ctx context.Context, groupID, deviceID string, it store.Item) {
+				wsSrv.AnnounceItemSaved(ctx, groupID, deviceID, it)
+			},
+			OnUpdated: func(ctx context.Context, groupID, deviceID string, it store.Item) {
+				wsSrv.AnnounceItemUpdated(ctx, groupID, deviceID, it)
+			},
+			OnDeleted: func(ctx context.Context, groupID, deviceID, itemID string) {
+				wsSrv.AnnounceItemDeleted(ctx, groupID, deviceID, itemID)
+			},
+			OnStoreState: func(ctx context.Context, groupID string, enabled bool) {
+				wsSrv.AnnounceStoreState(ctx, groupID, enabled)
+			},
+		},
+		Logger: logger,
+	})
+	// Store uploads live in this process's memory too: an item still
+	// pending now was left by the previous one.
+	if n, err := storeSvc.ReleaseOrphans(ctx); err != nil {
+		return fmt.Errorf("release orphaned store items: %w", err)
+	} else if n > 0 {
+		logger.Info("released store items a previous run left unfinished", slog.Int("items", n))
+	}
+	// The sweep is the store's backstop: stale uploads, failed blob deletes,
+	// stores of deleted groups and the reclaim queue.
+	sweeper.Also("sweep the store", storeSvc.Sweep)
+
 	wsSrv = ws.New(persistent, entrySvc, ws.Options{
 		Logger:     logger,
 		PairingTTL: config.PairingTokenTTL,
+		Items:      storeSvc,
 	})
 	adminSrv, err := admin.New(persistent, admin.Options{
 		PublicBaseURL: cfg.PublicBaseURL,
@@ -189,6 +238,7 @@ func serve(args []string) error {
 		Live:          wsSrv,
 		Purger:        entrySvc,
 		Limits:        ledger,
+		Store:         storeSvc,
 		Sweep:         sweeper.Trigger,
 		Redis:         rdb,
 		Version:       buildVersion(),
@@ -244,7 +294,14 @@ func serve(args []string) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		reapUploads(ctx, entrySvc)
+		reapUploads(ctx, entrySvc, storeSvc)
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// Empties the stores that a purge or a group deletion queued,
+		// including any a previous run left half done.
+		storeSvc.RunReclaimer(ctx)
 	}()
 
 	serveErr := make(chan error, 1)
@@ -257,7 +314,9 @@ func serve(args []string) error {
 			slog.Int64("entry_max_bytes", cfg.Entry.MaxBytes),
 			slog.Int64("entry_chunk_bytes", cfg.Entry.ChunkBytes),
 			slog.Int64("blob_max_total_bytes", cfg.Blob.MaxTotalBytes),
-			slog.Int64("blob_max_group_bytes", cfg.Blob.MaxGroupBytes))
+			slog.Int64("blob_max_group_bytes", cfg.Blob.MaxGroupBytes),
+			slog.Int64("store_max_group_bytes", cfg.Store.MaxGroupBytes),
+			slog.Int64("store_max_item_bytes", cfg.Store.MaxItemBytes))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- fmt.Errorf("http server: %w", err)
 			return
@@ -282,6 +341,7 @@ func serve(args []string) error {
 	// Uploads cut off by the shutdown release their room now, rather than at
 	// the next start.
 	entrySvc.AbortAllUploads(shutdownCtx)
+	storeSvc.AbortAllUploads(shutdownCtx)
 	if err != nil {
 		return fmt.Errorf("graceful shutdown: %w", err)
 	}
@@ -334,7 +394,10 @@ func buildVersion() string {
 const uploadReapInterval = time.Minute
 
 // reapUploads abandons idle chunked uploads until ctx is done.
-func reapUploads(ctx context.Context, svc *entries.Service) {
+func reapUploads(ctx context.Context, svcs ...interface {
+	ReapUploads(ctx context.Context, now time.Time) int
+},
+) {
 	ticker := time.NewTicker(uploadReapInterval)
 	defer ticker.Stop()
 	for {
@@ -342,7 +405,9 @@ func reapUploads(ctx context.Context, svc *entries.Service) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			svc.ReapUploads(ctx, now.UTC())
+			for _, svc := range svcs {
+				svc.ReapUploads(ctx, now.UTC())
+			}
 		}
 	}
 }

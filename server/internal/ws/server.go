@@ -58,12 +58,17 @@ type Options struct {
 
 	// Now supplies UTC timestamps; tests replace it.
 	Now func() time.Time
+
+	// Items is the store (SPEC §4.6). Without it every store request is
+	// answered as unknown, as by a relay that predates the store.
+	Items StoreItems
 }
 
 // Server is the WebSocket transport and its protocol handlers.
 type Server struct {
 	store   Store
 	entries Entries
+	items   StoreItems
 	hub     *Hub
 	logger  *slog.Logger
 
@@ -86,6 +91,7 @@ func New(st Store, en Entries, opts Options) *Server {
 	s := &Server{
 		store:               st,
 		entries:             en,
+		items:               opts.Items,
 		hub:                 NewHub(),
 		logger:              opts.Logger,
 		path:                opts.Path,

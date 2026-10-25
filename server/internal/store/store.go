@@ -137,6 +137,10 @@ type Tag struct {
 	Name      string
 	Limit     LimitOverride
 	CreatedAt time.Time
+
+	// StoreLimit is the tag's override of the store limit of its groups
+	// (SPEC §4.6). It cannot turn a store on: that is decided per group.
+	StoreLimit LimitOverride
 }
 
 // Settings are the server settings the admin edits at runtime.
@@ -185,6 +189,14 @@ type Group struct {
 
 	// Limit is the group's own storage limit override.
 	Limit LimitOverride
+
+	// StoreEnabled reports that the admin turned the group's store on
+	// (SPEC §4.6). It is off for every group until then, including every
+	// group created before the store existed.
+	StoreEnabled bool
+
+	// StoreLimit is the group's own override of its store limit.
+	StoreLimit LimitOverride
 }
 
 // Device is one installation of a client (SPEC §4.2).
@@ -346,7 +358,13 @@ type Store interface {
 	// ErrEpochConflict when expectedEpoch is stale and ErrInvalidRekey when
 	// keys do not cover exactly the remaining devices. A partial apply is a
 	// bug, not a degraded mode.
-	ApplyRekey(ctx context.Context, groupID, revokedDeviceID string, expectedEpoch uint64, keys []RekeyKey) (Group, error)
+	//
+	// storeLink, when not empty, is kept as the group's store link into the
+	// new epoch, in the same step (/spec/crypto.md §7a.2). An empty one is
+	// refused with ErrStoreLinkRequired while the group has store items:
+	// they would be unreadable from the new epoch on. The check and the
+	// apply are atomic with saving an item, so no item can slip in between.
+	ApplyRekey(ctx context.Context, groupID, revokedDeviceID string, expectedEpoch uint64, keys []RekeyKey, storeLink []byte) (Group, error)
 
 	// CreatePairing mints a single-use pairing token valid for ttl
 	// (SPEC §3.2 step 1).
@@ -402,6 +420,13 @@ type Store interface {
 	// SetGroupLimit stores a group's storage limit override.
 	SetGroupLimit(ctx context.Context, groupID string, limit LimitOverride) error
 
+	// SetGroupStore turns a group's store on or off (SPEC §4.6). Turning it
+	// off keeps the items; it only blocks the store until it is on again.
+	SetGroupStore(ctx context.Context, groupID string, enabled bool) error
+
+	// SetGroupStoreLimit stores a group's own store limit override.
+	SetGroupStoreLimit(ctx context.Context, groupID string, limit LimitOverride) error
+
 	// DeleteGroup removes a group and everything the persistent zone holds
 	// for it: its record, its devices and their wrapped keys. Each former
 	// device is remembered for TombstoneTTL (see DeviceTombstoned), and the
@@ -424,6 +449,9 @@ type Store interface {
 
 	// SetTagLimit stores a tag's storage limit override.
 	SetTagLimit(ctx context.Context, name string, limit LimitOverride) error
+
+	// SetTagStoreLimit stores a tag's store limit override.
+	SetTagStoreLimit(ctx context.Context, name string, limit LimitOverride) error
 
 	// DeleteTag removes a tag. Groups under it are left untagged, and tokens
 	// that would have given it to a new group give none.

@@ -230,6 +230,9 @@ func (s *RedisStore) GetGroup(ctx context.Context, groupID string) (Group, error
 		Name:      fields["name"],
 		Tag:       fields["tag"],
 		Limit:     limitFromFields(fields),
+
+		StoreEnabled: fields["store_on"] == "1",
+		StoreLimit:   storeLimitFromFields(fields),
 	}
 	if g.Name == "" {
 		// A group from before names existed: it reads as the token that
@@ -254,6 +257,22 @@ func limitArgs(l LimitOverride) []any {
 		on = "1"
 	}
 	return []any{"limit_bytes", strconv.FormatInt(max(l.Bytes, 0), 10), "limit_on", on}
+}
+
+// storeLimitFromFields and storeLimitArgs are limitFromFields and limitArgs
+// for the store limit, which a group and a tag carry beside their blob limit.
+// A record from before the store has neither field and reads as no override.
+func storeLimitFromFields(fields map[string]string) LimitOverride {
+	n, _ := strconv.ParseInt(fields["store_limit_bytes"], 10, 64)
+	return LimitOverride{Bytes: max(n, 0), Enabled: fields["store_limit_on"] == "1"}
+}
+
+func storeLimitArgs(l LimitOverride) []any {
+	on := "0"
+	if l.Enabled {
+		on = "1"
+	}
+	return []any{"store_limit_bytes", strconv.FormatInt(max(l.Bytes, 0), 10), "store_limit_on", on}
 }
 
 // AddDevice implements Store.
@@ -388,20 +407,21 @@ func (s *RedisStore) RemoveDevice(ctx context.Context, groupID, deviceID string)
 }
 
 // ApplyRekey implements Store.
-func (s *RedisStore) ApplyRekey(ctx context.Context, groupID, revokedDeviceID string, expectedEpoch uint64, keys []RekeyKey) (Group, error) {
-	argv := make([]any, 0, 4+2*len(keys))
+func (s *RedisStore) ApplyRekey(ctx context.Context, groupID, revokedDeviceID string, expectedEpoch uint64, keys []RekeyKey, storeLink []byte) (Group, error) {
+	argv := make([]any, 0, 5+2*len(keys))
 	argv = append(argv,
 		revokedDeviceID,
 		strconv.FormatUint(expectedEpoch, 10),
 		devicePrefix,
 		wrappedKeySuffix,
+		string(storeLink),
 	)
 	for _, k := range keys {
 		argv = append(argv, k.DeviceID, string(k.Key))
 	}
 
 	code, err := s.applyRekey.Run(ctx, s.rdb,
-		[]string{groupKey(groupID), groupDevicesKey(groupID)}, argv...).Int64()
+		[]string{groupKey(groupID), groupDevicesKey(groupID), storeLinksKey(groupID), storeIndexKey(groupID)}, argv...).Int64()
 	if err != nil {
 		return Group{}, fmt.Errorf("apply rekey for group %s: %w", groupID, err)
 	}
@@ -414,6 +434,8 @@ func (s *RedisStore) ApplyRekey(ctx context.Context, groupID, revokedDeviceID st
 		return Group{}, fmt.Errorf("apply rekey for group %s: %w: revoked device %s is not a member", groupID, ErrNotFound, revokedDeviceID)
 	case 4:
 		return Group{}, ErrInvalidRekey
+	case 5:
+		return Group{}, ErrStoreLinkRequired
 	}
 	return s.GetGroup(ctx, groupID)
 }
@@ -697,6 +719,26 @@ func (s *RedisStore) SetGroupLimit(ctx context.Context, groupID string, limit Li
 	return nil
 }
 
+// SetGroupStore implements Store.
+func (s *RedisStore) SetGroupStore(ctx context.Context, groupID string, enabled bool) error {
+	on := "0"
+	if enabled {
+		on = "1"
+	}
+	if err := s.setIfExists(ctx, groupKey(groupID), "store_on", on); err != nil {
+		return fmt.Errorf("set store of group %s: %w", groupID, err)
+	}
+	return nil
+}
+
+// SetGroupStoreLimit implements Store.
+func (s *RedisStore) SetGroupStoreLimit(ctx context.Context, groupID string, limit LimitOverride) error {
+	if err := s.setIfExists(ctx, groupKey(groupID), storeLimitArgs(limit)...); err != nil {
+		return fmt.Errorf("set store limit of group %s: %w", groupID, err)
+	}
+	return nil
+}
+
 // DeleteGroup implements Store.
 func (s *RedisStore) DeleteGroup(ctx context.Context, groupID string) (DeletedGroup, error) {
 	group, err := s.GetGroup(ctx, groupID)
@@ -704,9 +746,9 @@ func (s *RedisStore) DeleteGroup(ctx context.Context, groupID string) (DeletedGr
 		return DeletedGroup{}, fmt.Errorf("delete group %s: %w", groupID, err)
 	}
 	reply, err := deleteGroupScript.Run(ctx, s.rdb,
-		[]string{groupKey(groupID), groupDevicesKey(groupID), tokenKey(groupID)},
+		[]string{groupKey(groupID), groupDevicesKey(groupID), tokenKey(groupID), storeLinksKey(groupID), storeReclaimKey},
 		devicePrefix, wrappedKeySuffix, tombstonePrefix,
-		strconv.FormatInt(TombstoneTTL.Milliseconds(), 10), msString(s.now()),
+		strconv.FormatInt(TombstoneTTL.Milliseconds(), 10), msString(s.now()), groupID,
 	).Slice()
 	if err != nil {
 		return DeletedGroup{}, fmt.Errorf("delete group %s: %w", groupID, err)
@@ -771,7 +813,12 @@ func (s *RedisStore) GetTag(ctx context.Context, name string) (Tag, error) {
 	if len(fields) == 0 {
 		return Tag{}, ErrNotFound
 	}
-	return Tag{Name: name, Limit: limitFromFields(fields), CreatedAt: msTime(fields["created_at"])}, nil
+	return Tag{
+		Name:       name,
+		Limit:      limitFromFields(fields),
+		CreatedAt:  msTime(fields["created_at"]),
+		StoreLimit: storeLimitFromFields(fields),
+	}, nil
 }
 
 // CreateTag implements Store.
@@ -799,6 +846,14 @@ func (s *RedisStore) CreateTag(ctx context.Context, name string) (Tag, error) {
 func (s *RedisStore) SetTagLimit(ctx context.Context, name string, limit LimitOverride) error {
 	if err := s.setIfExists(ctx, tagKey(name), limitArgs(limit)...); err != nil {
 		return fmt.Errorf("set storage limit of tag: %w", err)
+	}
+	return nil
+}
+
+// SetTagStoreLimit implements Store.
+func (s *RedisStore) SetTagStoreLimit(ctx context.Context, name string, limit LimitOverride) error {
+	if err := s.setIfExists(ctx, tagKey(name), storeLimitArgs(limit)...); err != nil {
+		return fmt.Errorf("set store limit of tag %s: %w", name, err)
 	}
 	return nil
 }

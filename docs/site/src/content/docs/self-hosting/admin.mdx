@@ -111,6 +111,8 @@ that should share a clipboard).
 - **Groups, devices**, unused tokens and how many groups are stale, with a link to **Groups**.
 - **Evictions in the last 24 hours** — entries removed early to make room. If this is often above
   zero, the storage limits are too tight.
+- **Store**: what every group's [store](#the-store) holds together against
+  `TPP_STORE_MAX_TOTAL_BYTES`, its item count, and how many groups have it on.
 - **Health**: the relay's version and uptime, and how Redis is set up. Redis must run with
   `maxmemory-policy volatile-lru` and AOF on (see [Docker](/two-place-paste/self-hosting/docker/));
   the card marks anything else, because `allkeys-lru` or no AOF can silently lose groups. A managed
@@ -144,20 +146,45 @@ A group's page shows its devices, entries and storage, and lets you:
 - **Rename** it. The group's devices show the new name; connected ones update at once.
 - Put it under a **Tag**, or under none.
 - Give it its own **Storage limit** (see below).
+- Turn its [**Store**](#the-store) on or off, and give the store its own limit.
 - See its **Devices**: name, when each was paired, when it was last seen, and whether it is online
   now. Devices are added by pairing and removed from another device of the group, which re-keys
   it. The relay cannot re-key, so the admin page cannot remove a single device.
 
+### The store
+
+The store keeps items the group saves on purpose — a password hint, an address, a logo — beside
+its 24-hour history. Items do not expire: they stay until a device deletes them, the store is
+purged, or the group is deleted. Like everything else, they are encrypted on the devices; this page
+shows only how much the store holds, never names or contents.
+
+- It is **off** for every group until you click **Turn store on**. The group's apps then show a
+  Store tab; while it is off they say the store is turned off for the group.
+- **Turn store off** blocks it without deleting anything: the items are kept, and come back as
+  they were when you turn it on again.
+- It has its own **store limit**, separate from the storage limit above, chosen the same way: the
+  group's own, then its tag's, then `TPP_STORE_MAX_GROUP_BYTES`. The store **never evicts**: a save
+  that does not fit is refused, and lowering the limit deletes nothing.
+
+### Purge store
+
+**Purge store…** appears once the store holds anything. After a confirmation page it deletes every
+item in the store, for all the group's devices; the switch and the store limit stay as they are.
+The page answers at once and the store is emptied in the background — the store section says
+**emptying** until it is done, and the group's devices see the store as turned off until then. It
+cannot be undone.
+
 ### Purge entries
 
-**Purge entries…** deletes everything the group holds now, before its 24 hours are up, and frees
-its storage. Its devices keep working and their clipboards are not touched; open history lists
+**Purge entries…** deletes the group's history now, before its 24 hours are up, and frees its
+storage. Its store is not touched. Its devices keep working and their clipboards are not touched; open history lists
 drop the entries.
 
 ### Delete a group
 
-**Delete group…** removes the group, its devices and every entry it holds, after a confirmation
-page. It cannot be undone.
+**Delete group…** removes the group, its devices, every entry it holds and every item in its
+store, after a confirmation page. It cannot be undone. The store is emptied in the background, so a
+large one does not hold the page up.
 
 - Connected devices are disconnected at once. Devices that are offline find out when they next
   connect. Either way the app says the server admin deleted the group, rather than that the device
@@ -186,6 +213,11 @@ nothing straight away: the group's next upload removes its oldest entries until 
 
 Deleting a tag leaves its groups untagged; they fall back to their own limit or the default.
 
+A tag can also carry a **store limit** for its groups' [stores](#the-store), in place of
+`TPP_STORE_MAX_GROUP_BYTES`, and within `TPP_STORE_MAX_TOTAL_BYTES`. It works like the storage
+limit, except that nothing is ever evicted. A tag cannot turn a store on; that is decided on each
+group's page.
+
 ## Settings
 
 **Settings** holds what can change without a restart. Today that is the **stale threshold**: how
@@ -196,7 +228,7 @@ stale. The default is 90 days.
 
 **Audit log** lists the last 1,000 things done on these screens, newest first: sign-ins (and failed
 or rate-limited ones), tokens created and revoked, groups renamed, tagged, limited, purged and
-deleted, tags and settings changed, and sweeps requested — with the time and the address it came
+deleted, stores turned on, off or limited, tags and settings changed, and sweeps requested — with the time and the address it came
 from. It names groups and tokens, and never holds a token value, a password or a key. Search it
 by action, name, detail or address, or pick one kind of entry with **Action**.
 

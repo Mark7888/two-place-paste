@@ -46,7 +46,8 @@ docker compose exec redis redis-cli BGREWRITEAOF
 docker run --rm -v tpp_redis-data:/data -v "$PWD":/backup alpine \
     tar czf /backup/redis-$(date -u +%Y%m%d).tar.gz -C /data .
 
-# Blobs: at most 24 hours of ciphertext, so this is optional.
+# Blobs: at most 24 hours of history, so this is optional — unless a group has its
+# store turned on: saved items live under store/ and are kept until deleted.
 docker run --rm -v tpp_blob-data:/blobs -v "$PWD":/backup alpine \
     tar czf /backup/blobs-$(date -u +%Y%m%d).tar.gz -C /blobs .
 ```

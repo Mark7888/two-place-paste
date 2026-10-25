@@ -73,6 +73,9 @@ func (s *Server) dispatch(ctx context.Context, c *conn, env *tppv1.Envelope) ([]
 	case tppv1.MessageType_MESSAGE_TYPE_ENTRY_FETCH_CHUNK_REQUEST:
 		return s.handleEntryFetchChunk(ctx, env, groupID)
 	default:
+		if frame, ok, err := s.storeHandler(ctx, env, deviceID, groupID); ok {
+			return frame, err
+		}
 		// An unknown type is answered, never met with a closed socket
 		// (SPEC §5.1).
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_UNSUPPORTED_MESSAGE,
@@ -484,9 +487,20 @@ func (s *Server) handleRekey(ctx context.Context, env *tppv1.Envelope, deviceID,
 		}
 		keys = append(keys, store.RekeyKey{DeviceID: k.GetDeviceId(), Key: k.GetWrappedGroupKey()})
 	}
+	// The link is opaque here; its length is fixed (/spec/crypto.md §7a.2),
+	// and a client that predates the store sends none.
+	if n := len(req.GetStoreLink()); n != 0 && n != storeLinkSize {
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
+			"store_link must be empty or %d bytes", storeLinkSize)
+	}
 
-	group, err := s.store.ApplyRekey(ctx, groupID, req.GetRevokedDeviceId(), req.GetExpectedEpoch(), keys)
+	group, err := s.store.ApplyRekey(ctx, groupID, req.GetRevokedDeviceId(), req.GetExpectedEpoch(), keys, req.GetStoreLink())
 	switch {
+	case errors.Is(err, store.ErrStoreLinkRequired):
+		// A client that predates the store cannot seal the link, and
+		// applying its rekey would leave every store item unreadable.
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_CLIENT_OUTDATED,
+			"this group has store items; update the app to revoke devices in it")
 	case errors.Is(err, store.ErrEpochConflict):
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_EPOCH_CONFLICT,
 			"the group has moved past epoch %d; refetch the roster and retry", req.GetExpectedEpoch())
@@ -789,6 +803,16 @@ func (s *Server) handleUploadChunk(ctx context.Context, env *tppv1.Envelope, dev
 	if err := decode(env, &req); err != nil {
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "payload could not be decoded")
 	}
+	// The store's uploads share this message: the handle says whose it is.
+	if s.items != nil && s.items.OwnsUpload(req.GetUploadHandle()) {
+		received, err := s.items.WriteChunk(ctx, groupID, deviceID, req.GetUploadHandle(), req.GetIndex(), req.GetData())
+		if err != nil {
+			return nil, storeWireError(err)
+		}
+		return encode(env.GetId(), tppv1.MessageType_MESSAGE_TYPE_ENTRY_UPLOAD_CHUNK_RESPONSE, &tppv1.EntryUploadChunkResponse{
+			ReceivedBytes: uint64(received), //nolint:gosec // non-negative
+		})
+	}
 	received, err := s.entries.WriteChunk(ctx, groupID, deviceID, req.GetUploadHandle(), req.GetIndex(), req.GetData())
 	if err != nil {
 		return nil, s.uploadError(err)
@@ -804,7 +828,11 @@ func (s *Server) handleUploadAbort(ctx context.Context, env *tppv1.Envelope, dev
 	if err := decode(env, &req); err != nil {
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "payload could not be decoded")
 	}
-	if err := s.entries.AbortUpload(ctx, groupID, deviceID, req.GetUploadHandle()); err != nil {
+	if s.items != nil && s.items.OwnsUpload(req.GetUploadHandle()) {
+		if err := s.items.AbortUpload(ctx, groupID, deviceID, req.GetUploadHandle()); err != nil {
+			return nil, fmt.Errorf("abort store upload: %w", err)
+		}
+	} else if err := s.entries.AbortUpload(ctx, groupID, deviceID, req.GetUploadHandle()); err != nil {
 		return nil, fmt.Errorf("abort upload: %w", err)
 	}
 	return encode(env.GetId(), tppv1.MessageType_MESSAGE_TYPE_ENTRY_UPLOAD_ABORT_RESPONSE, &tppv1.EntryUploadAbortResponse{})

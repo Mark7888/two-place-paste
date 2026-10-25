@@ -35,11 +35,18 @@ export const api = {
   renameGroup: (handle: string, name: string) => request<void>("PUT", `/groups/${seg(handle)}/name`, { name }),
   setGroupTag: (handle: string, tag: string) => request<void>("PUT", `/groups/${seg(handle)}/tag`, { tag }),
   setGroupLimit: (handle: string, limit: LimitChange) => request<void>("PUT", `/groups/${seg(handle)}/limit`, limit),
+  setGroupStore: (handle: string, enabled: boolean) =>
+    request<void>("PUT", `/groups/${seg(handle)}/store`, { enabled }),
+  setGroupStoreLimit: (handle: string, limit: LimitChange) =>
+    request<void>("PUT", `/groups/${seg(handle)}/store-limit`, limit),
+  purgeGroupStore: (handle: string) => request<void>("POST", `/groups/${seg(handle)}/store/purge`),
   purgeGroup: (handle: string) => request<{ entries: number; bytes: number }>("POST", `/groups/${seg(handle)}/purge`),
   deleteGroup: (handle: string) => request<{ name: string }>("DELETE", `/groups/${seg(handle)}`),
 
   createTag: (name: string) => request<{ name: string }>("POST", "/tags", { name }),
   setTagLimit: (name: string, limit: LimitChange) => request<void>("PUT", `/tags/${seg(name)}/limit`, limit),
+  setTagStoreLimit: (name: string, limit: LimitChange) =>
+    request<void>("PUT", `/tags/${seg(name)}/store-limit`, limit),
   deleteTag: (name: string) => request<void>("DELETE", `/tags/${seg(name)}`),
 
   settings: (signal?: AbortSignal) => request<Settings>("GET", "/settings", undefined, signal),

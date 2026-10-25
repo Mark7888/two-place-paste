@@ -237,17 +237,30 @@ func (d *Disk) BeginUpload(_ context.Context, entryID string, expiresAt time.Tim
 			return nil, fmt.Errorf("begin upload for entry %s: %w: %d bytes free, floor is %d", entryID, ErrStorageFull, free, d.minFree)
 		}
 	}
-	f, err := os.CreateTemp(dir, entryID+"-*.part")
+	bucket := Bucket(expiresAt)
+	dst, err := d.blobPath(bucket, entryID)
 	if err != nil {
-		return nil, fmt.Errorf("begin upload for entry %s: %w", entryID, err)
+		return nil, err
 	}
-	return &diskUpload{d: d, entryID: entryID, bucket: Bucket(expiresAt), f: f, size: size}, nil
+	return d.beginStaged(entryID, dst, refFor(bucket, entryID), size)
+}
+
+// beginStaged opens a staging file under <root>/.uploads for a blob that
+// Complete links to dst, and whose reference is then ref. The free-space
+// floor is checked by the caller.
+func (d *Disk) beginStaged(name, dst, ref string, size int64) (*diskUpload, error) {
+	f, err := os.CreateTemp(filepath.Join(d.root, uploadsDir), name+"-*.part")
+	if err != nil {
+		return nil, fmt.Errorf("begin upload for %s: %w", name, err)
+	}
+	return &diskUpload{entryID: name, dst: dst, ref: ref, f: f, size: size}, nil
 }
 
 type diskUpload struct {
-	d       *Disk
+	// entryID names the upload in errors: an entry id, or an item id.
 	entryID string
-	bucket  string
+	dst     string
+	ref     string
 	f       *os.File
 	size    int64
 	written int64
@@ -282,21 +295,17 @@ func (u *diskUpload) Complete(context.Context) (ref string, err error) {
 	if err := u.f.Close(); err != nil {
 		return "", fmt.Errorf("complete upload for entry %s: %w", u.entryID, err)
 	}
-	dst, err := u.d.blobPath(u.bucket, u.entryID)
-	if err != nil {
-		return "", err
+	if err := os.MkdirAll(filepath.Dir(u.dst), 0o700); err != nil {
+		return "", fmt.Errorf("create blob directory for %s: %w", u.entryID, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return "", fmt.Errorf("create blob bucket %s: %w", u.bucket, err)
-	}
-	err = os.Link(u.f.Name(), dst)
+	err = os.Link(u.f.Name(), u.dst)
 	if errors.Is(err, fs.ErrExist) {
 		return "", fmt.Errorf("complete upload for entry %s: %w", u.entryID, ErrExists)
 	}
 	if err != nil {
 		return "", fmt.Errorf("complete upload for entry %s: %w", u.entryID, err)
 	}
-	return refFor(u.bucket, u.entryID), nil
+	return u.ref, nil
 }
 
 func (u *diskUpload) Abort(context.Context) error {

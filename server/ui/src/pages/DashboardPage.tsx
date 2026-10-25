@@ -90,6 +90,19 @@ function Summary({ data }: { data: Dashboard }) {
         <p className="figure">{data.device_count}</p>
         <p className="sub">across all groups</p>
       </StatCard>
+      {data.store && (
+        <StatCard title="Store" wide>
+          <p className="figure">
+            {humanBytes(data.store.used_bytes)} <span className="muted">of {limitText(data.store.limit_bytes)}</span>
+          </p>
+          <UsageMeter used={data.store.used_bytes} limit={data.store.limit_bytes} label="Store used" />
+          <p className="sub">
+            {data.store.items} {plural(data.store.items, "item", "items")} · on in {data.store.groups_on} of{" "}
+            {data.group_count} {plural(data.group_count, "group", "groups")} · {limitText(data.store.group_limit_bytes)}{" "}
+            a group by default
+          </p>
+        </StatCard>
+      )}
       {storage && (
         <StatCard title="Evictions, 24 h">
           <p className="figure">{storage.evictions}</p>

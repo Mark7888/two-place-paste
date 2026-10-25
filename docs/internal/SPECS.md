@@ -514,7 +514,9 @@ one delete per item: `RemoveAll` on disk, a listing and batched multi-object del
 S3. It runs in the background, from a queue that group deletion (§3.4) and **Purge
 store** add to and that survives a restart. As a backstop, each sweep lists the group
 prefixes under `store/` — one name per group, not per item — and reclaims any whose
-group no longer exists. Unlike the hour-bucket sweep, this one reads Redis, once per
+group no longer exists and whose creation token is marked as having had its group
+deleted; a group missing without that mark is left alone, so a relay pointed at the
+wrong or an empty Redis deletes nothing. Unlike the hour-bucket sweep, this one reads Redis, once per
 group.
 
 **Turning a store off** blocks every store request with `STORE_DISABLED` and keeps the

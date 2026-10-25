@@ -26,9 +26,17 @@ func redisAddr() string {
 
 func newTestRedisStore(t *testing.T) store.Store {
 	t.Helper()
+	return newTestRedisStoreDB(t, 0)
+}
+
+// newTestRedisStoreDB is newTestRedisStore on its own database, for a test
+// whose subject is relay-wide — such as releasing every pending item at
+// startup — and which would otherwise reach into the tests running beside it.
+func newTestRedisStoreDB(t *testing.T, db int) store.Store {
+	t.Helper()
 
 	addr := redisAddr()
-	rdb := redis.NewClient(&redis.Options{Addr: addr})
+	rdb := redis.NewClient(&redis.Options{Addr: addr, DB: db})
 	t.Cleanup(func() { _ = rdb.Close() })
 
 	if err := rdb.Ping(context.Background()).Err(); err != nil {

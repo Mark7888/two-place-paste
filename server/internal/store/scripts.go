@@ -79,13 +79,18 @@ return 0
 //
 // Return codes: 0 applied, 1 no such group, 2 epoch conflict, 3 the revoked
 // device is not a member, 4 the wrapped keys do not cover exactly the
-// remaining devices.
+// remaining devices, 5 no store link while the group has store items.
 //
 //	KEYS[1] group key            ARGV[1] revoked device id
 //	KEYS[2] group devices set    ARGV[2] expected epoch
-//	                             ARGV[3] device key prefix
-//	                             ARGV[4] wrapped key suffix
-//	                             ARGV[5..] device id, wrapped key, ...
+//	KEYS[3] group store links    ARGV[3] device key prefix
+//	KEYS[4] group store index    ARGV[4] wrapped key suffix
+//	                             ARGV[5] store link ("" for none)
+//	                             ARGV[6..] device id, wrapped key, ...
+//
+// The store check reads the same index an item is committed to, and an
+// item's commit checks the epoch in a script of its own: the two serialise,
+// so an item saved at the old epoch is either seen here or refused there.
 //
 // The write order matters and is asserted by TestApplyRekeyPartialApply: the
 // epoch is bumped last, so an interrupted apply leaves the group at its old
@@ -104,8 +109,10 @@ for _, id in ipairs(redis.call('SMEMBERS', KEYS[2])) do
   end
 end
 
+if ARGV[5] == '' and redis.call('ZCARD', KEYS[4]) > 0 then return 5 end
+
 local supplied_n = 0
-for i = 5, #ARGV, 2 do
+for i = 6, #ARGV, 2 do
   local id = ARGV[i]
   if remaining[id] ~= true then return 4 end
   remaining[id] = 'seen'
@@ -114,8 +121,11 @@ end
 if supplied_n ~= remaining_n then return 4 end
 
 local next_epoch = tostring(tonumber(ARGV[2]) + 1)
-for i = 5, #ARGV, 2 do
+for i = 6, #ARGV, 2 do
   redis.call('HSET', ARGV[3] .. ARGV[i] .. ARGV[4], 'epoch', next_epoch, 'key', ARGV[i + 1])
+end
+if ARGV[5] ~= '' then
+  redis.call('HSET', KEYS[3], next_epoch, ARGV[5])
 end
 -- Test seam: scripts_test.go swaps the next line for an error() to prove that
 -- an apply interrupted here leaves the group at its old epoch. Nothing below
@@ -238,8 +248,14 @@ return 0
 //	KEYS[1] group key            ARGV[1] device key prefix
 //	KEYS[2] group devices set    ARGV[2] wrapped key suffix
 //	KEYS[3] token key            ARGV[3] tombstone key prefix
-//	                             ARGV[4] tombstone TTL, ms
-//	                             ARGV[5] now, unix ms
+//	KEYS[4] group store links    ARGV[4] tombstone TTL, ms
+//	KEYS[5] groups being emptied ARGV[5] now, unix ms
+//	                             ARGV[6] group id
+//
+// The store links go with the group: they are what made its items readable,
+// and nothing can read them now. The items themselves are queued for the
+// background reclaim (SPEC §4.6), which a group of any size must not hold
+// this step up for.
 var deleteGroupScript = redis.NewScript(`
 if redis.call('EXISTS', KEYS[1]) == 0 then return {1} end
 
@@ -249,7 +265,8 @@ for _, id in ipairs(redis.call('SMEMBERS', KEYS[2])) do
   redis.call('SET', ARGV[3] .. id, '1', 'PX', ARGV[4])
   out[#out + 1] = id
 end
-redis.call('DEL', KEYS[2], KEYS[1])
+redis.call('DEL', KEYS[2], KEYS[1], KEYS[4])
+redis.call('SADD', KEYS[5], ARGV[6])
 if redis.call('EXISTS', KEYS[3]) == 1 then
   redis.call('HSET', KEYS[3], 'group_deleted', '1', 'deleted_at', ARGV[5])
 end

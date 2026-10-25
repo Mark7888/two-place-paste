@@ -7,7 +7,8 @@ import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 
 Entries up to 256 KB of ciphertext are kept in Redis. Larger ones go to the **blob store**: a
 directory on disk (the default) or an S3-compatible bucket. Either way it holds at most a day of
-ciphertext.
+history — plus the items of every group whose [store](/two-place-paste/self-hosting/admin/#the-store)
+you have turned on, which do not expire (see [The store's blobs](#the-stores-blobs)).
 
 <Tabs>
 <TabItem label="Disk (default)">
@@ -78,7 +79,9 @@ The relay needs only this on its bucket (plus `s3:CreateBucket` if you set
 ```
 
 A lifecycle rule that expires objects after **2 days** is a good backstop for a relay that stays
-down; the relay's own cleanup removes expired objects every hour.
+down; the relay's own cleanup removes expired objects every hour. Once any group has its store
+turned on, the rule must not cover `store/`, or it deletes saved items: give it the prefix
+`<TPP_S3_PREFIX>20` instead of the whole bucket, since every history directory starts with the year.
 
 </TabItem>
 </Tabs>
@@ -90,6 +93,7 @@ private network.
 
 **Switching backends** is a config change and a restart. Entries already written stay in the old
 backend and read as gone; nothing needs migrating, because nothing lives longer than a day.
+Store items are the exception: copy `store/` across before switching, or they read as missing.
 
 ## How cleanup works
 
@@ -100,6 +104,20 @@ so a relay that was off for a week cleans up the whole week in its first pass.
 
 If a blob goes missing (deleted by hand, or by a lifecycle rule shorter than a day), the first
 device to read that entry gets "not found", and the relay drops the entry there and then.
+
+## The store's blobs
+
+A store item's blob is kept at `store/<group_id>/<item_id>.bin`, outside the hour directories, so the
+cleanup above never touches it. It is deleted only when someone deletes the item, when you purge the
+group's store, or when you delete the group. Its record lives in Redis beside the group's.
+
+If an item's blob goes missing, the item stays listed and reading it fails with "not found", and
+the relay logs `store item has no blob` at `error`. It is not dropped on its own: the user can see
+the failure and delete the item.
+
+The store has its own limits (`TPP_STORE_*`, see
+[Configuration](/two-place-paste/self-hosting/configuration/)), separate from the ones below. Store
+items are never evicted: a save that does not fit is refused.
 
 ## Storage limits and eviction
 

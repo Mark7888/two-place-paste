@@ -255,7 +255,7 @@ func TestApplyRekey(t *testing.T) {
 			},
 		}
 		for _, tt := range tests {
-			if _, err := s.ApplyRekey(ctx, gid, tt.revoked, tt.epoch, tt.keys); !errors.Is(err, tt.want) {
+			if _, err := s.ApplyRekey(ctx, gid, tt.revoked, tt.epoch, tt.keys, nil); !errors.Is(err, tt.want) {
 				t.Errorf("ApplyRekey(%s) error = %v, want %v", tt.name, err, tt.want)
 			}
 			group, err := s.GetGroup(ctx, gid)
@@ -270,12 +270,19 @@ func TestApplyRekey(t *testing.T) {
 		group, err := s.ApplyRekey(ctx, gid, c.ID, 1, []store.RekeyKey{
 			{DeviceID: a, Key: []byte("w2-a")},
 			{DeviceID: b.ID, Key: []byte("w2-b")},
-		})
+		}, []byte("link-into-2"))
 		if err != nil {
 			t.Fatalf("ApplyRekey() error = %v", err)
 		}
 		if group.Epoch != 2 {
 			t.Errorf("ApplyRekey().Epoch = %d, want 2", group.Epoch)
+		}
+		links, err := s.(store.Items).StoreLinks(ctx, gid)
+		if err != nil {
+			t.Fatalf("StoreLinks() error = %v", err)
+		}
+		if len(links) != 1 || links[0].Epoch != 2 || string(links[0].Link) != "link-into-2" {
+			t.Errorf("StoreLinks() = %+v, want the link into epoch 2", links)
 		}
 		for _, id := range []string{a, b.ID} {
 			key, err := s.GetWrappedKey(ctx, id)

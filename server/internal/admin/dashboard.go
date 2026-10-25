@@ -27,6 +27,9 @@ type dashboardJSON struct {
 	// Storage is nil when no ledger is wired.
 	Storage *storageJSON `json:"storage"`
 
+	// Store is nil when the relay has no store.
+	Store *storeTotalsJSON `json:"store"`
+
 	Health *healthJSON `json:"health"`
 
 	// CanSweep shows the "Sweep now" button.
@@ -188,6 +191,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, _ sessi
 			}
 		}
 		view.GroupCount = len(groups)
+		view.Store = s.storeTotals(ctx, groups, probs)
 	}
 	view.Problems = probs.list
 	writeJSON(w, http.StatusOK, view)

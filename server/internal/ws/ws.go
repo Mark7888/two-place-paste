@@ -53,7 +53,7 @@ type Store interface {
 	GetWrappedKey(ctx context.Context, deviceID string) (store.WrappedKey, error)
 	SetWrappedKey(ctx context.Context, deviceID string, key store.WrappedKey) error
 	RemoveDevice(ctx context.Context, groupID, deviceID string) error
-	ApplyRekey(ctx context.Context, groupID, revokedDeviceID string, expectedEpoch uint64, keys []store.RekeyKey) (store.Group, error)
+	ApplyRekey(ctx context.Context, groupID, revokedDeviceID string, expectedEpoch uint64, keys []store.RekeyKey, storeLink []byte) (store.Group, error)
 	CreatePairing(ctx context.Context, groupID, inviterDeviceID string, ttl time.Duration) (store.Pairing, error)
 	GetPairing(ctx context.Context, token string) (store.Pairing, error)
 	ConsumePairing(ctx context.Context, token, joinerDeviceID string) (store.Pairing, error)

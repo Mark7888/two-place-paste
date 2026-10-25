@@ -4,8 +4,11 @@
 in #40. Header v2 is rolled out on its own, ahead of the store: the relay accepts
 it and says so in `EntryLimitsResponse.header_v2`, and both clients write it to
 a relay that does (#42). The store's wire schema is in `store.proto`, and both
-clients send the store link with every rekey (#43). §9 records the answered
-questions; §11 keeps the server-side copy as a later option.
+clients send the store link with every rekey (#43). The relay side of step 3 —
+records, limits, the admin switch and Purge store, the rekey link check, the
+item messages, background reclaim and the sweep — is in its own PR; the clients
+(steps 4–6) do not use it yet. §9 records the answered questions; §11 keeps the
+server-side copy as a later option.
 **Touches:** `/spec/**` (store section, header v2, vectors), `/proto/**`,
 `/server/**`, `/pkg/tppclient/**`, `/desktop/**`, `/mobile/**`, `/deploy/**`,
 `/docs/**`.

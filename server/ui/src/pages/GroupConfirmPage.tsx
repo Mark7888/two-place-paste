@@ -10,7 +10,7 @@ import { ago, humanBytes, plural } from "../lib/format";
 import { groupPath } from "../lib/paths";
 import { Link, useRouter } from "../router";
 
-export type ConfirmKind = "purge" | "delete";
+export type ConfirmKind = "purge" | "purge-store" | "delete";
 
 // One group, so nothing to sort: the columns have no sortValue.
 const confirmColumns: Column<Group>[] = [
@@ -42,10 +42,17 @@ const copy = {
       "Its devices keep working and their own clipboards are not touched; they only lose the shared history.",
     button: "Purge entries",
   },
+  "purge-store": {
+    heading: "Purge store",
+    lede:
+      "Every item in this group's store is deleted, for all its devices. The store stays on and keeps its limits; " +
+      "it closes while it is being emptied, which happens in the background. This cannot be undone.",
+    button: "Purge store",
+  },
   delete: {
     heading: "Delete group",
     lede:
-      "The group, its devices and every entry it holds are deleted. " +
+      "The group, its devices, every entry it holds and every item in its store are deleted. " +
       "Each device is disconnected and told its group was deleted; to use this server again it needs a new creation token. " +
       "This cannot be undone.",
     button: "Delete group",
@@ -71,6 +78,11 @@ export function GroupConfirmPage({ handle, kind }: { handle: string; kind: Confi
 
   const confirm = () =>
     action.run(async () => {
+      if (kind === "purge-store") {
+        await api.purgeGroupStore(handle);
+        navigate(groupPath(handle), { notice: "The store is being emptied." });
+        return;
+      }
       if (kind === "purge") {
         const res = await api.purgeGroup(handle);
         navigate(groupPath(handle), {
@@ -95,6 +107,11 @@ export function GroupConfirmPage({ handle, kind }: { handle: string; kind: Confi
   if (!data) return null;
   const g = data.group;
   const used = g.usage?.used_bytes ?? 0;
+  const store = data.store;
+  const freed =
+    kind === "purge-store"
+      ? `${store?.used_items ?? 0} ${plural(store?.used_items ?? 0, "item", "items")}, ${humanBytes(store?.used_bytes ?? 0)} of store freed.`
+      : `${humanBytes(used)} of blob storage freed.`;
   return (
     <>
       <ErrorNotice error={action.error} />
@@ -110,7 +127,7 @@ export function GroupConfirmPage({ handle, kind }: { handle: string; kind: Confi
         defaultSort={{ key: "name", dir: "asc" }}
         emptyText=""
       />
-      <p className="hint spaced">{`${humanBytes(used)} of blob storage freed.`}</p>
+      <p className="hint spaced">{freed}</p>
 
       <form
         className="form-row"

@@ -191,6 +191,9 @@ type groupDetailJSON struct {
 	// Tags are the tags the group can be put under.
 	Tags []string `json:"tags"`
 
+	// Store is the group's store, or nil when the relay has none.
+	Store *groupStoreJSON `json:"store"`
+
 	CanPurge bool `json:"can_purge"`
 
 	Problems []string `json:"problems"`
@@ -232,6 +235,7 @@ func (s *Server) handleGroup(w http.ResponseWriter, r *http.Request, _ session) 
 		b := t.Limit.Bytes
 		v.TagLimitBytes = &b
 	}
+	v.Store = s.groupStore(ctx, g, tags, probs)
 	for name := range tags {
 		v.Tags = append(v.Tags, name)
 	}
@@ -437,6 +441,14 @@ func (s *Server) deleteGroup(r *http.Request, id string) (string, error) {
 		s.live.CloseGroup(id)
 	}
 	detail := fmt.Sprintf("%d %s", len(del.DeviceIDs), plural(len(del.DeviceIDs), "device", "devices"))
+	if s.storeSvc != nil {
+		// The deletion queued the group's store; empty it now rather than at
+		// the next sweep.
+		s.storeSvc.Kick()
+		if u, err := s.store.StoreUsage(ctx, id); err == nil && u.Items > 0 {
+			detail += fmt.Sprintf(", %d store %s", u.Items, plural(u.Items, "item", "items"))
+		}
+	}
 	if s.purger != nil {
 		res, err := s.purger.PurgeGroup(context.WithoutCancel(ctx), id)
 		if err != nil {
@@ -472,7 +484,9 @@ func isStale(now, last time.Time, after time.Duration) bool {
 	return after > 0 && !last.IsZero() && now.Sub(last) > after
 }
 
-func plural(n int, one, many string) string {
+// plural picks the word for a count. It takes any integer type, so a count
+// read as int64 is never narrowed to int just to choose a word.
+func plural[N ~int | ~int64](n N, one, many string) string {
 	if n == 1 {
 		return one
 	}

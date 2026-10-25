@@ -62,7 +62,7 @@ func TestApplyRekeyPartialApply(t *testing.T) {
 	}
 	interrupted.applyRekey = redis.NewScript(body)
 
-	if _, err := interrupted.ApplyRekey(ctx, gid, b.ID, 1, []RekeyKey{{DeviceID: a, Key: []byte("w2-a")}}); err == nil {
+	if _, err := interrupted.ApplyRekey(ctx, gid, b.ID, 1, []RekeyKey{{DeviceID: a, Key: []byte("w2-a")}}, nil); err == nil {
 		t.Fatal("interrupted ApplyRekey() error = nil, want the injected failure")
 	}
 
@@ -78,7 +78,7 @@ func TestApplyRekeyPartialApply(t *testing.T) {
 	}
 
 	// The retry must still work: the interruption left no state that blocks it.
-	group, err = s.ApplyRekey(ctx, gid, b.ID, 1, []RekeyKey{{DeviceID: a, Key: []byte("w2-a")}})
+	group, err = s.ApplyRekey(ctx, gid, b.ID, 1, []RekeyKey{{DeviceID: a, Key: []byte("w2-a")}}, nil)
 	if err != nil {
 		t.Fatalf("retried ApplyRekey() error = %v", err)
 	}

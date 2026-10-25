@@ -26,10 +26,11 @@ type fakeLive struct {
 	online  map[string]bool
 	renamed map[string]string
 	closed  []string
+	store   map[string]bool
 }
 
 func newFakeLive() *fakeLive {
-	return &fakeLive{online: make(map[string]bool), renamed: make(map[string]string)}
+	return &fakeLive{online: make(map[string]bool), renamed: make(map[string]string), store: make(map[string]bool)}
 }
 
 func (l *fakeLive) OnlineDevices(string) map[string]bool {
@@ -46,6 +47,19 @@ func (l *fakeLive) AnnounceRename(_ context.Context, groupID, name string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.renamed[groupID] = name
+}
+
+func (l *fakeLive) AnnounceStoreState(_ context.Context, groupID string, enabled bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.store[groupID] = enabled
+}
+
+func (l *fakeLive) storeState(groupID string) (enabled, told bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	enabled, told = l.store[groupID]
+	return enabled, told
 }
 
 func (l *fakeLive) CloseGroup(groupID string) {

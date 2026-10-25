@@ -38,6 +38,8 @@ export interface Dashboard {
   stale_count: number;
   stale_after_days: number;
   storage: Storage | null;
+  /** Null when the relay has no store. */
+  store: StoreTotals | null;
   health: Health;
   can_sweep: boolean;
   problems: string[];
@@ -56,6 +58,19 @@ export interface Storage {
   evicted_bytes: number;
   uploads: { count: number; reserved_bytes: number } | null;
   last_sweep: { at: string; took_ms: number; error?: string } | null;
+}
+
+/** StoreTotals is the dashboard's store card: what every group's store
+ *  holds together, and the configured limits (SPEC §4.6). */
+export interface StoreTotals {
+  used_bytes: number;
+  items: number;
+  groups_on: number;
+  /** The relay's total store limit; zero means none. */
+  limit_bytes: number;
+  group_limit_bytes: number;
+  max_item_bytes: number;
+  max_group_items: number;
 }
 
 export type HealthState = "good" | "warn" | "bad" | "unknown";
@@ -127,7 +142,27 @@ export interface GroupDetail {
   default_limit_bytes: number;
   tags: string[];
   can_purge: boolean;
+  /** Null when the relay has no store. */
+  store: GroupStore | null;
   problems: string[];
+}
+
+/** GroupStore is a group's store: off until the admin turns it on, its
+ *  usage against its own limits, and its limit override (SPEC §4.6). */
+export interface GroupStore {
+  enabled: boolean;
+  /** True while a purge empties it in the background; closed until then. */
+  emptying: boolean;
+  used_bytes: number;
+  used_items: number;
+  /** The cap the store runs into; zero means none. */
+  limit_bytes: number;
+  limit_source: LimitSource;
+  own_limit: Limit;
+  tag_limit_bytes: number | null;
+  default_limit_bytes: number;
+  max_items: number;
+  max_item_bytes: number;
 }
 
 export interface Tag {
@@ -136,11 +171,15 @@ export interface Tag {
   devices: number;
   used_bytes: number;
   limit: Limit;
+  store_limit: Limit;
 }
 
 export interface TagList extends TablePage<Tag> {
   default_limit_bytes: number;
   total_limit_bytes: number;
+  has_store: boolean;
+  default_store_limit_bytes: number;
+  total_store_limit_bytes: number;
   problems: string[];
 }
 

@@ -26,6 +26,17 @@ const (
 
 	devicesSuffix    = ":devices"
 	wrappedKeySuffix = ":wrapped_key"
+
+	// The store (SPEC §4.6). Its records are persistent-zone records like
+	// every other key here: no TTL, never evictable.
+	storeItemPrefix   = "storeitem:"
+	storeIndexSuffix  = ":store"          // group:<id>:store, committed items by saved_at
+	storeUsageSuffix  = ":storeusage"     // group:<id>:storeusage, bytes and items held or reserved
+	storeLinksSuffix  = ":storelinks"     // group:<id>:storelinks, epoch -> store link
+	storeUsageKey     = "store:usage"     // bytes and items across every group
+	storePendingKey   = "store:pending"   // items being uploaded, by start time
+	storeReclaimKey   = "store:reclaim"   // groups whose store is being emptied
+	storeBlobRetryKey = "store:blobretry" // "<group id>/<item id>" whose blob delete failed
 )
 
 func tokenKey(value string) string     { return tokenPrefix + value }
@@ -37,3 +48,7 @@ func pairingKey(token string) string   { return pairingPrefix + token }
 func offerKey(code string) string      { return offerPrefix + code }
 func tagKey(name string) string        { return tagPrefix + name }
 func tombstoneKey(id string) string    { return tombstonePrefix + id }
+func storeUsageKeyOf(id string) string { return groupPrefix + id + storeUsageSuffix }
+func storeIndexKey(id string) string   { return groupPrefix + id + storeIndexSuffix }
+func storeItemKey(id string) string    { return storeItemPrefix + id }
+func storeLinksKey(id string) string   { return groupPrefix + id + storeLinksSuffix }
