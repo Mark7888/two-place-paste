@@ -279,6 +279,20 @@ func TestStoreRefusals(t *testing.T) {
 	if got := listItems(laptop, "", 0); len(got.GetItems()) != 4 {
 		t.Errorf("list after turning the store back on = %d items, want 4", len(got.GetItems()))
 	}
+
+	// Being emptied by a purge, it is closed too.
+	if err := h.items.Purge(context.Background(), created.GetGroupId()); err != nil {
+		t.Fatalf("Purge() error = %v", err)
+	}
+	if got := errorCode(t, putItem(laptop, "emptying", 1, []byte("x"))); got != tppv1.ErrorCode_ERROR_CODE_STORE_DISABLED {
+		t.Errorf("save while emptying = %s, want %s", got, tppv1.ErrorCode_ERROR_CODE_STORE_DISABLED)
+	}
+	if err := h.items.ReclaimQueued(context.Background()); err != nil {
+		t.Fatalf("ReclaimQueued() error = %v", err)
+	}
+	if got := listItems(laptop, "", 0); len(got.GetItems()) != 0 {
+		t.Errorf("list after the purge = %d items, want none", len(got.GetItems()))
+	}
 }
 
 // TestRekeyNeedsALinkOnceItemsExist: a rekey without a store link is fine

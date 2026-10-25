@@ -249,10 +249,13 @@ return 0
 //	KEYS[2] group devices set    ARGV[2] wrapped key suffix
 //	KEYS[3] token key            ARGV[3] tombstone key prefix
 //	KEYS[4] group store links    ARGV[4] tombstone TTL, ms
-//	                             ARGV[5] now, unix ms
+//	KEYS[5] groups being emptied ARGV[5] now, unix ms
+//	                             ARGV[6] group id
 //
 // The store links go with the group: they are what made its items readable,
-// and nothing can read them now.
+// and nothing can read them now. The items themselves are queued for the
+// background reclaim (SPEC §4.6), which a group of any size must not hold
+// this step up for.
 var deleteGroupScript = redis.NewScript(`
 if redis.call('EXISTS', KEYS[1]) == 0 then return {1} end
 
@@ -263,6 +266,7 @@ for _, id in ipairs(redis.call('SMEMBERS', KEYS[2])) do
   out[#out + 1] = id
 end
 redis.call('DEL', KEYS[2], KEYS[1], KEYS[4])
+redis.call('SADD', KEYS[5], ARGV[6])
 if redis.call('EXISTS', KEYS[3]) == 1 then
   redis.call('HSET', KEYS[3], 'group_deleted', '1', 'deleted_at', ARGV[5])
 end

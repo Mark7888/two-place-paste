@@ -34,10 +34,37 @@ func (c *clock) Advance(d time.Duration) {
 
 type fixture struct {
 	reg   *store.MemoryStore
-	blobs *blob.Disk
+	blobs *flakyBlobs
 	svc   *items.Service
 	clock *clock
 	group string
+
+	mu     sync.Mutex
+	states []bool // what OnStoreState was told, in order
+}
+
+// flakyBlobs is a disk whose item deletes can be made to fail.
+type flakyBlobs struct {
+	*blob.Disk
+	mu       sync.Mutex
+	failNext bool
+}
+
+func (f *flakyBlobs) DeleteItem(ctx context.Context, groupID, itemID string) error {
+	f.mu.Lock()
+	fail := f.failNext
+	f.failNext = false
+	f.mu.Unlock()
+	if fail {
+		return errors.New("disk on fire")
+	}
+	return f.Disk.DeleteItem(ctx, groupID, itemID) //nolint:wrapcheck // a test double
+}
+
+func (f *fixture) storeStates() []bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]bool(nil), f.states...)
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -47,9 +74,10 @@ func newFixture(t *testing.T) *fixture {
 	if err := reg.SetGroupStore(context.Background(), group, true); err != nil {
 		t.Fatalf("SetGroupStore() error = %v", err)
 	}
-	blobs := blob.NewDisk(t.TempDir(), 1<<20)
+	blobs := &flakyBlobs{Disk: blob.NewDisk(t.TempDir(), 1<<20)}
 	clk := &clock{now: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)}
-	svc := items.New(items.Options{
+	f := &fixture{reg: reg, blobs: blobs, clock: clk, group: group}
+	f.svc = items.New(items.Options{
 		Registry: reg,
 		Blobs:    blobs,
 		Config: items.Config{
@@ -58,8 +86,13 @@ func newFixture(t *testing.T) *fixture {
 		},
 		Logger: slog.New(slog.DiscardHandler),
 		Now:    clk.Now,
+		Hooks: items.Hooks{OnStoreState: func(_ context.Context, _ string, enabled bool) {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			f.states = append(f.states, enabled)
+		}},
 	})
-	return &fixture{reg: reg, blobs: blobs, svc: svc, clock: clk, group: group}
+	return f
 }
 
 func (f *fixture) usage(t *testing.T) store.ItemUsage {

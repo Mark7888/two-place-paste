@@ -441,6 +441,14 @@ func (s *Server) deleteGroup(r *http.Request, id string) (string, error) {
 		s.live.CloseGroup(id)
 	}
 	detail := fmt.Sprintf("%d %s", len(del.DeviceIDs), plural(len(del.DeviceIDs), "device", "devices"))
+	if s.storeSvc != nil {
+		// The deletion queued the group's store; empty it now rather than at
+		// the next sweep.
+		s.storeSvc.Kick()
+		if u, err := s.store.StoreUsage(ctx, id); err == nil && u.Items > 0 {
+			detail += fmt.Sprintf(", %d store %s", u.Items, plural(int(u.Items), "item", "items"))
+		}
+	}
 	if s.purger != nil {
 		res, err := s.purger.PurgeGroup(context.WithoutCancel(ctx), id)
 		if err != nil {

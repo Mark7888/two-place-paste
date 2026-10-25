@@ -140,10 +140,7 @@ func (s *Service) release(ctx context.Context, groupID, itemID string, blobWritt
 			slog.String("item_id", itemID), slog.Any("error", err))
 	}
 	if blobWritten {
-		if err := s.blobs.DeleteItem(ctx, groupID, itemID); err != nil {
-			s.logger.WarnContext(ctx, "delete uncommitted store blob failed",
-				slog.String("item_id", itemID), slog.Any("error", err))
-		}
+		s.deleteBlob(ctx, groupID, itemID)
 	}
 }
 
@@ -387,6 +384,20 @@ func (s *Service) AbortAllUploads(ctx context.Context) {
 	}
 }
 
+// abortGroupUploads abandons every upload of one group.
+func (s *Service) abortGroupUploads(ctx context.Context, groupID string) {
+	for _, u := range s.allSessions() {
+		if u.groupID != groupID {
+			continue
+		}
+		u.mu.Lock()
+		if !u.done {
+			s.endSession(ctx, u, "store emptied")
+		}
+		u.mu.Unlock()
+	}
+}
+
 func (s *Service) allSessions() []*uploadSession {
 	s.uploads.mu.Lock()
 	defer s.uploads.mu.Unlock()
@@ -403,10 +414,7 @@ func (s *Service) allSessions() []*uploadSession {
 func (s *Service) ReleaseOrphans(ctx context.Context) (int, error) {
 	orphans, err := s.reg.ReleaseAllPending(ctx)
 	for _, it := range orphans {
-		if derr := s.blobs.DeleteItem(ctx, it.GroupID, it.ID); derr != nil {
-			s.logger.WarnContext(ctx, "delete orphaned store blob failed",
-				slog.String("item_id", it.ID), slog.Any("error", derr))
-		}
+		s.deleteBlob(ctx, it.GroupID, it.ID)
 	}
 	if err != nil {
 		return len(orphans), fmt.Errorf("release orphaned store items: %w", err)

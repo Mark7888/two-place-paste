@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -172,6 +173,48 @@ func TestItemsAreOutsideTheBuckets(t *testing.T) {
 			if strings.HasPrefix(r, blob.ItemsDir+"/") {
 				t.Errorf("ListRefs() lists a store item: %s", r)
 			}
+		}
+	})
+}
+
+// TestItemGroups: the store is listed one name per group, and a group's
+// store is deleted as one prefix, leaving the others alone.
+func TestItemGroups(t *testing.T) {
+	t.Parallel()
+	forEachItemsBackend(t, func(t *testing.T, b storeBackend) {
+		ctx := context.Background()
+		for _, ref := range [][2]string{{"group-D", "one"}, {"group-D", "two"}, {"group-E", "one"}} {
+			if err := b.PutItem(ctx, ref[0], ref[1], 1, strings.NewReader("x")); err != nil {
+				t.Fatalf("PutItem(%s/%s) error = %v", ref[0], ref[1], err)
+			}
+		}
+		groups, err := b.ItemGroups(ctx)
+		if err != nil {
+			t.Fatalf("ItemGroups() error = %v", err)
+		}
+		if !slices.Contains(groups, "group-D") || !slices.Contains(groups, "group-E") {
+			t.Errorf("ItemGroups() = %v, want group-D and group-E", groups)
+		}
+
+		if err := b.DeleteItemGroup(ctx, "group-D"); err != nil {
+			t.Fatalf("DeleteItemGroup() error = %v", err)
+		}
+		for _, id := range []string{"one", "two"} {
+			if _, err := b.GetItemRange(ctx, "group-D", id, 0, 1); !errors.Is(err, blob.ErrNotFound) {
+				t.Errorf("GetItemRange(group-D/%s) after the delete error = %v, want %v", id, err, blob.ErrNotFound)
+			}
+		}
+		if got := readItem(t, b, "group-E", "one", 0, 1); string(got) != "x" {
+			t.Errorf("deleting group-D took group-E's item: %q", got)
+		}
+		if groups, _ := b.ItemGroups(ctx); slices.Contains(groups, "group-D") {
+			t.Errorf("ItemGroups() after the delete = %v, still lists group-D", groups)
+		}
+		if err := b.DeleteItemGroup(ctx, "group-D"); err != nil {
+			t.Errorf("DeleteItemGroup(again) error = %v, want nil", err)
+		}
+		if err := b.DeleteItemGroup(ctx, "../x"); !errors.Is(err, blob.ErrInvalidRef) {
+			t.Errorf("DeleteItemGroup(../x) error = %v, want %v", err, blob.ErrInvalidRef)
 		}
 	})
 }

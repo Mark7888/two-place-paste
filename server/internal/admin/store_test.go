@@ -26,7 +26,13 @@ func newStoreFixture(t *testing.T) *storeFixture {
 	t.Helper()
 	f := &storeFixture{live: newFakeLive()}
 	f.fixture = newFixtureWithStore(t, "https://tpp.example.com", func(o *admin.Options, st *store.MemoryStore) {
-		f.items = items.New(items.Options{Registry: st, Config: adminStoreConfig, Logger: slog.New(slog.DiscardHandler)})
+		f.items = items.New(items.Options{
+			Registry: st,
+			Config:   adminStoreConfig,
+			Logger:   slog.New(slog.DiscardHandler),
+			// As cmd/tpp wires it: a purge is told to the devices.
+			Hooks: items.Hooks{OnStoreState: f.live.AnnounceStoreState},
+		})
 		o.Store = f.items
 		o.Live = f.live
 	})
@@ -48,6 +54,7 @@ func (f *storeFixture) group(t *testing.T, tok store.NewToken) string {
 
 type storeSection struct {
 	Enabled           bool   `json:"enabled"`
+	Emptying          bool   `json:"emptying"`
 	UsedBytes         int64  `json:"used_bytes"`
 	UsedItems         int64  `json:"used_items"`
 	LimitBytes        int64  `json:"limit_bytes"`
@@ -167,4 +174,55 @@ func TestRelayWithoutAStoreService(t *testing.T) {
 		t.Errorf("store section = %+v, want none", page.Store)
 	}
 	wantStatus(t, g.call(c, csrf, http.MethodPut, "/admin/api/groups/"+admin.HandleOf(id)+"/store", map[string]bool{"enabled": true}), http.StatusNotImplemented)
+}
+
+// TestPurgeGroupStore: Purge store answers at once, shows the store as being
+// emptied until the background reclaim is done, keeps the switch, and is
+// audited (SPEC §4.6).
+func TestPurgeGroupStore(t *testing.T) {
+	t.Parallel()
+	f := newStoreFixture(t)
+	ctx := context.Background()
+	id := f.group(t, store.NewToken{Name: "Anna"})
+	if err := f.store.SetGroupStore(ctx, id, true); err != nil {
+		t.Fatalf("SetGroupStore() error = %v", err)
+	}
+	c := f.client()
+	csrf := f.login(c)
+	base := "/admin/api/groups/" + admin.HandleOf(id)
+
+	wantStatus(t, f.call(c, csrf, http.MethodPost, base+"/store/purge", nil), http.StatusNoContent)
+	if got := f.section(t, c, id); !got.Emptying || !got.Enabled {
+		t.Errorf("store section after the purge = %+v, want on and emptying", got)
+	}
+	if on, told := f.live.storeState(id); !told || on {
+		t.Errorf("devices told = %v (%v), want closed", on, told)
+	}
+
+	if err := f.items.ReclaimQueued(ctx); err != nil {
+		t.Fatalf("ReclaimQueued() error = %v", err)
+	}
+	if got := f.section(t, c, id); got.Emptying || !got.Enabled {
+		t.Errorf("store section after the reclaim = %+v, want on and not emptying", got)
+	}
+	if on, _ := f.live.storeState(id); !on {
+		t.Error("devices were not told the store opened again")
+	}
+
+	log := readJSON[struct {
+		Rows []struct {
+			Action string `json:"action"`
+		} `json:"rows"`
+	}](t, f.get(c, "/admin/api/audit"))
+	found := false
+	for _, e := range log.Rows {
+		found = found || e.Action == "group.storepurge"
+	}
+	if !found {
+		t.Error("audit log has no group.storepurge entry")
+	}
+
+	if resp := f.call(c, csrf, http.MethodPost, "/admin/api/groups/"+admin.HandleOf("missing")+"/store/purge", nil); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("purge of a missing group: status = %d, want %d", resp.StatusCode, http.StatusNotFound)
+	}
 }

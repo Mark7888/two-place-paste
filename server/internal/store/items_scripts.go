@@ -149,3 +149,44 @@ local rev = tonumber(ARGV[2]) + 1
 redis.call('HSET', KEYS[1], 'meta', ARGV[3], 'meta_rev', tostring(rev))
 return rev
 `)
+
+// reclaimItemsScript deletes a batch of a group's committed item records.
+//
+// Return: how many it deleted.
+//
+//	KEYS[1] group store index    ARGV[1] item key prefix
+//	                             ARGV[2] batch size
+var reclaimItemsScript = redis.NewScript(`
+local ids = redis.call('ZRANGE', KEYS[1], 0, tonumber(ARGV[2]) - 1)
+for _, id in ipairs(ids) do
+  redis.call('DEL', ARGV[1] .. id)
+end
+if #ids > 0 then redis.call('ZREM', KEYS[1], unpack(ids)) end
+return #ids
+`)
+
+// finishReclaimScript ends the records of a group's store once its list is
+// empty: its pending records go, and its usage comes off the total.
+//
+// Return codes: 0 done, 1 committed items are still listed.
+//
+//	KEYS[1] group store index    ARGV[1] group id
+//	KEYS[2] group store usage    ARGV[2] item key prefix
+//	KEYS[3] total store usage
+//	KEYS[4] pending items
+var finishReclaimScript = redis.NewScript(`
+if redis.call('ZCARD', KEYS[1]) > 0 then return 1 end
+for _, id in ipairs(redis.call('ZRANGE', KEYS[4], 0, -1)) do
+  if redis.call('HGET', ARGV[2] .. id, 'group_id') == ARGV[1] then
+    redis.call('DEL', ARGV[2] .. id)
+    redis.call('ZREM', KEYS[4], id)
+  end
+end
+local bytes = tonumber(redis.call('HGET', KEYS[2], 'bytes') or '0')
+local items = tonumber(redis.call('HGET', KEYS[2], 'items') or '0')
+-- A usage of zero is skipped: Lua would pass -0, which Redis refuses.
+if bytes ~= 0 then redis.call('HINCRBY', KEYS[3], 'bytes', -bytes) end
+if items ~= 0 then redis.call('HINCRBY', KEYS[3], 'items', -items) end
+redis.call('DEL', KEYS[1], KEYS[2])
+return 0
+`)

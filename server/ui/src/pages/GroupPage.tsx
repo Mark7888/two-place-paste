@@ -88,7 +88,11 @@ export function GroupPage({ handle }: { handle: string }) {
           )}
 
           <Devices data={data} />
-          <DangerZone handle={handle} canPurge={data.can_purge} />
+          <DangerZone
+            handle={handle}
+            canPurge={data.can_purge}
+            canPurgeStore={!!data.store && data.store.used_items > 0 && !data.store.emptying}
+          />
         </>
       )}
     </>
@@ -277,7 +281,13 @@ function StoreSection({
   return (
     <>
       <SectionHead title="Store">
-        {store.enabled ? <Badge kind="good">on</Badge> : <Badge kind="used">off</Badge>}
+        {store.emptying ? (
+          <Badge kind="used">emptying</Badge>
+        ) : store.enabled ? (
+          <Badge kind="good">on</Badge>
+        ) : (
+          <Badge kind="used">off</Badge>
+        )}
       </SectionHead>
       <div className="card">
         <div className="form-row spread">
@@ -285,7 +295,9 @@ function StoreSection({
             <strong>{store.enabled ? "The store is on" : "The store is off"}</strong>
             <br />
             <span className="muted">
-              {store.enabled
+              {store.emptying
+                ? "It is being emptied in the background, and closed to its devices until then."
+                : store.enabled
                 ? "The group's devices can save items that do not expire, beside their 24-hour history."
                 : store.used_items > 0
                   ? `It holds ${items} (${humanBytes(store.used_bytes)}), kept while it is off.`
@@ -418,7 +430,15 @@ function Devices({ data }: { data: GroupDetail }) {
   );
 }
 
-function DangerZone({ handle, canPurge }: { handle: string; canPurge: boolean }) {
+function DangerZone({
+  handle,
+  canPurge,
+  canPurgeStore,
+}: {
+  handle: string;
+  canPurge: boolean;
+  canPurgeStore: boolean;
+}) {
   return (
     <>
       <SectionHead title="Danger zone" />
@@ -435,11 +455,23 @@ function DangerZone({ handle, canPurge }: { handle: string; canPurge: boolean })
             </Link>
           </div>
         )}
+        {canPurgeStore && (
+          <div className="form-row spread">
+            <div>
+              <strong>Purge store</strong>
+              <br />
+              <span className="muted">Delete every item in the store. The store stays on.</span>
+            </div>
+            <Link className="button secondary" to={`${groupPath(handle)}/purge-store`}>
+              Purge store…
+            </Link>
+          </div>
+        )}
         <div className="form-row spread">
           <div>
             <strong>Delete group</strong>
             <br />
-            <span className="muted">Remove the group, its devices and entries. Cannot be undone.</span>
+            <span className="muted">Remove the group, its devices, entries and store. Cannot be undone.</span>
           </div>
           <Link className="button danger" to={`${groupPath(handle)}/delete`}>
             Delete group…

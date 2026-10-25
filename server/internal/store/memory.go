@@ -42,6 +42,8 @@ type MemoryStore struct {
 
 	// storeReclaim are the groups whose store is being emptied.
 	storeReclaim map[string]bool
+	// storeBlobRetry are the blobs whose delete failed.
+	storeBlobRetry map[BlobRetry]bool
 }
 
 // NewMemoryStore returns an empty in-memory Store.
@@ -63,7 +65,8 @@ func NewMemoryStore() *MemoryStore {
 		storeItems: make(map[string]Item),
 		storeLinks: make(map[string]map[uint64][]byte),
 
-		storeReclaim: make(map[string]bool),
+		storeReclaim:   make(map[string]bool),
+		storeBlobRetry: make(map[BlobRetry]bool),
 	}
 }
 
@@ -636,6 +639,7 @@ func (m *MemoryStore) DeleteGroup(_ context.Context, groupID string) (DeletedGro
 	delete(m.members, groupID)
 	delete(m.groups, groupID)
 	delete(m.storeLinks, groupID)
+	m.storeReclaim[groupID] = true
 	if tok, ok := m.tokens[groupID]; ok {
 		tok.GroupDeleted = true
 		m.tokens[groupID] = tok

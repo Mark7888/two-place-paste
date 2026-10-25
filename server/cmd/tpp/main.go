@@ -207,6 +207,9 @@ func serve(args []string) error {
 			OnDeleted: func(ctx context.Context, groupID, deviceID, itemID string) {
 				wsSrv.AnnounceItemDeleted(ctx, groupID, deviceID, itemID)
 			},
+			OnStoreState: func(ctx context.Context, groupID string, enabled bool) {
+				wsSrv.AnnounceStoreState(ctx, groupID, enabled)
+			},
 		},
 		Logger: logger,
 	})
@@ -217,6 +220,9 @@ func serve(args []string) error {
 	} else if n > 0 {
 		logger.Info("released store items a previous run left unfinished", slog.Int("items", n))
 	}
+	// The sweep is the store's backstop: stale uploads, failed blob deletes,
+	// stores of deleted groups and the reclaim queue.
+	sweeper.Also("sweep the store", storeSvc.Sweep)
 
 	wsSrv = ws.New(persistent, entrySvc, ws.Options{
 		Logger:     logger,
@@ -289,6 +295,13 @@ func serve(args []string) error {
 	go func() {
 		defer wg.Done()
 		reapUploads(ctx, entrySvc, storeSvc)
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// Empties the stores that a purge or a group deletion queued,
+		// including any a previous run left half done.
+		storeSvc.RunReclaimer(ctx)
 	}()
 
 	serveErr := make(chan error, 1)

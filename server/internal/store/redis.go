@@ -746,9 +746,9 @@ func (s *RedisStore) DeleteGroup(ctx context.Context, groupID string) (DeletedGr
 		return DeletedGroup{}, fmt.Errorf("delete group %s: %w", groupID, err)
 	}
 	reply, err := deleteGroupScript.Run(ctx, s.rdb,
-		[]string{groupKey(groupID), groupDevicesKey(groupID), tokenKey(groupID), storeLinksKey(groupID)},
+		[]string{groupKey(groupID), groupDevicesKey(groupID), tokenKey(groupID), storeLinksKey(groupID), storeReclaimKey},
 		devicePrefix, wrappedKeySuffix, tombstonePrefix,
-		strconv.FormatInt(TombstoneTTL.Milliseconds(), 10), msString(s.now()),
+		strconv.FormatInt(TombstoneTTL.Milliseconds(), 10), msString(s.now()), groupID,
 	).Slice()
 	if err != nil {
 		return DeletedGroup{}, fmt.Errorf("delete group %s: %w", groupID, err)

@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/Mark7888/two-place-paste/server/internal/blob"
@@ -104,12 +105,17 @@ type Hooks struct {
 	OnSaved   func(ctx context.Context, groupID, deviceID string, it store.Item)
 	OnUpdated func(ctx context.Context, groupID, deviceID string, it store.Item)
 	OnDeleted func(ctx context.Context, groupID, deviceID, itemID string)
+
+	// OnStoreState is called when a store closes to be emptied (false) and
+	// when it opens again, empty, with the group's switch.
+	OnStoreState func(ctx context.Context, groupID string, enabled bool)
 }
 
 // Registry is what the service needs of the persistent zone.
 type Registry interface {
 	GetGroup(ctx context.Context, groupID string) (store.Group, error)
 	GetTag(ctx context.Context, name string) (store.Tag, error)
+	GetToken(ctx context.Context, value string) (store.Token, error)
 	store.Items
 }
 
@@ -135,6 +141,11 @@ type Service struct {
 	now    func() time.Time
 
 	uploads uploads
+
+	// kick wakes the reclaimer; reclaimMu keeps it and the sweep from
+	// emptying the same store at once.
+	kick      chan struct{}
+	reclaimMu sync.Mutex
 }
 
 // New returns a store service.
@@ -150,6 +161,7 @@ func New(opts Options) *Service {
 		logger:  opts.Logger,
 		now:     opts.Now,
 		uploads: uploads{byHandle: make(map[string]*uploadSession)},
+		kick:    make(chan struct{}, 1),
 	}
 	if s.logger == nil {
 		s.logger = slog.Default()
@@ -222,6 +234,13 @@ func (s *Service) Limits(ctx context.Context, groupID string) (Limits, error) {
 	if !g.StoreEnabled {
 		return Limits{}, nil
 	}
+	emptying, err := s.reg.Reclaiming(ctx, groupID)
+	if err != nil {
+		return Limits{}, fmt.Errorf("read store limits of group %s: %w", groupID, err)
+	}
+	if emptying {
+		return Limits{}, nil // closed until it is empty
+	}
 	limits, err := s.storeLimits(ctx, g)
 	if err != nil {
 		return Limits{}, fmt.Errorf("read store limits of group %s: %w", groupID, err)
@@ -280,6 +299,13 @@ func (s *Service) enabledGroup(ctx context.Context, groupID string) (store.Group
 	}
 	if !g.StoreEnabled {
 		return store.Group{}, fmt.Errorf("group %s: %w", groupID, store.ErrStoreDisabled)
+	}
+	emptying, err := s.reg.Reclaiming(ctx, groupID)
+	if err != nil {
+		return store.Group{}, fmt.Errorf("read group %s: %w", groupID, err)
+	}
+	if emptying {
+		return store.Group{}, fmt.Errorf("group %s: %w", groupID, store.ErrStoreBusy)
 	}
 	return g, nil
 }

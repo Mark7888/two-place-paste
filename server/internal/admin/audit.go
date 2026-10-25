@@ -23,6 +23,7 @@ var auditLabels = []struct{ action, label string }{
 	{"group.limit", "Group storage limit changed"},
 	{"group.store", "Group store turned on or off"},
 	{"group.storelimit", "Group store limit changed"},
+	{"group.storepurge", "Group store purged"},
 	{"group.purge", "Group entries purged"},
 	{"group.delete", "Group deleted"},
 	{"tag.create", "Tag created"},

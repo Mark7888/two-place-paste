@@ -47,6 +47,14 @@ type Items interface {
 
 	// DeleteItem removes an item's blob. A missing one is not an error.
 	DeleteItem(ctx context.Context, groupID, itemID string) error
+
+	// DeleteItemGroup removes every blob of a group's store, as one prefix
+	// delete. A group with none is not an error.
+	DeleteItemGroup(ctx context.Context, groupID string) error
+
+	// ItemGroups lists the groups that have blobs in the store: one name per
+	// group, never one per item.
+	ItemGroups(ctx context.Context) ([]string, error)
 }
 
 var (
@@ -279,4 +287,60 @@ func (s *S3) DeleteItem(ctx context.Context, groupID, itemID string) error {
 		return fmt.Errorf("delete store item %s: %w", itemID, err)
 	}
 	return nil
+}
+
+// DeleteItemGroup implements Items.
+func (d *Disk) DeleteItemGroup(_ context.Context, groupID string) error {
+	if err := validEntryID(groupID); err != nil {
+		return fmt.Errorf("%w: group id", ErrInvalidRef)
+	}
+	if err := os.RemoveAll(filepath.Join(d.root, ItemsDir, groupID)); err != nil {
+		return fmt.Errorf("delete store of group %s: %w", groupID, err)
+	}
+	return nil
+}
+
+// ItemGroups implements Items.
+func (d *Disk) ItemGroups(_ context.Context) ([]string, error) {
+	des, err := os.ReadDir(filepath.Join(d.root, ItemsDir))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list store groups: %w", err)
+	}
+	var out []string
+	for _, de := range des {
+		if de.IsDir() && validEntryID(de.Name()) == nil {
+			out = append(out, de.Name())
+		}
+	}
+	return out, nil
+}
+
+// DeleteItemGroup implements Items.
+func (s *S3) DeleteItemGroup(ctx context.Context, groupID string) error {
+	if err := validEntryID(groupID); err != nil {
+		return fmt.Errorf("%w: group id", ErrInvalidRef)
+	}
+	if err := s.removePrefix(ctx, s.prefix+ItemsDir+"/"+groupID+"/"); err != nil {
+		return fmt.Errorf("delete store of group %s: %w", groupID, err)
+	}
+	return nil
+}
+
+// ItemGroups implements Items.
+func (s *S3) ItemGroups(ctx context.Context) ([]string, error) {
+	root := s.prefix + ItemsDir + "/"
+	var out []string
+	for obj := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Prefix: root}) {
+		if obj.Err != nil {
+			return nil, fmt.Errorf("list store groups: %w", obj.Err)
+		}
+		name, ok := strings.CutSuffix(strings.TrimPrefix(obj.Key, root), "/")
+		if ok && validEntryID(name) == nil {
+			out = append(out, name)
+		}
+	}
+	return out, nil
 }

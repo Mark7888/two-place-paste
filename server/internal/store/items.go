@@ -176,4 +176,51 @@ type Items interface {
 	// them. The relay calls it at startup: uploads live in its memory, so any
 	// item pending then was left by the previous process.
 	ReleaseAllPending(ctx context.Context) ([]Item, error)
+
+	// PendingBefore returns the pending items started before t, oldest
+	// first. The sweep releases them: no upload lives that long.
+	PendingBefore(ctx context.Context, t time.Time) ([]Item, error)
+
+	ItemReclaim
+}
+
+// BlobRetry names a store blob whose delete failed after its record was
+// gone.
+type BlobRetry struct {
+	GroupID string
+	ItemID  string
+}
+
+// ItemReclaim is the queue of groups whose store is being emptied — by a
+// purge or because the group was deleted — and the retry set of blobs a
+// delete left behind (SPEC §4.6). Both survive a restart.
+type ItemReclaim interface {
+	// QueueReclaim adds a group to the queue. From then until EndReclaim,
+	// ReserveItem and CommitItem refuse the group with ErrStoreBusy.
+	QueueReclaim(ctx context.Context, groupID string) error
+
+	// Reclaiming reports whether a group is in the queue.
+	Reclaiming(ctx context.Context, groupID string) (bool, error)
+
+	// ReclaimQueue returns every queued group.
+	ReclaimQueue(ctx context.Context) ([]string, error)
+
+	// ReclaimItems deletes up to n committed item records of a queued group
+	// and returns how many it deleted; zero means none is left. The usage
+	// is left alone until FinishReclaim, so a batch is cheap.
+	ReclaimItems(ctx context.Context, groupID string, n int) (int, error)
+
+	// FinishReclaim deletes the group's pending records and its usage, and
+	// takes that usage off the total, once ReclaimItems has left no
+	// committed item. It may be run again.
+	FinishReclaim(ctx context.Context, groupID string) error
+
+	// EndReclaim takes a group off the queue, once its blobs are gone too.
+	EndReclaim(ctx context.Context, groupID string) error
+
+	// AddBlobRetry, BlobRetries and RemoveBlobRetry keep the blobs whose
+	// delete failed, for the sweep to try again.
+	AddBlobRetry(ctx context.Context, r BlobRetry) error
+	BlobRetries(ctx context.Context) ([]BlobRetry, error)
+	RemoveBlobRetry(ctx context.Context, r BlobRetry) error
 }

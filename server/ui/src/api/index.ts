@@ -39,6 +39,7 @@ export const api = {
     request<void>("PUT", `/groups/${seg(handle)}/store`, { enabled }),
   setGroupStoreLimit: (handle: string, limit: LimitChange) =>
     request<void>("PUT", `/groups/${seg(handle)}/store-limit`, limit),
+  purgeGroupStore: (handle: string) => request<void>("POST", `/groups/${seg(handle)}/store/purge`),
   purgeGroup: (handle: string) => request<{ entries: number; bytes: number }>("POST", `/groups/${seg(handle)}/purge`),
   deleteGroup: (handle: string) => request<{ name: string }>("DELETE", `/groups/${seg(handle)}`),
 

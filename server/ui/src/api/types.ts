@@ -151,6 +151,8 @@ export interface GroupDetail {
  *  usage against its own limits, and its limit override (SPEC §4.6). */
 export interface GroupStore {
   enabled: boolean;
+  /** True while a purge empties it in the background; closed until then. */
+  emptying: boolean;
   used_bytes: number;
   used_items: number;
   /** The cap the store runs into; zero means none. */

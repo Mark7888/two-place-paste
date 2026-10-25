@@ -23,6 +23,14 @@ type StoreService interface {
 
 	// Config is the configured store limits.
 	Config() items.Config
+
+	// Purge queues a group's store to be emptied in the background, and
+	// Reclaiming reports whether it still is.
+	Purge(ctx context.Context, groupID string) error
+	Reclaiming(ctx context.Context, groupID string) (bool, error)
+
+	// Kick wakes the background reclaim, after a group was deleted.
+	Kick()
 }
 
 // storeAnnouncer is implemented by a transport that can tell a group's
@@ -35,6 +43,10 @@ type storeAnnouncer interface {
 // groupStoreJSON is the store section of the group page.
 type groupStoreJSON struct {
 	Enabled bool `json:"enabled"`
+
+	// Emptying is true while a purge or the group's deletion is emptying the
+	// store in the background; it is closed until then.
+	Emptying bool `json:"emptying"`
 
 	UsedBytes int64 `json:"used_bytes"`
 	UsedItems int64 `json:"used_items"`
@@ -83,6 +95,11 @@ func (s *Server) groupStore(ctx context.Context, g store.Group, tags map[string]
 	} else {
 		v.UsedBytes, v.UsedItems = u.Bytes, u.Items
 	}
+	if emptying, err := s.storeSvc.Reclaiming(ctx, g.ID); err != nil {
+		probs.add("the store state", err)
+	} else {
+		v.Emptying = emptying
+	}
 	return v
 }
 
@@ -117,8 +134,11 @@ func (s *Server) handleSetGroupStore(w http.ResponseWriter, r *http.Request, _ s
 	if !s.groupFound(w, r, id, err, "set group store") {
 		return
 	}
-	if a, ok := s.live.(storeAnnouncer); ok {
-		a.AnnounceStoreState(ctx, id, req.Enabled)
+	// A store being emptied stays closed; its devices hear when it opens.
+	if emptying, _ := s.storeSvc.Reclaiming(ctx, id); !emptying {
+		if a, ok := s.live.(storeAnnouncer); ok {
+			a.AnnounceStoreState(ctx, id, req.Enabled)
+		}
 	}
 	detail := "turned on"
 	if !req.Enabled {
@@ -254,4 +274,31 @@ func (s *Server) storeTotals(ctx context.Context, groups []store.Group, probs *p
 		}
 	}
 	return v
+}
+
+// handlePurgeGroupStore deletes every item of a group's store, for every
+// device. The request only queues the work: the store closes at once and is
+// emptied in the background, so a store of any size answers immediately.
+// The switch and the limits stay as they are.
+func (s *Server) handlePurgeGroupStore(w http.ResponseWriter, r *http.Request, _ session) {
+	if s.storeSvc == nil {
+		writeJSONError(w, http.StatusNotImplemented, "This server has no store.")
+		return
+	}
+	ctx := r.Context()
+	g, err := s.groupByHandle(ctx, r.PathValue("handle"))
+	id := g.ID
+	var before store.ItemUsage
+	if err == nil {
+		before, err = s.store.StoreUsage(ctx, id)
+	}
+	if err == nil {
+		err = s.storeSvc.Purge(ctx, id)
+	}
+	if !s.groupFound(w, r, id, err, "purge group store") {
+		return
+	}
+	s.audit(r, "group.storepurge", groupLabel(g),
+		fmt.Sprintf("%d %s (%s)", before.Items, plural(int(before.Items), "item", "items"), humanBytes(before.Bytes)))
+	w.WriteHeader(http.StatusNoContent)
 }

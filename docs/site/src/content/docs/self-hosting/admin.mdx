@@ -166,16 +166,25 @@ shows only how much the store holds, never names or contents.
   group's own, then its tag's, then `TPP_STORE_MAX_GROUP_BYTES`. The store **never evicts**: a save
   that does not fit is refused, and lowering the limit deletes nothing.
 
+### Purge store
+
+**Purge store…** appears once the store holds anything. After a confirmation page it deletes every
+item in the store, for all the group's devices; the switch and the store limit stay as they are.
+The page answers at once and the store is emptied in the background — the store section says
+**emptying** until it is done, and the group's devices see the store as turned off until then. It
+cannot be undone.
+
 ### Purge entries
 
-**Purge entries…** deletes everything the group holds now, before its 24 hours are up, and frees
-its storage. Its devices keep working and their clipboards are not touched; open history lists
+**Purge entries…** deletes the group's history now, before its 24 hours are up, and frees its
+storage. Its store is not touched. Its devices keep working and their clipboards are not touched; open history lists
 drop the entries.
 
 ### Delete a group
 
-**Delete group…** removes the group, its devices and every entry it holds, after a confirmation
-page. It cannot be undone.
+**Delete group…** removes the group, its devices, every entry it holds and every item in its
+store, after a confirmation page. It cannot be undone. The store is emptied in the background, so a
+large one does not hold the page up.
 
 - Connected devices are disconnected at once. Devices that are offline find out when they next
   connect. Either way the app says the server admin deleted the group, rather than that the device

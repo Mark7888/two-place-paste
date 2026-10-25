@@ -164,7 +164,7 @@ func (s *Service) UpdateMeta(ctx context.Context, groupID, deviceID, itemID stri
 }
 
 // Delete deletes an item for every device of the group: its record first,
-// then its blob. A blob whose delete fails is logged and left behind.
+// then its blob. A blob whose delete fails is left to the sweep.
 func (s *Service) Delete(ctx context.Context, groupID, deviceID, itemID string) error {
 	if _, err := s.enabledGroup(ctx, groupID); err != nil {
 		return err
@@ -185,11 +185,18 @@ func (s *Service) Delete(ctx context.Context, groupID, deviceID, itemID string) 
 	return nil
 }
 
-// deleteBlob deletes an item's blob, best effort: the record is already
-// gone, so a blob left behind costs disk, never correctness.
+// deleteBlob deletes the blob of an item whose record is gone. One that
+// fails goes to the retry set the sweep drains (SPEC §4.6): a blob left
+// behind costs disk, never correctness.
 func (s *Service) deleteBlob(ctx context.Context, groupID, itemID string) {
-	if err := s.blobs.DeleteItem(ctx, groupID, itemID); err != nil {
-		s.logger.WarnContext(ctx, "delete store blob failed",
+	err := s.blobs.DeleteItem(ctx, groupID, itemID)
+	if err == nil {
+		return
+	}
+	s.logger.WarnContext(ctx, "delete store blob failed; the sweep will retry",
+		slog.String("group_id", groupID), slog.String("item_id", itemID), slog.Any("error", err))
+	if err := s.reg.AddBlobRetry(ctx, store.BlobRetry{GroupID: groupID, ItemID: itemID}); err != nil {
+		s.logger.WarnContext(ctx, "queue store blob for retry failed",
 			slog.String("group_id", groupID), slog.String("item_id", itemID), slog.Any("error", err))
 	}
 }

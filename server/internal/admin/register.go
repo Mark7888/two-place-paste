@@ -34,6 +34,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 		"/admin/groups",
 		"/admin/groups/{handle}",
 		"/admin/groups/{handle}/purge",
+		"/admin/groups/{handle}/purge-store",
 		"/admin/groups/{handle}/delete",
 		"/admin/tags",
 		"/admin/tokens",
@@ -83,6 +84,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /admin/api/groups/{handle}/limit", s.write(s.handleSetGroupLimit))
 	mux.HandleFunc("PUT /admin/api/groups/{handle}/store", s.write(s.handleSetGroupStore))
 	mux.HandleFunc("PUT /admin/api/groups/{handle}/store-limit", s.write(s.handleSetGroupStoreLimit))
+	mux.HandleFunc("POST /admin/api/groups/{handle}/store/purge", s.write(s.handlePurgeGroupStore))
 	mux.HandleFunc("POST /admin/api/groups/{handle}/purge", s.write(s.handlePurgeGroup))
 
 	mux.HandleFunc("GET /admin/api/tags", s.read(s.handleTags))

@@ -23,6 +23,10 @@ const routes: { path: string; render: (params: Record<string, string>) => ReactN
   { path: "/admin/groups", render: () => <GroupsPage /> },
   { path: "/admin/groups/:handle", render: (p) => <GroupPage handle={p.handle} /> },
   { path: "/admin/groups/:handle/purge", render: (p) => <GroupConfirmPage handle={p.handle} kind="purge" /> },
+  {
+    path: "/admin/groups/:handle/purge-store",
+    render: (p) => <GroupConfirmPage handle={p.handle} kind="purge-store" />,
+  },
   { path: "/admin/groups/:handle/delete", render: (p) => <GroupConfirmPage handle={p.handle} kind="delete" /> },
   { path: "/admin/tags", render: () => <TagsPage /> },
   { path: "/admin/tokens", render: () => <TokensPage /> },
