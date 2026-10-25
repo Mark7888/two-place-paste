@@ -85,6 +85,12 @@ type EntryHeader struct {
 
 	// Size is the plaintext body length in bytes.
 	Size int64
+
+	// SHA256 is the body's hash, when HasSHA256: a version 2 header carries
+	// it (/spec/crypto.md §5.5.1). A history view checks it against a
+	// StoreIndex to mark entries already saved to the store.
+	SHA256    [sha256.Size]byte
+	HasSHA256 bool
 }
 
 // History is a page of entry metadata, newest first (SPEC §6).
@@ -377,5 +383,11 @@ func (c *Client) openHeader(m *tppv1.EntryMeta) *EntryHeader {
 	if err != nil || h.BodyLen > math.MaxInt64 {
 		return nil
 	}
-	return &EntryHeader{ContentType: h.ContentType, Filename: h.Filename, Size: int64(h.BodyLen)}
+	return &EntryHeader{
+		ContentType: h.ContentType,
+		Filename:    h.Filename,
+		Size:        int64(h.BodyLen),
+		SHA256:      h.SHA256,
+		HasSHA256:   h.HasSHA256,
+	}
 }

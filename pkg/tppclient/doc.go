@@ -2,7 +2,8 @@
 // /spec/crypto.md, a WebSocket protocol client, and one method per flow of
 // SPEC §3 and §6 — CreateGroup, StartPairing, JoinPairing, StartOffer,
 // PrepareAcceptOffer, Devices, Revoke, PutEntry, GetLatest, GetHistory,
-// GetEntry.
+// GetEntry — and the store of SPEC §6b: StoreLimits, SaveToStore, ListStore,
+// FetchStoreItem, EditStoreItem, DeleteStoreItem.
 //
 // The desktop app, and any future CLI or Linux client, are shells around this
 // package: it holds all of the crypto and all of the protocol, and they hold
@@ -47,6 +48,18 @@
 // retained old key, because forward secrecy across revocation is the whole
 // point of the rekey — and a wrapped key for a newer epoch, whether pushed
 // during a rekey or waiting at connect time, advances it.
+//
+// # The store
+//
+// Store items do not expire, so they are the one thing an older epoch's key
+// still has to open. That key is not kept: every rekey uploads a link, the old
+// store key sealed under the new one, and a client walks the links back from
+// its current key when it lists the store (/spec/crypto.md §7a). The keys it
+// opens live in memory for the current group key only.
+//
+// Searching, tag filters, sorting and duplicate checks happen on the device,
+// in a StoreIndex a shell fills from ListStore and keeps current from the
+// store handlers: the relay cannot search what it cannot read.
 //
 // # Concurrency
 //
