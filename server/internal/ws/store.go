@@ -18,6 +18,7 @@ import (
 // StoreItems is the store service subset this package needs.
 type StoreItems interface {
 	Limits(ctx context.Context, groupID string) (items.Limits, error)
+	Links(ctx context.Context, groupID string) ([]store.ItemLink, error)
 }
 
 // storeHandler routes one store request. It reports false for a message type
@@ -26,11 +27,19 @@ func (s *Server) storeHandler(ctx context.Context, env *tppv1.Envelope, _, group
 	if s.items == nil {
 		return nil, false, nil
 	}
-	if env.GetType() == tppv1.MessageType_MESSAGE_TYPE_STORE_LIMITS_REQUEST {
-		frame, err := s.handleStoreLimits(ctx, env, groupID)
-		return frame, true, err
+	var (
+		frame []byte
+		err   error
+	)
+	switch env.GetType() {
+	case tppv1.MessageType_MESSAGE_TYPE_STORE_LIMITS_REQUEST:
+		frame, err = s.handleStoreLimits(ctx, env, groupID)
+	case tppv1.MessageType_MESSAGE_TYPE_STORE_LINKS_REQUEST:
+		frame, err = s.handleStoreLinks(ctx, env, groupID)
+	default:
+		return nil, false, nil
 	}
-	return nil, false, nil
+	return frame, true, storeWireError(err)
 }
 
 // handleStoreLimits states whether the group's store is on and how full it
@@ -54,6 +63,37 @@ func (s *Server) handleStoreLimits(ctx context.Context, env *tppv1.Envelope, gro
 	})
 }
 
+// handleStoreLinks returns the group's store links, oldest first.
+func (s *Server) handleStoreLinks(ctx context.Context, env *tppv1.Envelope, groupID string) ([]byte, error) {
+	links, err := s.items.Links(ctx, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("read store links: %w", err)
+	}
+	resp := &tppv1.StoreLinksResponse{Links: make([]*tppv1.StoreLink, 0, len(links))}
+	for _, l := range links {
+		resp.Links = append(resp.Links, &tppv1.StoreLink{Epoch: l.Epoch, Link: l.Link})
+	}
+	return encode(env.GetId(), tppv1.MessageType_MESSAGE_TYPE_STORE_LINKS_RESPONSE, resp)
+}
+
+// storeWireError turns the store's errors into the codes a client branches
+// on. Anything it does not know is passed through, and becomes
+// ERROR_CODE_INTERNAL without its detail.
+func storeWireError(err error) error {
+	var wire wireError
+	switch {
+	case err == nil, errors.As(err, &wire):
+		return err
+	case errors.Is(err, store.ErrStoreDisabled):
+		return wireErrf(tppv1.ErrorCode_ERROR_CODE_STORE_DISABLED, "the store is turned off for this group")
+	case errors.Is(err, store.ErrStoreBusy):
+		return wireErrf(tppv1.ErrorCode_ERROR_CODE_STORE_DISABLED, "the store of this group is being emptied by the admin")
+	case errors.Is(err, store.ErrNotFound):
+		return wireErrf(tppv1.ErrorCode_ERROR_CODE_NOT_FOUND, "no such group")
+	}
+	return err
+}
+
 // AnnounceStoreState tells every connected device of a group that the admin
 // turned its store on or off. A device that is offline learns it from its
 // next StoreLimitsRequest.
@@ -66,3 +106,6 @@ func (s *Server) AnnounceStoreState(ctx context.Context, groupID string, enabled
 	}
 	s.hub.broadcast(groupID, frame)
 }
+
+// storeLinkSize is the fixed length of a store link (/spec/crypto.md §7a.2).
+const storeLinkSize = 49

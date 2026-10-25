@@ -407,20 +407,21 @@ func (s *RedisStore) RemoveDevice(ctx context.Context, groupID, deviceID string)
 }
 
 // ApplyRekey implements Store.
-func (s *RedisStore) ApplyRekey(ctx context.Context, groupID, revokedDeviceID string, expectedEpoch uint64, keys []RekeyKey) (Group, error) {
-	argv := make([]any, 0, 4+2*len(keys))
+func (s *RedisStore) ApplyRekey(ctx context.Context, groupID, revokedDeviceID string, expectedEpoch uint64, keys []RekeyKey, storeLink []byte) (Group, error) {
+	argv := make([]any, 0, 5+2*len(keys))
 	argv = append(argv,
 		revokedDeviceID,
 		strconv.FormatUint(expectedEpoch, 10),
 		devicePrefix,
 		wrappedKeySuffix,
+		string(storeLink),
 	)
 	for _, k := range keys {
 		argv = append(argv, k.DeviceID, string(k.Key))
 	}
 
 	code, err := s.applyRekey.Run(ctx, s.rdb,
-		[]string{groupKey(groupID), groupDevicesKey(groupID)}, argv...).Int64()
+		[]string{groupKey(groupID), groupDevicesKey(groupID), storeLinksKey(groupID), storeIndexKey(groupID)}, argv...).Int64()
 	if err != nil {
 		return Group{}, fmt.Errorf("apply rekey for group %s: %w", groupID, err)
 	}
@@ -433,6 +434,8 @@ func (s *RedisStore) ApplyRekey(ctx context.Context, groupID, revokedDeviceID st
 		return Group{}, fmt.Errorf("apply rekey for group %s: %w: revoked device %s is not a member", groupID, ErrNotFound, revokedDeviceID)
 	case 4:
 		return Group{}, ErrInvalidRekey
+	case 5:
+		return Group{}, ErrStoreLinkRequired
 	}
 	return s.GetGroup(ctx, groupID)
 }
@@ -743,7 +746,7 @@ func (s *RedisStore) DeleteGroup(ctx context.Context, groupID string) (DeletedGr
 		return DeletedGroup{}, fmt.Errorf("delete group %s: %w", groupID, err)
 	}
 	reply, err := deleteGroupScript.Run(ctx, s.rdb,
-		[]string{groupKey(groupID), groupDevicesKey(groupID), tokenKey(groupID)},
+		[]string{groupKey(groupID), groupDevicesKey(groupID), tokenKey(groupID), storeLinksKey(groupID)},
 		devicePrefix, wrappedKeySuffix, tombstonePrefix,
 		strconv.FormatInt(TombstoneTTL.Milliseconds(), 10), msString(s.now()),
 	).Slice()

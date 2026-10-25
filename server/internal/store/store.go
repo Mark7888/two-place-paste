@@ -358,7 +358,13 @@ type Store interface {
 	// ErrEpochConflict when expectedEpoch is stale and ErrInvalidRekey when
 	// keys do not cover exactly the remaining devices. A partial apply is a
 	// bug, not a degraded mode.
-	ApplyRekey(ctx context.Context, groupID, revokedDeviceID string, expectedEpoch uint64, keys []RekeyKey) (Group, error)
+	//
+	// storeLink, when not empty, is kept as the group's store link into the
+	// new epoch, in the same step (/spec/crypto.md §7a.2). An empty one is
+	// refused with ErrStoreLinkRequired while the group has store items:
+	// they would be unreadable from the new epoch on. The check and the
+	// apply are atomic with saving an item, so no item can slip in between.
+	ApplyRekey(ctx context.Context, groupID, revokedDeviceID string, expectedEpoch uint64, keys []RekeyKey, storeLink []byte) (Group, error)
 
 	// CreatePairing mints a single-use pairing token valid for ttl
 	// (SPEC §3.2 step 1).

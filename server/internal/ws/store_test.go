@@ -120,3 +120,73 @@ func TestRelayWithoutAStore(t *testing.T) {
 		t.Errorf("StoreLimitsRequest error = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_UNSUPPORTED_MESSAGE)
 	}
 }
+
+// rekey revokes victim from the caller's group, sending link as the store
+// link, and returns the frame the relay answered with.
+func rekey(c *client, victim, keeper string, epoch uint64, link []byte) *tppv1.Envelope {
+	c.t.Helper()
+	c.send("rekey", tppv1.MessageType_MESSAGE_TYPE_REKEY_REQUEST, &tppv1.RekeyRequest{
+		RevokedDeviceId: victim,
+		ExpectedEpoch:   epoch,
+		WrappedKeys:     []*tppv1.WrappedKey{{DeviceId: keeper, WrappedGroupKey: []byte("next")}},
+		StoreLink:       link,
+	})
+	return c.await(tppv1.MessageType_MESSAGE_TYPE_REKEY_RESPONSE, nil)
+}
+
+// TestStoreLinksComeFromRekeys: the link a rekey carries is kept for the new
+// epoch and listed, oldest first; a link of the wrong length is refused; and
+// like every store request but the limits, the list is refused while the
+// store is off (/spec/crypto.md §7a.2).
+func TestStoreLinksComeFromRekeys(t *testing.T) {
+	t.Parallel()
+
+	h := newStoreHarness(t, testStoreConfig)
+	laptop, created := h.createGroup(t, "laptop")
+	_, phone := h.pair(t, laptop, "phone")
+	_, tablet := h.pair(t, laptop, "tablet")
+
+	laptop.send("bad", tppv1.MessageType_MESSAGE_TYPE_REKEY_REQUEST, &tppv1.RekeyRequest{
+		RevokedDeviceId: phone.GetDeviceId(),
+		ExpectedEpoch:   1,
+		WrappedKeys: []*tppv1.WrappedKey{
+			{DeviceId: created.GetDeviceId(), WrappedGroupKey: []byte("next")},
+			{DeviceId: tablet.GetDeviceId(), WrappedGroupKey: []byte("next")},
+		},
+		StoreLink: make([]byte, 48),
+	})
+	if got := laptop.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT {
+		t.Errorf("rekey with a 48-byte link = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT)
+	}
+
+	link2 := []byte(strings.Repeat("2", 49))
+	laptop.send("rekey-2", tppv1.MessageType_MESSAGE_TYPE_REKEY_REQUEST, &tppv1.RekeyRequest{
+		RevokedDeviceId: phone.GetDeviceId(),
+		ExpectedEpoch:   1,
+		WrappedKeys: []*tppv1.WrappedKey{
+			{DeviceId: created.GetDeviceId(), WrappedGroupKey: []byte("next")},
+			{DeviceId: tablet.GetDeviceId(), WrappedGroupKey: []byte("next")},
+		},
+		StoreLink: link2,
+	})
+	laptop.await(tppv1.MessageType_MESSAGE_TYPE_REKEY_RESPONSE, nil)
+	link3 := []byte(strings.Repeat("3", 49))
+	rekey(laptop, tablet.GetDeviceId(), created.GetDeviceId(), 2, link3)
+
+	laptop.send("links-off", tppv1.MessageType_MESSAGE_TYPE_STORE_LINKS_REQUEST, &tppv1.StoreLinksRequest{})
+	if got := laptop.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_STORE_DISABLED {
+		t.Errorf("StoreLinksRequest with the store off = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_STORE_DISABLED)
+	}
+
+	if err := h.store.SetGroupStore(context.Background(), created.GetGroupId(), true); err != nil {
+		t.Fatalf("SetGroupStore() error = %v", err)
+	}
+	laptop.send("links", tppv1.MessageType_MESSAGE_TYPE_STORE_LINKS_REQUEST, &tppv1.StoreLinksRequest{})
+	var resp tppv1.StoreLinksResponse
+	laptop.await(tppv1.MessageType_MESSAGE_TYPE_STORE_LINKS_RESPONSE, &resp)
+	got := resp.GetLinks()
+	if len(got) != 2 || got[0].GetEpoch() != 2 || string(got[0].GetLink()) != string(link2) ||
+		got[1].GetEpoch() != 3 || string(got[1].GetLink()) != string(link3) {
+		t.Errorf("StoreLinksResponse = %v, want the links into epochs 2 and 3", got)
+	}
+}

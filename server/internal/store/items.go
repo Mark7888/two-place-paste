@@ -51,6 +51,13 @@ type ItemLimits struct {
 	GroupItems int64
 }
 
+// ItemLink is the previous epoch's store key sealed under the store key of
+// Epoch (/spec/crypto.md §7a.2). The relay keeps it and cannot open it.
+type ItemLink struct {
+	Epoch uint64
+	Link  []byte
+}
+
 // Items is the persistent zone's view of the store. Implementations must be
 // safe for concurrent use, and every write that checks a limit or an epoch
 // must make the check and the write one atomic step.
@@ -60,4 +67,8 @@ type Items interface {
 
 	// TotalStoreUsage reports what every store holds together.
 	TotalStoreUsage(ctx context.Context) (ItemUsage, error)
+
+	// StoreLinks returns the links every rekey of the group sent, oldest
+	// first. A group that was never re-keyed has none.
+	StoreLinks(ctx context.Context, groupID string) ([]ItemLink, error)
 }

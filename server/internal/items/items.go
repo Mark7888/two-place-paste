@@ -198,6 +198,34 @@ func (s *Service) Limits(ctx context.Context, groupID string) (Limits, error) {
 	return out, nil
 }
 
+// Links returns the group's store links, oldest first: one per rekey, each
+// leading from an epoch's store key back to the one before
+// (/spec/crypto.md §7a.2). They are refused, like every store request but
+// Limits, while the store is off.
+func (s *Service) Links(ctx context.Context, groupID string) ([]store.ItemLink, error) {
+	if _, err := s.enabledGroup(ctx, groupID); err != nil {
+		return nil, err
+	}
+	links, err := s.reg.StoreLinks(ctx, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("read store links of group %s: %w", groupID, err)
+	}
+	return links, nil
+}
+
+// enabledGroup reads a group and refuses with store.ErrStoreDisabled when its
+// store is off.
+func (s *Service) enabledGroup(ctx context.Context, groupID string) (store.Group, error) {
+	g, err := s.reg.GetGroup(ctx, groupID)
+	if err != nil {
+		return store.Group{}, fmt.Errorf("read group %s: %w", groupID, err)
+	}
+	if !g.StoreEnabled {
+		return store.Group{}, fmt.Errorf("group %s: %w", groupID, store.ErrStoreDisabled)
+	}
+	return g, nil
+}
+
 // storeLimits resolves what a reservation in g is checked against.
 func (s *Service) storeLimits(ctx context.Context, g store.Group) (store.ItemLimits, error) {
 	var tag *store.Tag

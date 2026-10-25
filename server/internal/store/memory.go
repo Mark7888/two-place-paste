@@ -37,6 +37,8 @@ type MemoryStore struct {
 	// The store's records (items_memory.go).
 	storeUsage map[string]ItemUsage
 	storeTotal ItemUsage
+	storeItems map[string]memItem
+	storeLinks map[string]map[uint64][]byte
 }
 
 // NewMemoryStore returns an empty in-memory Store.
@@ -55,6 +57,8 @@ func NewMemoryStore() *MemoryStore {
 		tombstones: make(map[string]time.Time),
 
 		storeUsage: make(map[string]ItemUsage),
+		storeItems: make(map[string]memItem),
+		storeLinks: make(map[string]map[uint64][]byte),
 	}
 }
 
@@ -294,7 +298,7 @@ func (m *MemoryStore) RemoveDevice(_ context.Context, groupID, deviceID string) 
 
 // ApplyRekey implements Store. Like the Lua script it mirrors, it validates
 // everything before it writes anything.
-func (m *MemoryStore) ApplyRekey(_ context.Context, groupID, revokedDeviceID string, expectedEpoch uint64, keys []RekeyKey) (Group, error) {
+func (m *MemoryStore) ApplyRekey(_ context.Context, groupID, revokedDeviceID string, expectedEpoch uint64, keys []RekeyKey, storeLink []byte) (Group, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -326,8 +330,17 @@ func (m *MemoryStore) ApplyRekey(_ context.Context, groupID, revokedDeviceID str
 			return Group{}, ErrInvalidRekey
 		}
 	}
+	if len(storeLink) == 0 && m.committedItemsLocked(groupID) > 0 {
+		return Group{}, ErrStoreLinkRequired
+	}
 
 	next := expectedEpoch + 1
+	if len(storeLink) > 0 {
+		if m.storeLinks[groupID] == nil {
+			m.storeLinks[groupID] = make(map[uint64][]byte)
+		}
+		m.storeLinks[groupID][next] = append([]byte(nil), storeLink...)
+	}
 	for _, k := range keys {
 		m.wrapped[k.DeviceID] = WrappedKey{Epoch: next, Key: k.Key}
 	}
@@ -617,6 +630,7 @@ func (m *MemoryStore) DeleteGroup(_ context.Context, groupID string) (DeletedGro
 	slices.Sort(out.DeviceIDs)
 	delete(m.members, groupID)
 	delete(m.groups, groupID)
+	delete(m.storeLinks, groupID)
 	if tok, ok := m.tokens[groupID]; ok {
 		tok.GroupDeleted = true
 		m.tokens[groupID] = tok
