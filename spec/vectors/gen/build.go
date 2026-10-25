@@ -89,6 +89,27 @@ func build() (map[string][]byte, error) {
 		body        []byte
 	}{"header.json", "entry header encryption", hn, "header", h})
 
+	for _, b := range []struct {
+		file, name, description string
+		build                   func() ([]byte, int, error)
+	}{
+		{"header-v2.json", "header-v2", "entry header encryption, version 2", buildHeaderV2},
+		{"store-chain.json", "store-chain", "store keys and the links a rekey uploads", buildStoreChain},
+		{"store-item.json", "store-item", "store items end to end: item keys, container and metadata", buildStoreItem},
+	} {
+		body, n, err := b.build()
+		if err != nil {
+			return nil, err
+		}
+		suites = append(suites, struct {
+			file        string
+			description string
+			count       int
+			name        string
+			body        []byte
+		}{b.file, b.description, n, b.name, body})
+	}
+
 	x2, xn2, err := buildFailure()
 	if err != nil {
 		return nil, err

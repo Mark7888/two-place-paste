@@ -10,20 +10,28 @@ import (
 )
 
 // Entry header (spec/crypto.md §5.5): a fixed-size, separately encrypted
-// summary of an entry — content type, filename, plaintext body length — that
-// the server stores beside the entry and returns in history, so a client can
-// show what an entry is without fetching it. The server sees 297 opaque bytes
-// for every entry, whatever it holds.
+// summary of an entry — content type, filename, plaintext body length and, in
+// version 2, the SHA-256 of the body — that the server stores beside the entry
+// and returns in history, so a client can show what an entry is without
+// fetching it. The server sees 297 opaque bytes for every v1 header and 553
+// for every v2 one, whatever the entry holds.
 
 const (
 	infoHeader = "tpp/v1/header"
 	aadHeader  = "tpp/v1/header-aad"
 	headerV1   = 0x01
+	headerV2   = 0x02
 
-	// HeaderSize is the fixed length of an encoded header.
+	// HeaderSize is the fixed length of an encoded v1 header.
 	HeaderSize = 256
-	// HeaderContainerSize is the fixed length of a sealed header.
+	// HeaderContainerSize is the fixed length of a sealed v1 header.
 	HeaderContainerSize = 1 + NonceSize + HeaderSize + TagSize // 297
+	// HeaderV2Size is the fixed length of an encoded v2 header (spec §5.5.1).
+	HeaderV2Size = 512
+	// HeaderV2ContainerSize is the fixed length of a sealed v2 header.
+	HeaderV2ContainerSize = 1 + NonceSize + HeaderV2Size + TagSize // 553
+	// headerV2MaxFilename is the longest filename a v2 header carries.
+	headerV2MaxFilename = 255
 
 	// headerMaxContentType is the longest content type a header carries; a
 	// longer one is written as fallbackContentType.
@@ -34,10 +42,15 @@ const (
 
 // Header is what a client may know about an entry before fetching it. It is
 // advisory: the frame inside the entry stays the authority.
+//
+// SHA256 is the hash of the frame's body. Only a v2 header carries it;
+// HasSHA256 says whether this one did.
 type Header struct {
 	ContentType string
 	Filename    string
 	BodyLen     uint64
+	SHA256      [sha256.Size]byte
+	HasSHA256   bool
 }
 
 // EncodeHeader serializes a header into exactly HeaderSize bytes. A content
@@ -62,6 +75,32 @@ func EncodeHeader(h Header) ([]byte, error) {
 	return append(out, make([]byte, HeaderSize-len(out))...), nil
 }
 
+// EncodeHeaderV2 serializes a v2 header into exactly HeaderV2Size bytes
+// (spec §5.5.1): the v1 fields, a filename cut at a UTF-8 boundary to 255
+// bytes, and the SHA-256 of the body, which h must carry.
+func EncodeHeaderV2(h Header) ([]byte, error) {
+	ct := h.ContentType
+	if ct == "" {
+		return nil, fmt.Errorf("tppcrypto: encode header: %w: empty content type", ErrMalformed)
+	}
+	if !h.HasSHA256 {
+		return nil, fmt.Errorf("tppcrypto: encode header: %w: a v2 header carries the body hash", ErrMalformed)
+	}
+	if len(ct) > headerMaxContentType {
+		ct = fallbackContentType
+	}
+	fn := truncateUTF8(h.Filename, headerV2MaxFilename)
+	out := make([]byte, 0, HeaderV2Size)
+	out = append(out, headerV2)
+	out = binary.BigEndian.AppendUint16(out, uint16(len(ct))) //nolint:gosec // at most 128
+	out = append(out, ct...)
+	out = binary.BigEndian.AppendUint16(out, uint16(len(fn))) //nolint:gosec // at most 255
+	out = append(out, fn...)
+	out = binary.BigEndian.AppendUint64(out, h.BodyLen)
+	out = append(out, h.SHA256[:]...)
+	return append(out, make([]byte, HeaderV2Size-len(out))...), nil
+}
+
 // truncateUTF8 cuts s to at most n bytes without splitting a code point.
 func truncateUTF8(s string, n int) string {
 	if len(s) <= n {
@@ -73,22 +112,28 @@ func truncateUTF8(s string, n int) string {
 	return s[:n]
 }
 
-// DecodeHeader parses an encoded header. It is canonical: exactly HeaderSize
-// bytes, a known version, a non-empty content type, lengths that fit, and
-// zero padding.
+// DecodeHeader parses an encoded header of either version. It is canonical:
+// a known version, exactly that version's size, a non-empty content type,
+// lengths that fit, a v2 filename of at most 255 bytes, and zero padding.
 func DecodeHeader(b []byte) (Header, error) {
-	if len(b) != HeaderSize {
-		return Header{}, fmt.Errorf("tppcrypto: decode header: %w: %d bytes, want %d", ErrMalformed, len(b), HeaderSize)
+	if len(b) == 0 {
+		return Header{}, fmt.Errorf("tppcrypto: decode header: %w: empty", ErrMalformed)
 	}
-	r := &frameReader{b: b}
-	v, err := r.u8()
-	if err != nil {
-		return Header{}, fmt.Errorf("tppcrypto: decode header: %w", err)
-	}
-	if v != headerV1 {
+	var size int
+	switch b[0] {
+	case headerV1:
+		size = HeaderSize
+	case headerV2:
+		size = HeaderV2Size
+	default:
 		return Header{}, fmt.Errorf("tppcrypto: decode header: %w", ErrVersion)
 	}
+	if len(b) != size {
+		return Header{}, fmt.Errorf("tppcrypto: decode header: %w: %d bytes, want %d", ErrMalformed, len(b), size)
+	}
+	r := &frameReader{b: b, i: 1}
 	var h Header
+	var err error
 	if h.ContentType, err = r.str16(); err != nil {
 		return Header{}, fmt.Errorf("tppcrypto: decode header content type: %w", err)
 	}
@@ -100,6 +145,17 @@ func DecodeHeader(b []byte) (Header, error) {
 	}
 	if h.BodyLen, err = r.u64(); err != nil {
 		return Header{}, fmt.Errorf("tppcrypto: decode header body length: %w", err)
+	}
+	if b[0] == headerV2 {
+		if len(h.Filename) > headerV2MaxFilename {
+			return Header{}, fmt.Errorf("tppcrypto: decode header: %w: filename over %d bytes", ErrMalformed, headerV2MaxFilename)
+		}
+		sum, err := r.bytes(sha256.Size)
+		if err != nil {
+			return Header{}, fmt.Errorf("tppcrypto: decode header hash: %w", err)
+		}
+		copy(h.SHA256[:], sum)
+		h.HasSHA256 = true
 	}
 	for _, c := range b[r.i:] {
 		if c != 0 {
@@ -146,12 +202,13 @@ func HeaderKey(groupKey, nonce []byte, epoch uint64) ([]byte, error) {
 	return key, nil
 }
 
-// SealHeader encrypts an encoded header:
+// SealHeader encrypts an encoded header of either version:
 //
-//	u8(version) || header_nonce[24] || ciphertext[256] || tag[16]
+//	u8(version) || header_nonce[24] || ciphertext[256 or 512] || tag[16]
 func SealHeader(groupKey, nonce []byte, epoch uint64, entryID string, encoded []byte) ([]byte, error) {
-	if len(encoded) != HeaderSize {
-		return nil, fmt.Errorf("tppcrypto: seal header: %w: %d bytes, want %d", ErrMalformed, len(encoded), HeaderSize)
+	if len(encoded) != HeaderSize && len(encoded) != HeaderV2Size {
+		return nil, fmt.Errorf("tppcrypto: seal header: %w: %d bytes, want %d or %d",
+			ErrMalformed, len(encoded), HeaderSize, HeaderV2Size)
 	}
 	key, err := HeaderKey(groupKey, nonce, epoch)
 	if err != nil {
@@ -161,16 +218,18 @@ func SealHeader(groupKey, nonce []byte, epoch uint64, entryID string, encoded []
 	if err != nil {
 		return nil, fmt.Errorf("tppcrypto: seal header: %w", err)
 	}
-	out := make([]byte, 0, HeaderContainerSize)
+	out := make([]byte, 0, 1+NonceSize+len(encoded)+TagSize)
 	out = append(out, Version)
 	out = append(out, nonce...)
 	return aead.Seal(out, nonce, encoded, HeaderAAD(epoch, entryID)), nil
 }
 
-// OpenHeader reverses SealHeader and returns the encoded header.
+// OpenHeader reverses SealHeader and returns the encoded header, of either
+// version.
 func OpenHeader(groupKey, container []byte, epoch uint64, entryID string) ([]byte, error) {
-	if len(container) != HeaderContainerSize {
-		return nil, fmt.Errorf("tppcrypto: open header: %w: %d bytes, want %d", ErrMalformed, len(container), HeaderContainerSize)
+	if len(container) != HeaderContainerSize && len(container) != HeaderV2ContainerSize {
+		return nil, fmt.Errorf("tppcrypto: open header: %w: %d bytes, want %d or %d",
+			ErrMalformed, len(container), HeaderContainerSize, HeaderV2ContainerSize)
 	}
 	if container[0] != Version {
 		return nil, fmt.Errorf("tppcrypto: open header: %w", ErrVersion)
@@ -191,7 +250,8 @@ func OpenHeader(groupKey, container []byte, epoch uint64, entryID string) ([]byt
 	return encoded, nil
 }
 
-// SealEntryHeader encodes and seals h under a fresh nonce.
+// SealEntryHeader encodes and seals h as a v1 header under a fresh nonce.
+// Writers stay on v1 until the relay accepts v2 (spec §5.5.1).
 func SealEntryHeader(groupKey []byte, epoch uint64, entryID string, h Header) ([]byte, error) {
 	encoded, err := EncodeHeader(h)
 	if err != nil {

@@ -162,7 +162,9 @@ func headerFailures() ([]failureVector, error) {
 		return failureVector{Name: name, Description: desc, Operation: "decode_header", Reason: reason, EncodedHeader: hexs(b)}
 	}
 	badVersion := append([]byte(nil), encoded...)
-	badVersion[0] = 0x02
+	badVersion[0] = 0xFF
+	v2InV1Size := append([]byte(nil), encoded...)
+	v2InV1Size[0] = headerV2
 	padded := append([]byte(nil), encoded...)
 	padded[HeaderSize-1] = 0x01
 	emptyType := append([]byte(nil), encoded...)
@@ -179,13 +181,15 @@ func headerFailures() ([]failureVector, error) {
 			"Poly1305 authentication fails", flip(container, 1+NonceSize+3), c.epoch, c.entryID),
 		open("header-unknown-version", "a container version this profile does not implement",
 			"rejected before any key is derived", flip(container, 0), c.epoch, c.entryID),
-		open("header-wrong-length", "a container that is not exactly 297 bytes",
-			"every header is the same size", container[:len(container)-1], c.epoch, c.entryID),
+		open("header-wrong-length", "a container that is neither 297 nor 553 bytes",
+			"every header of a version is the same size", container[:len(container)-1], c.epoch, c.entryID),
 		decode("header-decode-unknown-version", "an encoded header of an unknown version", "the version byte is checked first", badVersion),
 		decode("header-decode-pad-nonzero", "a non-zero byte in the padding", "the encoding is canonical", padded),
 		decode("header-decode-empty-content-type", "an empty content type", "a header always names a type", emptyType),
 		decode("header-decode-length-overflow", "a length prefix past the end of the header", "lengths must fit", overflow),
 		decode("header-decode-wrong-size", "an encoded header that is not 256 bytes", "every header is the same size", encoded[:HeaderSize-1]),
+		decode("header-decode-v2-at-v1-size", "a v2 version byte on a 256-byte header",
+			"each version has exactly one size", v2InV1Size),
 	}
 	return vs, nil
 }

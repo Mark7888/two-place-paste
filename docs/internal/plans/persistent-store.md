@@ -1,6 +1,7 @@
 # Plan — Persistent store
 
-**Status:** agreed design, ready for the spec PR (§10 step 1). §9 records the
+**Status:** agreed design; step 1 of §10 (spec, vectors, client crypto) is in
+review. §9 records the
 answered questions; §11 keeps the server-side copy as a later option.
 **Touches:** `/spec/**` (store section, header v2, vectors), `/proto/**`,
 `/server/**`, `/pkg/tppclient/**`, `/desktop/**`, `/mobile/**`, `/deploy/**`,
@@ -70,42 +71,28 @@ answered questions; §11 keeps the server-side copy as a later option.
 
 ## 4. Cryptography
 
-New `spec/crypto.md` section, plus a header revision. No new primitive. New
-domain strings: `tpp/v1/store`, `tpp/v1/store-link`, `tpp/v1/store-link-aad`,
-`tpp/v1/store-wrap`, `tpp/v1/store-wrap-aad`, `tpp/v1/store-meta`,
-`tpp/v1/store-meta-aad`.
+Specified in `spec/crypto.md` §5.5.1 (header v2) and §7a (store), revision
+1.3, with vectors in `header-v2.json`, `store-chain.json`, `store-item.json` and
+`failure.json`. No new primitive; seven new domain strings. In summary:
 
-```
-store_key[E]  = HKDF(ikm = group_key[E], salt = <empty>,
-                     info = "tpp/v1/store" || u64be(E), L = 32)
+| Piece | Construction | Size |
+|---|---|---|
+| Store key | `HKDF(group_key[E], <empty>, "tpp/v1/store" ‖ E)` | 32 |
+| Link into E | the store key of E-1, sealed under a key derived from the store key of E, zero nonce, both epochs in the AAD | 49 |
+| Item keys | the blob's content key and a **random metadata key**, wrapped together under the store key of the save epoch W, item id and W in the AAD | 105 |
+| Blob | an entry container (§5.2), `content_id = item_id`, `content_epoch = W` | body + 41 |
+| Metadata record | fixed record: body length, SHA-256, type, filename, name, description, tags | 2048, sealed 2089 |
 
--- the blob: an entry container (§5.2), sealed by whoever wrote it
-content_key   = HKDF(group_key[C], entry_nonce, "tpp/v1/entry" || u64be(C))   -- §5.1
-                where C = content_epoch and the AAD binds content_id (§5.3)
+Where the build differs from the first draft of this plan, and why:
 
--- per item, made by the saving device at its current epoch W (W = C in v1)
-wrapped_key   = u8(1) || wrap_nonce[24] || XChaCha20-Poly1305(
-                  key   = HKDF(store_key[W], wrap_nonce, "tpp/v1/store-wrap" || u64be(W)),
-                  nonce = wrap_nonce,
-                  aad   = "tpp/v1/store-wrap-aad" || u8(1) || u64be(W)
-                          || len32(item_id) || item_id,
-                  pt    = content_key)                                   -- 73 bytes
-
-sealed_meta   = u8(1) || meta_nonce[24] || XChaCha20-Poly1305(
-                  key   = HKDF(content_key, meta_nonce, "tpp/v1/store-meta"),
-                  nonce = meta_nonce,
-                  aad   = "tpp/v1/store-meta-aad" || u8(1) || len32(item_id) || item_id
-                          || u64be(meta_rev),
-                  pt    = 1024-byte record: version, name, description, tags,
-                          content type, filename, body length, sha256(body), saved_at)
-
--- on rekey E → E+1, by the revoking device, which holds both keys
-link[E+1]     = u8(1) || XChaCha20-Poly1305(
-                  key   = HKDF(store_key[E+1], <empty>, "tpp/v1/store-link"),
-                  nonce = 24 zero bytes,                       -- key used once
-                  aad   = "tpp/v1/store-link-aad" || u8(1) || u64be(E) || u64be(E+1),
-                  pt    = store_key[E])                                  -- 49 bytes
-```
+- **Two item keys, not one.** The draft derived the metadata key from the content
+  key, which would have used one key both as an AEAD key and as an HKDF input.
+  A separate random metadata key, wrapped with it, keeps every key to one use.
+- **A 2048-byte record, not 1024.** The limits agreed for the dialog (name 200
+  bytes, description 800, 16 tags of 32, a 255-byte filename) need up to 1961
+  bytes. The record no longer carries a client timestamp: the relay's `saved_at`
+  orders and dates items.
+- **The link key binds its epoch** (`"tpp/v1/store-link" ‖ E`), not only the AAD.
 
 Reading an item wrapped at epoch W by a client at epoch E ≥ W: derive
 `store_key[E]`, open `link[E]`, `link[E-1]`, … down to W; unwrap the content
@@ -115,7 +102,7 @@ key; open the container with the record's `content_id` and `content_epoch`.
 opening one costs a hash and a decryption: microseconds. At the two revocations
 a year SPEC §2.2 expects, a group rekeyed a hundred times carries 4.9 KB and opens
 the chain in well under a millisecond on a phone. It is never noticeable. If it
-ever matters, a client can re-wrap old items to the current epoch (73 bytes each)
+ever matters, a client can re-wrap old items to the current epoch (105 bytes each)
 and the old links become unused.
 
 **Exception to §7.** "Never keep old keys" stays the rule for history. For the
@@ -189,7 +176,7 @@ store:pending               zset   item ids in flight, by start time
 store:reclaim               set    group ids whose store is being deleted
 ```
 
-About 1.2 KB per item. Redis memory grows with the store, so the operator docs say
+About 2.3 KB per item (the sealed record is 2089 bytes). Redis memory grows with the store, so the operator docs say
 so, and the item count per group is limited (§6.5).
 
 ### 6.2 Write ordering
@@ -235,7 +222,7 @@ revocation. Connected devices get `StoreStateChanged` either way.
 | `TPP_STORE_MAX_TOTAL_BYTES` | 0 (off) | Separate from the blob total; history and store never evict each other. |
 | `TPP_STORE_MAX_GROUP_BYTES` | 100 MiB | Override per tag and per group, same precedence as the blob limit (SPEC §4.4). |
 | `TPP_STORE_MAX_ITEM_BYTES` | = entry cap (50 MiB) | |
-| `TPP_STORE_MAX_GROUP_ITEMS` | 1 000 | Bounds Redis memory and the index a client downloads (~1 MB). |
+| `TPP_STORE_MAX_GROUP_ITEMS` | 1 000 | Bounds Redis memory and the index a client downloads (~2 MB). |
 
 Counted: blob size plus the metadata record.
 
@@ -305,7 +292,11 @@ upgrading pages (operator), with screenshots, in the same PRs.
 ## 10. Order of work (one PR each)
 
 1. **Spec** — SPEC store sections and the §3.2, §3.3, §4.5 amendments;
-   `spec/crypto.md` store section and header v2, with vectors.
+   `spec/crypto.md` store section and header v2, with vectors, and the crypto
+   functions in `pkg/tppclient/tppcrypto` and `mobile/src/core/crypto` that the
+   vectors hold them to: `spec/crypto.md` §12 has a contract change land with
+   both implementations, and each client's coverage test fails on a suite it
+   does not run. Readers accept header v2 from here on; writers stay on v1.
 2. **Proto** — `store.proto`, `RekeyRequest.store_link`, `STORE_DISABLED`,
    `make proto`.
 3. **Server** — header v2 acceptance, store records, namespace and quota, upload

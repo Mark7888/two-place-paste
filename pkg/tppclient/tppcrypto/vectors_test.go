@@ -82,6 +82,10 @@ func TestVectorCorpusIsFullyCovered(t *testing.T) {
 		"entry.json":   true,
 		"header.json":  true,
 		"failure.json": true,
+
+		"header-v2.json":   true,
+		"store-chain.json": true,
+		"store-item.json":  true,
 	}
 	total := 0
 	for _, s := range index.Suites {
@@ -358,7 +362,7 @@ type headerFieldsVector struct {
 }
 
 func (h headerFieldsVector) header() Header {
-	return Header(h)
+	return Header{ContentType: h.ContentType, Filename: h.Filename, BodyLen: h.BodyLen}
 }
 
 func TestHeaderVectors(t *testing.T) {
@@ -446,6 +450,15 @@ func TestFailureVectors(t *testing.T) {
 			Container           hexString `json:"container"`
 			EncodedFrame        hexString `json:"encoded_frame"`
 			EncodedHeader       hexString `json:"encoded_header"`
+			StoreKey            hexString `json:"store_key"`
+			Link                hexString `json:"link"`
+			ItemID              string    `json:"item_id"`
+			WrappedItemKeys     hexString `json:"wrapped_item_keys"`
+			ContentKey          hexString `json:"content_key"`
+			MetaKey             hexString `json:"meta_key"`
+			MetaRev             uint64    `json:"meta_rev"`
+			SealedMeta          hexString `json:"sealed_meta"`
+			EncodedMeta         hexString `json:"encoded_meta"`
 		} `json:"vectors"`
 	}
 	loadSuite(t, "failure.json", &suite)
@@ -470,6 +483,16 @@ func TestFailureVectors(t *testing.T) {
 				_, err = OpenHeader(v.GroupKey, v.Container, v.value(t), v.EntryID)
 			case "decode_header":
 				_, err = DecodeHeader(v.EncodedHeader)
+			case "open_entry_with_key":
+				_, err = OpenEntryWithKey(v.ContentKey, v.Container, v.value(t), v.EntryID)
+			case "open_store_link":
+				_, err = OpenStoreLink(v.StoreKey, v.Link, v.value(t))
+			case "unwrap_item_keys":
+				_, _, err = UnwrapItemKeys(v.StoreKey, v.WrappedItemKeys, v.value(t), v.ItemID)
+			case "open_store_meta":
+				_, err = OpenStoreMeta(v.MetaKey, v.SealedMeta, v.ItemID, v.MetaRev)
+			case "decode_store_meta":
+				_, err = DecodeStoreMeta(v.EncodedMeta)
 			default:
 				t.Fatalf("unknown failure operation %q; this package must be taught to run it", v.Operation)
 			}

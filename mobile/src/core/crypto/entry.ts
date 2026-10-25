@@ -73,15 +73,32 @@ export function openEntry(
   if (container.length < MIN_CONTAINER_SIZE) {
     throw new Error('container is too short to hold a nonce and a tag');
   }
+  return openEntryWithKey(contentKey(groupKey, container.subarray(1, 1 + NONCE_SIZE), epoch), container, epoch, entryID);
+}
+
+/**
+ * openEntryWithKey opens a container with its content key instead of the group
+ * key (§7a.4). A store item is read this way: its content key is unwrapped from
+ * the store, by a client that may no longer hold the group key of the epoch
+ * the item was sealed at.
+ */
+export function openEntryWithKey(
+  key: Uint8Array,
+  container: Uint8Array,
+  epoch: bigint,
+  entryID: string,
+): Uint8Array {
+  if (key.length !== 32) {
+    throw new Error(`content key is ${key.length} bytes, want 32`);
+  }
+  if (container.length < MIN_CONTAINER_SIZE) {
+    throw new Error('container is too short to hold a nonce and a tag');
+  }
   if (container[0] !== VERSION) {
     throw new Error(`unsupported entry version ${container[0]}`);
   }
   const nonce = container.subarray(1, 1 + NONCE_SIZE);
-  return xchacha20poly1305(
-    contentKey(groupKey, nonce, epoch),
-    nonce,
-    entryAAD(epoch, entryID),
-  ).decrypt(container.subarray(1 + NONCE_SIZE));
+  return xchacha20poly1305(key, nonce, entryAAD(epoch, entryID)).decrypt(container.subarray(1 + NONCE_SIZE));
 }
 
 /** SLICE_BYTES is how much `openEntrySliced` works on between yields: a multiple of the 64-byte ChaCha block. */
@@ -114,6 +131,24 @@ export async function openEntrySliced(
   if (container.length < MIN_CONTAINER_SIZE) {
     throw new Error('container is too short to hold a nonce and a tag');
   }
+  const key = contentKey(groupKey, container.subarray(1, 1 + NONCE_SIZE), epoch);
+  return openEntrySlicedWithKey(key, container, epoch, entryID, pause);
+}
+
+/** openEntrySlicedWithKey is `openEntryWithKey` done a slice at a time, as `openEntrySliced` is. */
+export async function openEntrySlicedWithKey(
+  key: Uint8Array,
+  container: Uint8Array,
+  epoch: bigint,
+  entryID: string,
+  pause: () => Promise<void> = yieldToUI,
+): Promise<Uint8Array> {
+  if (key.length !== 32) {
+    throw new Error(`content key is ${key.length} bytes, want 32`);
+  }
+  if (container.length < MIN_CONTAINER_SIZE) {
+    throw new Error('container is too short to hold a nonce and a tag');
+  }
   if (container[0] !== VERSION) {
     throw new Error(`unsupported entry version ${container[0]}`);
   }
@@ -121,7 +156,6 @@ export async function openEntrySliced(
   const sealed = container.subarray(1 + NONCE_SIZE);
   const data = sealed.subarray(0, sealed.length - TAG_SIZE);
   const passedTag = sealed.subarray(sealed.length - TAG_SIZE);
-  const key = contentKey(groupKey, nonce, epoch);
   const aad = entryAAD(epoch, entryID);
 
   // The one-time Poly1305 key is the first 32 bytes of keystream block 0.

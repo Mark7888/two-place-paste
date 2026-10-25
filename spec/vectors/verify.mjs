@@ -84,10 +84,15 @@ function sealEntry(groupKey, nonce, epoch, entryID, frame) {
 
 function openEntry(groupKey, container, epoch, entryID) {
   if (container.length < 41) throw new Error('container is too short to hold a nonce and a tag');
+  return openEntryWithKey(contentKey(groupKey, container.slice(1, 25), epoch), container, epoch, entryID);
+}
+
+// §7a.4: a store item is opened with its content key, not the group key.
+function openEntryWithKey(key, container, epoch, entryID) {
+  if (container.length < 41) throw new Error('container is too short to hold a nonce and a tag');
   if (container[0] !== VERSION) throw new Error(`unsupported version ${container[0]}`);
   const nonce = container.slice(1, 25);
-  return xchacha20poly1305(contentKey(groupKey, nonce, epoch), nonce, entryAAD(epoch, entryID))
-    .decrypt(container.slice(25));
+  return xchacha20poly1305(key, nonce, entryAAD(epoch, entryID)).decrypt(container.slice(25));
 }
 
 function encodeFrame(f) {
@@ -124,39 +129,62 @@ function decodeFrame(b) {
   return { content_type: contentType, filename, created_at_unix_ms: createdAt, pad_len: 0, body: hex(body) };
 }
 
-// §5.5 entry header: fixed 256 bytes, sealed under its own key and nonce.
+// §5.5 entry header: fixed 256 bytes (v1) or 512 bytes (v2), sealed under its
+// own key and nonce.
 const HEADER_SIZE = 256;
+const HEADER_V2_SIZE = 512;
+
+const cutUTF8 = (b, n) => {
+  if (b.length <= n) return b;
+  while (n > 0 && (b[n] & 0xc0) === 0x80) n--;
+  return b.slice(0, n);
+};
 
 function encodeHeader(h) {
   let contentType = utf8(h.content_type);
   if (contentType.length === 0) throw new Error('content_type is mandatory');
   if (contentType.length > 128) contentType = utf8('application/octet-stream');
-  let filename = utf8(h.filename);
-  let n = HEADER_SIZE - 13 - contentType.length;
-  if (filename.length > n) {
-    while (n > 0 && (filename[n] & 0xc0) === 0x80) n--;
-    filename = filename.slice(0, n);
-  }
+  const filename = cutUTF8(utf8(h.filename), HEADER_SIZE - 13 - contentType.length);
   const body = cat(Uint8Array.of(0x01), u16be(contentType.length), contentType,
     u16be(filename.length), filename, u64be(h.body_len));
   return cat(body, new Uint8Array(HEADER_SIZE - body.length));
 }
 
+function encodeHeaderV2(h) {
+  let contentType = utf8(h.content_type);
+  if (contentType.length === 0) throw new Error('content_type is mandatory');
+  if (contentType.length > 128) contentType = utf8('application/octet-stream');
+  const sum = unhex(h.sha256);
+  if (sum.length !== 32) throw new Error('a v2 header carries a 32-byte hash');
+  const filename = cutUTF8(utf8(h.filename), 255);
+  const body = cat(Uint8Array.of(0x02), u16be(contentType.length), contentType,
+    u16be(filename.length), filename, u64be(h.body_len), sum);
+  return cat(body, new Uint8Array(HEADER_V2_SIZE - body.length));
+}
+
 function decodeHeader(b) {
-  if (b.length !== HEADER_SIZE) throw new Error('header has exactly one valid length');
-  let i = 0;
+  if (b.length === 0) throw new Error('empty header');
+  const version = b[0];
+  if (version !== 0x01 && version !== 0x02) throw new Error('unsupported header version');
+  if (b.length !== (version === 0x01 ? HEADER_SIZE : HEADER_V2_SIZE)) throw new Error('each header version has exactly one size');
+  let i = 1;
   const take = (n) => {
     if (b.length - i < n) throw new Error('length prefix exceeds the header');
     return b.slice(i, i += n);
   };
   const view = (n) => new DataView(take(n).slice().buffer);
-  if (take(1)[0] !== 0x01) throw new Error('unsupported header version');
   const contentType = new TextDecoder().decode(take(view(2).getUint16(0)));
   if (contentType.length === 0) throw new Error('content_type is mandatory');
-  const filename = new TextDecoder().decode(take(view(2).getUint16(0)));
+  const filenameBytes = take(view(2).getUint16(0));
+  const filename = new TextDecoder().decode(filenameBytes);
   const bodyLen = view(8).getBigUint64(0);
+  let sha = '';
+  if (version === 0x02) {
+    if (filenameBytes.length > 255) throw new Error('a v2 filename is at most 255 bytes');
+    sha = hex(take(32));
+  }
   if (b.slice(i).some((c) => c !== 0)) throw new Error('header padding is not zero');
-  return { content_type: contentType, filename, body_len: bodyLen };
+  return { content_type: contentType, filename, body_len: bodyLen, sha256: sha };
 }
 
 const headerInfo = (epoch) => cat(ascii('tpp/v1/header'), epoch);
@@ -172,11 +200,125 @@ function sealHeader(groupKey, nonce, epoch, entryID, encoded) {
 }
 
 function openHeader(groupKey, container, epoch, entryID) {
-  if (container.length !== 297) throw new Error('sealed header has exactly one valid length');
+  if (container.length !== 297 && container.length !== 553) throw new Error('a sealed header is 297 or 553 bytes');
   if (container[0] !== VERSION) throw new Error(`unsupported version ${container[0]}`);
   const nonce = container.slice(1, 25);
   return xchacha20poly1305(headerKey(groupKey, nonce, epoch), nonce, headerAAD(epoch, entryID))
     .decrypt(container.slice(25));
+}
+
+// §7a store ---------------------------------------------------------------
+
+const storeInfo = (epoch) => cat(ascii('tpp/v1/store'), epoch);
+const storeKey = (groupKey, epoch) => hkdf(sha256, groupKey, undefined, storeInfo(epoch), 32);
+
+const prevEpoch = (epoch) => u64be(new DataView(epoch.slice().buffer).getBigUint64(0) - 1n);
+const linkInfo = (epoch) => cat(ascii('tpp/v1/store-link'), epoch);
+const linkAAD = (epoch) => cat(ascii('tpp/v1/store-link-aad'), Uint8Array.of(VERSION), prevEpoch(epoch), epoch);
+const linkKey = (sk, epoch) => hkdf(sha256, sk, undefined, linkInfo(epoch), 32);
+const epochBelow2 = (epoch) => new DataView(epoch.slice().buffer).getBigUint64(0) < 2n;
+
+function sealLink(newKey, oldKey, epoch) {
+  if (epochBelow2(epoch)) throw new Error('epoch 1 has no link');
+  return cat(Uint8Array.of(VERSION), xchacha20poly1305(linkKey(newKey, epoch), ZERO_NONCE, linkAAD(epoch)).encrypt(oldKey));
+}
+
+function openLink(sk, link, epoch) {
+  if (link.length !== 49) throw new Error('a link is exactly 49 bytes');
+  if (epochBelow2(epoch)) throw new Error('epoch 1 has no link');
+  if (link[0] !== VERSION) throw new Error(`unsupported version ${link[0]}`);
+  return xchacha20poly1305(linkKey(sk, epoch), ZERO_NONCE, linkAAD(epoch)).decrypt(link.slice(1));
+}
+
+const wrapItemInfo = (epoch) => cat(ascii('tpp/v1/store-wrap'), epoch);
+const wrapItemAAD = (epoch, itemID) => {
+  const id = utf8(itemID);
+  return cat(ascii('tpp/v1/store-wrap-aad'), Uint8Array.of(VERSION), epoch, u32be(id.length), id);
+};
+const wrapItemKey = (sk, nonce, epoch) => hkdf(sha256, sk, nonce, wrapItemInfo(epoch), 32);
+
+function wrapItemKeys(sk, nonce, epoch, itemID, ck, mk) {
+  return cat(Uint8Array.of(VERSION), nonce,
+    xchacha20poly1305(wrapItemKey(sk, nonce, epoch), nonce, wrapItemAAD(epoch, itemID)).encrypt(cat(ck, mk)));
+}
+
+function unwrapItemKeys(sk, wrapped, epoch, itemID) {
+  if (wrapped.length !== 105) throw new Error('wrapped item keys are exactly 105 bytes');
+  if (wrapped[0] !== VERSION) throw new Error(`unsupported version ${wrapped[0]}`);
+  const nonce = wrapped.slice(1, 25);
+  const keys = xchacha20poly1305(wrapItemKey(sk, nonce, epoch), nonce, wrapItemAAD(epoch, itemID)).decrypt(wrapped.slice(25));
+  return { contentKey: keys.slice(0, 32), metaKey: keys.slice(32) };
+}
+
+const META_SIZE = 2048;
+
+function checkMeta(m) {
+  const tags = m.tags.map(utf8);
+  if (utf8(m.name).length === 0 || utf8(m.name).length > 200) throw new Error('name is 1 to 200 bytes');
+  if (utf8(m.description).length > 800) throw new Error('description is at most 800 bytes');
+  if (tags.length > 16) throw new Error('at most 16 tags');
+  const seen = new Set();
+  for (const t of tags) {
+    if (t.length === 0 || t.length > 32) throw new Error('a tag is 1 to 32 bytes');
+    if (seen.has(hex(t))) throw new Error('duplicate tag');
+    seen.add(hex(t));
+  }
+}
+
+function encodeMeta(m) {
+  checkMeta(m);
+  let contentType = utf8(m.content_type);
+  if (contentType.length === 0) throw new Error('content_type is mandatory');
+  if (contentType.length > 128) contentType = utf8('application/octet-stream');
+  const str = (b) => cat(u16be(b.length), b);
+  const tags = m.tags.map(utf8);
+  const body = cat(Uint8Array.of(0x01), u64be(m.body_len), unhex(m.sha256),
+    str(contentType), str(cutUTF8(utf8(m.filename), 255)), str(utf8(m.name)), str(utf8(m.description)),
+    Uint8Array.of(tags.length), ...tags.map((t) => cat(Uint8Array.of(t.length), t)));
+  return cat(body, new Uint8Array(META_SIZE - body.length));
+}
+
+function decodeMeta(b) {
+  if (b.length !== META_SIZE) throw new Error('a record is exactly 2048 bytes');
+  if (b[0] !== 0x01) throw new Error('unsupported record version');
+  let i = 1;
+  const take = (n) => {
+    if (b.length - i < n) throw new Error('length prefix exceeds the record');
+    return b.slice(i, i += n);
+  };
+  const view = (n) => new DataView(take(n).slice().buffer);
+  const dec = (x) => new TextDecoder().decode(x);
+  const bodyLen = view(8).getBigUint64(0);
+  const sum = hex(take(32));
+  const ct = take(view(2).getUint16(0));
+  const fn = take(view(2).getUint16(0));
+  const name = dec(take(view(2).getUint16(0)));
+  const description = dec(take(view(2).getUint16(0)));
+  if (ct.length === 0 || ct.length > 128 || fn.length > 255) throw new Error('content type or filename out of bounds');
+  const n = take(1)[0];
+  const tags = [];
+  for (let k = 0; k < n; k++) tags.push(dec(take(take(1)[0])));
+  const m = { name, description, tags, content_type: dec(ct), filename: dec(fn), body_len: bodyLen, sha256: sum };
+  checkMeta(m);
+  if (b.slice(i).some((c) => c !== 0)) throw new Error('record padding is not zero');
+  return m;
+}
+
+const metaAAD = (itemID, rev) => {
+  const id = utf8(itemID);
+  return cat(ascii('tpp/v1/store-meta-aad'), Uint8Array.of(VERSION), u32be(id.length), id, u64be(rev));
+};
+const metaSealKey = (mk, nonce) => hkdf(sha256, mk, nonce, ascii('tpp/v1/store-meta'), 32);
+
+function sealMeta(mk, nonce, itemID, rev, encoded) {
+  return cat(Uint8Array.of(VERSION), nonce, xchacha20poly1305(metaSealKey(mk, nonce), nonce, metaAAD(itemID, rev)).encrypt(encoded));
+}
+
+function openMeta(mk, sealed, itemID, rev) {
+  if (sealed.length !== 2089) throw new Error('a sealed record is exactly 2089 bytes');
+  if (sealed[0] !== VERSION) throw new Error(`unsupported version ${sealed[0]}`);
+  const nonce = sealed.slice(1, 25);
+  return xchacha20poly1305(metaSealKey(mk, nonce), nonce, metaAAD(itemID, rev)).decrypt(sealed.slice(25));
 }
 
 // --- the checks ------------------------------------------------------------
@@ -259,6 +401,70 @@ for (const v of load('header.json').vectors) {
     hex(openHeader(unhex(v.group_key), unhex(v.container), epoch, v.entry_id)), v.encoded_header);
 }
 
+for (const v of load('header-v2.json').vectors) {
+  const epoch = epochBytes(v);
+  eq(`header-v2/${v.name}: header key`, hex(headerKey(unhex(v.group_key), unhex(v.header_nonce), epoch)), v.header_key);
+  eq(`header-v2/${v.name}: encode`, hex(encodeHeaderV2(v.input)), v.encoded_header);
+  const back = decodeHeader(unhex(v.encoded_header));
+  eq(`header-v2/${v.name}: decode content_type`, back.content_type, v.decoded.content_type);
+  eq(`header-v2/${v.name}: decode filename`, back.filename, v.decoded.filename);
+  eq(`header-v2/${v.name}: decode body_len`, back.body_len, BigInt(v.decoded.body_len));
+  eq(`header-v2/${v.name}: decode sha256`, back.sha256, v.decoded.sha256);
+  eq(`header-v2/${v.name}: container`,
+    hex(sealHeader(unhex(v.group_key), unhex(v.header_nonce), epoch, v.entry_id, unhex(v.encoded_header))), v.container);
+  eq(`header-v2/${v.name}: open`,
+    hex(openHeader(unhex(v.group_key), unhex(v.container), epoch, v.entry_id)), v.encoded_header);
+}
+
+const chain = new Map();
+for (const v of load('store-chain.json').vectors) {
+  const epoch = epochBytes(v);
+  eq(`store-chain/${v.name}: store key info`, hex(storeInfo(epoch)), v.store_key_info);
+  const sk = storeKey(unhex(v.group_key), epoch);
+  eq(`store-chain/${v.name}: store key`, hex(sk), v.store_key);
+  chain.set(v.epoch_hex, v);
+  if (v.link) {
+    eq(`store-chain/${v.name}: link key info`, hex(linkInfo(epoch)), v.link_key_info);
+    eq(`store-chain/${v.name}: link key`, hex(linkKey(sk, epoch)), v.link_key);
+    eq(`store-chain/${v.name}: link aad`, hex(linkAAD(epoch)), v.link_aad);
+    eq(`store-chain/${v.name}: link`, hex(sealLink(sk, unhex(v.previous_store_key), epoch)), v.link);
+    eq(`store-chain/${v.name}: open link`, hex(openLink(sk, unhex(v.link), epoch)), v.previous_store_key);
+  }
+}
+// Walk from epoch 3 back to epoch 1 with nothing but epoch 3's store key and the links.
+{
+  let sk = unhex(chain.get(hex(u64be(3))).store_key);
+  for (const e of [3, 2]) sk = openLink(sk, unhex(chain.get(hex(u64be(e))).link), u64be(e));
+  eq('store-chain: walk 3 → 1', hex(sk), chain.get(hex(u64be(1))).store_key);
+}
+
+for (const v of load('store-item.json').vectors) {
+  const epoch = epochBytes(v);
+  const n = `store-item/${v.name}`;
+  const sk = storeKey(unhex(v.group_key), epoch);
+  eq(`${n}: store key`, hex(sk), v.store_key);
+  eq(`${n}: encoded frame`, hex(encodeFrame(v.frame)), v.encoded_frame);
+  eq(`${n}: content key`, hex(contentKey(unhex(v.group_key), unhex(v.entry_nonce), epoch)), v.content_key);
+  eq(`${n}: container`, hex(sealEntry(unhex(v.group_key), unhex(v.entry_nonce), epoch, v.item_id, unhex(v.encoded_frame))), v.container);
+  eq(`${n}: wrap key info`, hex(wrapItemInfo(epoch)), v.wrap_key_info);
+  eq(`${n}: wrap key`, hex(wrapItemKey(sk, unhex(v.wrap_nonce), epoch)), v.wrap_key);
+  eq(`${n}: wrap aad`, hex(wrapItemAAD(epoch, v.item_id)), v.wrap_aad);
+  eq(`${n}: wrapped item keys`,
+    hex(wrapItemKeys(sk, unhex(v.wrap_nonce), epoch, v.item_id, unhex(v.content_key), unhex(v.meta_key))), v.wrapped_item_keys);
+  const keys = unwrapItemKeys(sk, unhex(v.wrapped_item_keys), epoch, v.item_id);
+  eq(`${n}: unwrap content key`, hex(keys.contentKey), v.content_key);
+  eq(`${n}: unwrap meta key`, hex(keys.metaKey), v.meta_key);
+  eq(`${n}: open container`, hex(openEntryWithKey(keys.contentKey, unhex(v.container), epoch, v.item_id)), v.encoded_frame);
+  eq(`${n}: encode meta`, hex(encodeMeta(v.meta)), v.encoded_meta);
+  const m = decodeMeta(unhex(v.encoded_meta));
+  eq(`${n}: decode meta`, JSON.stringify({ ...m, body_len: Number(m.body_len) }), JSON.stringify(v.meta_decoded));
+  eq(`${n}: meta seal key`, hex(metaSealKey(unhex(v.meta_key), unhex(v.meta_nonce))), v.meta_seal_key);
+  eq(`${n}: meta aad`, hex(metaAAD(v.item_id, BigInt(v.meta_rev))), v.meta_aad);
+  eq(`${n}: sealed meta`,
+    hex(sealMeta(unhex(v.meta_key), unhex(v.meta_nonce), v.item_id, BigInt(v.meta_rev), unhex(v.encoded_meta))), v.sealed_meta);
+  eq(`${n}: open meta`, hex(openMeta(keys.metaKey, unhex(v.sealed_meta), v.item_id, BigInt(v.meta_rev))), v.encoded_meta);
+}
+
 for (const v of load('failure.json').vectors) {
   const name = `failure/${v.name}`;
   switch (v.operation) {
@@ -276,6 +482,21 @@ for (const v of load('failure.json').vectors) {
       break;
     case 'decode_header':
       mustThrow(name, () => decodeHeader(unhex(v.encoded_header)));
+      break;
+    case 'open_entry_with_key':
+      mustThrow(name, () => openEntryWithKey(unhex(v.content_key), unhex(v.container), epochBytes(v), v.entry_id));
+      break;
+    case 'open_store_link':
+      mustThrow(name, () => openLink(unhex(v.store_key), unhex(v.link), epochBytes(v)));
+      break;
+    case 'unwrap_item_keys':
+      mustThrow(name, () => unwrapItemKeys(unhex(v.store_key), unhex(v.wrapped_item_keys), epochBytes(v), v.item_id));
+      break;
+    case 'open_store_meta':
+      mustThrow(name, () => openMeta(unhex(v.meta_key), unhex(v.sealed_meta), v.item_id, BigInt(v.meta_rev ?? 0)));
+      break;
+    case 'decode_store_meta':
+      mustThrow(name, () => decodeMeta(unhex(v.encoded_meta)));
       break;
     default:
       failures.push(`${name}\n  unknown operation ${v.operation}`);

@@ -1,9 +1,10 @@
 /**
  * The entry header (spec/crypto.md §5.5): a fixed-size, separately encrypted
- * summary of an entry — content type, filename, plaintext body length — that
- * the relay stores beside the entry and returns in history, so a client can
- * show what an entry is without fetching it. Every header is the same size, so
- * the relay learns nothing from it.
+ * summary of an entry — content type, filename, plaintext body length and, in
+ * version 2, the SHA-256 of the body — that the relay stores beside the entry
+ * and returns in history, so a client can show what an entry is without
+ * fetching it. Every header of a version is the same size, so the relay learns
+ * nothing from it but the version.
  *
  * The header is advisory: the frame inside the entry stays the authority.
  */
@@ -16,25 +17,36 @@ import { concat, fromUTF8, u16be, u32be, u64be, u8, utf8, view } from '../bytes'
 import { NONCE_SIZE, TAG_SIZE, VERSION } from './keys';
 import { randomBytes } from '../random';
 
-/** HEADER_SIZE is the fixed length of an encoded header. */
+/** HEADER_SIZE is the fixed length of an encoded v1 header. */
 export const HEADER_SIZE = 256;
-/** HEADER_CONTAINER_SIZE is the fixed length of a sealed header. */
+/** HEADER_CONTAINER_SIZE is the fixed length of a sealed v1 header. */
 export const HEADER_CONTAINER_SIZE = 1 + NONCE_SIZE + HEADER_SIZE + TAG_SIZE;
+/** HEADER_V2_SIZE is the fixed length of an encoded v2 header (§5.5.1). */
+export const HEADER_V2_SIZE = 512;
+/** HEADER_V2_CONTAINER_SIZE is the fixed length of a sealed v2 header. */
+export const HEADER_V2_CONTAINER_SIZE = 1 + NONCE_SIZE + HEADER_V2_SIZE + TAG_SIZE;
 
 const HEADER_VERSION = 0x01;
+const HEADER_V2_VERSION = 0x02;
+const V2_MAX_FILENAME = 255;
+const SHA256_SIZE = 32;
 const MAX_CONTENT_TYPE = 128;
 const FALLBACK_CONTENT_TYPE = 'application/octet-stream';
 const HEADER_FIXED = 1 + 2 + 2 + 8;
 
-/** EntryHeader is what a client may know about an entry before fetching it. */
+/**
+ * EntryHeader is what a client may know about an entry before fetching it.
+ * `sha256` is the hash of the frame's body; only a v2 header carries it.
+ */
 export interface EntryHeader {
   contentType: string;
   filename: string;
   bodyLen: bigint;
+  sha256?: Uint8Array;
 }
 
 /** truncateUTF8 cuts b to at most n bytes without splitting a code point. */
-function truncateUTF8(b: Uint8Array, n: number): Uint8Array {
+export function truncateUTF8(b: Uint8Array, n: number): Uint8Array {
   if (b.length <= n) {
     return b;
   }
@@ -69,12 +81,52 @@ export function encodeHeader(h: EntryHeader): Uint8Array {
   return concat(body, new Uint8Array(HEADER_SIZE - body.length));
 }
 
-/** decodeHeader parses a header, rejecting anything but its one canonical encoding. */
-export function decodeHeader(encoded: Uint8Array): EntryHeader {
-  if (encoded.length !== HEADER_SIZE) {
-    throw new Error(`header is ${encoded.length} bytes, want ${HEADER_SIZE}`);
+/**
+ * encodeHeaderV2 serializes a v2 header into exactly HEADER_V2_SIZE bytes
+ * (§5.5.1): the v1 fields, a filename cut to 255 bytes at a UTF-8 boundary,
+ * and the body's SHA-256, which h must carry.
+ */
+export function encodeHeaderV2(h: EntryHeader): Uint8Array {
+  let contentType = utf8(h.contentType);
+  if (contentType.length === 0) {
+    throw new Error('content_type is mandatory');
   }
-  let offset = 0;
+  if (h.sha256 === undefined || h.sha256.length !== SHA256_SIZE) {
+    throw new Error('a v2 header carries the 32-byte body hash');
+  }
+  if (contentType.length > MAX_CONTENT_TYPE) {
+    contentType = utf8(FALLBACK_CONTENT_TYPE);
+  }
+  const filename = truncateUTF8(utf8(h.filename), V2_MAX_FILENAME);
+  const body = concat(
+    u8(HEADER_V2_VERSION),
+    u16be(contentType.length),
+    contentType,
+    u16be(filename.length),
+    filename,
+    u64be(h.bodyLen),
+    h.sha256,
+  );
+  return concat(body, new Uint8Array(HEADER_V2_SIZE - body.length));
+}
+
+/**
+ * decodeHeader parses a header of either version, rejecting anything but its
+ * one canonical encoding: each version has exactly one size.
+ */
+export function decodeHeader(encoded: Uint8Array): EntryHeader {
+  if (encoded.length === 0) {
+    throw new Error('header is empty');
+  }
+  const version = encoded[0];
+  if (version !== HEADER_VERSION && version !== HEADER_V2_VERSION) {
+    throw new Error('unsupported header version');
+  }
+  const size = version === HEADER_VERSION ? HEADER_SIZE : HEADER_V2_SIZE;
+  if (encoded.length !== size) {
+    throw new Error(`header is ${encoded.length} bytes, want ${size}`);
+  }
+  let offset = 1;
   const take = (n: number): Uint8Array => {
     if (encoded.length - offset < n) {
       throw new Error('length prefix exceeds the header');
@@ -83,21 +135,26 @@ export function decodeHeader(encoded: Uint8Array): EntryHeader {
     offset += n;
     return slice;
   };
-  if (take(1)[0] !== HEADER_VERSION) {
-    throw new Error('unsupported header version');
-  }
   const contentType = fromUTF8(take(view(take(2)).getUint16(0)));
   if (contentType.length === 0) {
     throw new Error('content_type is mandatory');
   }
-  const filename = fromUTF8(take(view(take(2)).getUint16(0)));
+  const filenameBytes = take(view(take(2)).getUint16(0));
+  const filename = fromUTF8(filenameBytes);
   const bodyLen = view(take(8)).getBigUint64(0);
+  let sha256: Uint8Array | undefined;
+  if (version === HEADER_V2_VERSION) {
+    if (filenameBytes.length > V2_MAX_FILENAME) {
+      throw new Error(`a v2 filename is at most ${V2_MAX_FILENAME} bytes`);
+    }
+    sha256 = take(SHA256_SIZE).slice();
+  }
   for (let i = offset; i < encoded.length; i++) {
     if (encoded[i] !== 0) {
       throw new Error('header padding is not zero');
     }
   }
-  return { contentType, filename, bodyLen };
+  return sha256 === undefined ? { contentType, filename, bodyLen } : { contentType, filename, bodyLen, sha256 };
 }
 
 /** headerInfo is the HKDF info of a header key. */
@@ -116,7 +173,7 @@ export function headerKey(groupKey: Uint8Array, nonce: Uint8Array, epoch: bigint
   return hkdf(sha256, groupKey, nonce, headerInfo(epoch), 32);
 }
 
-/** sealHeader encrypts an encoded header: version || nonce || ciphertext || tag. */
+/** sealHeader encrypts an encoded header of either version: version || nonce || ciphertext || tag. */
 export function sealHeader(
   groupKey: Uint8Array,
   nonce: Uint8Array,
@@ -127,8 +184,8 @@ export function sealHeader(
   if (nonce.length !== NONCE_SIZE) {
     throw new Error(`header nonce is ${nonce.length} bytes, want ${NONCE_SIZE}`);
   }
-  if (encoded.length !== HEADER_SIZE) {
-    throw new Error(`header is ${encoded.length} bytes, want ${HEADER_SIZE}`);
+  if (encoded.length !== HEADER_SIZE && encoded.length !== HEADER_V2_SIZE) {
+    throw new Error(`header is ${encoded.length} bytes, want ${HEADER_SIZE} or ${HEADER_V2_SIZE}`);
   }
   const ciphertext = xchacha20poly1305(
     headerKey(groupKey, nonce, epoch),
@@ -138,15 +195,17 @@ export function sealHeader(
   return concat(u8(VERSION), nonce, ciphertext);
 }
 
-/** openHeader decrypts a sealed header back to its encoding. */
+/** openHeader decrypts a sealed header of either version back to its encoding. */
 export function openHeader(
   groupKey: Uint8Array,
   container: Uint8Array,
   epoch: bigint,
   entryID: string,
 ): Uint8Array {
-  if (container.length !== HEADER_CONTAINER_SIZE) {
-    throw new Error(`sealed header is ${container.length} bytes, want ${HEADER_CONTAINER_SIZE}`);
+  if (container.length !== HEADER_CONTAINER_SIZE && container.length !== HEADER_V2_CONTAINER_SIZE) {
+    throw new Error(
+      `sealed header is ${container.length} bytes, want ${HEADER_CONTAINER_SIZE} or ${HEADER_V2_CONTAINER_SIZE}`,
+    );
   }
   if (container[0] !== VERSION) {
     throw new Error(`unsupported header version ${container[0]}`);
@@ -159,7 +218,10 @@ export function openHeader(
   ).decrypt(container.subarray(1 + NONCE_SIZE));
 }
 
-/** sealEntryHeader encodes and seals a header under a fresh nonce. */
+/**
+ * sealEntryHeader encodes and seals a v1 header under a fresh nonce. Writers
+ * stay on v1 until the relay accepts v2 (§5.5.1).
+ */
 export function sealEntryHeader(
   groupKey: Uint8Array,
   epoch: bigint,
