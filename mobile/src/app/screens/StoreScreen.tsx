@@ -11,14 +11,15 @@
  * hands this app only the one file the user chose.
  */
 
-import React, { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Alert, FlatList, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
-import type { StoreItem, StoreSort } from '../../core';
+import type { Item, StoreItem, StoreSort } from '../../core';
 import { clipboard, files, type SavedFile } from '../../platform';
 import { useSession } from '../SessionContext';
 import { Icon, type IconName } from '../icons';
-import { formatSize, storeRoom } from '../preview';
+import { PreviewBody } from '../PreviewBody';
+import { formatSize, headerPreviewable, MAX_FILE_PREVIEW_BYTES, previewOf, storeRoom, type Preview } from '../preview';
 import { deliver, describeItem, failureMessage, handleFile, toClipboardItem, type FileChoice, type PendingFile } from '../session';
 import { chip, chipOn, chipOnText, chipRow, chipText, StoreSheet } from '../StoreSheet';
 import {
@@ -42,6 +43,14 @@ const SORTS: { id: StoreSort; label: string }[] = [
   { id: 'smallest', label: 'Smallest' },
 ];
 
+/** Loaded is a preview that arrived, or the reason one could not. */
+type Loaded = { ok: true; preview: Preview } | { ok: false; error: string };
+
+/** previewable says whether an item offers a preview: by the same rule as a
+ *  history entry, from what its opened metadata says. */
+const previewable = (it: StoreItem) =>
+  headerPreviewable({ contentType: it.contentType, filename: it.filename, size: it.bodySize });
+
 type Dialog =
   | { kind: 'clipboard'; item: { contentType: string; filename: string; body: Uint8Array } }
   | { kind: 'file'; item: { contentType: string; filename: string; body: Uint8Array } }
@@ -62,6 +71,13 @@ export function StoreScreen(): React.JSX.Element {
   const [saved, setSaved] = useState<SavedFile | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [file, setFile] = useState<PendingFile | null>(null);
+
+  // Previews live for as long as this screen does, as in the History. The
+  // last item opened is kept whole too, so Copy or Save or open right after
+  // its preview does not download it again.
+  const [previews, setPreviews] = useState<Record<string, Loaded>>({});
+  const fetching = useRef<Set<string>>(new Set());
+  const lastFetched = useRef<{ id: string; item: Item } | null>(null);
 
   useEffect(() => {
     if (client !== null) {
@@ -131,12 +147,50 @@ export function StoreScreen(): React.JSX.Element {
       setDialog({ kind: 'file', item: { contentType: picked.contentType, filename: picked.name, body: picked.body } });
     });
 
+  /** fetchItem downloads an item, or reuses the one its preview just read. */
+  const fetchItem = async (it: StoreItem): Promise<Item> => {
+    if (client === null) {
+      throw new Error('not connected');
+    }
+    const kept = lastFetched.current;
+    if (kept !== null && kept.id === it.id) {
+      return kept.item;
+    }
+    const item = await client.fetchStoreItem(it);
+    // Only something a preview could have read is kept: a large file copied
+    // once is not worth holding in memory.
+    lastFetched.current = item.body.length <= MAX_FILE_PREVIEW_BYTES ? { id: it.id, item } : null;
+    return item;
+  };
+
+  const toggle = (it: StoreItem) => {
+    if (open === it.id) {
+      setOpen(null);
+      return;
+    }
+    setOpen(it.id);
+    if (!previewable(it) || previews[it.id] !== undefined || fetching.current.has(it.id) || client === null) {
+      return;
+    }
+    fetching.current.add(it.id);
+    void (async () => {
+      try {
+        const item = await fetchItem(it);
+        setPreviews((prev) => ({ ...prev, [it.id]: { ok: true, preview: previewOf(item) } }));
+      } catch (err) {
+        setPreviews((prev) => ({ ...prev, [it.id]: { ok: false, error: failureMessage(err) } }));
+      } finally {
+        fetching.current.delete(it.id);
+      }
+    })();
+  };
+
   const copy = (it: StoreItem) =>
     run(it.id, async () => {
       if (client === null) {
         return;
       }
-      const item = toClipboardItem(await client.fetchStoreItem(it));
+      const item = toClipboardItem(await fetchItem(it));
       const result = await deliver(item);
       if (result.direction === 'file' && result.file !== undefined) {
         setFile(result.file);
@@ -292,6 +346,7 @@ export function StoreScreen(): React.JSX.Element {
         refreshing={store.status === 'loading'}
         renderItem={({ item: it }) => {
           const expanded = open === it.id;
+          const loaded = previews[it.id];
           const fileOnly = !clipboard.canWrite({ contentType: it.contentType, filename: it.filename, body: new Uint8Array(0) });
           return (
             <View style={styles.card}>
@@ -299,7 +354,7 @@ export function StoreScreen(): React.JSX.Element {
                 accessibilityRole="button"
                 accessibilityState={{ expanded }}
                 accessibilityLabel={it.name}
-                onPress={() => setOpen(expanded ? null : it.id)}
+                onPress={() => toggle(it)}
                 android_ripple={{ color: colors.accentSoft }}
                 style={{ flexDirection: 'row', gap: 10 }}
               >
@@ -324,6 +379,13 @@ export function StoreScreen(): React.JSX.Element {
               </Pressable>
               {expanded && (
                 <View style={{ gap: 8, paddingTop: 4 }}>
+                  {!previewable(it) ? null : loaded === undefined ? (
+                    <Text style={styles.small}>Decrypting…</Text>
+                  ) : !loaded.ok ? (
+                    <Notice message={loaded.error} tone="error" />
+                  ) : (
+                    <PreviewBody preview={loaded.preview} />
+                  )}
                   <Button
                     label={busy === it.id ? 'Downloading…' : fileOnly ? 'Save or open on this device' : 'Copy to this device'}
                     icon={fileOnly ? 'download' : 'check'}
