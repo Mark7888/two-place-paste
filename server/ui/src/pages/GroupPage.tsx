@@ -127,7 +127,7 @@ function Stats({ data }: { data: GroupDetail }) {
   const g = data.group;
   const now = Date.now();
   return (
-    <div className="stats">
+    <div className="stats quad">
       <StatCard title="Devices">
         <p className="figure">{g.devices}</p>
         <p className="sub">last active {ago(now, g.last_seen, "never")}</p>
@@ -139,7 +139,7 @@ function Stats({ data }: { data: GroupDetail }) {
       {g.usage && (
         <StatCard title="Blob storage">
           <p className="figure">
-            {humanBytes(g.usage.used_bytes)} <span className="muted nowrap">of {limitText(g.limit_bytes)}</span>
+            {humanBytes(g.usage.used_bytes)} <span className="muted of">of {limitText(g.limit_bytes)}</span>
           </p>
           <UsageMeter used={g.usage.used_bytes} limit={g.limit_bytes} label="Blob storage used" />
           <p className="sub">
@@ -159,7 +159,7 @@ function StoreStat({ store }: { store: GroupStore }) {
   return (
     <StatCard title="Store">
       <p className="figure">
-        {humanBytes(store.used_bytes)} <span className="muted nowrap">of {limitText(store.limit_bytes)}</span>
+        {humanBytes(store.used_bytes)} <span className="muted of">of {limitText(store.limit_bytes)}</span>
       </p>
       <UsageMeter used={store.used_bytes} limit={store.limit_bytes} label="Store used" />
       <p className="sub">
