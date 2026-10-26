@@ -65,6 +65,49 @@ type groupStoreJSON struct {
 	MaxItemBytes int64 `json:"max_item_bytes"`
 }
 
+// storeRowJSON is a group's store on the groups list: whether it is on, and
+// how much it holds against the cap it runs into.
+type storeRowJSON struct {
+	Enabled    bool  `json:"enabled"`
+	Emptying   bool  `json:"emptying"`
+	UsedBytes  int64 `json:"used_bytes"`
+	UsedItems  int64 `json:"used_items"`
+	LimitBytes int64 `json:"limit_bytes"`
+}
+
+// storeRow builds a group's store cell for the groups list, or nil when the
+// relay has no store.
+func (s *Server) storeRow(ctx context.Context, g store.Group, tags map[string]store.Tag, probs *problems) *storeRowJSON {
+	if s.storeSvc == nil {
+		return nil
+	}
+	limit := s.storeSvc.GroupLimit(g, tagOf(g, tags))
+	v := &storeRowJSON{
+		Enabled:    g.StoreEnabled,
+		LimitBytes: storeShown(limit.Bytes, s.storeSvc.Config().MaxTotalBytes),
+	}
+	if u, err := s.store.StoreUsage(ctx, g.ID); err != nil {
+		probs.add("the store usage of "+g.Name, err)
+	} else {
+		v.UsedBytes, v.UsedItems = u.Bytes, u.Items
+	}
+	if emptying, err := s.storeSvc.Reclaiming(ctx, g.ID); err != nil {
+		probs.add("the store state of "+g.Name, err)
+	} else {
+		v.Emptying = emptying
+	}
+	return v
+}
+
+// tagOf is the tag a group is under, or nil when it has none or its tag is
+// gone.
+func tagOf(g store.Group, tags map[string]store.Tag) *store.Tag {
+	if t, ok := tags[g.Tag]; ok && g.Tag != "" {
+		return &t
+	}
+	return nil
+}
+
 // groupStore builds the store section of a group's page, or nil when the
 // relay has no store.
 func (s *Server) groupStore(ctx context.Context, g store.Group, tags map[string]store.Tag, probs *problems) *groupStoreJSON {
@@ -72,10 +115,7 @@ func (s *Server) groupStore(ctx context.Context, g store.Group, tags map[string]
 		return nil
 	}
 	cfg := s.storeSvc.Config()
-	var tag *store.Tag
-	if t, ok := tags[g.Tag]; ok && g.Tag != "" {
-		tag = &t
-	}
+	tag := tagOf(g, tags)
 	limit := s.storeSvc.GroupLimit(g, tag)
 	v := &groupStoreJSON{
 		Enabled:           g.StoreEnabled,

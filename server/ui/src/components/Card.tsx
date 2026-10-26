@@ -1,11 +1,25 @@
 import { useId, type ReactNode } from "react";
 
-/** StatCard is one figure of a summary row, such as "Groups 12". */
-export function StatCard({ title, wide, children }: { title: string; wide?: boolean; children: ReactNode }) {
+/** StatCard is one figure of a summary row, such as "Groups 12". A badge,
+ *  such as whether a feature is on, sits after the title. */
+export function StatCard({
+  title,
+  badge,
+  wide,
+  children,
+}: {
+  title: string;
+  badge?: ReactNode;
+  wide?: boolean;
+  children: ReactNode;
+}) {
   const id = useId();
   return (
     <section className={wide ? "card stat wide" : "card stat"} aria-labelledby={id}>
-      <h2 id={id}>{title}</h2>
+      <h2 id={id}>
+        {title}
+        {badge && <> {badge}</>}
+      </h2>
       {children}
     </section>
   );

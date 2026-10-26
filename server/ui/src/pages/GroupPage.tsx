@@ -1,6 +1,6 @@
 import { useId, useState } from "react";
 import { api, type Device, type GroupDetail, type GroupStore, type LimitChange } from "../api";
-import { Badge, GroupBadges } from "../components/Badge";
+import { Badge, GroupBadges, StoreBadge } from "../components/Badge";
 import { SectionHead, StatCard } from "../components/Card";
 import { useLimitForm } from "../components/LimitFields";
 import { ErrorNotice, Problems } from "../components/Notice";
@@ -157,7 +157,7 @@ function Stats({ data }: { data: GroupDetail }) {
  *  page; the Store section further down holds its switch and limit. */
 function StoreStat({ store }: { store: GroupStore }) {
   return (
-    <StatCard title="Store">
+    <StatCard title="Store" badge={<StoreBadge store={store} />}>
       <p className="figure">
         {humanBytes(store.used_bytes)} <span className="muted of">of {limitText(store.limit_bytes)}</span>
       </p>
@@ -165,7 +165,6 @@ function StoreStat({ store }: { store: GroupStore }) {
       <p className="sub">
         {store.used_items} of {store.max_items} {plural(store.max_items, "item", "items")} · limit from{" "}
         {limitSources[store.limit_source]}
-        {store.emptying ? " · emptying" : !store.enabled && " · off"}
       </p>
     </StatCard>
   );
@@ -300,13 +299,7 @@ function StoreSection({
   return (
     <>
       <SectionHead title="Store">
-        {store.emptying ? (
-          <Badge kind="used">emptying</Badge>
-        ) : store.enabled ? (
-          <Badge kind="good">on</Badge>
-        ) : (
-          <Badge kind="used">off</Badge>
-        )}
+        <StoreBadge store={store} />
       </SectionHead>
       <div className="card">
         <div className="form-row spread">

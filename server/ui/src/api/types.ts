@@ -111,6 +111,17 @@ export interface Group {
   limit_source: LimitSource;
   /** Null when blob storage is not accounted. */
   usage: { used_bytes: number; over_limit: boolean } | null;
+  /** Only on the groups list, and only when the relay has a store. */
+  store?: GroupStoreRow;
+}
+
+/** GroupStoreRow is a group's store on the groups list. */
+export interface GroupStoreRow {
+  enabled: boolean;
+  emptying: boolean;
+  used_bytes: number;
+  used_items: number;
+  limit_bytes: number;
 }
 
 export interface GroupList extends TablePage<Group> {
@@ -123,6 +134,7 @@ export interface GroupList extends TablePage<Group> {
   stale_count: number;
   stale_after_days: number;
   has_usage: boolean;
+  has_store: boolean;
   problems: string[];
 }
 

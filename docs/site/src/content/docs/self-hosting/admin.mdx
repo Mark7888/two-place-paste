@@ -124,10 +124,11 @@ If part of the dashboard cannot be read (say Redis is down), it says which part 
 
 ## The groups
 
-<Image src={groups} alt="The Groups screen: a tag filter above a table of groups with their storage" class="screenshot" />
+<Image src={groups} alt="The Groups screen: a tag filter above a table of groups with their storage and store" class="screenshot" />
 
 **Groups** lists every group, heaviest first: its tag, devices, last activity, live entries,
-oldest entry and storage against the group's limit. The search looks at group names, tags, the
+oldest entry, storage against the group's limit, and its [store](#the-store) — what it holds
+against the store limit, marked **on**, **off** or **emptying**. The search looks at group names, tags, the
 short ids and device names. Next to it, the tag buttons narrow the list to one tag or to the
 untagged groups, and **Stale only** to the stale ones;
 [**Manage tags**](#tags-and-storage-limits) leads to the Tags screen.
@@ -141,8 +142,8 @@ was lowered below what it holds). To remove a stale group, open it and
 
 <Image src={group} alt="A group's page: its storage and store, name, tag, limits and devices" class="screenshot" />
 
-A group's page shows its devices, entries, blob storage and store use in a row at the top, and lets
-you:
+A group's page shows its devices, entries, blob storage and store in a row at the top — the store
+marked **on**, **off** or **emptying** — and lets you:
 
 - **Rename** it. The group's devices show the new name; connected ones update at once.
 - Put it under a **Tag**, or under none.
