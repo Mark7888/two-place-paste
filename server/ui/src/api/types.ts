@@ -184,6 +184,10 @@ export interface Tag {
   used_bytes: number;
   limit: Limit;
   store_limit: Limit;
+  /** What the stores of the tag's groups hold together, and how many of
+   *  those groups have their store on. */
+  store_bytes: number;
+  store_groups_on: number;
 }
 
 export interface TagList extends TablePage<Tag> {

@@ -19,6 +19,11 @@ type tagJSON struct {
 
 	// StoreLimit is the tag's store limit override (SPEC §4.6).
 	StoreLimit limitJSON `json:"store_limit"`
+
+	// StoreBytes is what the stores of the tag's groups hold together, and
+	// StoreGroupsOn how many of those groups have their store on.
+	StoreBytes    int64 `json:"store_bytes"`
+	StoreGroupsOn int   `json:"store_groups_on"`
 }
 
 // tagsJSON is the tag screen: one page of the tags, and the limits its
@@ -57,6 +62,7 @@ var tagTable = table[tagJSON]{
 		"groups":  {cmp: func(a, b tagJSON) int { return byNumber(a.Groups, b.Groups) }, desc: true},
 		"devices": {cmp: func(a, b tagJSON) int { return byNumber(a.Devices, b.Devices) }, desc: true},
 		"storage": {cmp: func(a, b tagJSON) int { return byNumber(a.UsedBytes, b.UsedBytes) }, desc: true},
+		"store":   {cmp: func(a, b tagJSON) int { return byNumber(a.StoreBytes, b.StoreBytes) }, desc: true},
 		"limit":   {cmp: func(a, b tagJSON) int { return byNumber(limitOrder(a.Limit), limitOrder(b.Limit)) }, desc: true},
 	},
 	defaultSort: "name",
@@ -65,7 +71,7 @@ var tagTable = table[tagJSON]{
 }
 
 // handleTags returns one page of the tag screen: each tag with the groups,
-// devices and storage under it.
+// devices, storage and store under it.
 func (s *Server) handleTags(w http.ResponseWriter, r *http.Request, _ session) {
 	ctx := r.Context()
 	tags, err := s.store.ListTags(ctx)
@@ -104,6 +110,14 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request, _ session) {
 		if s.dashboard.Ledger != nil {
 			if u, err := s.dashboard.Ledger.GroupUsage(ctx, g.ID); err == nil {
 				tv.UsedBytes += u.Bytes
+			}
+		}
+		if s.storeSvc != nil {
+			if g.StoreEnabled {
+				tv.StoreGroupsOn++
+			}
+			if u, err := s.store.StoreUsage(ctx, g.ID); err == nil {
+				tv.StoreBytes += u.Bytes
 			}
 		}
 	}

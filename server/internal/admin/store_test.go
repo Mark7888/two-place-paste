@@ -299,3 +299,54 @@ func TestGroupListStore(t *testing.T) {
 		t.Errorf("list without a store = %+v, want no store column", got)
 	}
 }
+
+// TestTagListStore: the tag list adds up the stores of each tag's groups —
+// what they hold and how many have theirs on — and sorts by it (SPEC §4.6).
+func TestTagListStore(t *testing.T) {
+	t.Parallel()
+	f := newStoreFixture(t)
+	ctx := context.Background()
+	for _, name := range []string{"family", "work"} {
+		if _, err := f.store.CreateTag(ctx, name); err != nil {
+			t.Fatalf("CreateTag(%q) error = %v", name, err)
+		}
+	}
+	anna := f.group(t, store.NewToken{Name: "Anna", Tag: "work"})
+	f.group(t, store.NewToken{Name: "Bela", Tag: "work"})
+	f.group(t, store.NewToken{Name: "Csilla", Tag: "family"})
+	if err := f.store.SetGroupStore(ctx, anna, true); err != nil {
+		t.Fatalf("SetGroupStore() error = %v", err)
+	}
+	g, err := f.store.GetGroup(ctx, anna)
+	if err != nil {
+		t.Fatalf("GetGroup() error = %v", err)
+	}
+	r := store.ItemReservation{GroupID: anna, ItemID: "item-1", Epoch: g.Epoch, Size: 2 << 20, Accounted: 2 << 20, StartedAt: time.Now()}
+	if err := f.store.ReserveItem(ctx, r, store.ItemLimits{GroupItems: 10}); err != nil {
+		t.Fatalf("ReserveItem() error = %v", err)
+	}
+	c := f.client()
+	f.login(c)
+
+	type row struct {
+		Name          string `json:"name"`
+		Groups        int    `json:"groups"`
+		StoreBytes    int64  `json:"store_bytes"`
+		StoreGroupsOn int    `json:"store_groups_on"`
+	}
+	got := readJSON[struct {
+		Rows []row `json:"rows"`
+	}](t, f.get(c, "/admin/api/tags?sort=store"))
+	want := []row{
+		{Name: "work", Groups: 2, StoreBytes: 2 << 20, StoreGroupsOn: 1},
+		{Name: "family", Groups: 1},
+	}
+	if len(got.Rows) != len(want) {
+		t.Fatalf("rows = %+v, want %+v", got.Rows, want)
+	}
+	for i := range want {
+		if got.Rows[i] != want[i] {
+			t.Errorf("row %d = %+v, want %+v", i, got.Rows[i], want[i])
+		}
+	}
+}
