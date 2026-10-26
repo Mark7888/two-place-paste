@@ -298,7 +298,9 @@ p:last-child { margin-bottom: 0; }
   padding: 0.75rem 0.9rem;
 }
 
-.item .body { flex: 1 1 auto; min-width: 0; }
+/* A word longer than the row, such as a long filename, breaks rather than
+   running under the row's buttons. */
+.item .body { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .item .body .title { font-weight: 550; }
 .item .actions { flex: none; display: flex; gap: 0.4rem; align-items: center; }
 
@@ -331,6 +333,7 @@ p:last-child { margin-bottom: 0; }
 .stack { display: flex; flex-direction: column; gap: 0.35rem; }
 .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 .row.tight { gap: 0.35rem; }
+.nowrap { white-space: nowrap; }
 .spread { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
 
 /* --- controls ------------------------------------------------------------ */

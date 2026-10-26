@@ -295,10 +295,14 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
                         {item.description ? (
                           <div className="description small">{item.description}</div>
                         ) : null}
-                        <div className="muted small row tight">
+                        {/* One line of text, not a row of boxes: a long filename wraps
+                            inside the line, and each dot stays with what follows it. */}
+                        <div className="muted small item-meta">
                           <span title={when(item.saved_at)}>{relative(item.saved_at)}</span>
-                          <span>· {item.filename ?? item.content_type}</span>
-                          <span>· {bytes(item.bytes)}</span>
+                          {" ·\u00a0"}
+                          {item.filename ?? item.content_type}
+                          {" ·\u00a0"}
+                          <span className="nowrap">{bytes(item.bytes)}</span>
                         </div>
                         {item.tags.length ? (
                           <div className="chips small">
