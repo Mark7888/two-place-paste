@@ -1,21 +1,10 @@
 # Plan — Persistent store
 
-**Status:** agreed design. Step 1 of §10 (spec, vectors, client crypto) landed
-in #40. Header v2 is rolled out on its own, ahead of the store: the relay accepts
-it and says so in `EntryLimitsResponse.header_v2`, and both clients write it to
-a relay that does (#42). The store's wire schema is in `store.proto`, and both
-clients send the store link with every rekey (#43). The relay side of step 3 —
-records, limits, the admin switch and Purge store, the rekey link check, the
-item messages, background reclaim and the sweep — is in its own PR; the clients
-(steps 4–6) do not use it yet. The relay side landed in #44. Step 4 — the Go
-client core's store calls, events and StoreIndex — is in its own PR; the store's
-cross-client interop test comes with the TypeScript core in step 6. The Go core
-landed in #45 and the desktop Store tab in #46. Step 6 — the TypeScript core,
-the store interop suite and the Android Store screen — is in its own PR. §9 records the answered questions; §11 keeps the
-server-side copy as a later option.
-**Touches:** `/spec/**` (store section, header v2, vectors), `/proto/**`,
-`/server/**`, `/pkg/tppclient/**`, `/desktop/**`, `/mobile/**`, `/deploy/**`,
-`/docs/**`.
+**Status:** done. Every step of §10 has landed: spec, vectors and client crypto
+(#40), header v2 (#42), the wire schema and store links on rekey (#43), the relay
+(#44), the Go client core (#45), the desktop Store tab (#46), and the TypeScript core
+with the Android Store screen and the cross-client interop suite (#47). §9 records the
+answered questions; §11 keeps the server-side copy as a later option.
 
 ---
 
