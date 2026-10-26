@@ -46,8 +46,31 @@ import {
   EntryEvicted,
   EpochChanged,
   GroupRenamed,
+  StoreItemAdded,
+  StoreItemDeleted,
+  StoreItemUpdated,
+  StoreStateChanged,
   WrappedKeyAvailable,
 } from '../../protocol/gen/tpp/v1/events';
+import {
+  StoreDeleteRequest,
+  StoreDeleteResponse,
+  StoreFetchChunkRequest,
+  StoreFetchChunkResponse,
+  StoreItemMeta,
+  StoreLimitsRequest,
+  StoreLimitsResponse,
+  StoreLinksRequest,
+  StoreLinksResponse,
+  StoreListRequest,
+  StoreListResponse,
+  StorePutRequest,
+  StorePutResponse,
+  StoreUpdateMetaRequest,
+  StoreUpdateMetaResponse,
+  StoreUploadBeginRequest,
+  StoreUploadBeginResponse,
+} from '../../protocol/gen/tpp/v1/store';
 import {
   EntryFetchChunkRequest,
   EntryFetchChunkResponse,
@@ -89,8 +112,19 @@ import {
   generateGroupKey,
   generateNonce,
   newEntryID,
+  contentKey as deriveContentKey,
+  decodeStoreMeta,
+  encodeStoreMeta,
+  META_KEY_SIZE,
   openEntry,
   openEntrySliced,
+  openEntrySlicedWithKey,
+  openEntryWithKey,
+  openStoreLink,
+  openStoreMeta,
+  sealStoreMeta,
+  unwrapItemKeys,
+  wrapItemKeys,
   openEntryHeader,
   publicKey as derivePublicKey,
   sealEntry,
@@ -122,6 +156,9 @@ import {
   saveState,
 } from './state';
 import { deviceStatusURL, splitCreationURL, normalizeServerURL, websocketURL } from './urls';
+import { hashHex, type StoreDetails, type StoreItem, type StoreLimits, type StoreListing } from './store';
+import { randomBytes } from '../random';
+import { toHex } from '../bytes';
 
 /**
  * SINGLE_FRAME_MAX_BYTES is the most ciphertext one frame carries, in either
@@ -263,6 +300,12 @@ export interface EntryHeaderView {
   filename: string;
   /** size is the plaintext body length in bytes. */
   size: number;
+  /**
+   * sha256Hex is the body's hash, from a version 2 header; absent from a
+   * version 1 header. A history view checks it against a StoreIndex to mark
+   * entries already saved to the store.
+   */
+  sha256Hex?: string;
 }
 
 /** Item is one clipboard payload in plaintext. Nothing here reaches the relay in the clear. */
@@ -313,6 +356,18 @@ export interface Handlers {
   onEntryEvicted?: (entryId: string) => void;
   /** onProgress reports a chunked upload or download, once per chunk. */
   onProgress?: (progress: Progress) => void;
+  /**
+   * onStoreItemAdded and onStoreItemUpdated fire when another device saved or
+   * edited a store item, with its metadata opened; a StoreIndex takes them
+   * with put. An item that does not open is skipped: the next listStore
+   * reports it.
+   */
+  onStoreItemAdded?: (item: StoreItem) => void;
+  onStoreItemUpdated?: (item: StoreItem) => void;
+  /** onStoreItemDeleted fires when another device deleted a store item. */
+  onStoreItemDeleted?: (itemId: string) => void;
+  /** onStoreState fires when the admin turned the store on or off, or it closed to be emptied and opened again. */
+  onStoreState?: (enabled: boolean) => void;
 }
 
 /** ClientOptions configures a Client. */
@@ -441,6 +496,9 @@ function toEntryMeta(m: WireEntryMeta, key: { epoch: bigint; groupKey: Uint8Arra
     try {
       const h = openEntryHeader(key.groupKey, m.header, epoch, m.entryId);
       header = { contentType: h.contentType, filename: h.filename, size: Number(h.bodyLen) };
+      if (h.sha256 !== undefined) {
+        header.sha256Hex = toHex(h.sha256);
+      }
     } catch {
       header = null;
     }
@@ -493,6 +551,12 @@ export class Client {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private refusals = 0;
   private invitations = new Map<string, (device: Device) => void>();
+  /**
+   * storeKeys are the store keys and links of one group key, opened as needed
+   * and never persisted (spec/crypto.md §7a.2). A new group key starts over.
+   */
+  private storeKeys: { groupKeyHex: string; keys: Map<bigint, Uint8Array>; links: Map<bigint, Uint8Array> | null } | null =
+    null;
 
   private constructor(state: ClientState, options: ClientOptions) {
     this.state = state;
@@ -828,6 +892,31 @@ export class Client {
         const event = EntryEvicted.decode(env.payload);
         this.forgetEntry(event.entryId);
         this.handlers.onEntryEvicted?.(event.entryId);
+        break;
+      }
+      case MessageType.MESSAGE_TYPE_STORE_ITEM_ADDED:
+      case MessageType.MESSAGE_TYPE_STORE_ITEM_UPDATED: {
+        const added = env.type === MessageType.MESSAGE_TYPE_STORE_ITEM_ADDED;
+        const m = added ? StoreItemAdded.decode(env.payload).item : StoreItemUpdated.decode(env.payload).item;
+        const handler = added ? this.handlers.onStoreItemAdded : this.handlers.onStoreItemUpdated;
+        if (m === undefined || handler === undefined) {
+          break;
+        }
+        // Events are handled off the read loop, so opening an item of an
+        // earlier epoch may ask for the links.
+        try {
+          handler(await this.readStoreItem(m));
+        } catch {
+          // Skipped: the next listing reports it as unreadable.
+        }
+        break;
+      }
+      case MessageType.MESSAGE_TYPE_STORE_ITEM_DELETED: {
+        this.handlers.onStoreItemDeleted?.(StoreItemDeleted.decode(env.payload).itemId);
+        break;
+      }
+      case MessageType.MESSAGE_TYPE_STORE_STATE_CHANGED: {
+        this.handlers.onStoreState?.(StoreStateChanged.decode(env.payload).enabled);
         break;
       }
       case MessageType.MESSAGE_TYPE_GROUP_RENAMED: {
@@ -1893,11 +1982,449 @@ export class Client {
     };
   }
 
+  // -------------------------------------------------------------------------
+  // The store (SPEC §6b, spec/crypto.md §7a), mirroring pkg/tppclient/store.go
+  // -------------------------------------------------------------------------
+
+  /** storeLimits asks the relay for the group's store limits and usage. A relay without a store has none. */
+  async storeLimits(): Promise<StoreLimits> {
+    this.requireGroup();
+    const conn = await this.connection();
+    try {
+      const r = await conn.call(
+        MessageType.MESSAGE_TYPE_STORE_LIMITS_REQUEST,
+        { codec: StoreLimitsRequest, message: {} },
+        StoreLimitsResponse,
+      );
+      return {
+        enabled: r.enabled,
+        maxBytes: Number(r.maxBytes),
+        usedBytes: Number(r.usedBytes),
+        availableBytes: Number(r.availableBytes),
+        maxItems: Number(r.maxItems),
+        usedItems: Number(r.usedItems),
+        maxItemBytes: Number(r.maxItemBytes),
+      };
+    } catch (err) {
+      if (isCode(err, ErrorCode.ERROR_CODE_UNSUPPORTED_MESSAGE)) {
+        return { enabled: false, maxBytes: 0, usedBytes: 0, availableBytes: 0, maxItems: 0, usedItems: 0, maxItemBytes: 0 };
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * saveToStore encrypts an item and saves it in the group's store with the
+   * details the user typed (§7a.3-§7a.5). It does not look for duplicates: a
+   * screen checks the item's hash against its StoreIndex first, and asks.
+   */
+  async saveToStore(
+    item: { contentType: string; filename?: string; body: Uint8Array; createdAt?: Date },
+    details: StoreDetails,
+  ): Promise<StoreItem> {
+    this.requireGroup();
+    if (item.contentType === '') {
+      throw new TppError('invalid', 'a store item needs a content type');
+    }
+    const sum = await sha256Sliced(item.body);
+    let meta: Uint8Array;
+    try {
+      meta = encodeStoreMeta({
+        name: details.name,
+        description: details.description,
+        tags: details.tags,
+        contentType: item.contentType,
+        filename: item.filename ?? '',
+        bodyLen: BigInt(item.body.length),
+        sha256: sum,
+      });
+    } catch (err) {
+      throw new TppError('invalid', `the item's details: ${(err as Error).message}`, { cause: err });
+    }
+    const createdAt = item.createdAt ?? this.now();
+    const frame = encodeFrame({
+      contentType: item.contentType,
+      filename: item.filename ?? '',
+      createdAt: BigInt(createdAt.getTime()),
+      body: item.body,
+    });
+    const itemId = newEntryID();
+    const epoch = this.state.epoch;
+    const groupKey = this.state.groupKey;
+
+    // The blob is an entry container at this epoch, bound to the item's id;
+    // its content key is the one wrapped below (§7a.4).
+    const nonce = generateNonce();
+    const contentKey = deriveContentKey(groupKey, nonce, epoch);
+    const container = sealEntry(groupKey, nonce, epoch, itemId, frame);
+    const metaKey = randomBytes(META_KEY_SIZE);
+    const key = storeKey(groupKey, epoch);
+    const wrapped = wrapItemKeys(key, generateNonce(), epoch, itemId, { contentKey, metaKey });
+    const sealedMeta = sealStoreMeta(metaKey, generateNonce(), itemId, 0n, meta);
+
+    // The limits are asked first, so a store that is off, full or too small
+    // refuses before anything is uploaded.
+    const limits = await this.storeLimits();
+    if (!limits.enabled) {
+      throw new ProtocolError(ErrorCode.ERROR_CODE_STORE_DISABLED, 'the store is turned off for this group');
+    }
+    if (limits.maxItemBytes > 0 && container.length > limits.maxItemBytes) {
+      throw new TppError('too-large', `the item is ${container.length} bytes sealed, the store takes ${limits.maxItemBytes}`);
+    }
+    if (container.length > limits.availableBytes) {
+      throw new ProtocolError(
+        ErrorCode.ERROR_CODE_QUOTA_EXCEEDED,
+        `the item is ${container.length} bytes sealed, the store has room for ${limits.availableBytes}`,
+      );
+    }
+
+    const base = {
+      itemId,
+      epoch: epoch.toString(),
+      size: container.length.toString(),
+      wrappedItemKeys: wrapped,
+      sealedMeta,
+    };
+    const what = { filename: item.filename ?? '', contentType: item.contentType };
+    const response =
+      container.length > SINGLE_FRAME_MAX_BYTES
+        ? await this.transfer(() => this.storeUploadChunked(base, container, what))
+        : await (await this.connection()).call(
+            MessageType.MESSAGE_TYPE_STORE_PUT_REQUEST,
+            { codec: StorePutRequest, message: { ...base, ciphertext: container } },
+            StorePutResponse,
+            chunkTimeoutMs(container.length),
+          );
+    const m = response.item;
+    if (
+      m === undefined ||
+      m.itemId !== itemId ||
+      m.contentId !== itemId ||
+      asBigInt(m.wrapEpoch) !== epoch ||
+      asBigInt(m.contentEpoch) !== epoch
+    ) {
+      throw new TppError('invalid', 'the relay stored the item under other ids or epochs than the ones bound into it');
+    }
+    return this.openStoreItem(m, key);
+  }
+
+  /** storeUploadChunked uploads a blob larger than one frame and commits it, aborting on any failure. */
+  private async storeUploadChunked(
+    base: { itemId: string; epoch: string; size: string; wrappedItemKeys: Uint8Array; sealedMeta: Uint8Array },
+    container: Uint8Array,
+    what: { filename: string; contentType: string },
+  ): Promise<StorePutResponse> {
+    const size = container.length;
+    const begin = await (await this.connection()).call(
+      MessageType.MESSAGE_TYPE_STORE_UPLOAD_BEGIN_REQUEST,
+      { codec: StoreUploadBeginRequest, message: { itemId: base.itemId, epoch: base.epoch, size: base.size } },
+      StoreUploadBeginResponse,
+    );
+    const handle = begin.uploadHandle;
+    let chunk = Number(begin.chunkBytes);
+    if (!(chunk > 0 && chunk <= SINGLE_FRAME_MAX_BYTES)) {
+      chunk = SINGLE_FRAME_MAX_BYTES;
+    }
+    const progress = (done: number) =>
+      this.handlers.onProgress?.({ entryId: base.itemId, direction: 'upload', done, total: size, waiting: false, ...what });
+    progress(0);
+    try {
+      for (let index = 0, off = 0; off < size; index++, off += chunk) {
+        const end = Math.min(off + chunk, size);
+        await (await this.connection()).call(
+          MessageType.MESSAGE_TYPE_ENTRY_UPLOAD_CHUNK_REQUEST,
+          { codec: EntryUploadChunkRequest, message: { uploadHandle: handle, index, data: container.subarray(off, end) } },
+          EntryUploadChunkResponse,
+          chunkTimeoutMs(end - off),
+        );
+        progress(end);
+      }
+      return await (await this.connection()).call(
+        MessageType.MESSAGE_TYPE_STORE_PUT_REQUEST,
+        { codec: StorePutRequest, message: { ...base, uploadHandle: handle } },
+        StorePutResponse,
+      );
+    } catch (err) {
+      try {
+        await (await this.connection()).call(
+          MessageType.MESSAGE_TYPE_ENTRY_UPLOAD_ABORT_REQUEST,
+          { codec: EntryUploadAbortRequest, message: { uploadHandle: handle } },
+          EntryUploadAbortResponse,
+        );
+      } catch {
+        // The relay abandons it at its timeout regardless.
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * listStore lists and opens every item of the group's store, newest first.
+   * An item that does not open is reported in `unreadable`, never dropped.
+   */
+  async listStore(): Promise<StoreListing> {
+    this.requireGroup();
+    const out: StoreListing = { items: [], unreadable: [] };
+    let cursor = '';
+    for (;;) {
+      const resp = await (await this.connection()).call(
+        MessageType.MESSAGE_TYPE_STORE_LIST_REQUEST,
+        { codec: StoreListRequest, message: { limit: 0, cursor } },
+        StoreListResponse,
+      );
+      for (const m of resp.items) {
+        try {
+          out.items.push(await this.readStoreItem(m));
+        } catch (err) {
+          if (!(err instanceof TppError && (err.kind === 'store-unreadable' || err.kind === 'epoch-ahead'))) {
+            throw err;
+          }
+          out.unreadable.push({
+            id: m.itemId,
+            savedAt: msToDate(m.savedAtUnixMs) ?? new Date(0),
+            reason:
+              err.kind === 'epoch-ahead'
+                ? 'saved with a group key this device has not received yet'
+                : 'it could not be decrypted on this device',
+          });
+        }
+      }
+      cursor = resp.nextCursor;
+      if (cursor === '') {
+        return out;
+      }
+    }
+  }
+
+  /** readStoreItem opens one listed item, walking the links when its keys are wrapped at an earlier epoch (§7a.6). */
+  private async readStoreItem(m: StoreItemMeta): Promise<StoreItem> {
+    const key = await this.storeKeyAt(asBigInt(m.wrapEpoch));
+    return this.openStoreItem(m, key);
+  }
+
+  /** openStoreItem unwraps an item's keys and opens its metadata at the revision the relay reports. */
+  private openStoreItem(m: StoreItemMeta, key: Uint8Array): StoreItem {
+    const wrapEpoch = asBigInt(m.wrapEpoch);
+    const rev = asBigInt(m.metaRev);
+    try {
+      const keys = unwrapItemKeys(key, m.wrappedItemKeys, wrapEpoch, m.itemId);
+      const meta = decodeStoreMeta(openStoreMeta(keys.metaKey, m.sealedMeta, m.itemId, rev));
+      return {
+        id: m.itemId,
+        savedAt: msToDate(m.savedAtUnixMs) ?? new Date(0),
+        name: meta.name,
+        description: meta.description,
+        tags: meta.tags,
+        contentType: meta.contentType,
+        filename: meta.filename,
+        bodySize: Number(meta.bodyLen),
+        sha256Hex: hashHex(meta.sha256),
+        blobSize: Number(m.size),
+        metaRev: rev,
+        wrapEpoch,
+        secrets: {
+          contentKey: keys.contentKey,
+          metaKey: keys.metaKey,
+          contentId: m.contentId,
+          contentEpoch: asBigInt(m.contentEpoch),
+        },
+      };
+    } catch (err) {
+      throw new TppError('store-unreadable', `store item ${m.itemId} did not open`, { cause: err });
+    }
+  }
+
+  /**
+   * fetchStoreItem downloads an item's blob and decrypts it: what Copy and
+   * Save as file do. The body is checked against the hash in the item's
+   * metadata.
+   */
+  async fetchStoreItem(it: StoreItem): Promise<Item> {
+    this.requireGroup();
+    const size = it.blobSize;
+    const chunked = size > SINGLE_FRAME_MAX_BYTES;
+    const buf = new Uint8Array(size);
+    let filled = 0;
+    const progress = (done: number) =>
+      this.handlers.onProgress?.({
+        entryId: it.id,
+        direction: 'download',
+        done,
+        total: size,
+        waiting: false,
+        filename: it.filename,
+        contentType: it.contentType,
+      });
+    const read = async () => {
+      if (chunked) {
+        progress(0);
+      }
+      while (filled < size) {
+        const resp = await (await this.connection()).call(
+          MessageType.MESSAGE_TYPE_STORE_FETCH_CHUNK_REQUEST,
+          {
+            codec: StoreFetchChunkRequest,
+            message: { itemId: it.id, offset: filled.toString(), length: SINGLE_FRAME_MAX_BYTES.toString() },
+          },
+          StoreFetchChunkResponse,
+          chunkTimeoutMs(Math.min(SINGLE_FRAME_MAX_BYTES, size - filled)),
+        );
+        const data = resp.data;
+        if (
+          resp.item === undefined ||
+          resp.item.itemId !== it.id ||
+          Number(resp.item.size) !== size ||
+          Number(resp.offset) !== filled ||
+          data.length === 0 ||
+          filled + data.length > size
+        ) {
+          throw new TppError('invalid', `store item ${it.id}: the relay returned a range that does not continue the item`);
+        }
+        buf.set(data, filled);
+        filled += data.length;
+        if (chunked) {
+          progress(filled);
+        }
+      }
+    };
+    await (chunked ? this.transfer(read) : read());
+
+    const { contentKey, contentId, contentEpoch } = it.secrets;
+    let plain: Uint8Array;
+    try {
+      plain =
+        size > SLICED_OPEN_MIN_BYTES
+          ? await openEntrySlicedWithKey(contentKey, buf, contentEpoch, contentId)
+          : openEntryWithKey(contentKey, buf, contentEpoch, contentId);
+    } catch (err) {
+      throw new TppError('store-unreadable', `store item ${it.id} did not decrypt`, { cause: err });
+    }
+    const frame = decodeFrame(plain);
+    if (frame.body.length !== it.bodySize || hashHex(await sha256Sliced(frame.body)) !== it.sha256Hex) {
+      throw new TppError('store-unreadable', `store item ${it.id} does not match its metadata`);
+    }
+    return {
+      contentType: frame.contentType,
+      filename: frame.filename,
+      body: frame.body,
+      createdAt: new Date(Number(frame.createdAt)),
+      meta: null,
+    };
+  }
+
+  /**
+   * editStoreItem replaces an item's name, description and tags, starting from
+   * the revision it was listed at: when another device edited it first the
+   * relay refuses with REVISION_CONFLICT and nothing changes.
+   */
+  async editStoreItem(it: StoreItem, details: StoreDetails): Promise<StoreItem> {
+    this.requireGroup();
+    let encoded: Uint8Array;
+    try {
+      encoded = encodeStoreMeta({
+        name: details.name,
+        description: details.description,
+        tags: details.tags,
+        contentType: it.contentType,
+        filename: it.filename,
+        bodyLen: BigInt(it.bodySize),
+        sha256: hexBytes(it.sha256Hex),
+      });
+    } catch (err) {
+      throw new TppError('invalid', `the item's details: ${(err as Error).message}`, { cause: err });
+    }
+    const next = it.metaRev + 1n;
+    const sealed = sealStoreMeta(it.secrets.metaKey, generateNonce(), it.id, next, encoded);
+    const resp = await (await this.connection()).call(
+      MessageType.MESSAGE_TYPE_STORE_UPDATE_META_REQUEST,
+      {
+        codec: StoreUpdateMetaRequest,
+        message: { itemId: it.id, expectedMetaRev: it.metaRev.toString(), sealedMeta: sealed },
+      },
+      StoreUpdateMetaResponse,
+    );
+    if (resp.item === undefined || resp.item.itemId !== it.id || asBigInt(resp.item.metaRev) !== next) {
+      throw new TppError('invalid', `the relay answered the edit of ${it.id} with another item or revision`);
+    }
+    return { ...it, name: details.name, description: details.description, tags: [...details.tags], metaRev: next };
+  }
+
+  /** deleteStoreItem deletes an item for every device of the group. A screen asks first. */
+  async deleteStoreItem(itemId: string): Promise<void> {
+    this.requireGroup();
+    await (await this.connection()).call(
+      MessageType.MESSAGE_TYPE_STORE_DELETE_REQUEST,
+      { codec: StoreDeleteRequest, message: { itemId } },
+      StoreDeleteResponse,
+    );
+  }
+
+  /**
+   * storeKeyAt returns the store key of epoch `w`: derived from the group key
+   * at the current epoch and opened link by link below it. The links are
+   * fetched once per group key.
+   */
+  private async storeKeyAt(w: bigint): Promise<Uint8Array> {
+    const epoch = this.state.epoch;
+    const groupKey = this.state.groupKey;
+    if (w > epoch) {
+      throw new TppError('epoch-ahead', `a store item is wrapped at epoch ${w}, this device is at ${epoch}`);
+    }
+    if (w < 1n) {
+      throw new TppError('store-unreadable', `a store item is wrapped at epoch ${w}`);
+    }
+    const groupKeyHex = toHex(groupKey);
+    if (this.storeKeys === null || this.storeKeys.groupKeyHex !== groupKeyHex) {
+      this.storeKeys = { groupKeyHex, keys: new Map([[epoch, storeKey(groupKey, epoch)]]), links: null };
+    }
+    const cache = this.storeKeys;
+    const cached = cache.keys.get(w);
+    if (cached !== undefined) {
+      return cached;
+    }
+    if (cache.links === null) {
+      const resp = await (await this.connection()).call(
+        MessageType.MESSAGE_TYPE_STORE_LINKS_REQUEST,
+        { codec: StoreLinksRequest, message: {} },
+        StoreLinksResponse,
+      );
+      cache.links = new Map(resp.links.map((l) => [asBigInt(l.epoch), l.link]));
+    }
+    let key = cache.keys.get(epoch) as Uint8Array;
+    for (let e = epoch; e > w; e--) {
+      const known = cache.keys.get(e - 1n);
+      if (known !== undefined) {
+        key = known;
+        continue;
+      }
+      const link = cache.links.get(e);
+      if (link === undefined) {
+        throw new TppError('store-unreadable', `the relay has no store link into epoch ${e}`);
+      }
+      try {
+        key = openStoreLink(key, link, e);
+      } catch (err) {
+        throw new TppError('store-unreadable', `the store link into epoch ${e} did not open`, { cause: err });
+      }
+      cache.keys.set(e - 1n, key);
+    }
+    return key;
+  }
+
   private requireGroup(): void {
     if (!this.inGroup) {
       throw new TppError('no-group', 'this device is not in a group');
     }
   }
+}
+
+/** hexBytes parses the lowercase hex of a hash. */
+function hexBytes(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(hex.slice(2 * i, 2 * i + 2), 16);
+  }
+  return out;
 }
 
 /** jitter spreads reconnects so that every client of a relay that restarted does not come back in the same millisecond. */

@@ -10,7 +10,8 @@ item messages, background reclaim and the sweep — is in its own PR; the client
 (steps 4–6) do not use it yet. The relay side landed in #44. Step 4 — the Go
 client core's store calls, events and StoreIndex — is in its own PR; the store's
 cross-client interop test comes with the TypeScript core in step 6. The Go core
-landed in #45; step 5, the desktop Store tab, is in its own PR. §9 records the answered questions; §11 keeps the
+landed in #45 and the desktop Store tab in #46. Step 6 — the TypeScript core,
+the store interop suite and the Android Store screen — is in its own PR. §9 records the answered questions; §11 keeps the
 server-side copy as a later option.
 **Touches:** `/spec/**` (store section, header v2, vectors), `/proto/**`,
 `/server/**`, `/pkg/tppclient/**`, `/desktop/**`, `/mobile/**`, `/deploy/**`,

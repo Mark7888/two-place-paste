@@ -17,7 +17,7 @@
  * device no longer holds the key it was written under (SPEC §3.3).
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { FlatList, Image, Pressable, RefreshControl, Text, View } from 'react-native';
 
 import type { EntryMeta, Progress } from '../../core';
@@ -36,6 +36,8 @@ import {
 import { describeHeader, formatSize, headerPreviewable, previewOf, type Preview } from '../preview';
 import { Button, FileChoices, Notice, OutcomeNotice, Sheet, Shimmer, TransferList } from '../ui';
 import { colors, styles } from '../theme';
+import { StoreSheet } from '../StoreSheet';
+import { getStoreSnapshot, index as storeIndex, loadStore, saveItem, savedHash, subscribeStore } from '../storeState';
 
 /** Loaded is a preview that arrived, or the reason one could not. */
 type Loaded = { ok: true; preview: Preview } | { ok: false; error: string };
@@ -85,6 +87,10 @@ export function HistoryScreen(): React.JSX.Element {
   }, []);
   // A file waiting for save-or-open: asked before its download, from its header.
   const [file, setFile] = useState<PendingFile | null>(null);
+  // The entry being saved to the store, while its sheet is open.
+  const [saving, setSaving] = useState<EntryMeta | null>(null);
+  // The store, for the "saved" marks and whether Save to store is offered.
+  const store = useSyncExternalStore(subscribeStore, getStoreSnapshot);
 
   const client = session.client;
   const inFlight = useRef(false);
@@ -113,7 +119,10 @@ export function HistoryScreen(): React.JSX.Element {
 
   useEffect(() => {
     void load();
-  }, [load]);
+    if (client !== null) {
+      void loadStore(client);
+    }
+  }, [load, client]);
 
   // The relay removed an entry early to stay within its storage limit: it is
   // gone, so it leaves the list now rather than failing when tapped.
@@ -300,6 +309,10 @@ export function HistoryScreen(): React.JSX.Element {
                 <Text style={styles.text}>{item.createdAt.toLocaleString()}</Text>
                 <Text style={styles.small}>
                   {describeHeader(item.header)} · {formatSize(item.header?.size ?? item.size)}
+                  {savedHash(item.header?.sha256Hex) ? '  ·  ' : ''}
+                  {savedHash(item.header?.sha256Hex) && (
+                    <Text style={{ color: colors.ok }}>saved in the store</Text>
+                  )}
                 </Text>
                 <Text style={{ color: canOpen ? colors.accent : colors.faint, fontSize: 13 }}>
                   {!canOpen
@@ -335,10 +348,48 @@ export function HistoryScreen(): React.JSX.Element {
                     onPress={() => copy(item)}
                     disabled={jobs.has(item.id) || (busy && !needsFileChoice(item.header))}
                   />
+                  {store.status === 'ready' && (
+                    <Button
+                      label="Save to store"
+                      icon="store"
+                      variant="secondary"
+                      onPress={() => setSaving(item)}
+                      disabled={busy}
+                    />
+                  )}
                 </View>
               )}
             </View>
           );
+        }}
+      />
+
+      <StoreSheet
+        visible={saving !== null}
+        title="Save to store"
+        what={saving === null ? undefined : `${describeHeader(saving.header)} from the history`}
+        available={store.limits?.availableBytes}
+        initial={{ name: saving?.header?.filename ?? '', description: '', tags: [] }}
+        knownTags={storeIndex.tags().map((t) => t.tag)}
+        onClose={() => setSaving(null)}
+        onSubmit={async (details, allowDuplicate) => {
+          if (client === null || saving === null) {
+            return '';
+          }
+          fetchingEntry(saving.id, true);
+          try {
+            const entry = await client.getEntry(saving.id, saving);
+            const it = await saveItem(client, toClipboardItem(entry), details, allowDuplicate);
+            return `Saved “${it.name}” to the store.`;
+          } finally {
+            fetchingEntry(saving.id, false);
+          }
+        }}
+        onDone={(msg) => {
+          setSaving(null);
+          setOk(true);
+          setMessage(msg);
+          setSaved(null);
         }}
       />
 

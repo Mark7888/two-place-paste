@@ -32,7 +32,12 @@ export type TppErrorKind =
   /** A malformed or unusable value — a pairing code that is not one, a server URL that is not a URL. */
   | 'invalid'
   /** The entry is larger than the relay accepts; refused here, before any upload. */
-  | 'too-large';
+  | 'too-large'
+  /**
+   * A store item's keys, metadata or blob did not open: a missing link,
+   * tampering or corruption. It is reported, never silently dropped.
+   */
+  | 'store-unreadable';
 
 /** TppError is a local failure with a kind a caller can switch on. */
 export class TppError extends Error {
@@ -90,6 +95,16 @@ export function isQuotaExceeded(err: unknown): boolean {
   return isCode(err, ErrorCode.ERROR_CODE_QUOTA_EXCEEDED);
 }
 
+/** isStoreDisabled means the admin has the group's store off, or it is being emptied. */
+export function isStoreDisabled(err: unknown): boolean {
+  return isCode(err, ErrorCode.ERROR_CODE_STORE_DISABLED);
+}
+
+/** isRevisionConflict means another device edited a store item first; nothing was overwritten. */
+export function isRevisionConflict(err: unknown): boolean {
+  return isCode(err, ErrorCode.ERROR_CODE_REVISION_CONFLICT);
+}
+
 /** describe renders an error for the one-line status a screen shows. It never renders a cause chain into the UI. */
 export function describe(err: unknown): string {
   // The two storage refusals get a sentence a person can act on; the relay's
@@ -99,6 +114,15 @@ export function describe(err: unknown): string {
   }
   if (isQuotaExceeded(err)) {
     return 'The relay’s storage is full right now; try again shortly.';
+  }
+  if (isStoreDisabled(err)) {
+    return 'The store is turned off for this group.';
+  }
+  if (isRevisionConflict(err)) {
+    return 'Another device edited this item first.';
+  }
+  if (isCode(err, ErrorCode.ERROR_CODE_CLIENT_OUTDATED)) {
+    return 'The server needs a newer version of this app.';
   }
   if (err instanceof TppError || err instanceof ProtocolError) {
     return err.message;

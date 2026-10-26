@@ -9,4 +9,5 @@ export * from './entryCache';
 export * from './errors';
 export * from './pairing';
 export * from './state';
+export * from './store';
 export * from './urls';

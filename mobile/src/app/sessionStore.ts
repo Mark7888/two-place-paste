@@ -38,6 +38,7 @@ import {
   upload,
   type FileChoice,
 } from './session';
+import { clearStore, invalidate as invalidateStore, storeEvents } from './storeState';
 
 /** DirectionChoice is what the user answers a direction question with. */
 export type DirectionChoice = 'up' | 'down';
@@ -227,6 +228,7 @@ export async function forget(): Promise<void> {
     return;
   }
   await client.forget();
+  clearStore();
   probablyRevoked = false;
   notice = '';
   emit();
@@ -273,7 +275,12 @@ export function init(): void {
   void (async () => {
     try {
       const opened = await openSession({
-        onConnected: () => emit(),
+        onConnected: () => {
+          // Store events sent while this device was away were missed: the
+          // store is listed again when next needed.
+          invalidateStore();
+          emit();
+        },
         onDisconnected: () => emit(),
         onEpoch: (epoch) => {
           // A rekey installs a key and nothing else: the local clipboard is
@@ -298,6 +305,10 @@ export function init(): void {
           emit();
         },
         onGroupName: () => emit(),
+        onStoreItemAdded: storeEvents.put,
+        onStoreItemUpdated: storeEvents.put,
+        onStoreItemDeleted: storeEvents.remove,
+        onStoreState: storeEvents.state,
         onEntryEvicted: (id) => {
           evicted = { id, seq: (evicted?.seq ?? 0) + 1 };
           emit();

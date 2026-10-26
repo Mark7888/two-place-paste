@@ -2,7 +2,7 @@
  * The app shell: a tab per screen, the setup gate in front of them, and the
  * window insets.
  *
- * The navigation is five tabs and a piece of state. A navigation library would
+ * The navigation is six tabs and a piece of state. A navigation library would
  * be a dependency to keep current for a stack that is one level deep
  * (docs/internal/conventions.md §9).
  *
@@ -51,15 +51,17 @@ import { DevicesScreen } from './screens/DevicesScreen';
 import { HistoryScreen } from './screens/HistoryScreen';
 import { PairingScreen } from './screens/PairingScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
+import { StoreScreen } from './screens/StoreScreen';
 import { SetupScreen } from './screens/SetupScreen';
 import { SyncScreen } from './screens/SyncScreen';
 import { colors, styles } from './theme';
 
-type Tab = 'sync' | 'history' | 'devices' | 'pairing' | 'settings';
+type Tab = 'sync' | 'history' | 'store' | 'devices' | 'pairing' | 'settings';
 
 const TABS: { id: Tab; label: string; icon: IconName }[] = [
   { id: 'sync', label: 'Sync', icon: 'sync' },
   { id: 'history', label: 'History', icon: 'history' },
+  { id: 'store', label: 'Store', icon: 'store' },
   { id: 'devices', label: 'Devices', icon: 'devices' },
   { id: 'pairing', label: 'Pairing', icon: 'link' },
   { id: 'settings', label: 'Settings', icon: 'settings' },
@@ -68,6 +70,7 @@ const TABS: { id: Tab; label: string; icon: IconName }[] = [
 const SCREENS: Record<Tab, () => React.JSX.Element> = {
   sync: SyncScreen,
   history: HistoryScreen,
+  store: StoreScreen,
   devices: DevicesScreen,
   pairing: PairingScreen,
   settings: SettingsScreen,
