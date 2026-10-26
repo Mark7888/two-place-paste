@@ -12,7 +12,7 @@ The **Store** tab keeps items the group saves on purpose. Unlike the
 [History](/two-place-paste/guides/history/), items do not expire: they stay until someone deletes
 them. Every device in the group sees the same store.
 
-<Image src={store} alt="The Store tab: space used, Save clipboard to store and Add file buttons, a search box, tag filters and four saved items" class="screenshot" />
+<Image src={store} alt="The Store tab: space used, a drop zone with Save clipboard and Upload a file buttons, a search box, tag filters, and saved items with the first one's preview open" class="screenshot" />
 
 <Aside>
 	The store is off until the server admin turns it on for your group. Until then the Store tab
@@ -27,12 +27,13 @@ content, name, description or tags; it only knows how big each one is.
 
 There are three ways to put an item in the store:
 
-- **Save clipboard to store** on the Store tab saves whatever you have copied.
-- **Add file…** on the Store tab saves a file: drop it on the window, or choose it.
+- **Save clipboard**, in the box at the top of the Store tab, saves whatever you have copied.
+- To save a file, drop it on that box, or click **Upload a file…** to choose it.
 - The store button on a [History](/two-place-paste/guides/history/) entry saves that entry, so it
   outlives its 24 hours. The entry itself still expires as usual.
 
-Each save asks for a **name** (required), a **description** and **tags**. Type a tag and press
+Each save asks for a **name** (required), a **description** and **tags**. A file starts with its
+filename as the name, whether you copied it, dropped it or saved it from the History. Type a tag and press
 Enter; the tags already in use are suggested as you type. The counters show the limits: a name up
 to 200 bytes, a description up to 800, and up to 16 tags of 32 bytes each.
 
@@ -51,12 +52,17 @@ History entries the store already holds are marked **saved**.
 - **Search** matches every word you type against names and descriptions, ignoring case.
 - **Tags** under the search box filter the list; pick several to see only items that carry all of
   them. Each tag shows how many items carry it.
-- **Sort** by newest, oldest, or name.
+- **Sort** by newest, oldest, name, or size (largest or smallest first).
 
 Searching happens on your device: the server cannot search what it cannot read.
 
 ## Use an item
 
+- **Preview** opens an item under its row without touching your clipboard: text is shown as text,
+  images as images, and audio and video play. It is offered for the same types as in the History
+  (see [What can be previewed](/two-place-paste/guides/history/#what-can-be-previewed)), and not
+  for an item larger than **Download automatically up to** in Settings, since a preview downloads
+  it. **Hide** closes it.
 - **Copy** puts the item on this computer's clipboard, like **Copy** in the History. It is not sent
   to your other devices as a new clipboard entry.
 - The download button saves the item as a file. A file keeps its own name; text and images are
@@ -80,9 +86,11 @@ The Android app has the same **Store** tab, with the same search, tags and sorti
   gives the app only the file you choose.
 - An open History entry has a **Save to store** button, and entries the store already holds are
   marked **saved in the store**.
-- Tap an item for its actions. Text and images are copied to the clipboard; a file, which the
-  Android clipboard cannot hold, is saved to `Downloads/TwoPlacePaste` or opened in another app,
-  as you choose.
+- Tap an item for its actions. Text, images and files of the types the
+  [History previews on Android](/two-place-paste/guides/history/#on-android) show a preview above
+  them; copying or saving the item right after does not download it again.
+- Text and images are copied to the clipboard; a file, which the Android clipboard cannot hold,
+  is saved to `Downloads/TwoPlacePaste` or opened in another app, as you choose.
 - **Edit** changes the name, description and tags; **Delete** asks first.
 
 ## Items this device cannot open

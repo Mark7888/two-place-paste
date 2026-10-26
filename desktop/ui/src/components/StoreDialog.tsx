@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { ApiError, storeLimits, type StoreDetails, type StoreItemView } from "../api";
+import { ApiError, storeLimits, type StoreDetails, type StoreItemView, type StoreLimitsView } from "../api";
 import { bytes, when } from "../format";
 import { Icon } from "./Icon";
 import { Modal } from "./Modal";
@@ -263,4 +263,19 @@ export function StoreDialog({
       )}
     </Modal>
   );
+}
+
+/**
+ * storeRoom is how much the store has left, for the dialog to say.
+ *
+ * available_bytes is not it: that is the largest item a save may still be,
+ * which the relay cuts to the per-item limit. Below that limit it is the room
+ * left; at it, the room is the store limit less what is used, and a store
+ * with no limit has nothing to say. Whether one file fits is still
+ * available_bytes's to answer.
+ */
+export function storeRoom(limits: StoreLimitsView | null | undefined): number | undefined {
+  if (!limits) return undefined;
+  if (limits.available_bytes < limits.max_item_bytes) return limits.available_bytes;
+  return limits.max_bytes > 0 ? Math.max(limits.max_bytes - limits.used_bytes, 0) : undefined;
 }

@@ -7,16 +7,24 @@
  * `image/*` media type makes it an image, and everything else is text — of
  * which only a `text/*` body is actually rendered.
  *
+ * A file is previewed when its extension names a format in FILE_FORMATS — a
+ * shorter list than the desktop's, of what this app can draw — and its bytes
+ * are what the extension claims, the same check the desktop makes.
+ *
  * Nothing in here is cached or stored. A preview exists for as long as the
  * screen showing it does, and building one costs exactly the same decryption
  * that copying the entry would.
  */
 
-import type { EntryHeaderView, Item, Progress } from '../core';
+import type { EntryHeaderView, Item, Progress, StoreLimits } from '../core';
 import { fromUTF8 } from '../core';
 
-/** PREVIEW_CHARS bounds a text preview. The desktop uses the same number. */
-export const PREVIEW_CHARS = 240;
+/**
+ * PREVIEW_CHARS bounds a text preview, copied text and text files alike:
+ * either is opened to be read, and the preview box scrolls. The desktop uses
+ * the same number.
+ */
+export const PREVIEW_CHARS = 4000;
 
 /**
  * MAX_IMAGE_BYTES bounds an image rendered inline. Base64 costs a third on top
@@ -24,6 +32,13 @@ export const PREVIEW_CHARS = 240;
  * big it is instead of trying to draw it.
  */
 export const MAX_IMAGE_BYTES = 4 << 20;
+
+/**
+ * MAX_FILE_PREVIEW_BYTES bounds a file the history offers to preview. A
+ * preview downloads the whole file, so past this the row offers Save or open
+ * only, as it does for a type with no preview.
+ */
+export const MAX_FILE_PREVIEW_BYTES = MAX_IMAGE_BYTES;
 
 export type PreviewKind = 'text' | 'image' | 'file';
 
@@ -39,6 +54,94 @@ export interface Preview {
   /** imageUri is a data URI for an image small enough to draw, or ''. */
   imageUri: string;
   imageTooLarge: boolean;
+  /** format names what is shown: "PNG image" for a file, else the media type. */
+  format: string;
+  /** mismatch says a file's bytes are not what its name claims, so it is not shown. */
+  mismatch: boolean;
+}
+
+/** FileFormat is a file type the history previews, known by its extension. */
+interface FileFormat {
+  name: string;
+  render: 'text' | 'image';
+  /** mime is the type it is drawn as: the table's, never the sender's. */
+  mime: string;
+  /** check says whether the bytes are what the extension claims. */
+  check: (b: Uint8Array) => boolean;
+}
+
+const startsWith = (b: Uint8Array, ...sig: number[]) => sig.every((v, i) => b[i] === v);
+const ascii = (s: string) => Array.from(s, (c) => c.charCodeAt(0));
+
+function image(name: string, mime: string, check: (b: Uint8Array) => boolean): FileFormat {
+  return { name, render: 'image', mime, check };
+}
+
+// The images Android's <Image> draws. SVG and AVIF, which the desktop shows,
+// are not among them.
+const IMAGES: [string[], FileFormat][] = [
+  [['.png'], image('PNG image', 'image/png', (b) => startsWith(b, 0x89, ...ascii('PNG\r\n'), 0x1a, 0x0a))],
+  [['.jpg', '.jpeg', '.jpe', '.jfif'], image('JPEG image', 'image/jpeg', (b) => startsWith(b, 0xff, 0xd8, 0xff))],
+  [['.gif'], image('GIF image', 'image/gif', (b) => startsWith(b, ...ascii('GIF87a')) || startsWith(b, ...ascii('GIF89a')))],
+  [['.webp'], image('WebP image', 'image/webp', (b) => startsWith(b, ...ascii('RIFF')) && ascii('WEBP').every((v, i) => b[8 + i] === v))],
+  [['.bmp'], image('BMP image', 'image/bmp', (b) => startsWith(b, ...ascii('BM')))],
+];
+
+// The text files the desktop previews (desktop/internal/preview), shown as
+// text here too: an .html file is its source, never a page.
+const TEXTS: [string, string[]][] = [
+  ['Text', ['.txt', '.text', '.log', '.csv', '.tsv', '.srt', '.vtt', '.diff', '.patch']],
+  ['Markdown', ['.md', '.markdown']],
+  ['Data', ['.json', '.jsonl', '.ndjson', '.xml', '.yaml', '.yml', '.toml']],
+  ['Config', ['.ini', '.cfg', '.conf', '.env', '.properties']],
+  ['Web source', ['.html', '.htm', '.css', '.scss', '.less']],
+  [
+    'Source code',
+    [
+      '.go', '.py', '.rb', '.rs', '.java', '.kt', '.kts', '.scala', '.groovy', '.gradle',
+      '.js', '.mjs', '.cjs', '.jsx', '.ts', '.tsx', '.c', '.h', '.cc', '.cpp', '.hpp',
+      '.cs', '.swift', '.m', '.php', '.pl', '.lua', '.r', '.dart', '.sql', '.proto',
+      '.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat', '.cmd', '.tex',
+    ],
+  ],
+];
+
+const FILE_FORMATS: ReadonlyMap<string, FileFormat> = new Map([
+  ...IMAGES.flatMap(([exts, f]) => exts.map((e): [string, FileFormat] => [e, f])),
+  ...TEXTS.flatMap(([name, exts]) =>
+    exts.map((e): [string, FileFormat] => [e, { name, render: 'text', mime: 'text/plain', check: isText }]),
+  ),
+]);
+
+/** fileFormat finds a file's format from its name, or undefined. */
+export function fileFormat(filename: string): FileFormat | undefined {
+  const dot = filename.lastIndexOf('.');
+  return dot < 0 ? undefined : FILE_FORMATS.get(filename.slice(dot).toLowerCase());
+}
+
+/**
+ * isText says whether bytes read as text: valid UTF-8 with no NUL, the
+ * desktop's check. A binary file renamed .txt is not drawn as mojibake.
+ */
+export function isText(b: Uint8Array): boolean {
+  let i = 0;
+  while (i < b.length) {
+    const c = b[i];
+    if (c === 0) {
+      return false;
+    }
+    const size = c < 0x80 ? 1 : (c & 0xe0) === 0xc0 && c >= 0xc2 ? 2 : (c & 0xf0) === 0xe0 ? 3 : (c & 0xf8) === 0xf0 && c <= 0xf4 ? 4 : 0;
+    if (size === 0 || i + size > b.length) {
+      return false;
+    }
+    for (let k = 1; k < size; k++) {
+      if ((b[i + k] & 0xc0) !== 0x80) {
+        return false;
+      }
+    }
+    i += size;
+  }
+  return true;
 }
 
 /** kindOf classifies an entry exactly as the desktop's clipboard does. */
@@ -54,13 +157,17 @@ export function kindOf(contentType: string, filename: string): PreviewKind {
 
 /**
  * headerPreviewable says whether the history offers a preview for an entry,
- * from its sealed header and without fetching it — the same rule the desktop
- * applies: only text/* and image/* without a filename. An entry whose header
- * is missing or unreadable has an unknown type, and no preview.
+ * from its sealed header and without fetching it: copied text and images,
+ * and a file whose name is a format in FILE_FORMATS, up to
+ * MAX_FILE_PREVIEW_BYTES. An entry whose header is missing or unreadable has
+ * an unknown type, and no preview.
  */
 export function headerPreviewable(header: EntryHeaderView | null): boolean {
-  if (header === null || header.filename !== '') {
+  if (header === null) {
     return false;
+  }
+  if (header.filename !== '') {
+    return fileFormat(header.filename) !== undefined && header.size <= MAX_FILE_PREVIEW_BYTES;
   }
   return header.contentType.startsWith('text/') || header.contentType.startsWith('image/');
 }
@@ -149,26 +256,57 @@ export function previewOf(item: Item): Preview {
     truncated: false,
     imageUri: '',
     imageTooLarge: false,
+    format: item.contentType,
+    mismatch: false,
   };
 
+  if (kind === 'file') {
+    const format = fileFormat(item.filename);
+    if (format === undefined) {
+      return out;
+    }
+    out.format = format.name;
+    if (!format.check(item.body)) {
+      out.mismatch = true;
+      return out;
+    }
+    out.kind = format.render;
+    if (format.render === 'text') {
+      textOf(out, item.body, PREVIEW_CHARS);
+    } else {
+      imageOf(out, item.body, format.mime);
+    }
+    return out;
+  }
+
   if (kind === 'text' && item.contentType.startsWith('text/')) {
-    const text = fromUTF8(item.body);
-    // Counted in code points rather than UTF-16 units, so an emoji is one
-    // character and a surrogate pair is never cut in half.
-    const chars = Array.from(text);
-    out.truncated = chars.length > PREVIEW_CHARS;
-    out.text = out.truncated ? chars.slice(0, PREVIEW_CHARS).join('') + '…' : text;
+    textOf(out, item.body, PREVIEW_CHARS);
     return out;
   }
 
   if (kind === 'image') {
-    if (item.body.length > MAX_IMAGE_BYTES) {
-      out.imageTooLarge = true;
-      return out;
-    }
-    out.imageUri = `data:${item.contentType};base64,${toBase64(item.body)}`;
+    imageOf(out, item.body, item.contentType);
   }
   return out;
+}
+
+/** textOf fills in a text preview of at most limit characters. */
+function textOf(out: Preview, body: Uint8Array, limit: number): void {
+  const text = fromUTF8(body).replace(/^\uFEFF/, '');
+  // Counted in code points rather than UTF-16 units, so an emoji is one
+  // character and a surrogate pair is never cut in half.
+  const chars = Array.from(text);
+  out.truncated = chars.length > limit;
+  out.text = out.truncated ? chars.slice(0, limit).join('') + '…' : text;
+}
+
+/** imageOf fills in an image preview, drawn as mime, unless it is too large. */
+function imageOf(out: Preview, body: Uint8Array, mime: string): void {
+  if (body.length > MAX_IMAGE_BYTES) {
+    out.imageTooLarge = true;
+    return;
+  }
+  out.imageUri = `data:${mime};base64,${toBase64(body)}`;
 }
 
 const BASE64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -193,4 +331,23 @@ export function toBase64(b: Uint8Array): string {
     out += remaining > 2 ? BASE64[n & 0x3f] : '=';
   }
   return out;
+}
+
+/**
+ * storeRoom is how much the store has left, for the save sheet to say.
+ *
+ * availableBytes is not it: that is the largest item a save may still be,
+ * which the relay cuts to the per-item limit. Below that limit it is the
+ * room left; at it, the room is the store limit less what is used, and a
+ * store with no limit has nothing to say. Whether one file fits is still
+ * availableBytes's to answer.
+ */
+export function storeRoom(limits: StoreLimits | null | undefined): number | undefined {
+  if (!limits) {
+    return undefined;
+  }
+  if (limits.availableBytes < limits.maxItemBytes) {
+    return limits.availableBytes;
+  }
+  return limits.maxBytes > 0 ? Math.max(limits.maxBytes - limits.usedBytes, 0) : undefined;
 }

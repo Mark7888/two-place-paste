@@ -1,6 +1,6 @@
 import { useId, useState } from "react";
 import { api, type Device, type GroupDetail, type GroupStore, type LimitChange } from "../api";
-import { Badge, GroupBadges } from "../components/Badge";
+import { Badge, GroupBadges, StoreBadge } from "../components/Badge";
 import { SectionHead, StatCard } from "../components/Card";
 import { useLimitForm } from "../components/LimitFields";
 import { ErrorNotice, Problems } from "../components/Notice";
@@ -127,7 +127,7 @@ function Stats({ data }: { data: GroupDetail }) {
   const g = data.group;
   const now = Date.now();
   return (
-    <div className="stats">
+    <div className="stats quad">
       <StatCard title="Devices">
         <p className="figure">{g.devices}</p>
         <p className="sub">last active {ago(now, g.last_seen, "never")}</p>
@@ -137,9 +137,9 @@ function Stats({ data }: { data: GroupDetail }) {
         <p className="sub">oldest {ago(now, g.oldest, "—")}</p>
       </StatCard>
       {g.usage && (
-        <StatCard title="Blob storage" wide>
+        <StatCard title="Blob storage">
           <p className="figure">
-            {humanBytes(g.usage.used_bytes)} <span className="muted">of {limitText(g.limit_bytes)}</span>
+            {humanBytes(g.usage.used_bytes)} <span className="muted of">of {limitText(g.limit_bytes)}</span>
           </p>
           <UsageMeter used={g.usage.used_bytes} limit={g.limit_bytes} label="Blob storage used" />
           <p className="sub">
@@ -148,7 +148,25 @@ function Stats({ data }: { data: GroupDetail }) {
           </p>
         </StatCard>
       )}
+      {data.store && <StoreStat store={data.store} />}
     </div>
+  );
+}
+
+/** StoreStat is the store's usage beside the blob storage at the top of the
+ *  page; the Store section further down holds its switch and limit. */
+function StoreStat({ store }: { store: GroupStore }) {
+  return (
+    <StatCard title="Store" badge={<StoreBadge store={store} />}>
+      <p className="figure">
+        {humanBytes(store.used_bytes)} <span className="muted of">of {limitText(store.limit_bytes)}</span>
+      </p>
+      <UsageMeter used={store.used_bytes} limit={store.limit_bytes} label="Store used" />
+      <p className="sub">
+        {store.used_items} of {store.max_items} {plural(store.max_items, "item", "items")} · limit from{" "}
+        {limitSources[store.limit_source]}
+      </p>
+    </StatCard>
   );
 }
 
@@ -281,13 +299,7 @@ function StoreSection({
   return (
     <>
       <SectionHead title="Store">
-        {store.emptying ? (
-          <Badge kind="used">emptying</Badge>
-        ) : store.enabled ? (
-          <Badge kind="good">on</Badge>
-        ) : (
-          <Badge kind="used">off</Badge>
-        )}
+        <StoreBadge store={store} />
       </SectionHead>
       <div className="card">
         <div className="form-row spread">
@@ -323,14 +335,6 @@ function StoreSection({
             {store.enabled ? "Turn store off" : "Turn store on"}
           </button>
         </div>
-        <p className="figure">
-          {humanBytes(store.used_bytes)} <span className="muted">of {limitText(store.limit_bytes)}</span>
-        </p>
-        <UsageMeter used={store.used_bytes} limit={store.limit_bytes} label="Store used" />
-        <p className="sub">
-          {items} of {store.max_items} · limit from {limitSources[store.limit_source]} · up to{" "}
-          {humanBytes(store.max_item_bytes)} an item
-        </p>
       </div>
       <form
         className="card"
@@ -361,7 +365,8 @@ function StoreSection({
         </div>
         <span className="hint">
           Overrides the tag's store limit{store.tag_limit_bytes !== null && ` (${limitText(store.tag_limit_bytes)})`}{" "}
-          and the server default ({limitText(store.default_limit_bytes)}). 0 means no limit of its own. Separate from
+          and the server default ({limitText(store.default_limit_bytes)}). 0 means no limit of its own. An item can
+          be up to {humanBytes(store.max_item_bytes)}. Separate from
           the storage limit above. Lowering it deletes nothing: the store never evicts, so new saves are refused until
           it fits.
         </span>

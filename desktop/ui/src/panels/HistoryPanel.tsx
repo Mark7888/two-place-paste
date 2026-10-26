@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type EntryPreview, type EntryView, type ServiceEvent } from "../api";
-import { StoreDialog } from "../components/StoreDialog";
+import { StoreDialog, storeRoom } from "../components/StoreDialog";
 import { bytes, relative, useNow, when } from "../format";
 import { Icon } from "../components/Icon";
 import { PreviewBody, entryIcon } from "../preview";
@@ -66,7 +66,7 @@ export function HistoryPanel({
   const loadStore = useCallback(async () => {
     try {
       const v = await api.store();
-      setStore(v.enabled ? { tags: v.tags.map((t) => t.tag), available: v.limits?.available_bytes } : null);
+      setStore(v.enabled ? { tags: v.tags.map((t) => t.tag), available: storeRoom(v.limits) } : null);
     } catch {
       // No store is not a reason to fail the history.
       setStore(null);

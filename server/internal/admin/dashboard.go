@@ -101,6 +101,10 @@ type groupJSON struct {
 
 	// Usage is nil when blob storage is not accounted.
 	Usage *usageJSON `json:"usage"`
+
+	// Store is the group's store, on the groups list only; it is absent
+	// elsewhere and when the relay has no store.
+	Store *storeRowJSON `json:"store,omitempty"`
 }
 
 type usageJSON struct {
@@ -130,6 +134,7 @@ type groupsJSON struct {
 	StaleCount     int  `json:"stale_count"`
 	StaleAfterDays int  `json:"stale_after_days"`
 	HasUsage       bool `json:"has_usage"`
+	HasStore       bool `json:"has_store"`
 
 	Problems []string `json:"problems"`
 }
@@ -233,6 +238,7 @@ var groupTable = table[groupItem]{
 		"entries":     {cmp: func(a, b groupItem) int { return byNumber(a.row.Entries, b.row.Entries) }, desc: true},
 		"oldest":      {cmp: func(a, b groupItem) int { return byTime(a.row.Oldest, b.row.Oldest) }, desc: true},
 		"storage":     {cmp: func(a, b groupItem) int { return byNumber(usedBytes(a.row), usedBytes(b.row)) }, desc: true},
+		"store":       {cmp: func(a, b groupItem) int { return byNumber(storeBytes(a.row), storeBytes(b.row)) }, desc: true},
 	},
 	defaultSort: "storage",
 	fields: func(g groupItem) []string {
@@ -261,6 +267,7 @@ func (s *Server) handleGroupList(w http.ResponseWriter, r *http.Request, _ sessi
 		Filter:   filter,
 		Stale:    staleOnly,
 		HasUsage: s.dashboard.Ledger != nil,
+		HasStore: s.storeSvc != nil,
 	}
 
 	groups, err := s.store.ListGroups(ctx)
@@ -293,6 +300,7 @@ func (s *Server) handleGroupList(w http.ResponseWriter, r *http.Request, _ sessi
 		if (filter != "" && filter != key) || (staleOnly && !row.Stale) {
 			continue
 		}
+		row.Store = s.storeRow(ctx, g, tags, probs)
 		item := groupItem{row: row, id: g.ID, devices: make([]string, 0, len(devices))}
 		for _, d := range devices {
 			item.devices = append(item.devices, d.Name)
@@ -323,6 +331,13 @@ func usedBytes(g groupJSON) int64 {
 		return 0
 	}
 	return g.Usage.UsedBytes
+}
+
+func storeBytes(g groupJSON) int64 {
+	if g.Store == nil {
+		return 0
+	}
+	return g.Store.UsedBytes
 }
 
 // settings reads the runtime settings, falling back to the defaults when they

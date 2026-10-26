@@ -1,4 +1,16 @@
-import { describeHeader, formatSize, headerPreviewable, transferText, kindOf, previewOf, toBase64, PREVIEW_CHARS } from '../preview';
+import {
+  describeHeader,
+  formatSize,
+  headerPreviewable,
+  isText,
+  transferText,
+  kindOf,
+  previewOf,
+  toBase64,
+  MAX_FILE_PREVIEW_BYTES,
+  PREVIEW_CHARS,
+  storeRoom,
+} from '../preview';
 import { utf8, type Item } from '../../core';
 
 function item(contentType: string, body: Uint8Array, filename = ''): Item {
@@ -77,6 +89,75 @@ describe('previewOf', () => {
   });
 });
 
+describe('previewOf for a file', () => {
+  const PNG = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0);
+
+  it('draws an image file as the type its name says, not the type it was sent as', () => {
+    const p = previewOf(item('application/octet-stream', PNG, 'shot.png'));
+    expect(p.kind).toBe('image');
+    expect(p.format).toBe('PNG image');
+    expect(p.imageUri.startsWith('data:image/png;base64,')).toBe(true);
+  });
+
+  it('shows a text file as text, as much of it as copied text, without a BOM', () => {
+    const p = previewOf(item('text/html', utf8('\uFEFF<script>' + 'a'.repeat(PREVIEW_CHARS)), 'page.html'));
+    expect(p.kind).toBe('text');
+    expect(p.format).toBe('Web source');
+    expect(p.text.startsWith('<script>')).toBe(true);
+    expect(p.truncated).toBe(true);
+    expect(Array.from(p.text)).toHaveLength(PREVIEW_CHARS + 1);
+  });
+
+  it('refuses a file whose bytes are not what its name claims', () => {
+    for (const [name, body] of [
+      ['shot.png', utf8('<html>not a png</html>')],
+      ['notes.txt', Uint8Array.of(0x00, 0x01, 0xff)],
+    ] as const) {
+      const p = previewOf(item('application/octet-stream', body, name));
+      expect(p.kind).toBe('file');
+      expect(p.mismatch).toBe(true);
+      expect(p.text).toBe('');
+      expect(p.imageUri).toBe('');
+    }
+  });
+});
+
+describe('isText', () => {
+  it('accepts UTF-8 and refuses NUL, stray and cut-off bytes', () => {
+    expect(isText(utf8('plain, ékezetes, 😀'))).toBe(true);
+    expect(isText(Uint8Array.of(0x61, 0x00))).toBe(false);
+    expect(isText(Uint8Array.of(0xff))).toBe(false);
+    expect(isText(Uint8Array.of(0xc3))).toBe(false);
+  });
+});
+
+describe('storeRoom', () => {
+  const MB = 1 << 20;
+  const limits = (maxBytes: number, usedBytes: number, availableBytes: number) => ({
+    enabled: true,
+    maxBytes,
+    usedBytes,
+    availableBytes,
+    maxItems: 1000,
+    usedItems: 3,
+    maxItemBytes: 200 * MB,
+  });
+
+  it('is the store limit less what is used when one item may be as large as allowed', () => {
+    // 1 GB store, 100 MB used: the relay says 200 MB, the most one item may be.
+    expect(storeRoom(limits(1024 * MB, 100 * MB, 200 * MB))).toBe(924 * MB);
+  });
+
+  it('is what the relay says when that is less than one item may be', () => {
+    expect(storeRoom(limits(1024 * MB, 1000 * MB, 24 * MB))).toBe(24 * MB);
+  });
+
+  it('says nothing for a store without a limit, or before the limits are known', () => {
+    expect(storeRoom(limits(0, 100 * MB, 200 * MB))).toBeUndefined();
+    expect(storeRoom(null)).toBeUndefined();
+  });
+});
+
 describe('toBase64', () => {
   it('pads to a multiple of four, at every remainder', () => {
     expect(toBase64(utf8(''))).toBe('');
@@ -94,17 +175,26 @@ describe('toBase64', () => {
 });
 
 describe('headerPreviewable', () => {
-  // The same rule as the desktop history: only text and images, read from the
-  // entry's sealed header, are previewed; anything else is copy-only.
-  const h = (contentType: string, filename = '') => ({ contentType, filename, size: 10 });
+  // Read from the entry's sealed header: copied text and images, and files of
+  // a format this app draws, within the size bound.
+  const h = (contentType: string, filename = '', size = 10) => ({ contentType, filename, size });
 
   it('previews unnamed text and images', () => {
     expect(headerPreviewable(h('text/plain; charset=utf-8'))).toBe(true);
     expect(headerPreviewable(h('image/png'))).toBe(true);
   });
 
-  it('does not preview files, other types, or an unknown type', () => {
-    expect(headerPreviewable(h('image/png', 'shot.png'))).toBe(false);
+  it('previews a file of a known format by its name, whatever type it was sent as', () => {
+    expect(headerPreviewable(h('image/png', 'shot.PNG'))).toBe(true);
+    expect(headerPreviewable(h('application/octet-stream', 'notes.md'))).toBe(true);
+    expect(headerPreviewable(h('application/octet-stream', 'main.go'))).toBe(true);
+  });
+
+  it('does not preview other files, a large file, other types, or an unknown type', () => {
+    expect(headerPreviewable(h('application/pdf', 'report.pdf'))).toBe(false);
+    expect(headerPreviewable(h('image/svg+xml', 'logo.svg'))).toBe(false);
+    expect(headerPreviewable(h('text/plain', 'Makefile'))).toBe(false);
+    expect(headerPreviewable(h('image/png', 'big.png', MAX_FILE_PREVIEW_BYTES + 1))).toBe(false);
     expect(headerPreviewable(h('application/json'))).toBe(false);
     expect(headerPreviewable(null)).toBe(false);
   });

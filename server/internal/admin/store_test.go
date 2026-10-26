@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/Mark7888/two-place-paste/server/internal/admin"
 	"github.com/Mark7888/two-place-paste/server/internal/items"
@@ -224,5 +225,128 @@ func TestPurgeGroupStore(t *testing.T) {
 
 	if resp := f.call(c, csrf, http.MethodPost, "/admin/api/groups/"+admin.HandleOf("missing")+"/store/purge", nil); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("purge of a missing group: status = %d, want %d", resp.StatusCode, http.StatusNotFound)
+	}
+}
+
+// TestGroupListStore: the groups list shows each group's store — on or off,
+// what it holds, its cap — and sorts by it; a relay without a store has no
+// store column (SPEC §4.4, §4.6).
+func TestGroupListStore(t *testing.T) {
+	t.Parallel()
+	f := newStoreFixture(t)
+	ctx := context.Background()
+	on := f.group(t, store.NewToken{Name: "Anna"})
+	off := f.group(t, store.NewToken{Name: "Bela"})
+	if err := f.store.SetGroupStore(ctx, on, true); err != nil {
+		t.Fatalf("SetGroupStore() error = %v", err)
+	}
+	g, err := f.store.GetGroup(ctx, on)
+	if err != nil {
+		t.Fatalf("GetGroup() error = %v", err)
+	}
+	r := store.ItemReservation{GroupID: on, ItemID: "item-1", Epoch: g.Epoch, Size: 3 << 20, Accounted: 3 << 20, StartedAt: time.Now()}
+	if err := f.store.ReserveItem(ctx, r, store.ItemLimits{GroupItems: 10}); err != nil {
+		t.Fatalf("ReserveItem() error = %v", err)
+	}
+	c := f.client()
+	f.login(c)
+
+	type row struct {
+		Handle string `json:"handle"`
+		Store  *struct {
+			Enabled    bool  `json:"enabled"`
+			UsedBytes  int64 `json:"used_bytes"`
+			UsedItems  int64 `json:"used_items"`
+			LimitBytes int64 `json:"limit_bytes"`
+		} `json:"store"`
+	}
+	type list struct {
+		Rows     []row `json:"rows"`
+		HasStore bool  `json:"has_store"`
+	}
+	for _, dir := range []string{"desc", "asc"} {
+		got := readJSON[list](t, f.get(c, "/admin/api/groups?sort=store&dir="+dir))
+		if !got.HasStore || len(got.Rows) != 2 {
+			t.Fatalf("list = %+v, want two groups and a store column", got)
+		}
+		first, second := admin.HandleOf(on), admin.HandleOf(off)
+		if dir == "asc" {
+			first, second = second, first
+		}
+		if got.Rows[0].Handle != first || got.Rows[1].Handle != second {
+			t.Errorf("sort=store dir=%s = %s, %s, want %s, %s", dir, got.Rows[0].Handle, got.Rows[1].Handle, first, second)
+		}
+		for _, r := range got.Rows {
+			if r.Store == nil {
+				t.Fatalf("row %s has no store", r.Handle)
+			}
+			want := r.Handle == admin.HandleOf(on)
+			if r.Store.Enabled != want || r.Store.LimitBytes != 100<<20 {
+				t.Errorf("row %s store = %+v, want enabled %v with the 100 MiB default", r.Handle, *r.Store, want)
+			}
+			if want && (r.Store.UsedBytes != 3<<20 || r.Store.UsedItems != 1) {
+				t.Errorf("row %s store = %+v, want 3 MiB in 1 item", r.Handle, *r.Store)
+			}
+		}
+	}
+
+	bare := newGroupFixture(t, quota.Limits{}, nil)
+	bare.group(t, "Anna")
+	bc := bare.client()
+	bare.login(bc)
+	got := readJSON[list](t, bare.get(bc, "/admin/api/groups"))
+	if got.HasStore || len(got.Rows) != 1 || got.Rows[0].Store != nil {
+		t.Errorf("list without a store = %+v, want no store column", got)
+	}
+}
+
+// TestTagListStore: the tag list adds up the stores of each tag's groups —
+// what they hold and how many have theirs on — and sorts by it (SPEC §4.6).
+func TestTagListStore(t *testing.T) {
+	t.Parallel()
+	f := newStoreFixture(t)
+	ctx := context.Background()
+	for _, name := range []string{"family", "work"} {
+		if _, err := f.store.CreateTag(ctx, name); err != nil {
+			t.Fatalf("CreateTag(%q) error = %v", name, err)
+		}
+	}
+	anna := f.group(t, store.NewToken{Name: "Anna", Tag: "work"})
+	f.group(t, store.NewToken{Name: "Bela", Tag: "work"})
+	f.group(t, store.NewToken{Name: "Csilla", Tag: "family"})
+	if err := f.store.SetGroupStore(ctx, anna, true); err != nil {
+		t.Fatalf("SetGroupStore() error = %v", err)
+	}
+	g, err := f.store.GetGroup(ctx, anna)
+	if err != nil {
+		t.Fatalf("GetGroup() error = %v", err)
+	}
+	r := store.ItemReservation{GroupID: anna, ItemID: "item-1", Epoch: g.Epoch, Size: 2 << 20, Accounted: 2 << 20, StartedAt: time.Now()}
+	if err := f.store.ReserveItem(ctx, r, store.ItemLimits{GroupItems: 10}); err != nil {
+		t.Fatalf("ReserveItem() error = %v", err)
+	}
+	c := f.client()
+	f.login(c)
+
+	type row struct {
+		Name          string `json:"name"`
+		Groups        int    `json:"groups"`
+		StoreBytes    int64  `json:"store_bytes"`
+		StoreGroupsOn int    `json:"store_groups_on"`
+	}
+	got := readJSON[struct {
+		Rows []row `json:"rows"`
+	}](t, f.get(c, "/admin/api/tags?sort=store"))
+	want := []row{
+		{Name: "work", Groups: 2, StoreBytes: 2 << 20, StoreGroupsOn: 1},
+		{Name: "family", Groups: 1},
+	}
+	if len(got.Rows) != len(want) {
+		t.Fatalf("rows = %+v, want %+v", got.Rows, want)
+	}
+	for i := range want {
+		if got.Rows[i] != want[i] {
+			t.Errorf("row %d = %+v, want %+v", i, got.Rows[i], want[i])
+		}
 	}
 }

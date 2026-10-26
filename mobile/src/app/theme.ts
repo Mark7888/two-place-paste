@@ -149,13 +149,14 @@ export const styles = StyleSheet.create({
   tabLabelActive: { color: colors.accent, fontWeight: '700' },
 
   /** A decrypted entry's body, shown in the history list. */
+  // A scroller: the box is the frame, and the padding is on what scrolls in
+  // it, so the first and last lines are not cut by it.
   previewBox: {
     backgroundColor: colors.background,
     borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
     maxHeight: 220,
   },
+  previewBoxContent: { paddingHorizontal: 12, paddingVertical: 10 },
   previewText: { color: colors.text, fontSize: 13, lineHeight: 19 },
   previewImage: {
     borderRadius: 10,

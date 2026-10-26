@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
-import type { Group, GroupList } from "../api";
-import { Badge } from "../components/Badge";
+import type { Group, GroupList, GroupStoreRow } from "../api";
+import { Badge, StoreBadge } from "../components/Badge";
 import { Notice, Problems } from "../components/Notice";
 import { SmartTable, type Column, type DefaultSort } from "../components/SmartTable";
 import { Dash } from "../components/Dash";
@@ -72,6 +72,14 @@ const storageColumn: Column<Group> = {
   render: (g) => <UsageCell group={g} />,
 };
 
+const storeColumn: Column<Group> = {
+  key: "store",
+  header: "Store",
+  firstDir: "desc",
+  className: "usage",
+  render: (g) => (g.store ? <StoreCell group={g} store={g.store} /> : <Dash />),
+};
+
 /** GroupsPage lists every group, heaviest first, searchable and sortable,
  *  and narrowed by tag (?tag=name, or ?tag=- for the untagged ones) or to
  *  the stale ones (?stale=1). */
@@ -86,7 +94,12 @@ export function GroupsPage() {
 
   // Until the first answer says whether storage is accounted, assume it is:
   // a column that appears is less jarring than one that vanishes.
-  const columns = meta && !meta.has_usage ? baseColumns : [...baseColumns, storageColumn];
+  // The store column likewise, which every relay has today.
+  const columns = [
+    ...baseColumns,
+    ...(meta && !meta.has_usage ? [] : [storageColumn]),
+    ...(meta && !meta.has_store ? [] : [storeColumn]),
+  ];
   const open = useCallback((g: Group) => navigate(groupPath(g.handle)), [navigate]);
 
   // A filter starts its list from the first page.
@@ -209,6 +222,28 @@ function UsageCell({ group }: { group: Group }) {
         )}
       </span>
       <UsageMeter used={used} limit={limit} label={`Blob storage used by ${group.name}`} />
+    </span>
+  );
+}
+
+/** StoreCell is a group's store: on or off, and what it holds against the
+ *  cap it runs into. */
+function StoreCell({ group, store }: { group: Group; store: GroupStoreRow }) {
+  const used = store.used_bytes;
+  const limit = store.limit_bytes;
+  return (
+    <span className="stack">
+      <span className="nowrap">
+        {humanBytes(used)}
+        {limit > 0 && (
+          <>
+            {" "}
+            <span className="muted">· {percent(used, limit)}%</span>
+          </>
+        )}{" "}
+        <StoreBadge store={store} />
+      </span>
+      <UsageMeter used={used} limit={limit} label={`Store used by ${group.name}`} />
     </span>
   );
 }

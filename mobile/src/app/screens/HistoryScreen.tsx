@@ -9,16 +9,18 @@
  * each entry's sealed header, opened here, which says what the entry is
  * without fetching it (spec/crypto.md §5.5).
  *
- * Tapping a text or image row opens a preview, which is the one thing that
- * decrypts an entry — the same operation copying it would do, on that entry
- * alone and only when asked. Any other row opens to its Copy button only; a
+ * Tapping a text or image row, or a file of a format src/app/preview.ts can
+ * draw, opens a preview, which is the one thing that decrypts an entry — the
+ * same operation copying it would do, on that entry alone and only when
+ * asked; the client keeps what it just read, so saving a file right after its
+ * preview does not download it again. Any other row opens to its Copy button only; a
  * file, which the Android clipboard cannot hold, is saved to Downloads or
  * opened in another app instead, whichever the user picks. An entry from an older epoch has no preview and no copy: this
  * device no longer holds the key it was written under (SPEC §3.3).
  */
 
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { FlatList, Image, Pressable, RefreshControl, Text, View } from 'react-native';
+import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
 
 import type { EntryMeta, Progress } from '../../core';
 import type { SavedFile } from '../../platform';
@@ -33,9 +35,10 @@ import {
   type FileChoice,
   type PendingFile,
 } from '../session';
-import { describeHeader, formatSize, headerPreviewable, previewOf, type Preview } from '../preview';
+import { describeHeader, formatSize, headerPreviewable, previewOf, storeRoom, type Preview } from '../preview';
 import { Button, FileChoices, Notice, OutcomeNotice, Sheet, Shimmer, TransferList } from '../ui';
 import { colors, styles } from '../theme';
+import { PreviewBody } from '../PreviewBody';
 import { StoreSheet } from '../StoreSheet';
 import { getStoreSnapshot, index as storeIndex, loadStore, saveItem, savedHash, subscribeStore } from '../storeState';
 
@@ -334,7 +337,7 @@ export function HistoryScreen(): React.JSX.Element {
                   ) : !loaded.ok ? (
                     <Notice message={loaded.error} tone="error" />
                   ) : (
-                    <Body preview={loaded.preview} />
+                    <PreviewBody preview={loaded.preview} />
                   )}
                   <Button
                     label={
@@ -368,7 +371,7 @@ export function HistoryScreen(): React.JSX.Element {
         visible={saving !== null}
         title="Save to store"
         what={saving === null ? undefined : `${describeHeader(saving.header)} from the history`}
-        available={store.limits?.availableBytes}
+        available={storeRoom(store.limits)}
         initial={{ name: saving?.header?.filename ?? '', description: '', tags: [] }}
         knownTags={storeIndex.tags().map((t) => t.tag)}
         onClose={() => setSaving(null)}
@@ -423,88 +426,4 @@ function downloadingNow(
     return !t.waiting;
   }
   return fetching.has(id) || jobs.has(id);
-}
-
-
-/** Body renders what a preview turned out to be. */
-function Body({ preview }: { preview: Preview }): React.JSX.Element {
-  if (preview.kind === 'image') {
-    if (preview.imageTooLarge || preview.imageUri === '') {
-      return (
-        <Text style={styles.small}>
-          {preview.contentType} · {formatSize(preview.bytes)} — too large to show here.
-        </Text>
-      );
-    }
-    return (
-      <>
-        <ImagePreview uri={preview.imageUri} />
-        <Text style={styles.small}>
-          {preview.contentType} · {formatSize(preview.bytes)}
-        </Text>
-      </>
-    );
-  }
-
-  if (preview.kind === 'file') {
-    // A file has no body worth drawing; its name and size are the preview.
-    return (
-      <Text style={styles.small}>
-        {preview.filename === '' ? 'file' : preview.filename} · {preview.contentType} ·{' '}
-        {formatSize(preview.bytes)}
-      </Text>
-    );
-  }
-
-  return (
-    <>
-      <View style={styles.previewBox}>
-        <Text style={styles.previewText}>
-          {preview.text === '' ? '(nothing to show)' : preview.text}
-        </Text>
-      </View>
-      <Text style={styles.small}>
-        {preview.truncated ? 'Shown in part · ' : ''}
-        {preview.contentType} · {formatSize(preview.bytes)}
-      </Text>
-    </>
-  );
-}
-
-/**
- * ImagePreview draws the image at its own aspect ratio.
- *
- * The ratio comes from the decoded image itself, through `onLoad`, because
- * nothing in an entry's metadata carries it. Until it arrives the box has a
- * provisional height; `resizeMode="contain"` means the picture is never
- * distorted at any point, only letterboxed.
- *
- * A landscape image takes the full width and derives its height; a portrait one
- * is pinned to a maximum height and derives its width, so a tall screenshot
- * does not take over the whole screen.
- */
-function ImagePreview({ uri }: { uri: string }): React.JSX.Element {
-  const [ratio, setRatio] = useState<number | null>(null);
-
-  const box =
-    ratio === null
-      ? { width: '100%' as const, height: 160 }
-      : ratio >= 1
-        ? { width: '100%' as const, aspectRatio: ratio }
-        : { height: 280, aspectRatio: ratio, alignSelf: 'flex-start' as const };
-
-  return (
-    <Image
-      accessibilityIgnoresInvertColors
-      source={{ uri }}
-      resizeMode="contain"
-      onLoad={(e) => {
-        const { width, height } = e.nativeEvent.source;
-        if (width > 0 && height > 0) {
-          setRatio(width / height);
-        }
-      }}
-      style={[styles.previewImage, box]}
-    />
-  );
 }

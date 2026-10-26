@@ -34,3 +34,9 @@ export function GroupBadges({ group }: { group: Group }) {
     </>
   );
 }
+
+/** StoreBadge says whether a group's store is on, off, or being emptied. */
+export function StoreBadge({ store }: { store: { enabled: boolean; emptying: boolean } }) {
+  if (store.emptying) return <Badge kind="used">emptying</Badge>;
+  return store.enabled ? <Badge kind="good">on</Badge> : <Badge kind="used">off</Badge>;
+}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/Mark7888/two-place-paste/desktop/internal/clipboard"
 	"github.com/Mark7888/two-place-paste/desktop/internal/localui"
+	"github.com/Mark7888/two-place-paste/desktop/internal/preview"
 	"github.com/Mark7888/two-place-paste/pkg/tppclient"
 	"github.com/Mark7888/two-place-paste/pkg/tppclient/tppcrypto"
 )
@@ -166,7 +167,7 @@ func (s *Service) Store(ctx context.Context, q localui.StoreQuery) (localui.Stor
 		Unreadable: []localui.StoreUnreadableView{},
 	}
 	for _, it := range items {
-		view.Items = append(view.Items, storeItemView(it))
+		view.Items = append(view.Items, s.itemView(it))
 	}
 	for _, t := range s.store.index.Tags() {
 		view.Tags = append(view.Tags, localui.StoreTagView{Tag: t.Tag, Count: t.Count})
@@ -189,6 +190,10 @@ func storeSort(v string) tppclient.StoreSort {
 		return tppclient.SortName
 	case "name_desc":
 		return tppclient.SortNameDesc
+	case "largest":
+		return tppclient.SortLargest
+	case "smallest":
+		return tppclient.SortSmallest
 	default:
 		return tppclient.SortNewest
 	}
@@ -273,7 +278,7 @@ func (s *Service) saveToStore(ctx context.Context, relay Relay, item tppclient.I
 		if dups := s.store.index.Duplicates(sha256.Sum256(item.Body)); len(dups) > 0 {
 			out := &localui.DuplicateError{}
 			for _, it := range dups {
-				out.Duplicates = append(out.Duplicates, storeItemView(it))
+				out.Duplicates = append(out.Duplicates, s.itemView(it))
 			}
 			return localui.StoreItemView{}, out
 		}
@@ -288,7 +293,7 @@ func (s *Service) saveToStore(ctx context.Context, relay Relay, item tppclient.I
 	s.store.index.Put(saved)
 	s.logger.InfoContext(ctx, "saved to the store", "item_id", saved.ID, "bytes", saved.BlobSize)
 	s.hub.publish(localui.Event{Kind: localui.EventStore})
-	return storeItemView(saved), nil
+	return s.itemView(saved), nil
 }
 
 // storeItem finds a listed item, which carries the keys an action needs.
@@ -327,7 +332,7 @@ func (s *Service) EditStoreItem(ctx context.Context, itemID string, d localui.St
 	}
 	s.store.index.Put(edited)
 	s.hub.publish(localui.Event{Kind: localui.EventStore})
-	return storeItemView(edited), nil
+	return s.itemView(edited), nil
 }
 
 // DeleteStoreItem implements localui.StoreAPI. An item another device already
@@ -402,6 +407,52 @@ func (s *Service) StoreItemContent(ctx context.Context, itemID string) (localui.
 	return localui.EntryContent{ContentType: item.ContentType, Body: item.Body}, nil
 }
 
+// StoreItemPreview implements localui.StoreAPI: it fetches and decrypts an
+// item and renders it as the history renders an entry, under the same checks.
+func (s *Service) StoreItemPreview(ctx context.Context, itemID string) (localui.EntryPreview, error) {
+	it, item, format, err := s.openStoreForPreview(ctx, itemID)
+	if err != nil {
+		return localui.EntryPreview{}, err
+	}
+	view := previewView(it.ID, it.WrapEpoch, item, format)
+	s.logger.DebugContext(ctx, "store item previewed", "item_id", it.ID, "render", view.Render)
+	return view, nil
+}
+
+// StoreItemMedia implements localui.StoreAPI: an audio or video item's bytes
+// for the page to play, typed by the preview table rather than the sender.
+// Save as file is StoreItemContent.
+func (s *Service) StoreItemMedia(ctx context.Context, itemID string) (localui.EntryContent, error) {
+	it, item, format, err := s.openStoreForPreview(ctx, itemID)
+	if err != nil {
+		return localui.EntryContent{}, err
+	}
+	if !format.Render.Streamed() {
+		return localui.EntryContent{}, localui.Errorf(http.StatusUnprocessableEntity, nil,
+			"this item is not audio or video")
+	}
+	s.logger.DebugContext(ctx, "store item played", "item_id", it.ID, "render", string(format.Render))
+	return localui.EntryContent{ContentType: format.MIME, Body: item.Body}, nil
+}
+
+// openStoreForPreview fetches and decrypts an item for a preview, and refuses
+// it unless the preview table has a format for it that its bytes match.
+func (s *Service) openStoreForPreview(ctx context.Context, itemID string) (tppclient.StoreItem, tppclient.Item, preview.Format, error) {
+	it, err := s.storeItem(itemID)
+	if err != nil {
+		return tppclient.StoreItem{}, tppclient.Item{}, preview.Format{}, err
+	}
+	item, err := s.fetchStoreItem(ctx, itemID)
+	if err != nil {
+		return tppclient.StoreItem{}, tppclient.Item{}, preview.Format{}, err
+	}
+	format, err := previewFormat(item, "item")
+	if err != nil {
+		return tppclient.StoreItem{}, tppclient.Item{}, preview.Format{}, err
+	}
+	return it, item, format, nil
+}
+
 // storeError adds the store's own refusals to relayError's.
 func (s *Service) storeError(op string, err error) error {
 	switch {
@@ -423,8 +474,19 @@ func (s *Service) storeError(op string, err error) error {
 	return s.relayError(op, err)
 }
 
-// storeItemView describes an item for the page.
-func storeItemView(it tppclient.StoreItem) localui.StoreItemView {
+// itemView describes an item for the page, with the auto-download limit
+// that bounds its preview.
+func (s *Service) itemView(it tppclient.StoreItem) localui.StoreItemView {
+	s.mu.Lock()
+	limit := s.settings.AutoDownloadLimit()
+	s.mu.Unlock()
+	return storeItemView(it, limit)
+}
+
+// storeItemView describes an item for the page. Whether it can be previewed
+// is decided as for a history entry (entryView): a format the preview table
+// knows, within the auto-download limit, since a preview fetches the item.
+func storeItemView(it tppclient.StoreItem, downloadLimit int64) localui.StoreItemView {
 	tags := it.Tags
 	if tags == nil {
 		tags = []string{}
@@ -442,6 +504,16 @@ func storeItemView(it tppclient.StoreItem) localui.StoreItemView {
 		v.Filename = clipboard.SafeName(it.Filename)
 	}
 	v.Kind = string(headerKind(tppclient.EntryHeader{ContentType: it.ContentType, Filename: it.Filename}))
+	format, ok := preview.ForEntry(it.Filename, it.ContentType)
+	switch {
+	case !ok:
+		v.NoPreview = "no preview for this type"
+	case downloadLimit > 0 && it.BodySize > downloadLimit:
+		v.NoPreview = "larger than the auto-download limit"
+	default:
+		v.Previewable = true
+		v.Render = string(format.Render)
+	}
 	return v
 }
 

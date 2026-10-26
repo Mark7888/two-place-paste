@@ -97,11 +97,12 @@ const pngMagic = "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
 
 // TestEntryPreviewOfFiles: a file in the preview table is drawn by the table's
 // renderer under the table's media type, and a file whose bytes are not what
-// its name says is refused rather than drawn.
+// its name says is refused rather than drawn. Copied text opens to the same
+// length as a text file.
 func TestEntryPreviewOfFiles(t *testing.T) {
 	t.Parallel()
 
-	longSource := strings.Repeat("x", previewFileRunes+10)
+	longSource := strings.Repeat("x", previewTextRunes+10)
 	tests := []struct {
 		name    string
 		item    tppclient.Item
@@ -123,9 +124,21 @@ func TestEntryPreviewOfFiles(t *testing.T) {
 			item: tppclient.Item{ContentType: clipboard.TypeOctetStream, Filename: "main.go", Body: []byte(longSource)},
 			check: func(t *testing.T, v localui.EntryPreview) {
 				t.Helper()
-				if !v.Truncated || utf8.RuneCountInString(v.Text) != previewFileRunes+1 {
+				if !v.Truncated || utf8.RuneCountInString(v.Text) != previewTextRunes+1 {
 					t.Errorf("EntryPreview() text = %d runes truncated %v, want %d and true",
-						utf8.RuneCountInString(v.Text), v.Truncated, previewFileRunes+1)
+						utf8.RuneCountInString(v.Text), v.Truncated, previewTextRunes+1)
+				}
+			},
+		},
+		{
+			// Copied text opens to the same length as a text file: both scroll.
+			name: "long copied text",
+			item: tppclient.Item{ContentType: "text/plain; charset=utf-8", Body: []byte(longSource)},
+			check: func(t *testing.T, v localui.EntryPreview) {
+				t.Helper()
+				if v.Render != "text" || !v.Truncated || utf8.RuneCountInString(v.Text) != previewTextRunes+1 {
+					t.Errorf("EntryPreview() text = %d runes truncated %v, want %d and true",
+						utf8.RuneCountInString(v.Text), v.Truncated, previewTextRunes+1)
 				}
 			},
 		},

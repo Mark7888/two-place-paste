@@ -43,10 +43,16 @@ type StoreAPI interface {
 
 	// StoreItemContent decrypts an item for the user to save as a file.
 	StoreItemContent(ctx context.Context, itemID string) (EntryContent, error)
+
+	// StoreItemPreview decrypts an item and renders it for display, as
+	// EntryPreview does an entry. StoreItemMedia returns an audio or video
+	// item's bytes for the preview to play, as EntryContent does.
+	StoreItemPreview(ctx context.Context, itemID string) (EntryPreview, error)
+	StoreItemMedia(ctx context.Context, itemID string) (EntryContent, error)
 }
 
 // StoreQuery selects and orders the listing. Sort is "newest" (the default),
-// "oldest", "name" or "name_desc".
+// "oldest", "name", "name_desc", "largest" or "smallest".
 type StoreQuery struct {
 	Text string
 	Tags []string
@@ -103,6 +109,13 @@ type StoreItemView struct {
 	Filename    string `json:"filename,omitempty"`
 	// Bytes is the plaintext size.
 	Bytes int64 `json:"bytes"`
+
+	// Previewable, NoPreview and Render are as for a history entry
+	// (EntryView): whether the tab offers a preview, why not, and how it is
+	// drawn.
+	Previewable bool   `json:"previewable"`
+	NoPreview   string `json:"no_preview,omitempty"`
+	Render      string `json:"render,omitempty"`
 }
 
 // StoreTagView is a tag and how many items carry it.
@@ -170,7 +183,7 @@ func (s *Server) handleStore(w http.ResponseWriter, r *http.Request) {
 	v := r.URL.Query()
 	q := StoreQuery{Text: v.Get("q"), Tags: v["tag"], Sort: v.Get("sort")}
 	switch q.Sort {
-	case "", "newest", "oldest", "name", "name_desc":
+	case "", "newest", "oldest", "name", "name_desc", "largest", "smallest":
 	default:
 		writeError(w, http.StatusBadRequest, "unknown sort")
 		return
@@ -366,6 +379,48 @@ func (s *Server) handleStoreContent(w http.ResponseWriter, r *http.Request) {
 	content, err := s.store.StoreItemContent(r.Context(), id)
 	if err != nil {
 		s.fail(w, r, "read the item", err)
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", content.ContentType)
+	h.Set("Content-Length", strconv.Itoa(len(content.Body)))
+	h.Set("Content-Disposition", "attachment")
+	h.Set("Content-Security-Policy", "sandbox; default-src 'none'")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(content.Body)
+}
+
+// handleStorePreview renders an item for the Store tab's preview, as
+// handleEntryPreview does an entry.
+func (s *Server) handleStorePreview(w http.ResponseWriter, r *http.Request) {
+	if s.storeOff(w) {
+		return
+	}
+	id, ok := storeItemID(w, r)
+	if !ok {
+		return
+	}
+	view, err := s.store.StoreItemPreview(r.Context(), id)
+	if err != nil {
+		s.fail(w, r, "preview the item", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// handleStoreMedia sends an audio or video item's bytes for its preview to
+// play, under the same headers as handleEntryContent: never a page.
+func (s *Server) handleStoreMedia(w http.ResponseWriter, r *http.Request) {
+	if s.storeOff(w) {
+		return
+	}
+	id, ok := storeItemID(w, r)
+	if !ok {
+		return
+	}
+	content, err := s.store.StoreItemMedia(r.Context(), id)
+	if err != nil {
+		s.fail(w, r, "play the item", err)
 		return
 	}
 	h := w.Header()

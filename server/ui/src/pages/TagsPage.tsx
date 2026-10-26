@@ -37,6 +37,23 @@ export function TagsPage() {
     { key: "groups", header: "Groups", firstDir: "desc", align: "end", render: (t) => t.groups },
     { key: "devices", header: "Devices", firstDir: "desc", align: "end", render: (t) => t.devices },
     { key: "storage", header: "Blob storage", firstDir: "desc", render: (t) => humanBytes(t.used_bytes) },
+    ...(meta?.has_store
+      ? [
+          {
+            key: "store",
+            header: "Store",
+            firstDir: "desc" as const,
+            render: (t: Tag) => (
+              <span className="stack">
+                <span>{humanBytes(t.store_bytes)}</span>
+                <span className="muted nowrap">
+                  on in {t.store_groups_on} of {t.groups}
+                </span>
+              </span>
+            ),
+          },
+        ]
+      : []),
     {
       key: "limit",
       header: "Storage limit",

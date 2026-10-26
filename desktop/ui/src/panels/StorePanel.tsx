@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 import {
   api,
+  type ClipboardView,
+  type EntryPreview,
   type ServiceEvent,
   type StoreDetails,
   type StoreItemView,
   type StoreSort,
   type StoreView,
 } from "../api";
-import { Icon, type IconName } from "../components/Icon";
+import { Icon } from "../components/Icon";
 import { Modal } from "../components/Modal";
-import { StoreDialog } from "../components/StoreDialog";
+import { StoreDialog, storeRoom } from "../components/StoreDialog";
 import { bytes, relative, useNow, when } from "../format";
+import { PreviewBody, entryIcon } from "../preview";
 
 /**
  * Store: what the group keeps on purpose, beside its 24-hour history (SPEC §6b).
@@ -18,14 +21,15 @@ import { bytes, relative, useNow, when } from "../format";
  * Items do not expire. The service holds them opened in memory and searches
  * them there; this tab asks it again as the user types, picks tags or sorts,
  * and whenever the service says the store changed — here or on another
- * device. An item's body is fetched only when the user copies it or saves it
- * as a file.
+ * device. An item's body is fetched only when the user copies it, saves it as
+ * a file, or opens its preview — offered, as in the History, only for formats
+ * the service can draw within the auto-download limit.
  */
 
 const emptyDetails: StoreDetails = { name: "", description: "", tags: [] };
 
 type Dialog =
-  | { kind: "clipboard" }
+  | { kind: "clipboard"; clip?: ClipboardView }
   | { kind: "file"; file: File }
   | { kind: "edit"; item: StoreItemView }
   | null;
@@ -39,11 +43,30 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
   const [notice, setNotice] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
-  const [adding, setAdding] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<{ id: string; name: string } | null>(null);
   const seq = useRef(0);
 
+  // Previews are kept per item id, as in the History, so reopening one does
+  // not fetch it again. An edit keeps the content, so its preview stays good.
+  const [previews, setPreviews] = useState<Record<string, EntryPreview | { error: string }>>({});
+  const loadingPreview = useRef<Set<string>>(new Set());
+
   useNow();
+
+  // A file dropped beside the drop zone would otherwise be opened by the
+  // browser in place of this page.
+  useEffect(() => {
+    const ignore = (e: globalThis.DragEvent) => {
+      if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
+    };
+    window.addEventListener("dragover", ignore);
+    window.addEventListener("drop", ignore);
+    return () => {
+      window.removeEventListener("dragover", ignore);
+      window.removeEventListener("drop", ignore);
+    };
+  }, []);
 
   const load = useCallback(async () => {
     // Answers can arrive out of order while the user types; only the newest
@@ -88,6 +111,68 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
     } finally {
       setBusyId(null);
     }
+  };
+
+  const toggle = (item: StoreItemView) => {
+    const id = item.id;
+    if (open === id) {
+      setOpen(null);
+      return;
+    }
+    setOpen(id);
+    if (previews[id] || loadingPreview.current.has(id)) return;
+    loadingPreview.current.add(id);
+    void (async () => {
+      try {
+        const view = await api.previewStoreItem(id);
+        setPreviews((prev) => ({ ...prev, [id]: view }));
+      } catch (err) {
+        setPreviews((prev) => ({
+          ...prev,
+          [id]: { error: err instanceof Error ? err.message : String(err) },
+        }));
+      } finally {
+        loadingPreview.current.delete(id);
+      }
+    })();
+  };
+
+  // The clipboard is read before the form opens, as a file from the drop zone
+  // is: a copied file's name fills in the item's name, as it does for a file
+  // dropped here or an entry saved from the History, and an empty clipboard
+  // is said at once. If the read fails the form opens anyway: the save reads
+  // the clipboard itself and says what is wrong.
+  const saveClipboard = async () => {
+    setNotice("");
+    let clip: ClipboardView | undefined;
+    try {
+      clip = (await api.status()).clipboard;
+    } catch {
+      clip = undefined;
+    }
+    if (clip?.available && clip.empty) {
+      setError("The clipboard is empty. Copy something first.");
+      return;
+    }
+    setError("");
+    setDialog({ kind: "clipboard", clip });
+  };
+
+  // A file from the drop zone or the picker is checked before the details
+  // are asked for, so a file that cannot fit is refused at once.
+  const pickFile = (file: File) => {
+    setNotice("");
+    if (file.size === 0) {
+      setError("That file is empty.");
+      return;
+    }
+    const room = view?.limits?.available_bytes;
+    if (room !== undefined && file.size > room) {
+      setError(`That file is ${bytes(file.size)}; the store has room for ${bytes(room)}.`);
+      return;
+    }
+    setError("");
+    setDialog({ kind: "file", file });
   };
 
   const saveAsFile = (item: StoreItemView) =>
@@ -151,16 +236,7 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
         <>
           {limits ? <SpaceBar limits={limits} /> : null}
 
-          <div className="row store-actions">
-            <button className="action primary" onClick={() => setDialog({ kind: "clipboard" })}>
-              <Icon name="copy" size={15} />
-              Save clipboard to store
-            </button>
-            <button className="action" onClick={() => setAdding(true)}>
-              <Icon name="plus" size={15} />
-              Add file…
-            </button>
-          </div>
+          <AddZone onClipboard={() => void saveClipboard()} onFile={pickFile} />
 
           <div className="store-filters">
             <input
@@ -176,6 +252,8 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
               <option value="oldest">Oldest first</option>
               <option value="name">Name, A to Z</option>
               <option value="name_desc">Name, Z to A</option>
+              <option value="largest">Largest first</option>
+              <option value="smallest">Smallest first</option>
             </select>
           </div>
           {view.tags.length ? (
@@ -200,73 +278,119 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
 
           {view.total === 0 ? (
             <div className="empty">
-              Nothing saved yet. Save the clipboard, add a file, or use “Save to store” on an entry in
-              the History.
+              Nothing saved yet. Save the clipboard, drop a file above, or use “Save to store” on an
+              entry in the History.
             </div>
           ) : view.items.length === 0 ? (
             <div className="empty">No item matches.</div>
           ) : (
             <div className="list">
-              {view.items.map((item) => (
-                <div key={item.id} className="item store-item">
-                  <Icon name={itemIcon(item)} size={18} />
-                  <div className="body">
-                    <div className="title">{item.name}</div>
-                    {item.description ? <div className="description small">{item.description}</div> : null}
-                    <div className="muted small row tight">
-                      <span title={when(item.saved_at)}>{relative(item.saved_at)}</span>
-                      <span>· {item.filename ?? item.content_type}</span>
-                      <span>· {bytes(item.bytes)}</span>
+              {view.items.map((item) => {
+                const expanded = item.previewable && open === item.id;
+                const preview = previews[item.id];
+                return (
+                  <div key={item.id}>
+                    <div className="item store-item">
+                      <Icon name={entryIcon(item)} size={18} />
+                      <div className="body">
+                        <div className="title">{item.name}</div>
+                        {item.description ? (
+                          <div className="description small">{item.description}</div>
+                        ) : null}
+                        {/* One line of text, not a row of boxes: a long filename wraps
+                            inside the line, and each dot stays with what follows it. */}
+                        <div className="muted small item-meta">
+                          <span title={when(item.saved_at)}>{relative(item.saved_at)}</span>
+                          {" ·\u00a0"}
+                          {item.filename ?? item.content_type}
+                          {" ·\u00a0"}
+                          <span className="nowrap">{bytes(item.bytes)}</span>
+                        </div>
+                        {item.tags.length ? (
+                          <div className="chips small">
+                            {item.tags.map((t) => (
+                              <span key={t} className="chip">
+                                {t}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="actions">
+                        {item.previewable ? (
+                          <button
+                            className="action small quiet"
+                            aria-expanded={expanded}
+                            onClick={() => toggle(item)}
+                          >
+                            <Icon
+                              name="chevron"
+                              size={15}
+                              style={{
+                                transform: expanded ? "rotate(90deg)" : undefined,
+                                transition: "transform 120ms",
+                              }}
+                            />
+                            {expanded ? "Hide" : "Preview"}
+                          </button>
+                        ) : null}
+                        <button
+                          className="action small"
+                          disabled={busyId !== null}
+                          onClick={() =>
+                            void run(item.id, async () => (await api.copyStoreItem(item.id)).message)
+                          }
+                        >
+                          {busyId === item.id ? <span className="spinner" /> : <Icon name="copy" size={15} />}
+                          Copy
+                        </button>
+                        <button
+                          className="icon-button"
+                          title="Save as file"
+                          aria-label={`Save ${item.name} as a file`}
+                          disabled={busyId !== null}
+                          onClick={() => void saveAsFile(item)}
+                        >
+                          <Icon name="download" size={16} />
+                        </button>
+                        <button
+                          className="icon-button"
+                          title="Edit"
+                          aria-label={`Edit ${item.name}`}
+                          onClick={() => setDialog({ kind: "edit", item })}
+                        >
+                          <Icon name="edit" size={16} />
+                        </button>
+                        <button
+                          className="icon-button danger"
+                          title="Delete"
+                          aria-label={`Delete ${item.name}`}
+                          onClick={() => setDeleting({ id: item.id, name: item.name })}
+                        >
+                          <Icon name="trash" size={16} />
+                        </button>
+                      </div>
                     </div>
-                    {item.tags.length ? (
-                      <div className="chips small">
-                        {item.tags.map((t) => (
-                          <span key={t} className="chip">
-                            {t}
-                          </span>
-                        ))}
+                    {expanded ? (
+                      <div className="entry-detail">
+                        {!preview ? (
+                          <div className="row">
+                            <span className="spinner" />
+                            <span className="muted small">Decrypting…</span>
+                          </div>
+                        ) : "error" in preview ? (
+                          <div className="notice error">
+                            <Icon name="alert" />
+                            <span>{preview.error}</span>
+                          </div>
+                        ) : (
+                          <PreviewBody preview={preview} loadMedia={api.storeItemMedia} />
+                        )}
                       </div>
                     ) : null}
                   </div>
-                  <div className="actions">
-                    <button
-                      className="action small"
-                      disabled={busyId !== null}
-                      onClick={() =>
-                        void run(item.id, async () => (await api.copyStoreItem(item.id)).message)
-                      }
-                    >
-                      {busyId === item.id ? <span className="spinner" /> : <Icon name="copy" size={15} />}
-                      Copy
-                    </button>
-                    <button
-                      className="icon-button"
-                      title="Save as file"
-                      aria-label={`Save ${item.name} as a file`}
-                      disabled={busyId !== null}
-                      onClick={() => void saveAsFile(item)}
-                    >
-                      <Icon name="download" size={16} />
-                    </button>
-                    <button
-                      className="icon-button"
-                      title="Edit"
-                      aria-label={`Edit ${item.name}`}
-                      onClick={() => setDialog({ kind: "edit", item })}
-                    >
-                      <Icon name="edit" size={16} />
-                    </button>
-                    <button
-                      className="icon-button danger"
-                      title="Delete"
-                      aria-label={`Delete ${item.name}`}
-                      onClick={() => setDeleting({ id: item.id, name: item.name })}
-                    >
-                      <Icon name="trash" size={16} />
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
@@ -298,33 +422,23 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
         </>
       )}
 
-      <AddFileModal
-        open={adding}
-        maxBytes={limits?.available_bytes}
-        onClose={() => setAdding(false)}
-        onPicked={(file) => {
-          setAdding(false);
-          setDialog({ kind: "file", file });
-        }}
-      />
-
       <StoreDialog
         open={dialog !== null}
         title={dialog?.kind === "edit" ? "Edit item" : "Save to store"}
         what={
           dialog?.kind === "clipboard"
-            ? "what is on the clipboard"
+            ? clipboardWhat(dialog.clip)
             : dialog?.kind === "file"
               ? `${dialog.file.name} (${bytes(dialog.file.size)})`
               : undefined
         }
-        available={dialog?.kind === "edit" ? undefined : limits?.available_bytes}
+        available={dialog?.kind === "edit" ? undefined : storeRoom(limits)}
         initial={
           dialog?.kind === "edit"
             ? { name: dialog.item.name, description: dialog.item.description, tags: dialog.item.tags }
             : dialog?.kind === "file"
               ? { ...emptyDetails, name: dialog.file.name }
-              : emptyDetails
+              : { ...emptyDetails, name: dialog?.clip?.filename ?? "" }
         }
         knownTags={knownTags}
         saveLabel={dialog?.kind === "edit" ? "Save changes" : "Save"}
@@ -409,86 +523,73 @@ function SpaceBar({ limits }: { limits: NonNullable<StoreView["limits"]> }) {
   );
 }
 
-/** AddFileModal takes a file by drop or by the system's file picker. */
-function AddFileModal({
-  open,
-  maxBytes,
-  onClose,
-  onPicked,
-}: {
-  open: boolean;
-  maxBytes?: number;
-  onClose: () => void;
-  onPicked: (file: File) => void;
-}) {
+/**
+ * AddZone is how something gets into the store: a file dropped on it or
+ * chosen with the system's picker, or the clipboard. The whole zone takes a
+ * drop, so there is no dialog to open first.
+ */
+function AddZone({ onClipboard, onFile }: { onClipboard: () => void; onFile: (file: File) => void }) {
   const [over, setOver] = useState(false);
-  const [error, setError] = useState("");
   const input = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    if (open) setError("");
-  }, [open]);
-
-  const take = (files: FileList | null) => {
-    const file = files?.[0];
-    if (!file) return;
-    if (file.size === 0) {
-      setError("That file is empty.");
-      return;
-    }
-    if (maxBytes !== undefined && file.size > maxBytes) {
-      setError(`That file is ${bytes(file.size)}; the store has room for ${bytes(maxBytes)}.`);
-      return;
-    }
-    onPicked(file);
-  };
 
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setOver(false);
-    take(event.dataTransfer.files);
+    const file = event.dataTransfer.files[0];
+    if (file) onFile(file);
   };
 
   return (
-    <Modal open={open} title="Add a file to the store" onClose={onClose}>
-      {error ? (
-        <div className="notice error">
-          <Icon name="alert" />
-          <span>{error}</span>
-        </div>
-      ) : null}
-      <div
-        className={`drop-zone${over ? " over" : ""}`}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setOver(true);
-        }}
-        onDragLeave={() => setOver(false)}
-        onDrop={onDrop}
-      >
-        <Icon name="upload" size={28} />
-        <p>Drop a file here</p>
-        <button type="button" className="action" onClick={() => input.current?.click()}>
-          Choose a file…
-        </button>
-        <input
-          ref={input}
-          type="file"
-          hidden
-          onChange={(e) => {
-            take(e.target.files);
-            e.target.value = "";
-          }}
-        />
+    <div
+      className={`drop-zone add-zone${over ? " over" : ""}`}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        setOver(true);
+      }}
+      // Leaving for one of its own children is not leaving the zone.
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(false);
+      }}
+      onDrop={onDrop}
+    >
+      <Icon name="upload" size={22} />
+      <div className="add-zone-text">
+        <strong>{over ? "Drop to save it to the store" : "Drop a file here to save it"}</strong>
+        <span className="small">or save what is on the clipboard</span>
       </div>
-    </Modal>
+      <div className="add-zone-actions">
+        <button type="button" className="action primary" onClick={onClipboard}>
+          <Icon name="copy" size={15} />
+          Save clipboard
+        </button>
+        <button type="button" className="action" onClick={() => input.current?.click()}>
+          <Icon name="upload" size={15} />
+          Upload a file…
+        </button>
+      </div>
+      <input
+        ref={input}
+        type="file"
+        hidden
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file) onFile(file);
+        }}
+      />
+    </div>
   );
 }
 
-function itemIcon(item: StoreItemView): IconName {
-  if (item.kind === "text") return "text";
-  if (item.kind === "image") return "image";
-  return "file";
+/** clipboardWhat says what Save clipboard is about to save: the copied
+ *  file by name, else the kind of thing on the clipboard. */
+function clipboardWhat(clip?: ClipboardView): string {
+  if (!clip || clip.empty || clip.error) return "what is on the clipboard";
+  if (clip.filename) return `${clip.filename} (${bytes(clip.bytes)}) from the clipboard`;
+  const what = clip.kind === "image" ? "the image" : clip.kind === "text" ? "the text" : "what is";
+  return `${what} on the clipboard (${bytes(clip.bytes)})`;
 }
 
 /** fileName is what Save as file calls an item: its own filename, else its

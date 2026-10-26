@@ -520,6 +520,12 @@ h1 .tag, td.name .tag { vertical-align: 0.15em; margin-left: 0.25rem; }
   .stats .wide { grid-column: span 2; }
 }
 
+/* A group's row of four (devices, entries, blob storage, store) stays four
+   or two across, so no tile is left alone on a line of its own. */
+@media (min-width: 46rem) {
+  .stats.quad { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
 .stat h2 {
   margin: 0;
   font-size: 0.72rem;
@@ -528,6 +534,11 @@ h1 .tag, td.name .tag { vertical-align: 0.15em; margin-left: 0.25rem; }
   letter-spacing: 0.05em;
   color: var(--muted);
 }
+
+/* A tile's badge (the store's "on") sits at the far end of its title, as a
+   section's does. */
+.stat h2:has(.tag) { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+.stat h2 .tag { font-size: 0.65rem; padding: 0.1rem 0.45rem; margin-block: -0.25rem; }
 
 .stat .figure {
   margin: 0;
@@ -538,6 +549,8 @@ h1 .tag, td.name .tag { vertical-align: 0.15em; margin-left: 0.25rem; }
 }
 
 .stat .figure .muted { font-size: 0.95rem; font-weight: 500; letter-spacing: 0; }
+/* "of 128 MiB" on its own line under the figure, for the narrow tiles. */
+.stat .figure .of { display: block; }
 .stat .sub { margin: 0; color: var(--muted); font-size: 0.85rem; }
 
 /* Usage bars are <meter>s: no inline style is needed to size them, which is

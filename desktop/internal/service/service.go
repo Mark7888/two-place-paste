@@ -28,7 +28,7 @@ import (
 // moved on (SPEC §3.3 step 2).
 const planTTL = 10 * time.Minute
 
-// previewRunes bounds the clipboard preview the UI renders. The preview never
+// previewRunes bounds the clipboard line of the status the UI shows. It never
 // leaves this machine; it is bounded because a 50 MB paste in a status
 // response helps nobody.
 const previewRunes = 240
@@ -38,10 +38,11 @@ const previewRunes = 240
 // nobody is squinting at anyway.
 const maxPreviewImageBytes = 4 << 20
 
-// previewFileRunes bounds the preview of a text file. A file is opened to be
-// read, and 240 characters of a source file is its licence header; past this
-// the screen says it is shown in part and Copy has the rest.
-const previewFileRunes = 4000
+// previewTextRunes bounds an opened text preview in the History or the Store,
+// copied text and text files alike: either is opened to be read, and the
+// screen scrolls it. Past this it says it is shown in part and Copy has the
+// rest.
+const previewTextRunes = 4000
 
 // requestTimeout bounds one relay round trip made on the UI's behalf.
 const requestTimeout = 30 * time.Second
@@ -649,14 +650,22 @@ func (s *Service) EntryPreview(ctx context.Context, entryID string) (localui.Ent
 	if err != nil {
 		return localui.EntryPreview{}, err
 	}
+	view := previewView(item.Meta.ID, item.Meta.Epoch, item, format)
+	s.logger.DebugContext(ctx, "entry previewed", "entry_id", item.Meta.ID, "render", view.Render)
+	return view, nil
+}
 
+// previewView renders a decrypted entry or store item for the screen, in the
+// way its format says. Audio and video come back as a description only: the
+// page fetches their bytes on their own when it plays them.
+func previewView(id string, epoch uint64, item tppclient.Item, format preview.Format) localui.EntryPreview {
 	c := clipboard.Content{ContentType: item.ContentType, Body: item.Body}
 	if item.Filename != "" {
 		c.Filename = clipboard.SafeName(item.Filename)
 	}
 	view := localui.EntryPreview{
-		ID:          item.Meta.ID,
-		Epoch:       item.Meta.Epoch,
+		ID:          id,
+		Epoch:       epoch,
 		ContentType: item.ContentType,
 		Filename:    c.Filename,
 		Bytes:       len(item.Body),
@@ -667,11 +676,7 @@ func (s *Service) EntryPreview(ctx context.Context, entryID string) (localui.Ent
 
 	switch format.Render {
 	case preview.RenderText:
-		limit := previewRunes
-		if item.Filename != "" {
-			limit = previewFileRunes
-		}
-		view.Text, view.Truncated = previewText(item.Body, limit)
+		view.Text, view.Truncated = previewText(item.Body, previewTextRunes)
 	case preview.RenderImage:
 		// Inlined as a data URL so the page renders it without a second
 		// request for a decrypted body. Past the bound the screen says how big
@@ -685,11 +690,9 @@ func (s *Service) EntryPreview(ctx context.Context, entryID string) (localui.Ent
 		view.ImageDataURL = "data:" + format.MIME + ";base64," +
 			base64.StdEncoding.EncodeToString(item.Body)
 	case preview.RenderAudio, preview.RenderVideo:
-		// Nothing inline: see EntryContent.
+		// Nothing inline: see EntryContent and StoreItemMedia.
 	}
-
-	s.logger.DebugContext(ctx, "entry previewed", "entry_id", item.Meta.ID, "render", view.Render)
-	return view, nil
+	return view
 }
 
 // EntryContent implements localui.API: it decrypts one audio or video entry
@@ -729,16 +732,27 @@ func (s *Service) openForPreview(ctx context.Context, entryID string) (tppclient
 		return tppclient.Item{}, preview.Format{}, s.relayError("fetch that entry", err)
 	}
 
-	format, ok := preview.ForEntry(item.Filename, item.ContentType)
-	if !ok {
-		return tppclient.Item{}, preview.Format{}, localui.Errorf(http.StatusUnprocessableEntity, nil,
-			"this entry has no preview; copy it instead")
-	}
-	if !format.Verify(item.Body) {
-		return tppclient.Item{}, preview.Format{}, localui.Errorf(http.StatusUnprocessableEntity, nil,
-			"this entry's content does not match its type, so it is not previewed; copy it instead")
+	format, err := previewFormat(item, "entry")
+	if err != nil {
+		return tppclient.Item{}, preview.Format{}, err
 	}
 	return item, format, nil
+}
+
+// previewFormat finds a decrypted item's format in the preview table, and
+// refuses it unless there is one and the bytes are what it claims. What is
+// "entry" or "item", for the message.
+func previewFormat(item tppclient.Item, what string) (preview.Format, error) {
+	format, ok := preview.ForEntry(item.Filename, item.ContentType)
+	if !ok {
+		return preview.Format{}, localui.Errorf(http.StatusUnprocessableEntity, nil,
+			"this %s has no preview; copy it instead", what)
+	}
+	if !format.Verify(item.Body) {
+		return preview.Format{}, localui.Errorf(http.StatusUnprocessableEntity, nil,
+			"this %s's content does not match its type, so it is not previewed; copy it instead", what)
+	}
+	return format, nil
 }
 
 // previewText renders at most limit runes of a text body, without a leading

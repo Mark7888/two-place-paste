@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { api, type EntryPreview } from "../api";
+import type { PreviewProps } from ".";
 import { Icon } from "../components/Icon";
 import { Caption } from "./Caption";
 
 /**
- * MediaPreview plays an audio or video entry.
+ * MediaPreview plays an audio or video entry or store item.
  *
  * The bytes are fetched with the token, like every other call, and played
  * from a blob URL the page makes itself; the URL is released when the preview
@@ -15,7 +15,7 @@ import { Caption } from "./Caption";
  * HEVC .mov plays in Safari and often nowhere else. When the browser gives up,
  * the preview says so and points at Copy.
  */
-export function MediaPreview({ preview }: { preview: EntryPreview }) {
+export function MediaPreview({ preview, loadMedia }: PreviewProps) {
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [unplayable, setUnplayable] = useState(false);
@@ -23,8 +23,7 @@ export function MediaPreview({ preview }: { preview: EntryPreview }) {
   useEffect(() => {
     let url: string | null = null;
     let cancelled = false;
-    api
-      .entryContent(preview.id)
+    loadMedia(preview.id)
       .then((blob) => {
         if (cancelled) return;
         url = URL.createObjectURL(blob);
@@ -37,7 +36,7 @@ export function MediaPreview({ preview }: { preview: EntryPreview }) {
       cancelled = true;
       if (url) URL.revokeObjectURL(url);
     };
-  }, [preview.id]);
+  }, [preview.id, loadMedia]);
 
   if (error) {
     return (
