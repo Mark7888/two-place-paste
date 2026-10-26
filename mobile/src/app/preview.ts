@@ -19,8 +19,12 @@
 import type { EntryHeaderView, Item, Progress, StoreLimits } from '../core';
 import { fromUTF8 } from '../core';
 
-/** PREVIEW_CHARS bounds a text preview. The desktop uses the same number. */
-export const PREVIEW_CHARS = 240;
+/**
+ * PREVIEW_CHARS bounds a text preview, copied text and text files alike:
+ * either is opened to be read, and the preview box scrolls. The desktop uses
+ * the same number.
+ */
+export const PREVIEW_CHARS = 4000;
 
 /**
  * MAX_IMAGE_BYTES bounds an image rendered inline. Base64 costs a third on top
@@ -35,10 +39,6 @@ export const MAX_IMAGE_BYTES = 4 << 20;
  * only, as it does for a type with no preview.
  */
 export const MAX_FILE_PREVIEW_BYTES = MAX_IMAGE_BYTES;
-
-/** FILE_PREVIEW_CHARS bounds a text file's preview, which is worth more of a
- *  look than a copied snippet. */
-export const FILE_PREVIEW_CHARS = 2000;
 
 export type PreviewKind = 'text' | 'image' | 'file';
 
@@ -272,7 +272,7 @@ export function previewOf(item: Item): Preview {
     }
     out.kind = format.render;
     if (format.render === 'text') {
-      textOf(out, item.body, FILE_PREVIEW_CHARS);
+      textOf(out, item.body, PREVIEW_CHARS);
     } else {
       imageOf(out, item.body, format.mime);
     }

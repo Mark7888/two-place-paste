@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { Image, Text, View } from 'react-native';
+import { Image, ScrollView, Text } from 'react-native';
 
 import { formatSize, type Preview } from './preview';
 import { styles } from './theme';
@@ -49,11 +49,13 @@ export function PreviewBody({ preview }: { preview: Preview }): React.JSX.Elemen
 
   return (
     <>
-      <View style={styles.previewBox}>
-        <Text style={styles.previewText}>
+      {/* Its own scroller inside the screen's list, so a long text is read
+          in place; nestedScrollEnabled lets it scroll on Android. */}
+      <ScrollView style={styles.previewBox} contentContainerStyle={styles.previewBoxContent} nestedScrollEnabled>
+        <Text style={styles.previewText} selectable>
           {preview.text === '' ? '(nothing to show)' : preview.text}
         </Text>
-      </View>
+      </ScrollView>
       <Text style={styles.small}>
         {preview.truncated ? 'Shown in part · ' : ''}
         {preview.format} · {formatSize(preview.bytes)}

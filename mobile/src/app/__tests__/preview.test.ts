@@ -7,7 +7,6 @@ import {
   kindOf,
   previewOf,
   toBase64,
-  FILE_PREVIEW_CHARS,
   MAX_FILE_PREVIEW_BYTES,
   PREVIEW_CHARS,
   storeRoom,
@@ -100,13 +99,13 @@ describe('previewOf for a file', () => {
     expect(p.imageUri.startsWith('data:image/png;base64,')).toBe(true);
   });
 
-  it('shows a text file as text, more of it than a copied snippet, without a BOM', () => {
-    const p = previewOf(item('text/html', utf8('\uFEFF<script>' + 'a'.repeat(FILE_PREVIEW_CHARS)), 'page.html'));
+  it('shows a text file as text, as much of it as copied text, without a BOM', () => {
+    const p = previewOf(item('text/html', utf8('\uFEFF<script>' + 'a'.repeat(PREVIEW_CHARS)), 'page.html'));
     expect(p.kind).toBe('text');
     expect(p.format).toBe('Web source');
     expect(p.text.startsWith('<script>')).toBe(true);
     expect(p.truncated).toBe(true);
-    expect(Array.from(p.text)).toHaveLength(FILE_PREVIEW_CHARS + 1);
+    expect(Array.from(p.text)).toHaveLength(PREVIEW_CHARS + 1);
   });
 
   it('refuses a file whose bytes are not what its name claims', () => {

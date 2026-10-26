@@ -28,7 +28,7 @@ import (
 // moved on (SPEC §3.3 step 2).
 const planTTL = 10 * time.Minute
 
-// previewRunes bounds the clipboard preview the UI renders. The preview never
+// previewRunes bounds the clipboard line of the status the UI shows. It never
 // leaves this machine; it is bounded because a 50 MB paste in a status
 // response helps nobody.
 const previewRunes = 240
@@ -38,10 +38,11 @@ const previewRunes = 240
 // nobody is squinting at anyway.
 const maxPreviewImageBytes = 4 << 20
 
-// previewFileRunes bounds the preview of a text file. A file is opened to be
-// read, and 240 characters of a source file is its licence header; past this
-// the screen says it is shown in part and Copy has the rest.
-const previewFileRunes = 4000
+// previewTextRunes bounds an opened text preview in the History or the Store,
+// copied text and text files alike: either is opened to be read, and the
+// screen scrolls it. Past this it says it is shown in part and Copy has the
+// rest.
+const previewTextRunes = 4000
 
 // requestTimeout bounds one relay round trip made on the UI's behalf.
 const requestTimeout = 30 * time.Second
@@ -675,11 +676,7 @@ func previewView(id string, epoch uint64, item tppclient.Item, format preview.Fo
 
 	switch format.Render {
 	case preview.RenderText:
-		limit := previewRunes
-		if item.Filename != "" {
-			limit = previewFileRunes
-		}
-		view.Text, view.Truncated = previewText(item.Body, limit)
+		view.Text, view.Truncated = previewText(item.Body, previewTextRunes)
 	case preview.RenderImage:
 		// Inlined as a data URL so the page renders it without a second
 		// request for a decrypted body. Past the bound the screen says how big
