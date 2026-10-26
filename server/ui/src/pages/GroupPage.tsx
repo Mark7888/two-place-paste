@@ -137,9 +137,9 @@ function Stats({ data }: { data: GroupDetail }) {
         <p className="sub">oldest {ago(now, g.oldest, "—")}</p>
       </StatCard>
       {g.usage && (
-        <StatCard title="Blob storage" wide>
+        <StatCard title="Blob storage">
           <p className="figure">
-            {humanBytes(g.usage.used_bytes)} <span className="muted">of {limitText(g.limit_bytes)}</span>
+            {humanBytes(g.usage.used_bytes)} <span className="muted nowrap">of {limitText(g.limit_bytes)}</span>
           </p>
           <UsageMeter used={g.usage.used_bytes} limit={g.limit_bytes} label="Blob storage used" />
           <p className="sub">
@@ -148,7 +148,26 @@ function Stats({ data }: { data: GroupDetail }) {
           </p>
         </StatCard>
       )}
+      {data.store && <StoreStat store={data.store} />}
     </div>
+  );
+}
+
+/** StoreStat is the store's usage beside the blob storage at the top of the
+ *  page; the Store section further down holds its switch and limit. */
+function StoreStat({ store }: { store: GroupStore }) {
+  return (
+    <StatCard title="Store">
+      <p className="figure">
+        {humanBytes(store.used_bytes)} <span className="muted nowrap">of {limitText(store.limit_bytes)}</span>
+      </p>
+      <UsageMeter used={store.used_bytes} limit={store.limit_bytes} label="Store used" />
+      <p className="sub">
+        {store.used_items} of {store.max_items} {plural(store.max_items, "item", "items")} · limit from{" "}
+        {limitSources[store.limit_source]}
+        {store.emptying ? " · emptying" : !store.enabled && " · off"}
+      </p>
+    </StatCard>
   );
 }
 
@@ -323,14 +342,6 @@ function StoreSection({
             {store.enabled ? "Turn store off" : "Turn store on"}
           </button>
         </div>
-        <p className="figure">
-          {humanBytes(store.used_bytes)} <span className="muted">of {limitText(store.limit_bytes)}</span>
-        </p>
-        <UsageMeter used={store.used_bytes} limit={store.limit_bytes} label="Store used" />
-        <p className="sub">
-          {items} of {store.max_items} · limit from {limitSources[store.limit_source]} · up to{" "}
-          {humanBytes(store.max_item_bytes)} an item
-        </p>
       </div>
       <form
         className="card"
@@ -361,7 +372,8 @@ function StoreSection({
         </div>
         <span className="hint">
           Overrides the tag's store limit{store.tag_limit_bytes !== null && ` (${limitText(store.tag_limit_bytes)})`}{" "}
-          and the server default ({limitText(store.default_limit_bytes)}). 0 means no limit of its own. Separate from
+          and the server default ({limitText(store.default_limit_bytes)}). 0 means no limit of its own. An item can
+          be up to {humanBytes(store.max_item_bytes)}. Separate from
           the storage limit above. Lowering it deletes nothing: the store never evicts, so new saves are refused until
           it fits.
         </span>
