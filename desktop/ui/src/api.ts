@@ -328,6 +328,11 @@ export interface StoreItemView extends StoreDetails {
   filename?: string;
   /** The plaintext size. */
   bytes: number;
+  /** As for a history entry: whether a preview is offered, why not, and
+   *  how it is drawn. */
+  previewable: boolean;
+  no_preview?: string;
+  render?: Render;
 }
 
 export interface StoreLimitsView {
@@ -491,6 +496,12 @@ export const api = {
   // own download. A POST, for the same reason as previewEntry.
   storeItemContent: (itemId: string) =>
     requestBlob("POST", "/api/store/content", { item_id: itemId }),
+  // A store item's preview, drawn like a history entry's, and the bytes an
+  // audio or video preview plays (typed by the service's preview table).
+  previewStoreItem: (itemId: string) =>
+    request<EntryPreview>("POST", "/api/store/preview", { item_id: itemId }),
+  storeItemMedia: (itemId: string) =>
+    requestBlob("POST", "/api/store/media", { item_id: itemId }),
 };
 
 /** upload sends a file the user dropped or picked as multipart form data. */

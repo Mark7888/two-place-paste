@@ -730,8 +730,6 @@ button.action.choice .choice-why {
 
 /* ---- Store ------------------------------------------------------------- */
 
-.store-actions { margin-bottom: 1rem; }
-
 .store-filters { display: flex; gap: 0.5rem; margin-bottom: 0.6rem; }
 .store-filters input { flex: 1 1 auto; min-width: 0; }
 .store-filters select { flex: none; width: auto; }
@@ -831,16 +829,24 @@ button.chip:hover { color: var(--ink); background: var(--surface-sunken); }
 .tag-input input[type="text"]:focus { outline: none; }
 .tag-input:focus-within { border-color: var(--accent); }
 
+/* The Store tab's add zone: it takes a dropped file anywhere on it, and
+   holds the two buttons that add without dragging. It is one row where there
+   is room, and the buttons drop below the words where there is not. */
 .drop-zone {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.6rem;
-  padding: 2rem 1rem;
+  gap: 0.6rem 0.9rem;
+  margin-bottom: 1rem;
+  padding: 0.9rem 1rem;
   border: 2px dashed var(--line);
   border-radius: 12px;
   color: var(--muted);
-  text-align: center;
+  transition: border-color 120ms, background 120ms;
 }
-.drop-zone p { margin: 0; }
+.drop-zone > svg { flex: none; }
 .drop-zone.over { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.add-zone-text { display: flex; flex-direction: column; flex: 1 1 12rem; min-width: 0; }
+.add-zone-text strong { color: var(--ink); font-weight: 600; }
+.drop-zone.over .add-zone-text strong { color: var(--accent); }
+.add-zone-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }

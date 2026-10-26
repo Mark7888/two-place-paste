@@ -1,5 +1,5 @@
 /**
- * How a history entry is drawn once it is opened.
+ * How a history entry or a store item is drawn once it is opened.
  *
  * The service decides how an entry is rendered, from its preview table
  * (desktop/internal/preview), and says so in `render`. This module maps each
@@ -10,23 +10,38 @@
  */
 
 import type { ComponentType } from "react";
-import type { EntryPreview, EntryView, Render } from "../api";
+import { api, type EntryPreview, type EntryView, type Render } from "../api";
 import type { IconName } from "../components/Icon";
 import { ImagePreview } from "./ImagePreview";
 import { MediaPreview } from "./MediaPreview";
 import { TextPreview } from "./TextPreview";
 
-const renderers: Record<Render, ComponentType<{ preview: EntryPreview }>> = {
+/** PreviewProps is what every renderer gets: the preview, and where audio
+ *  and video fetch the bytes they play — a history entry's or a store
+ *  item's. */
+export interface PreviewProps {
+  preview: EntryPreview;
+  loadMedia: (id: string) => Promise<Blob>;
+}
+
+const renderers: Record<Render, ComponentType<PreviewProps>> = {
   text: TextPreview,
   image: ImagePreview,
   audio: MediaPreview,
   video: MediaPreview,
 };
 
-/** PreviewBody draws an opened entry with the component for its renderer. */
-export function PreviewBody({ preview }: { preview: EntryPreview }) {
+/** PreviewBody draws an opened entry or store item with the component for
+ *  its renderer. */
+export function PreviewBody({
+  preview,
+  loadMedia = api.entryContent,
+}: {
+  preview: EntryPreview;
+  loadMedia?: (id: string) => Promise<Blob>;
+}) {
   const Body = renderers[preview.render];
-  return <Body preview={preview} />;
+  return <Body preview={preview} loadMedia={loadMedia} />;
 }
 
 /** entryIcon picks a row's icon: what the entry previews as when it does,

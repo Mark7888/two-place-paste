@@ -52,6 +52,16 @@ func (s *stubAPI) StoreItemContent(_ context.Context, itemID string) (EntryConte
 	return EntryContent{ContentType: "text/html", Body: []byte("<script>alert(1)</script>")}, nil
 }
 
+func (s *stubAPI) StoreItemPreview(_ context.Context, itemID string) (EntryPreview, error) {
+	s.record("store-preview " + itemID)
+	return EntryPreview{ID: itemID, Render: "text", Text: "hello"}, nil
+}
+
+func (s *stubAPI) StoreItemMedia(_ context.Context, itemID string) (EntryContent, error) {
+	s.record("store-media " + itemID)
+	return EntryContent{ContentType: "audio/mpeg", Body: []byte("ID3")}, nil
+}
+
 func appHeaders(srv *Server) map[string]string {
 	return map[string]string{
 		"Origin":    fmt.Sprintf("http://127.0.0.1:%d", srv.Port()),
@@ -60,8 +70,9 @@ func appHeaders(srv *Server) map[string]string {
 }
 
 // TestStoreRoutes: the listing passes its query through, a duplicate comes
-// back as 409 with the items it duplicates, an item's bytes are an
-// attachment no browser renders, and a build without a store says so.
+// back as 409 with the items it duplicates, an item's bytes and its media are
+// attachments no browser renders, a preview comes back as JSON, and a build
+// without a store says so.
 func TestStoreRoutes(t *testing.T) {
 	t.Parallel()
 	srv, api := newTestServer(t)
@@ -96,6 +107,23 @@ func TestStoreRoutes(t *testing.T) {
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Disposition") != "attachment" ||
 		rec.Header().Get("Content-Security-Policy") != "sandbox; default-src 'none'" {
 		t.Errorf("POST /api/store/content = %d %v, want an attachment in a sandbox", rec.Code, rec.Header())
+	}
+
+	rec = do(t, srv, "POST", "/api/store/preview", `{"item_id":"i1"}`, h)
+	var view EntryPreview
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil || rec.Code != http.StatusOK || view.ID != "i1" || view.Text != "hello" {
+		t.Errorf("POST /api/store/preview = %d %s, want the item's preview", rec.Code, rec.Body)
+	}
+	rec = do(t, srv, "POST", "/api/store/media", `{"item_id":"i1"}`, h)
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "audio/mpeg" ||
+		rec.Header().Get("Content-Disposition") != "attachment" ||
+		rec.Header().Get("Content-Security-Policy") != "sandbox; default-src 'none'" {
+		t.Errorf("POST /api/store/media = %d %v, want typed media in a sandbox", rec.Code, rec.Header())
+	}
+	for _, path := range []string{"/api/store/preview", "/api/store/media"} {
+		if rec := do(t, srv, "POST", path, `{}`, h); rec.Code != http.StatusBadRequest {
+			t.Errorf("POST %s without an item = %d, want 400", path, rec.Code)
+		}
 	}
 
 	bare, err := Listen(context.Background(), Options{API: newStubAPI(), Port: 0, Token: "test-token"})

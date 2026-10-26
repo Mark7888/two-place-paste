@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -206,5 +207,82 @@ func TestStoreEventsKeepTheIndex(t *testing.T) {
 	_, _ = f.svc.Store(ctx, localui.StoreQuery{})
 	if f.relay.storeLists != before+1 {
 		t.Errorf("a reconnect did not list the store again: %d listings, want %d", f.relay.storeLists, before+1)
+	}
+}
+
+// TestStoreItemPreview: a store item previews as a history entry does — from
+// the preview table, within the auto-download limit, and only when its bytes
+// are what its name claims; audio and video are played from their own bytes,
+// typed by the table.
+func TestStoreItemPreview(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := context.Background()
+	f.enableStore()
+	if _, err := f.svc.UpdateSettings(ctx, localui.SettingsPatch{AutoDownloadMaxBytes: int64Ptr(1 << 20)}); err != nil {
+		t.Fatalf("UpdateSettings() error = %v", err)
+	}
+
+	f.clip.set(textContent("wifi: hunter2"))
+	note, err := f.svc.SaveToStore(ctx, localui.StoreSaveRequest{Source: "clipboard", StoreDetails: details("Home wifi")})
+	if err != nil {
+		t.Fatalf("SaveToStore() error = %v", err)
+	}
+	upload := func(name, contentType string, body []byte) localui.StoreItemView {
+		t.Helper()
+		v, err := f.svc.UploadToStore(ctx, localui.StoreUpload{
+			ContentType: contentType, Filename: name, Body: body, Details: details(name),
+		})
+		if err != nil {
+			t.Fatalf("UploadToStore(%s) error = %v", name, err)
+		}
+		return v
+	}
+	song := upload("song.mp3", "audio/mpeg", []byte("ID3 not really a song"))
+	fake := upload("logo.png", "image/png", []byte("<html>not a png</html>"))
+	manual := upload("manual.pdf", "application/pdf", []byte("%PDF"))
+	big := upload("big.txt", "text/plain", bytes.Repeat([]byte("a"), 2<<20))
+
+	tests := []struct {
+		name        string
+		item        localui.StoreItemView
+		previewable bool
+		render      string
+	}{
+		{"clipboard text", note, true, "text"},
+		{"audio file", song, true, "audio"},
+		{"a .png by name, decided before fetching", fake, true, "image"},
+		{"a type with no preview", manual, false, ""},
+		{"over the auto-download limit", big, false, ""},
+	}
+	for _, tt := range tests {
+		if tt.item.Previewable != tt.previewable || tt.item.Render != tt.render {
+			t.Errorf("%s: previewable = %v render = %q, want %v %q", tt.name, tt.item.Previewable, tt.item.Render, tt.previewable, tt.render)
+		}
+		if !tt.previewable && tt.item.NoPreview == "" {
+			t.Errorf("%s: no reason given for no preview", tt.name)
+		}
+	}
+
+	view, err := f.svc.StoreItemPreview(ctx, note.ID)
+	if err != nil || view.Render != "text" || view.Text != "wifi: hunter2" || view.ID != note.ID {
+		t.Errorf("StoreItemPreview(text) = %+v, %v", view, err)
+	}
+	if view, err := f.svc.StoreItemPreview(ctx, song.ID); err != nil || view.Render != "audio" || view.Text != "" {
+		t.Errorf("StoreItemPreview(audio) = %+v, %v, want a description only", view, err)
+	}
+	if _, err := f.svc.StoreItemPreview(ctx, fake.ID); statusOf(err) != http.StatusUnprocessableEntity {
+		t.Errorf("StoreItemPreview(HTML named .png) = %v, want 422", err)
+	}
+
+	media, err := f.svc.StoreItemMedia(ctx, song.ID)
+	if err != nil || media.ContentType != "audio/mpeg" || string(media.Body) != "ID3 not really a song" {
+		t.Errorf("StoreItemMedia(audio) = %q %q, %v", media.ContentType, media.Body, err)
+	}
+	if _, err := f.svc.StoreItemMedia(ctx, note.ID); statusOf(err) != http.StatusUnprocessableEntity {
+		t.Errorf("StoreItemMedia(text) = %v, want 422", err)
+	}
+	if _, err := f.svc.StoreItemPreview(ctx, "gone"); statusOf(err) != http.StatusNotFound {
+		t.Errorf("StoreItemPreview(unknown) = %v, want 404", err)
 	}
 }

@@ -12,7 +12,7 @@ The **Store** tab keeps items the group saves on purpose. Unlike the
 [History](/two-place-paste/guides/history/), items do not expire: they stay until someone deletes
 them. Every device in the group sees the same store.
 
-<Image src={store} alt="The Store tab: space used, Save clipboard to store and Add file buttons, a search box, tag filters and four saved items" class="screenshot" />
+<Image src={store} alt="The Store tab: space used, a drop zone with Save clipboard and Upload a file buttons, a search box, tag filters, and saved items with the first one's preview open" class="screenshot" />
 
 <Aside>
 	The store is off until the server admin turns it on for your group. Until then the Store tab
@@ -27,8 +27,8 @@ content, name, description or tags; it only knows how big each one is.
 
 There are three ways to put an item in the store:
 
-- **Save clipboard to store** on the Store tab saves whatever you have copied.
-- **Add file…** on the Store tab saves a file: drop it on the window, or choose it.
+- **Save clipboard**, in the box at the top of the Store tab, saves whatever you have copied.
+- To save a file, drop it on that box, or click **Upload a file…** to choose it.
 - The store button on a [History](/two-place-paste/guides/history/) entry saves that entry, so it
   outlives its 24 hours. The entry itself still expires as usual.
 
@@ -57,6 +57,11 @@ Searching happens on your device: the server cannot search what it cannot read.
 
 ## Use an item
 
+- **Preview** opens an item under its row without touching your clipboard: text is shown as text,
+  images as images, and audio and video play. It is offered for the same types as in the History
+  (see [What can be previewed](/two-place-paste/guides/history/#what-can-be-previewed)), and not
+  for an item larger than **Download automatically up to** in Settings, since a preview downloads
+  it. **Hide** closes it.
 - **Copy** puts the item on this computer's clipboard, like **Copy** in the History. It is not sent
   to your other devices as a new clipboard entry.
 - The download button saves the item as a file. A file keeps its own name; text and images are
