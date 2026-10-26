@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 import {
   api,
+  type ClipboardView,
   type EntryPreview,
   type ServiceEvent,
   type StoreDetails,
@@ -28,7 +29,7 @@ import { PreviewBody, entryIcon } from "../preview";
 const emptyDetails: StoreDetails = { name: "", description: "", tags: [] };
 
 type Dialog =
-  | { kind: "clipboard" }
+  | { kind: "clipboard"; clip?: ClipboardView }
   | { kind: "file"; file: File }
   | { kind: "edit"; item: StoreItemView }
   | null;
@@ -136,6 +137,27 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
     })();
   };
 
+  // The clipboard is read before the form opens, as a file from the drop zone
+  // is: a copied file's name fills in the item's name, as it does for a file
+  // dropped here or an entry saved from the History, and an empty clipboard
+  // is said at once. If the read fails the form opens anyway: the save reads
+  // the clipboard itself and says what is wrong.
+  const saveClipboard = async () => {
+    setNotice("");
+    let clip: ClipboardView | undefined;
+    try {
+      clip = (await api.status()).clipboard;
+    } catch {
+      clip = undefined;
+    }
+    if (clip?.available && clip.empty) {
+      setError("The clipboard is empty. Copy something first.");
+      return;
+    }
+    setError("");
+    setDialog({ kind: "clipboard", clip });
+  };
+
   // A file from the drop zone or the picker is checked before the details
   // are asked for, so a file that cannot fit is refused at once.
   const pickFile = (file: File) => {
@@ -214,7 +236,7 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
         <>
           {limits ? <SpaceBar limits={limits} /> : null}
 
-          <AddZone onClipboard={() => setDialog({ kind: "clipboard" })} onFile={pickFile} />
+          <AddZone onClipboard={() => void saveClipboard()} onFile={pickFile} />
 
           <div className="store-filters">
             <input
@@ -399,7 +421,7 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
         title={dialog?.kind === "edit" ? "Edit item" : "Save to store"}
         what={
           dialog?.kind === "clipboard"
-            ? "what is on the clipboard"
+            ? clipboardWhat(dialog.clip)
             : dialog?.kind === "file"
               ? `${dialog.file.name} (${bytes(dialog.file.size)})`
               : undefined
@@ -410,7 +432,7 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
             ? { name: dialog.item.name, description: dialog.item.description, tags: dialog.item.tags }
             : dialog?.kind === "file"
               ? { ...emptyDetails, name: dialog.file.name }
-              : emptyDetails
+              : { ...emptyDetails, name: dialog?.clip?.filename ?? "" }
         }
         knownTags={knownTags}
         saveLabel={dialog?.kind === "edit" ? "Save changes" : "Save"}
@@ -553,6 +575,15 @@ function AddZone({ onClipboard, onFile }: { onClipboard: () => void; onFile: (fi
       />
     </div>
   );
+}
+
+/** clipboardWhat says what Save clipboard is about to save: the copied
+ *  file by name, else the kind of thing on the clipboard. */
+function clipboardWhat(clip?: ClipboardView): string {
+  if (!clip || clip.empty || clip.error) return "what is on the clipboard";
+  if (clip.filename) return `${clip.filename} (${bytes(clip.bytes)}) from the clipboard`;
+  const what = clip.kind === "image" ? "the image" : clip.kind === "text" ? "the text" : "what is";
+  return `${what} on the clipboard (${bytes(clip.bytes)})`;
 }
 
 /** fileName is what Save as file calls an item: its own filename, else its
