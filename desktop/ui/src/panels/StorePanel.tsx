@@ -11,7 +11,7 @@ import {
 } from "../api";
 import { Icon } from "../components/Icon";
 import { Modal } from "../components/Modal";
-import { StoreDialog } from "../components/StoreDialog";
+import { StoreDialog, storeRoom } from "../components/StoreDialog";
 import { bytes, relative, useNow, when } from "../format";
 import { PreviewBody, entryIcon } from "../preview";
 
@@ -432,7 +432,7 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
               ? `${dialog.file.name} (${bytes(dialog.file.size)})`
               : undefined
         }
-        available={dialog?.kind === "edit" ? undefined : limits?.available_bytes}
+        available={dialog?.kind === "edit" ? undefined : storeRoom(limits)}
         initial={
           dialog?.kind === "edit"
             ? { name: dialog.item.name, description: dialog.item.description, tags: dialog.item.tags }

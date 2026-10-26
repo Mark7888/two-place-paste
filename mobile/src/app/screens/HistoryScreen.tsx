@@ -9,9 +9,11 @@
  * each entry's sealed header, opened here, which says what the entry is
  * without fetching it (spec/crypto.md §5.5).
  *
- * Tapping a text or image row opens a preview, which is the one thing that
- * decrypts an entry — the same operation copying it would do, on that entry
- * alone and only when asked. Any other row opens to its Copy button only; a
+ * Tapping a text or image row, or a file of a format src/app/preview.ts can
+ * draw, opens a preview, which is the one thing that decrypts an entry — the
+ * same operation copying it would do, on that entry alone and only when
+ * asked; the client keeps what it just read, so saving a file right after its
+ * preview does not download it again. Any other row opens to its Copy button only; a
  * file, which the Android clipboard cannot hold, is saved to Downloads or
  * opened in another app instead, whichever the user picks. An entry from an older epoch has no preview and no copy: this
  * device no longer holds the key it was written under (SPEC §3.3).
@@ -33,7 +35,7 @@ import {
   type FileChoice,
   type PendingFile,
 } from '../session';
-import { describeHeader, formatSize, headerPreviewable, previewOf, type Preview } from '../preview';
+import { describeHeader, formatSize, headerPreviewable, previewOf, storeRoom, type Preview } from '../preview';
 import { Button, FileChoices, Notice, OutcomeNotice, Sheet, Shimmer, TransferList } from '../ui';
 import { colors, styles } from '../theme';
 import { StoreSheet } from '../StoreSheet';
@@ -368,7 +370,7 @@ export function HistoryScreen(): React.JSX.Element {
         visible={saving !== null}
         title="Save to store"
         what={saving === null ? undefined : `${describeHeader(saving.header)} from the history`}
-        available={store.limits?.availableBytes}
+        available={storeRoom(store.limits)}
         initial={{ name: saving?.header?.filename ?? '', description: '', tags: [] }}
         knownTags={storeIndex.tags().map((t) => t.tag)}
         onClose={() => setSaving(null)}
@@ -432,7 +434,7 @@ function Body({ preview }: { preview: Preview }): React.JSX.Element {
     if (preview.imageTooLarge || preview.imageUri === '') {
       return (
         <Text style={styles.small}>
-          {preview.contentType} · {formatSize(preview.bytes)} — too large to show here.
+          {preview.format} · {formatSize(preview.bytes)} — too large to show here.
         </Text>
       );
     }
@@ -440,13 +442,20 @@ function Body({ preview }: { preview: Preview }): React.JSX.Element {
       <>
         <ImagePreview uri={preview.imageUri} />
         <Text style={styles.small}>
-          {preview.contentType} · {formatSize(preview.bytes)}
+          {preview.format} · {formatSize(preview.bytes)}
         </Text>
       </>
     );
   }
 
   if (preview.kind === 'file') {
+    if (preview.mismatch) {
+      return (
+        <Text style={styles.small}>
+          This file’s content does not match its type, so it is not shown here. Save or open it instead.
+        </Text>
+      );
+    }
     // A file has no body worth drawing; its name and size are the preview.
     return (
       <Text style={styles.small}>
@@ -465,7 +474,7 @@ function Body({ preview }: { preview: Preview }): React.JSX.Element {
       </View>
       <Text style={styles.small}>
         {preview.truncated ? 'Shown in part · ' : ''}
-        {preview.contentType} · {formatSize(preview.bytes)}
+        {preview.format} · {formatSize(preview.bytes)}
       </Text>
     </>
   );

@@ -18,7 +18,7 @@ import type { StoreItem, StoreSort } from '../../core';
 import { clipboard, files, type SavedFile } from '../../platform';
 import { useSession } from '../SessionContext';
 import { Icon, type IconName } from '../icons';
-import { formatSize } from '../preview';
+import { formatSize, storeRoom } from '../preview';
 import { deliver, describeItem, failureMessage, handleFile, toClipboardItem, type FileChoice, type PendingFile } from '../session';
 import { chip, chipOn, chipOnText, chipRow, chipText, StoreSheet } from '../StoreSheet';
 import {
@@ -384,7 +384,7 @@ export function StoreScreen(): React.JSX.Element {
         visible={dialog !== null}
         title={dialog?.kind === 'edit' ? 'Edit item' : 'Save to store'}
         what={dialog !== null && dialog.kind !== 'edit' ? describeItem(dialog.item) : undefined}
-        available={dialog?.kind === 'edit' ? undefined : store.limits?.availableBytes}
+        available={dialog?.kind === 'edit' ? undefined : storeRoom(store.limits)}
         initial={
           dialog?.kind === 'edit'
             ? { name: dialog.item.name, description: dialog.item.description, tags: dialog.item.tags }
