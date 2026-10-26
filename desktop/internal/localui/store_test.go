@@ -84,6 +84,11 @@ func TestStoreRoutes(t *testing.T) {
 	if !api.called(`store q="wifi" tags=[home net] sort="name"`) {
 		t.Errorf("the query did not reach the service: %v", api.calls)
 	}
+	for _, sort := range []string{"largest", "smallest"} {
+		if rec := do(t, srv, "GET", "/api/store?sort="+sort, "", h); rec.Code != http.StatusOK {
+			t.Errorf("GET /api/store?sort=%s = %d, want 200", sort, rec.Code)
+		}
+	}
 	if rec := do(t, srv, "GET", "/api/store?sort=size", "", h); rec.Code != http.StatusBadRequest {
 		t.Errorf("GET /api/store?sort=size = %d, want 400", rec.Code)
 	}

@@ -38,6 +38,8 @@ const SORTS: { id: StoreSort; label: string }[] = [
   { id: 'oldest', label: 'Oldest' },
   { id: 'name', label: 'A–Z' },
   { id: 'name-desc', label: 'Z–A' },
+  { id: 'largest', label: 'Largest' },
+  { id: 'smallest', label: 'Smallest' },
 ];
 
 type Dialog =

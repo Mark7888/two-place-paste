@@ -90,7 +90,7 @@ export interface StoreListing {
   unreadable: Unreadable[];
 }
 
-export type StoreSort = 'newest' | 'oldest' | 'name' | 'name-desc';
+export type StoreSort = 'newest' | 'oldest' | 'name' | 'name-desc' | 'largest' | 'smallest';
 
 /** StoreQuery selects and orders items. */
 export interface StoreQuery {
@@ -179,6 +179,11 @@ export class StoreIndex {
         return out.sort(byName);
       case 'name-desc':
         return out.sort((a, b) => byName(b, a));
+      // By plaintext size; items of the same size newest first.
+      case 'largest':
+        return out.sort((a, b) => b.bodySize - a.bodySize || newestFirst(a, b));
+      case 'smallest':
+        return out.sort((a, b) => a.bodySize - b.bodySize || newestFirst(a, b));
       default:
         return out.sort(newestFirst);
     }

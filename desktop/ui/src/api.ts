@@ -312,7 +312,7 @@ export interface ServiceEvent {
 // The store (SPEC §6b): items the group keeps on purpose, beside its 24-hour
 // history. The service opens them; the relay sees none of this.
 
-export type StoreSort = "newest" | "oldest" | "name" | "name_desc";
+export type StoreSort = "newest" | "oldest" | "name" | "name_desc" | "largest" | "smallest";
 
 export interface StoreDetails {
   name: string;

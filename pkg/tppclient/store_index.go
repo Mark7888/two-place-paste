@@ -33,6 +33,10 @@ const (
 	SortName
 	// SortNameDesc is by name, Z to A.
 	SortNameDesc
+	// SortLargest is by plaintext size, largest first, and SortSmallest
+	// smallest first; items of the same size are newest first.
+	SortLargest
+	SortSmallest
 )
 
 // StoreQuery selects and orders items.
@@ -125,7 +129,22 @@ func (x *StoreIndex) Query(q StoreQuery) []StoreItem {
 		}
 		return newest(a, b)
 	}
+	bySize := func(a, b StoreItem) int {
+		if c := cmp.Compare(a.BodySize, b.BodySize); c != 0 {
+			return c
+		}
+		return newest(a, b)
+	}
 	switch q.Sort {
+	case SortLargest:
+		slices.SortFunc(out, func(a, b StoreItem) int {
+			if c := cmp.Compare(b.BodySize, a.BodySize); c != 0 {
+				return c
+			}
+			return newest(a, b)
+		})
+	case SortSmallest:
+		slices.SortFunc(out, bySize)
 	case SortOldest:
 		slices.SortFunc(out, func(a, b StoreItem) int { return newest(b, a) })
 	case SortName:

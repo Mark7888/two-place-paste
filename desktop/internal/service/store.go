@@ -190,6 +190,10 @@ func storeSort(v string) tppclient.StoreSort {
 		return tppclient.SortName
 	case "name_desc":
 		return tppclient.SortNameDesc
+	case "largest":
+		return tppclient.SortLargest
+	case "smallest":
+		return tppclient.SortSmallest
 	default:
 		return tppclient.SortNewest
 	}

@@ -252,6 +252,8 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
               <option value="oldest">Oldest first</option>
               <option value="name">Name, A to Z</option>
               <option value="name_desc">Name, Z to A</option>
+              <option value="largest">Largest first</option>
+              <option value="smallest">Smallest first</option>
             </select>
           </div>
           {view.tags.length ? (

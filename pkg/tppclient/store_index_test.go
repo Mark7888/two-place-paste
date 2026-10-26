@@ -27,6 +27,32 @@ func ids(items []tppclient.StoreItem) []string {
 	return out
 }
 
+// TestStoreIndexSortBySize: by plaintext size either way, with items of the
+// same size newest first.
+func TestStoreIndexSortBySize(t *testing.T) {
+	t.Parallel()
+	sized := func(id string, saved int, size int64) tppclient.StoreItem {
+		it := indexItem(id, id, "", saved, 0, id)
+		it.BodySize = size
+		return it
+	}
+	x := tppclient.NewStoreIndex()
+	x.Reset([]tppclient.StoreItem{sized("a", 1, 500), sized("b", 2, 10), sized("c", 3, 500), sized("d", 4, 7000)})
+	tests := []struct {
+		name string
+		sort tppclient.StoreSort
+		want []string
+	}{
+		{"largest first", tppclient.SortLargest, []string{"d", "c", "a", "b"}},
+		{"smallest first", tppclient.SortSmallest, []string{"b", "c", "a", "d"}},
+	}
+	for _, tt := range tests {
+		if got := ids(x.Query(tppclient.StoreQuery{Sort: tt.sort})); !slices.Equal(got, tt.want) {
+			t.Errorf("%s = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
 // TestStoreIndexQuery: search is every word in the name or description,
 // ignoring case; tags all have to match; and each sort is stable.
 func TestStoreIndexQuery(t *testing.T) {

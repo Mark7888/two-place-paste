@@ -52,7 +52,7 @@ type StoreAPI interface {
 }
 
 // StoreQuery selects and orders the listing. Sort is "newest" (the default),
-// "oldest", "name" or "name_desc".
+// "oldest", "name", "name_desc", "largest" or "smallest".
 type StoreQuery struct {
 	Text string
 	Tags []string
@@ -183,7 +183,7 @@ func (s *Server) handleStore(w http.ResponseWriter, r *http.Request) {
 	v := r.URL.Query()
 	q := StoreQuery{Text: v.Get("q"), Tags: v["tag"], Sort: v.Get("sort")}
 	switch q.Sort {
-	case "", "newest", "oldest", "name", "name_desc":
+	case "", "newest", "oldest", "name", "name_desc", "largest", "smallest":
 	default:
 		writeError(w, http.StatusBadRequest, "unknown sort")
 		return

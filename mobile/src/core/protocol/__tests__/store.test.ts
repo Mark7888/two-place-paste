@@ -46,6 +46,20 @@ describe('StoreIndex', () => {
   });
 });
 
+// As TestStoreIndexSortBySize: by plaintext size either way, ties newest first.
+test.each([
+  ['largest' as const, ['d', 'c', 'a', 'b']],
+  ['smallest' as const, ['b', 'c', 'a', 'd']],
+])('StoreIndex sorts by size: %s first', (sort, want) => {
+  const sized = (id: string, saved: number, size: number): StoreItem => ({
+    ...item(id, id, '', saved, 0n, id),
+    bodySize: size,
+  });
+  const x = new StoreIndex();
+  x.reset([sized('a', 1, 500), sized('b', 2, 10), sized('c', 3, 500), sized('d', 4, 7000)]);
+  expect(ids(x.query({ sort }))).toEqual(want);
+});
+
 test('StoreIndex counts tags, finds duplicates and never rolls back a revision', () => {
   const x = new StoreIndex();
   x.put(item('a', 'Note', '', 1, 0n, 'same', 'home'));
