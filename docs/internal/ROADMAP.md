@@ -21,6 +21,7 @@ request. Phases run in numeric order; only one pair of phases may overlap.
 | **P8** | Release — E2E, hardening, docs, artefacts | ▶ **Next** | P6, P7 |
 | **P9** | Storage — S3/MinIO blobs, storage limits, chunked transfer, admin dashboard | 🔍 **In review** (#26) | P3–P7 |
 | **P10** | Admin group management — rename, tags, limits, purge, delete, health, audit | 🔍 **In review** | P9 |
+| **P11** | Persistent store — items kept beyond the 24-hour history, per group | ✅ **Done** (#40, #42–#47) | P10 |
 
 **Only P6 and P7 may run at the same time** (different languages, disjoint directories,
 no shared file). Both are done, so P8 now runs on its own. Everything else is strictly
@@ -39,6 +40,14 @@ P10 is cross-cutting in the same way: the admin can now rename, tag, limit, purg
 delete groups, and the apps show a group's name and say when it was deleted. Its wire
 change went in first as its own PR (#35); the plan is
 [`docs/internal/plans/admin-group-management.md`](plans/admin-group-management.md).
+
+P11 is cross-cutting as well: a group can keep items that do not expire — searched,
+tagged and encrypted like everything else, readable across rekeys through a chain of
+store links, and off until the admin turns it on for the group (SPEC §4.6, §6b;
+spec/crypto.md §7a). It landed as one PR per step: crypto and spec (#40), header v2
+(#42), wire schema (#43), relay (#44), Go client core (#45), desktop (#46), and the
+TypeScript core with Android (#47). The plan is
+[`docs/internal/plans/persistent-store.md`](plans/persistent-store.md).
 
 ---
 
@@ -968,4 +977,5 @@ moving the risk onto the member, and the work split are in
 
 **Standing prohibition:** no pin, favourite or extend-TTL feature. Entry lifetimes are
 immutable and the entire §4.5 GC scheme depends on that. Any agent proposing one is
-redirected to the §4.5 invariant.
+redirected to the §4.5 invariant. The persistent store (P11) is not one: saving an entry
+to the store copies it, and the entry keeps its own 24 hours.
