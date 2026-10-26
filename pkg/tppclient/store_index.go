@@ -33,9 +33,11 @@ const (
 	SortName
 	// SortNameDesc is by name, Z to A.
 	SortNameDesc
-	// SortLargest is by plaintext size, largest first, and SortSmallest
-	// smallest first; items of the same size are newest first.
+	// SortLargest is by plaintext size, largest first; items of the same
+	// size are newest first.
 	SortLargest
+	// SortSmallest is by plaintext size, smallest first; items of the same
+	// size are newest first.
 	SortSmallest
 )
 
