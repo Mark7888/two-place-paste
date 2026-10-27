@@ -68,6 +68,17 @@ type (
 	}
 )
 
+// buildFailedError is a Nightly commit whose every desktop build failed or
+// was cancelled, and none is still running.
+type buildFailedError struct {
+	commit string
+	run    string // the newest run's page
+}
+
+func (e *buildFailedError) Error() string {
+	return fmt.Sprintf("the build of commit %s failed", short(e.commit))
+}
+
 // ResolveCommit turns an abbreviated hash into the full one, through the API.
 // The service calls it before saving a Nightly commit, so the settings file
 // only ever holds full hashes.
@@ -151,7 +162,7 @@ func (m *Manager) nightlyCandidate(ctx context.Context, api githubAPI, sha strin
 				Origin:    origin,
 			}}, nil
 		}
-		return nil, fmt.Errorf("the build of commit %s failed: %s", short(sha), runs.WorkflowRuns[0].HTMLURL)
+		return nil, &buildFailedError{commit: sha, run: runs.WorkflowRuns[0].HTMLURL}
 	}
 
 	// A push run in this repository had the signing key; a fork's

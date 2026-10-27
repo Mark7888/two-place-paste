@@ -444,6 +444,7 @@ label.toggle:has(input:disabled) { cursor: not-allowed; opacity: 0.6; }
 .notice.info { color: var(--ink); background: var(--accent-soft); }
 .notice.warn { color: var(--warn); background: var(--warn-soft); }
 .notice.ok { color: var(--ok); background: var(--ok-soft); }
+.notice.error a { color: inherit; font-weight: 600; }
 
 .empty {
   padding: 2.5rem 1rem;

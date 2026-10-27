@@ -28,6 +28,20 @@ var (
 	errNotFound = errors.New("not found")
 )
 
+// transientError is a GitHub call that may well work if made again: the
+// network failed, the rate limit ran out, or GitHub itself had a problem. A
+// poll that meets one keeps polling rather than reporting it.
+type transientError struct{ err error }
+
+func (e transientError) Error() string { return e.err.Error() }
+func (e transientError) Unwrap() error { return e.err }
+
+// isTransient reports whether err is worth trying again later.
+func isTransient(err error) bool {
+	var t transientError
+	return errors.As(err, &t)
+}
+
 // githubAPI is an authenticated client for the few REST calls Nightly makes.
 type githubAPI struct {
 	client *http.Client
@@ -79,7 +93,7 @@ func (g githubAPI) do(req *http.Request) (*http.Response, error) {
 	resp, err := g.client.Do(req)
 	if err != nil {
 		// The URL is the API's, never one with a secret in it.
-		return nil, fmt.Errorf("call GitHub: %w", err)
+		return nil, transientError{fmt.Errorf("call GitHub: %w", err)}
 	}
 	// Only a 200 is read: a missing header on an error page says nothing
 	// about the token.
@@ -99,11 +113,15 @@ func (g githubAPI) status(resp *http.Response, path string) error {
 		return errNotFound
 	case http.StatusForbidden, http.StatusTooManyRequests:
 		if resp.Header.Get("X-Ratelimit-Remaining") == "0" {
-			return errors.New("GitHub's rate limit is used up; try again in a while")
+			return transientError{errors.New("GitHub's rate limit is used up; try again in a while")}
 		}
 		return fmt.Errorf("GitHub refused %s (%s); the token may lack the Actions: Read permission", path, resp.Status)
 	default:
-		return fmt.Errorf("GitHub answered %s for %s", resp.Status, path)
+		err := fmt.Errorf("GitHub answered %s for %s", resp.Status, path)
+		if resp.StatusCode >= http.StatusInternalServerError {
+			return transientError{err}
+		}
+		return err
 	}
 }
 

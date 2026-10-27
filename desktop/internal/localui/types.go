@@ -428,6 +428,10 @@ type UpdateView struct {
 	// why nothing can be installed.
 	Message string `json:"message,omitempty"`
 
+	// FailedRun is the GitHub Actions run whose failure State error reports,
+	// when the error is a Nightly commit's build that failed.
+	FailedRun string `json:"failed_run,omitempty"`
+
 	// Available is the build the channel offers, when it differs from the
 	// running one.
 	Available *UpdateCandidate `json:"available,omitempty"`

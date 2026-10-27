@@ -499,7 +499,17 @@ function StateNotice({ view }: { view: UpdateView }) {
       return (
         <div className="notice error" role="status">
           <Icon name="alert" />
-          <span>{view.message ? sentence(view.message) : "The last update failed."}</span>
+          <span>
+            {view.message ? sentence(view.message) : "The last update failed."}
+            {view.failed_run ? (
+              <>
+                .{" "}
+                <a href={view.failed_run} target="_blank" rel="noreferrer">
+                  View the run on GitHub
+                </a>
+              </>
+            ) : null}
+          </span>
         </div>
       );
     case "downloading": {
@@ -541,7 +551,10 @@ function StateNotice({ view }: { view: UpdateView }) {
       return (
         <div className="notice info" role="status">
           <span className="spinner" />
-          <span>That commit is still building. Check again when its run has finished.</span>
+          <span>
+            That commit is still building. TwoPlacePaste looks again every minute and offers it
+            here once its run has finished.
+          </span>
         </div>
       );
     default:

@@ -24,6 +24,17 @@ const (
 	// only runs while such an update is waiting.
 	DefaultIdleRetry = 15 * time.Minute
 
+	// DefaultBuildPoll is how often a Nightly commit that is still building
+	// is looked at again. Each look is a handful of API calls, well inside
+	// the token's hourly allowance, and a desktop build takes ten minutes or
+	// so, so a minute's wait at the end is not felt.
+	DefaultBuildPoll = time.Minute
+
+	// DefaultBuildPollLimit is when polling a build gives up: no desktop
+	// build runs this long, so a run still going is stuck, and "Check now"
+	// remains for whoever is waiting on it.
+	DefaultBuildPollLimit = 3 * time.Hour
+
 	// fallbackTick is how often the portable scheduler wakes to compare the
 	// wall clock with the last check. Each wake is a comparison and nothing
 	// else unless a check is due.
@@ -58,21 +69,44 @@ func (m *Manager) Run(ctx context.Context) {
 
 	start := time.NewTimer(m.opts.StartDelay)
 	defer start.Stop()
-	var retry <-chan time.Time
+	var retry, poll <-chan time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-start.C:
+			m.scheduled(ctx)
 		case <-fires:
+			m.scheduled(ctx)
 		case <-retry:
+			m.scheduled(ctx)
+		case <-poll:
+			poll = nil
+			_, _ = m.check(ctx, true)
 		}
-		m.scheduled(ctx)
 		retry = nil
 		if m.autoPending() {
 			retry = time.After(m.opts.IdleRetry)
 		}
+		// Kept, not restarted, across other wakes, so they cannot hold the
+		// next look back.
+		switch {
+		case !m.awaitingBuild():
+			poll = nil
+		case poll == nil:
+			poll = time.After(m.opts.BuildPoll)
+		}
 	}
+}
+
+// awaitingBuild reports whether the offered Nightly commit is still building
+// and worth looking at again: it has not been building for longer than any
+// build takes.
+func (m *Manager) awaitingBuild() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.state == localui.UpdateStateBuilding && !m.buildingSince.IsZero() &&
+		m.opts.Now().Sub(m.buildingSince) < m.opts.BuildPollLimit
 }
 
 // Woke tells the schedule the machine has just woken: a check that fell due

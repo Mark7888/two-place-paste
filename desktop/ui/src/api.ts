@@ -277,6 +277,8 @@ export interface UpdateView {
   nightly_commit?: string;
   state: UpdateState;
   message?: string;
+  /** The GitHub Actions run behind a failed Nightly build, when `state` is "error" for that. */
+  failed_run?: string;
   /** The download in progress while `state` is "downloading", once bytes arrive. */
   progress?: DownloadProgress;
   available?: UpdateCandidate;

@@ -77,6 +77,7 @@ type fakeActions struct {
 	prFiles    []string
 	tokenLeaks []string
 	expires    string
+	down       bool // every API call answers 503
 }
 
 func newFakeActions(t *testing.T) *fakeActions {
@@ -107,6 +108,10 @@ func (f *fakeActions) serveAPI(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	if r.Header.Get("Authorization") != "Bearer "+testToken {
 		http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
+		return
+	}
+	if f.down {
+		http.Error(w, `{"message":"Unavailable"}`, http.StatusServiceUnavailable)
 		return
 	}
 	if f.expires != "" {
@@ -466,6 +471,171 @@ func TestARunningBuildIsReportedNotInstalled(t *testing.T) {
 	}
 	if _, err := n.m.Install(context.Background(), localui.InstallRequest{Confirm: true}); !isStatus(err, http.StatusConflict) {
 		t.Fatalf("Install of a running build: %v; want a 409", err)
+	}
+}
+
+// building sets the commit's only run to one still in progress and checks,
+// so the manager offers the commit as building.
+func (n *nightlyHarness) building(t *testing.T) ghRun {
+	t.Helper()
+	run := pushRun(11)
+	run.Status, run.Conclusion = "in_progress", ""
+	n.actions.mu.Lock()
+	n.actions.runs = []ghRun{run}
+	n.actions.mu.Unlock()
+	if v, err := n.m.Check(context.Background()); err != nil || v.State != localui.UpdateStateBuilding {
+		t.Fatalf("Check() = state %q, error %v; want building", v.State, err)
+	}
+	return run
+}
+
+// finish completes the running build as run, in one step a poll cannot see
+// half done.
+func (n *nightlyHarness) finish(t *testing.T, run ghRun, conclusion string) {
+	t.Helper()
+	run.Status, run.Conclusion = "completed", conclusion
+	if conclusion == "success" {
+		// Listed beside the running one, as a re-run would be; a finished
+		// build wins over one still going.
+		run.ID++
+		n.actions.addRun(t, run, n.key, 200, []byte("nightly build"))
+		return
+	}
+	n.actions.mu.Lock()
+	n.actions.runs = []ghRun{run}
+	n.actions.mu.Unlock()
+}
+
+func TestAPolledBuildThatSucceedsIsOffered(t *testing.T) {
+	n := newNightlyHarness(t)
+	n.useNightly(t)
+	run := n.building(t)
+	if !n.m.awaitingBuild() {
+		t.Fatal("a building commit is not being waited on")
+	}
+
+	n.finish(t, run, "success")
+	v, err := n.m.check(context.Background(), true)
+	if err != nil {
+		t.Fatalf("check() error = %v", err)
+	}
+	if v.State != localui.UpdateStateAvailable || v.Available == nil || v.Available.Building {
+		t.Fatalf("state %q, available %+v; want the finished build on offer", v.State, v.Available)
+	}
+	if n.m.awaitingBuild() {
+		t.Fatal("still waiting on a build that finished")
+	}
+}
+
+func TestAPolledBuildThatFailsIsAnError(t *testing.T) {
+	n := newNightlyHarness(t)
+	n.useNightly(t)
+	run := n.building(t)
+
+	n.finish(t, run, "failure")
+	v, _ := n.m.check(context.Background(), true)
+	if v.State != localui.UpdateStateError || v.Available != nil {
+		t.Fatalf("state %q, available %+v; want an error and nothing on offer", v.State, v.Available)
+	}
+	if !strings.Contains(v.Message, "failed") {
+		t.Errorf("message = %q, want it to say the build failed", v.Message)
+	}
+	if v.FailedRun != run.HTMLURL {
+		t.Errorf("failed run = %q, want %q", v.FailedRun, run.HTMLURL)
+	}
+	if n.m.awaitingBuild() {
+		t.Fatal("still waiting on a build that failed")
+	}
+	// A check from the page starts over and forgets the failed run.
+	n.finish(t, run, "success")
+	if v, err := n.m.Check(context.Background()); err != nil || v.FailedRun != "" {
+		t.Fatalf("Check() = failed run %q, error %v; want neither", v.FailedRun, err)
+	}
+}
+
+func TestAPollThatCannotReachGitHubKeepsWaiting(t *testing.T) {
+	n := newNightlyHarness(t)
+	n.useNightly(t)
+	n.building(t)
+
+	n.actions.mu.Lock()
+	n.actions.down = true
+	n.actions.mu.Unlock()
+	v, err := n.m.check(context.Background(), true)
+	if err == nil {
+		t.Fatal("check() with GitHub down returned no error")
+	}
+	if v.State != localui.UpdateStateBuilding || v.Message != "" {
+		t.Fatalf("state %q, message %q; want building still, with no error shown", v.State, v.Message)
+	}
+	if !n.m.awaitingBuild() {
+		t.Fatal("stopped waiting on the build after one failed look")
+	}
+
+	// A check someone asks for does say so.
+	if v, _ := n.m.Check(context.Background()); v.State != localui.UpdateStateError {
+		t.Fatalf("Check() with GitHub down: state %q, want error", v.State)
+	}
+}
+
+func TestPollingABuildGivesUp(t *testing.T) {
+	n := newNightlyHarness(t)
+	c := &clock{}
+	c.now.Store(time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC).UnixNano())
+	n.m.opts.Now = c.Now
+	n.useNightly(t)
+	n.building(t)
+
+	c.advance(DefaultBuildPollLimit - time.Minute)
+	if !n.m.awaitingBuild() {
+		t.Fatal("gave up before the limit")
+	}
+	// Looking again does not restart the clock.
+	if _, err := n.m.check(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	c.advance(time.Minute)
+	if n.m.awaitingBuild() {
+		t.Fatal("still polling past the limit")
+	}
+}
+
+func TestTheSchedulePollsABuildingCommit(t *testing.T) {
+	n := newNightlyHarness(t)
+	n.useNightly(t)
+	changed := make(chan struct{}, 1)
+	n.m.opts.OnChange = func() {
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	}
+	n.m.opts.BuildPoll = 10 * time.Millisecond
+	n.m.opts.StartDelay = time.Hour
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		n.m.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	run := n.building(t)
+	n.finish(t, run, "success")
+	deadline := time.After(10 * time.Second)
+	for {
+		if n.m.Status(context.Background()).State == localui.UpdateStateAvailable {
+			return
+		}
+		select {
+		case <-changed:
+		case <-deadline:
+			t.Fatalf("the schedule never found the finished build; state %q", n.m.Status(context.Background()).State)
+		}
 	}
 }
 
