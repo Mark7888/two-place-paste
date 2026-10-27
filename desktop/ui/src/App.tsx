@@ -9,7 +9,7 @@ import {
   type Status,
 } from "./api";
 import { Icon, type IconName } from "./components/Icon";
-import { Modal } from "./components/Modal";
+import { SessionLostDialog } from "./components/SessionLostDialog";
 import { bytes } from "./format";
 import { SyncPanel } from "./panels/SyncPanel";
 import { HistoryPanel } from "./panels/HistoryPanel";
@@ -278,16 +278,7 @@ export function App() {
         </div>
       </main>
 
-      <Modal open={lost} title="Reopen TwoPlacePaste" onClose={() => {}} dismissable={false}>
-        <p>
-          This page is no longer connected to TwoPlacePaste. The app has restarted — after an
-          update, for example — or was quit, and this page&rsquo;s access ended with it.
-        </p>
-        <p>
-          If a new TwoPlacePaste tab opened after an update, carry on there. Otherwise open
-          TwoPlacePaste again from its tray icon. Either way, this tab can be closed.
-        </p>
-      </Modal>
+      <SessionLostDialog open={lost} />
     </div>
   );
 }

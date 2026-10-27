@@ -377,13 +377,15 @@ export class ApiError extends Error {
   }
 }
 
-// The token is good for one launch. Once the service restarts — an update, a
-// rollback, a quit and reopen — it answers this page's token with 401, and
-// nothing on the page will work again: only the tray holds the new token. The
-// first 401 marks the session lost for good, and the app says to reopen it.
+// The token is good for one launch, and the service is on this machine. When
+// the service quits, every request fails outright; when it restarts (an
+// update, a rollback, a quit and reopen) it answers this page's token with
+// 401. Either way nothing on the page will work again, even once a service is
+// back: only the tray holds the new token. The first such answer marks the
+// session lost for good, and the app says to reopen it.
 //
-// It does not matter why the token stopped working, so nothing tries to tell
-// an update from an ordinary restart.
+// It does not matter which of these happened, so nothing tries to tell them
+// apart.
 let sessionLost = false;
 const lostListeners = new Set<() => void>();
 
@@ -407,8 +409,25 @@ export function onSessionLost(fn: () => void): () => void {
   };
 }
 
-async function send(method: string, path: string, body?: unknown): Promise<Response> {
-  const res = await fetch(path, {
+/**
+ * call is fetch, watching for the two answers that mean this page's session
+ * is over: no answer at all (the service quit), and 401 (it restarted).
+ */
+async function call(path: string, init: RequestInit): Promise<Response> {
+  let res: Response;
+  try {
+    res = await fetch(path, init);
+  } catch (err) {
+    // A request this page cancelled is not the service going away.
+    if (!(err instanceof DOMException && err.name === "AbortError")) markLost();
+    throw err;
+  }
+  if (res.status === 401) markLost();
+  return res;
+}
+
+function send(method: string, path: string, body?: unknown): Promise<Response> {
+  return call(path, {
     method,
     headers: {
       [TOKEN_HEADER]: token,
@@ -418,8 +437,6 @@ async function send(method: string, path: string, body?: unknown): Promise<Respo
     credentials: "omit",
     cache: "no-store",
   });
-  if (res.status === 401) markLost();
-  return res;
 }
 
 /** failure turns a refused response's JSON error into an ApiError. */
@@ -542,14 +559,13 @@ async function upload(file: File, details: StoreDetails, allowDuplicate: boolean
   form.append("details", JSON.stringify(details));
   if (allowDuplicate) form.append("allow_duplicate", "true");
   form.append("file", file, file.name);
-  const res = await fetch("/api/store/upload", {
+  const res = await call("/api/store/upload", {
     method: "POST",
     headers: { [TOKEN_HEADER]: token },
     body: form,
     credentials: "omit",
     cache: "no-store",
   });
-  if (res.status === 401) markLost();
   const text = await res.text();
   if (!res.ok) throw failure(res.status, text);
   return JSON.parse(text) as StoreItemView;
@@ -565,16 +581,15 @@ export function events(onEvent: (ev: ServiceEvent) => void): () => void {
 
   // A browser hides why a WebSocket upgrade failed, so a refused token looks
   // like any dropped connection. Before reconnecting, one ordinary request
-  // asks: a 401 means the service restarted and this page's token is dead
-  // (send marks the session lost), and there is nothing to reconnect to.
-  // While the service is down the request fails outright, and the stream
-  // keeps retrying until it is back.
+  // asks: no answer means the service quit, and 401 means it restarted (send
+  // marks the session lost either way), and there is nothing to reconnect to.
+  // Without this, an open page would not notice until someone clicked.
   const reconnect = async () => {
     try {
       const res = await send("GET", "/api/status");
       if (res.status === 401) return;
     } catch {
-      // The service is not answering yet; try the stream anyway.
+      return;
     }
     open();
   };

@@ -522,6 +522,25 @@ dialog.modal.wide { width: min(38rem, calc(100vw - 2rem)); }
 
 dialog.modal::backdrop { background: rgba(8, 10, 16, 0.45); }
 
+/* The page's session is over (SessionLostDialog): small, red-tinted, and no
+   way to close it. The tint is layered over the raised surface so the
+   backdrop does not show through. */
+dialog.session-lost {
+  width: min(24rem, calc(100vw - 2rem));
+  padding: 1rem 1.1rem;
+  color: var(--ink);
+  background: linear-gradient(var(--danger-soft), var(--danger-soft)), var(--surface-raised);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  outline: none;
+}
+dialog.session-lost[open] { display: flex; gap: 0.7rem; align-items: flex-start; }
+dialog.session-lost::backdrop { background: rgba(8, 10, 16, 0.45); }
+dialog.session-lost svg { flex: none; color: var(--danger); margin-top: 0.1rem; }
+dialog.session-lost h2 { margin: 0 0 0.25rem; font-size: 1rem; color: var(--danger); }
+dialog.session-lost p { margin: 0; font-size: 0.92rem; color: var(--muted); }
+
 .modal-head {
   display: flex;
   align-items: flex-start;
