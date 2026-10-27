@@ -94,6 +94,21 @@ UI is the only place to do it. A paired device starts quietly into the tray: it
 is a background service, and one that throws a browser tab at you on every
 login is one you turn off. The tray's "Open UI" is how you reach it after that.
 
+Two other launches open it, because each is someone asking for the app:
+
+- **Starting the app while it runs.** Only one copy runs (the second cannot
+  bind the port), so the second asks the first to open the UI and exits. On
+  Windows that is a second process: the running copy writes a per-launch
+  instance key to `instance.key` beside the settings file (mode 0600, removed
+  on quit), and the second copy sends it to `POST /instance/show`. The key
+  opens the app in the user's own browser and does nothing else; the route
+  refuses anything with an `Origin` or `Sec-Fetch-Site` header, so no page can
+  use it, and it opens at most one tab every 2 seconds. On macOS, opening a
+  running app does not start a second process at all: the running one gets a
+  reopen Apple Event, which the tray handles the same way.
+- **An update or rollback started from the UI**, which relaunches with
+  `--show-ui` (internal/update). An automatic update opens nothing.
+
 ## What it costs to leave running
 
 The service is meant to sit in the tray all day, including on a laptop's

@@ -87,7 +87,8 @@ func run(logger *slog.Logger) error {
 	// An update relaunches the new build while the old one still holds the
 	// localhost port (internal/update). Binding before it has gone would land
 	// this process in the "port in use" failure, so it waits first.
-	if pid := update.ParseWaitPID(os.Args[1:]); pid > 0 {
+	waitPID := update.ParseWaitPID(os.Args[1:])
+	if pid := waitPID; pid > 0 {
 		logger.Info("waiting for the build this one replaces to exit", "pid", pid)
 		if !update.WaitForExit(pid, update.WaitPIDTimeout) {
 			logger.Warn("the previous build is still running; starting anyway", "pid", pid)
@@ -116,6 +117,18 @@ func run(logger *slog.Logger) error {
 	settingsPath, err := config.Path(configDir)
 	if err != nil {
 		return fmt.Errorf("locate the settings file: %w", err)
+	}
+
+	// Only one copy runs. Starting the app again while it is running is how
+	// people look for it, so this copy asks the running one to open the app
+	// in the browser, as its tray would, and leaves. Not after an update: the
+	// copy still running then is the one this build replaces.
+	keyPath := filepath.Join(filepath.Dir(settingsPath), localui.InstanceKeyFile)
+	if waitPID == 0 {
+		if err := localui.ShowRunning(ctx, keyPath, settings.ListenPort()); err == nil {
+			logger.Info("TwoPlacePaste is already running; asked it to open the app")
+			return nil
+		}
 	}
 
 	store, err := keystore.Open(keystore.Options{Service: keystore.DefaultService})
@@ -183,13 +196,24 @@ func run(logger *slog.Logger) error {
 	defer closeClient(logger, client, shutdownTimeout)
 	svc.Attach(service.NewRelay(client))
 
+	instanceKey, err := localui.NewToken()
+	if err != nil {
+		return fmt.Errorf("generate the instance key: %w", err)
+	}
 	srv, listenErr := localui.Listen(ctx, localui.Options{
-		API:      svc,
-		Updates:  updater,
-		Store:    svc,
-		Port:     settings.ListenPort(),
-		DevProxy: os.Getenv(envUIDev),
-		Logger:   logger,
+		API:         svc,
+		Updates:     updater,
+		Store:       svc,
+		Port:        settings.ListenPort(),
+		DevProxy:    os.Getenv(envUIDev),
+		InstanceKey: instanceKey,
+		OnShow: func(url string) {
+			logger.Info("the app was started again; opening it")
+			if err := openUI(ctx, url, logger); err != nil {
+				logger.Warn("could not open the browser", "error", err)
+			}
+		},
+		Logger: logger,
 	})
 	if listenErr != nil {
 		// SPEC §7.2: never fail silently. The tray shows the failure and
@@ -204,6 +228,14 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("start the localhost UI: %w", listenErr)
 	}
 	svc.SetListenPort(srv.Port())
+
+	// Written now that this copy holds the port (localui.WriteInstanceKey).
+	// Without it a second launch cannot reach this one, which costs only that.
+	if removeKey, err := localui.WriteInstanceKey(keyPath, instanceKey); err != nil {
+		logger.Warn("a second launch will not be able to open this one", "error", err)
+	} else {
+		defer removeKey()
+	}
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

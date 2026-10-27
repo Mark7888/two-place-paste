@@ -32,6 +32,12 @@ type Options struct {
 	// Token is the per-launch token. Generated when empty.
 	Token string
 
+	// InstanceKey and OnShow let a second copy of the service ask this one
+	// to open the app (instance.go): a request carrying InstanceKey calls
+	// OnShow with the app's URL. Either empty turns the route off.
+	InstanceKey string
+	OnShow      func(url string)
+
 	// DevProxy, when set, is the base URL of a running Vite dev server; every
 	// request that is not the API is forwarded to it. Development only: it is
 	// never set in a shipped binary, and the guards still apply in front of it.
@@ -55,6 +61,7 @@ type Server struct {
 	listener net.Listener
 	handler  http.Handler
 	assets   http.Handler
+	shower   *shower
 }
 
 // ErrPortInUse reports that the configured port was already taken. It is a
@@ -117,6 +124,11 @@ func Listen(ctx context.Context, opts Options) (*Server, error) {
 		logger.Warn("serving the UI from a dev server rather than the embedded build", "target", opts.DevProxy)
 	} else {
 		s.assets = embeddedAssets(logger)
+	}
+	if opts.InstanceKey != "" && opts.OnShow != nil {
+		onShow := opts.OnShow
+		// Opening a browser waits on another program; the request does not.
+		s.shower = &shower{key: opts.InstanceKey, show: func() { go onShow(s.URL()) }, now: time.Now}
 	}
 	s.handler = s.routes()
 	return s, nil
@@ -223,6 +235,12 @@ func (s *Server) routes() http.Handler {
 	// the same guard as everything else: an upgrade request from a foreign
 	// page is the one a naive server forgets to check.
 	mux.Handle("GET /api/events", s.guard(originScripted, tokenRequired, http.HandlerFunc(s.handleEvents)))
+
+	// A second copy asking this one to open the app. It has its own key and
+	// its own guard, which refuses anything a browser sends (instance.go).
+	if s.shower != nil {
+		mux.Handle("POST "+instancePath, s.shower)
+	}
 
 	// The shell is the page and the files it pulls in. It is the same bytes
 	// for every launch and every user, and a browser cannot put a token on a
