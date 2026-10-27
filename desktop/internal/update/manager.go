@@ -52,9 +52,10 @@ type Applier interface {
 	HasPrevious() bool
 	// Rollback restores the build the last Install replaced.
 	Rollback(ctx context.Context) error
-	// Relaunch starts the installed build, telling it to wait for pid to exit
-	// before it binds the localhost port.
-	Relaunch(pid int) error
+	// Relaunch starts the installed build with args, which tell it the PID
+	// to wait for before it binds the localhost port and whether to open the
+	// app once it is up (relaunchArgs).
+	Relaunch(args []string) error
 }
 
 // Options configures a Manager.
@@ -445,8 +446,15 @@ func (m *Manager) reportProgress(done, total int64) {
 }
 
 // Install downloads, verifies and installs the offered build, then restarts
-// into it.
+// into it. It is the UI's install: a person asked for it, so the new build
+// opens the app when it is up.
 func (m *Manager) Install(ctx context.Context, req localui.InstallRequest) (localui.UpdateView, error) {
+	return m.installBuild(ctx, req, ShowUpdated)
+}
+
+// installBuild is Install, with show passed on to the relaunched build: what
+// it opens the app to say, or "" to start quietly into the tray.
+func (m *Manager) installBuild(ctx context.Context, req localui.InstallRequest, show string) (localui.UpdateView, error) {
 	m.mu.Lock()
 	cand, err := m.beginInstallLocked(req)
 	if err != nil {
@@ -459,7 +467,7 @@ func (m *Manager) Install(ctx context.Context, req localui.InstallRequest) (loca
 	m.mu.Unlock()
 	m.changed()
 
-	if err := m.install(ctx, cand); err != nil {
+	if err := m.install(ctx, cand, show); err != nil {
 		m.mu.Lock()
 		m.busy = false
 		m.state = localui.UpdateStateError
@@ -503,7 +511,7 @@ func (m *Manager) beginInstallLocked(req localui.InstallRequest) (*candidate, er
 	return m.avail, nil
 }
 
-func (m *Manager) install(ctx context.Context, cand *candidate) error {
+func (m *Manager) install(ctx context.Context, cand *candidate, show string) error {
 	// The download outlives the request that asked for it, and has no
 	// deadline of its own beyond the stall guard.
 	ctx = context.WithoutCancel(ctx)
@@ -527,7 +535,7 @@ func (m *Manager) install(ctx context.Context, cand *candidate) error {
 	m.saveLocked()
 	m.mu.Unlock()
 
-	return m.restart()
+	return m.restart(show)
 }
 
 // Rollback restores the build the last update replaced, and restarts into it.
@@ -556,7 +564,7 @@ func (m *Manager) Rollback(ctx context.Context) (localui.UpdateView, error) {
 		m.saveLocked()
 		m.mu.Unlock()
 		m.opts.Logger.Info("rolled back to the previous build")
-		err = m.restart()
+		err = m.restart(ShowRolledBack)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -570,9 +578,10 @@ func (m *Manager) Rollback(ctx context.Context) (localui.UpdateView, error) {
 }
 
 // restart starts the installed build and stops this one shortly after, so
-// the response that asked for it still reaches the page.
-func (m *Manager) restart() error {
-	if err := m.opts.Applier.Relaunch(os.Getpid()); err != nil {
+// the response that asked for it still reaches the page. show is what the new
+// build opens the app to say, or "" for nothing.
+func (m *Manager) restart(show string) error {
+	if err := m.opts.Applier.Relaunch(relaunchArgs(os.Getpid(), show)); err != nil {
 		return fmt.Errorf("the new build is installed but could not be started; quit and reopen TwoPlacePaste to finish: %w", err)
 	}
 	m.setState(localui.UpdateStateRestarting)

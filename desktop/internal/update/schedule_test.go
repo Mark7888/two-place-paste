@@ -85,6 +85,13 @@ func TestAutoUpdateWaitsForIdle(t *testing.T) {
 	if len(h.applier.installed) != 1 {
 		t.Fatalf("installed %d builds once idle, want 1", len(h.applier.installed))
 	}
+	// Nobody asked for it: the new build starts quietly, opening nothing.
+	if len(h.applier.relaunched) != 1 {
+		t.Fatalf("relaunched %d times, want 1", len(h.applier.relaunched))
+	}
+	if got := ParseShowUI(h.applier.relaunched[0]); got != "" {
+		t.Fatalf("an automatic update relaunched to show %q, want nothing", got)
+	}
 }
 
 func TestAutoUpdateNeverInstallsAnOlderBuild(t *testing.T) {

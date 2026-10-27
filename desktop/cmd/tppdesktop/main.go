@@ -223,6 +223,12 @@ func run(logger *slog.Logger) error {
 		updater.Woke()
 	})
 
+	// An update or rollback someone started from the UI relaunches this build
+	// with --show-ui: the page they were on belonged to the old build and its
+	// token, so they get a fresh one, which says what happened. An automatic
+	// update passes nothing and starts quietly like any other launch.
+	show := update.ParseShowUI(os.Args[1:])
+
 	if client.InGroup() {
 		if err := client.Connect(runCtx); err != nil {
 			// A relay that is down is not a reason to refuse to start: the
@@ -230,9 +236,16 @@ func run(logger *slog.Logger) error {
 			// meanwhile to show why nothing is syncing.
 			logger.Warn("could not connect to the relay yet", "error", err)
 		}
-	} else {
+	}
+	switch {
+	case show != "":
+		logger.Info("opening the UI after an update", "reason", show)
+		if err := openUI(runCtx, srv.URL()+"#"+show, logger); err != nil {
+			logger.Warn("could not open the browser", "error", err)
+		}
+	case !client.InGroup():
 		// Nothing works until this device is in a group, and the only place to
-		// fix that is the UI — so this is the one launch that opens it. A
+		// fix that is the UI — so this is the one ordinary launch that opens it. A
 		// paired device starts quietly into the tray instead: it is a
 		// background service, and a service that throws a browser tab at the
 		// user on every login is one they turn off.

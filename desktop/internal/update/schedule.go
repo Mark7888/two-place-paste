@@ -109,7 +109,9 @@ func (m *Manager) scheduled(ctx context.Context) {
 		m.opts.Logger.Debug("an update is ready; waiting until the machine is idle to restart")
 		return
 	}
-	if _, err := m.Install(ctx, localui.InstallRequest{}); err != nil {
+	// Nobody asked for this one, and nobody is at the machine: the new build
+	// starts quietly into the tray rather than opening a browser tab.
+	if _, err := m.installBuild(ctx, localui.InstallRequest{}, ""); err != nil {
 		m.opts.Logger.Warn("automatic update failed", "error", err)
 	}
 }

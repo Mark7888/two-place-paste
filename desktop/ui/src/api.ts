@@ -377,8 +377,38 @@ export class ApiError extends Error {
   }
 }
 
-function send(method: string, path: string, body?: unknown): Promise<Response> {
-  return fetch(path, {
+// The token is good for one launch. Once the service restarts — an update, a
+// rollback, a quit and reopen — it answers this page's token with 401, and
+// nothing on the page will work again: only the tray holds the new token. The
+// first 401 marks the session lost for good, and the app says to reopen it.
+//
+// It does not matter why the token stopped working, so nothing tries to tell
+// an update from an ordinary restart.
+let sessionLost = false;
+const lostListeners = new Set<() => void>();
+
+function markLost(): void {
+  if (sessionLost) return;
+  sessionLost = true;
+  for (const fn of lostListeners) fn();
+}
+
+/** isSessionLost reports whether the service has stopped accepting this page's token. */
+export function isSessionLost(): boolean {
+  return sessionLost;
+}
+
+/** onSessionLost calls fn once the service stops accepting this page's token,
+ *  and returns a function that stops listening. */
+export function onSessionLost(fn: () => void): () => void {
+  lostListeners.add(fn);
+  return () => {
+    lostListeners.delete(fn);
+  };
+}
+
+async function send(method: string, path: string, body?: unknown): Promise<Response> {
+  const res = await fetch(path, {
     method,
     headers: {
       [TOKEN_HEADER]: token,
@@ -388,6 +418,8 @@ function send(method: string, path: string, body?: unknown): Promise<Response> {
     credentials: "omit",
     cache: "no-store",
   });
+  if (res.status === 401) markLost();
+  return res;
 }
 
 /** failure turns a refused response's JSON error into an ApiError. */
@@ -517,6 +549,7 @@ async function upload(file: File, details: StoreDetails, allowDuplicate: boolean
     credentials: "omit",
     cache: "no-store",
   });
+  if (res.status === 401) markLost();
   const text = await res.text();
   if (!res.ok) throw failure(res.status, text);
   return JSON.parse(text) as StoreItemView;
@@ -530,8 +563,24 @@ export function events(onEvent: (ev: ServiceEvent) => void): () => void {
   let closed = false;
   let retry: number | undefined;
 
+  // A browser hides why a WebSocket upgrade failed, so a refused token looks
+  // like any dropped connection. Before reconnecting, one ordinary request
+  // asks: a 401 means the service restarted and this page's token is dead
+  // (send marks the session lost), and there is nothing to reconnect to.
+  // While the service is down the request fails outright, and the stream
+  // keeps retrying until it is back.
+  const reconnect = async () => {
+    try {
+      const res = await send("GET", "/api/status");
+      if (res.status === 401) return;
+    } catch {
+      // The service is not answering yet; try the stream anyway.
+    }
+    open();
+  };
+
   const open = () => {
-    if (closed) return;
+    if (closed || sessionLost) return;
     const url = `${window.location.origin.replace(/^http/, "ws")}/api/events?token=${encodeURIComponent(token)}`;
     socket = new WebSocket(url);
     socket.onmessage = (msg) => {
@@ -542,7 +591,7 @@ export function events(onEvent: (ev: ServiceEvent) => void): () => void {
       }
     };
     socket.onclose = () => {
-      if (!closed) retry = window.setTimeout(open, 1500);
+      if (!closed && !sessionLost) retry = window.setTimeout(() => void reconnect(), 1500);
     };
   };
   open();

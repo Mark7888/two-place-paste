@@ -99,7 +99,7 @@ type fakeApplier struct {
 	mu         sync.Mutex
 	notReady   error
 	installed  [][]byte
-	relaunched []int
+	relaunched [][]string
 	previous   bool
 	rolledBack bool
 }
@@ -132,10 +132,10 @@ func (a *fakeApplier) Rollback(context.Context) error {
 	return nil
 }
 
-func (a *fakeApplier) Relaunch(pid int) error {
+func (a *fakeApplier) Relaunch(args []string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.relaunched = append(a.relaunched, pid)
+	a.relaunched = append(a.relaunched, args)
 	return nil
 }
 
@@ -303,8 +303,16 @@ func TestInstallVerifiesSwapsAndRestarts(t *testing.T) {
 	if len(h.applier.installed) != 1 || string(h.applier.installed[0]) != "new build" {
 		t.Fatalf("installed %q", h.applier.installed)
 	}
-	if len(h.applier.relaunched) != 1 || h.applier.relaunched[0] != os.Getpid() {
-		t.Fatalf("relaunched %v; want this pid", h.applier.relaunched)
+	if len(h.applier.relaunched) != 1 {
+		t.Fatalf("relaunched %d times, want 1", len(h.applier.relaunched))
+	}
+	args := h.applier.relaunched[0]
+	if got := ParseWaitPID(args); got != os.Getpid() {
+		t.Fatalf("relaunched to wait for pid %d, want %d", got, os.Getpid())
+	}
+	// Installed from the UI: the new build opens the app to say so.
+	if got := ParseShowUI(args); got != ShowUpdated {
+		t.Fatalf("relaunched to show %q, want %q", got, ShowUpdated)
 	}
 	if v.Previous == nil || v.Previous.Stamp != 100 {
 		t.Fatalf("previous = %+v; want the replaced build", v.Previous)
@@ -406,6 +414,9 @@ func TestRollbackRestoresAndRestarts(t *testing.T) {
 	<-h.quit
 	if !h.applier.rolledBack || len(h.applier.relaunched) != 1 {
 		t.Fatalf("rolled back %v, relaunched %v", h.applier.rolledBack, h.applier.relaunched)
+	}
+	if got := ParseShowUI(h.applier.relaunched[0]); got != ShowRolledBack {
+		t.Fatalf("relaunched to show %q, want %q", got, ShowRolledBack)
 	}
 }
 

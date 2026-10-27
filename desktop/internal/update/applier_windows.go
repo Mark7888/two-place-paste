@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"syscall"
 
 	"golang.org/x/sys/windows"
@@ -76,11 +75,11 @@ func (a *windowsApplier) Rollback(context.Context) error {
 }
 
 // Relaunch starts the installed .exe detached from this process, so it
-// outlives it, and tells it to wait for this one to exit.
-func (a *windowsApplier) Relaunch(pid int) error {
+// outlives it, with args telling it to wait for this one to exit.
+func (a *windowsApplier) Relaunch(args []string) error {
 	// Background: the new process must outlive this one, so nothing may
 	// cancel it.
-	cmd := exec.CommandContext(context.Background(), a.exe, waitPIDFlag, strconv.Itoa(pid))
+	cmd := exec.CommandContext(context.Background(), a.exe, args...)
 	cmd.Dir = filepath.Dir(a.exe)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP,

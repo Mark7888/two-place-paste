@@ -48,8 +48,9 @@ const busyStates = new Set(["checking", "downloading", "installing", "restarting
  * what that channel offers (docs/internal/plans/versioning-releases-and-updates.md §3).
  *
  * Installing restarts the service, and a restarted service has a new launch
- * token, so this page cannot follow it: after an install it says to reopen
- * TwoPlacePaste from the tray rather than spin forever.
+ * token, so this page cannot follow it. The new build opens a fresh page of
+ * its own, and this one says it has lost the service once the old token stops
+ * working (App.tsx).
  */
 export function UpdatesSection({
   settings,
@@ -531,8 +532,8 @@ function StateNotice({ view }: { view: UpdateView }) {
         <div className="notice ok" role="status">
           <Icon name="check" />
           <span>
-            Installed. TwoPlacePaste is restarting; open it again from the tray icon in a few
-            seconds.
+            Done. TwoPlacePaste is restarting and opens in a new tab in a few seconds; if it
+            does not, open it again from the tray icon.
           </span>
         </div>
       );
