@@ -731,6 +731,13 @@ button.action.choice .choice-why {
 .notice .grow { flex: 1; }
 .notice > button { flex: none; align-self: center; }
 
+/* A one-line notice with a close button at its end: the text and icon sit in
+   the middle of the row the button sets the height of, and the button reaches
+   into the padding so the row is no taller than a plain notice. */
+.notice.centered { align-items: center; }
+.notice.centered svg { margin-top: 0; }
+.notice.centered > .icon-button { width: 1.6rem; height: 1.6rem; margin: -0.3rem -0.4rem -0.3rem 0; color: inherit; }
+
 /* ---- Store ------------------------------------------------------------- */
 
 .store-filters { display: flex; gap: 0.5rem; margin-bottom: 0.6rem; }

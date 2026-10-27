@@ -186,7 +186,7 @@ export function App() {
             entry lands on either side.
           */}
           {arrived ? (
-            <div className="notice ok" role="status">
+            <div className="notice ok centered" role="status">
               <Icon name="check" />
               <span className="grow">
                 {arrived.kind === "updated"
@@ -194,8 +194,14 @@ export function App() {
                   : "TwoPlacePaste has been rolled back"}
                 {arrived.version ? ` to ${arrived.version}` : ""}.
               </span>
-              <button type="button" className="action quiet" onClick={() => setArrived(null)}>
-                Dismiss
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Dismiss"
+                title="Dismiss"
+                onClick={() => setArrived(null)}
+              >
+                <Icon name="close" size={16} />
               </button>
             </div>
           ) : null}
