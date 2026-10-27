@@ -52,9 +52,10 @@ type Applier interface {
 	HasPrevious() bool
 	// Rollback restores the build the last Install replaced.
 	Rollback(ctx context.Context) error
-	// Relaunch starts the installed build, telling it to wait for pid to exit
-	// before it binds the localhost port.
-	Relaunch(pid int) error
+	// Relaunch starts the installed build with args, which tell it the PID
+	// to wait for before it binds the localhost port and whether to open the
+	// app once it is up (relaunchArgs).
+	Relaunch(args []string) error
 }
 
 // Options configures a Manager.
@@ -101,6 +102,12 @@ type Options struct {
 	StartDelay    time.Duration
 	IdleRetry     time.Duration
 
+	// While a Nightly commit is still building, how often to look again and
+	// for how long at most. Zero means DefaultBuildPoll and
+	// DefaultBuildPollLimit.
+	BuildPoll      time.Duration
+	BuildPollLimit time.Duration
+
 	// Tests replace the endpoints, the key, the HTTP client, the clock, and
 	// the file this platform installs.
 	Asset       string
@@ -127,6 +134,12 @@ type Manager struct {
 	lastChecked time.Time
 	previous    *localui.BuildView
 	busy        bool
+
+	// failedRun is the run behind a failed Nightly build, shown with the
+	// error; buildingSince is when the offered commit was first seen still
+	// building, which bounds how long the schedule polls it.
+	failedRun     string
+	buildingSince time.Time
 
 	// The download in progress: bytes so far, bytes in all (0 when not
 	// known), and when the UI was last told.
@@ -184,6 +197,12 @@ func New(opts Options) (*Manager, error) {
 	}
 	if opts.IdleRetry <= 0 {
 		opts.IdleRetry = DefaultIdleRetry
+	}
+	if opts.BuildPoll <= 0 {
+		opts.BuildPoll = DefaultBuildPoll
+	}
+	if opts.BuildPollLimit <= 0 {
+		opts.BuildPollLimit = DefaultBuildPollLimit
 	}
 	if opts.ReleaseBase == "" {
 		opts.ReleaseBase = DefaultReleaseBase
@@ -246,6 +265,8 @@ func (m *Manager) SetPreferences(s config.Settings) {
 		m.avail = nil
 		m.state = localui.UpdateStateIdle
 		m.message = ""
+		m.failedRun = ""
+		m.buildingSince = time.Time{}
 	}
 	m.mu.Unlock()
 	if changed {
@@ -268,6 +289,7 @@ func (m *Manager) viewLocked() localui.UpdateView {
 		NightlyCommit: m.prefs.NightlyCommit,
 		State:         m.state,
 		Message:       m.message,
+		FailedRun:     m.failedRun,
 		Progress:      m.progressLocked(),
 		Previous:      m.previous,
 		Token:         m.token.view(),
@@ -304,17 +326,30 @@ func (m *Manager) readyLocked() error {
 
 // Check asks the channel for its newest build.
 func (m *Manager) Check(ctx context.Context) (localui.UpdateView, error) {
+	return m.check(ctx, false)
+}
+
+// check is Check. A quiet one is the schedule looking again at a commit that
+// is still building: the page keeps showing "still building" rather than
+// flashing "checking" every time, and a failure that may pass by itself (the
+// network, GitHub's rate limit) leaves things as they were for the next try.
+func (m *Manager) check(ctx context.Context, quiet bool) (localui.UpdateView, error) {
 	m.mu.Lock()
 	if m.busy {
 		m.mu.Unlock()
 		return localui.UpdateView{}, localui.Errorf(http.StatusConflict, nil, "an update is already in progress")
 	}
 	m.busy = true
-	m.state = localui.UpdateStateChecking
-	m.message = ""
+	if !quiet {
+		m.state = localui.UpdateStateChecking
+		m.message = ""
+		m.failedRun = ""
+	}
 	prefs := m.prefs
 	m.mu.Unlock()
-	m.changed()
+	if !quiet {
+		m.changed()
+	}
 
 	// A check is rare enough to re-ask the applier too, so a folder that was
 	// made writable shows up without a restart.
@@ -325,6 +360,15 @@ func (m *Manager) Check(ctx context.Context) (localui.UpdateView, error) {
 	m.busy = false
 	m.notReady = notReady
 	m.lastChecked = m.opts.Now()
+	if quiet && err != nil && isTransient(err) {
+		m.saveLocked()
+		v := m.viewLocked()
+		m.mu.Unlock()
+		m.opts.Logger.Warn("could not look at the build again; will retry", "error", err)
+		return v, err
+	}
+	m.failedRun = ""
+	var failed *buildFailedError
 	switch {
 	case errors.Is(err, ErrNoRelease):
 		m.avail = nil
@@ -334,6 +378,10 @@ func (m *Manager) Check(ctx context.Context) (localui.UpdateView, error) {
 	case err != nil:
 		m.state = localui.UpdateStateError
 		m.message = err.Error()
+		if errors.As(err, &failed) {
+			m.avail = nil
+			m.failedRun = failed.run
+		}
 	case cand == nil:
 		m.avail = nil
 		m.state = localui.UpdateStateUpToDate
@@ -344,16 +392,29 @@ func (m *Manager) Check(ctx context.Context) (localui.UpdateView, error) {
 			m.state = localui.UpdateStateBuilding
 		}
 	}
+	building := m.state == localui.UpdateStateBuilding
+	switch {
+	case !building:
+		m.buildingSince = time.Time{}
+	case m.buildingSince.IsZero():
+		m.buildingSince = m.opts.Now()
+	}
 	m.saveLocked()
 	v := m.viewLocked()
+	trigger := m.trigger
 	m.mu.Unlock()
 	m.changed()
+	// A build still running is polled by the schedule; a check from the page
+	// wakes it so it starts.
+	if building && !quiet && trigger != nil {
+		trigger()
+	}
 
 	if err != nil {
 		m.opts.Logger.Warn("update check failed", "channel", prefs.Channel(), "error", err)
 		return v, localui.Errorf(http.StatusBadGateway, err, "the update check failed: %v", err)
 	}
-	if cand != nil {
+	if cand != nil && !cand.view.Building {
 		m.opts.Logger.Info("update available", "channel", prefs.Channel(),
 			"version", cand.view.Version, "older", cand.view.Older)
 	}
@@ -445,8 +506,15 @@ func (m *Manager) reportProgress(done, total int64) {
 }
 
 // Install downloads, verifies and installs the offered build, then restarts
-// into it.
+// into it. It is the UI's install: a person asked for it, so the new build
+// opens the app when it is up.
 func (m *Manager) Install(ctx context.Context, req localui.InstallRequest) (localui.UpdateView, error) {
+	return m.installBuild(ctx, req, ShowUpdated)
+}
+
+// installBuild is Install, with show passed on to the relaunched build: what
+// it opens the app to say, or "" to start quietly into the tray.
+func (m *Manager) installBuild(ctx context.Context, req localui.InstallRequest, show string) (localui.UpdateView, error) {
 	m.mu.Lock()
 	cand, err := m.beginInstallLocked(req)
 	if err != nil {
@@ -459,7 +527,7 @@ func (m *Manager) Install(ctx context.Context, req localui.InstallRequest) (loca
 	m.mu.Unlock()
 	m.changed()
 
-	if err := m.install(ctx, cand); err != nil {
+	if err := m.install(ctx, cand, show); err != nil {
 		m.mu.Lock()
 		m.busy = false
 		m.state = localui.UpdateStateError
@@ -503,7 +571,7 @@ func (m *Manager) beginInstallLocked(req localui.InstallRequest) (*candidate, er
 	return m.avail, nil
 }
 
-func (m *Manager) install(ctx context.Context, cand *candidate) error {
+func (m *Manager) install(ctx context.Context, cand *candidate, show string) error {
 	// The download outlives the request that asked for it, and has no
 	// deadline of its own beyond the stall guard.
 	ctx = context.WithoutCancel(ctx)
@@ -527,7 +595,7 @@ func (m *Manager) install(ctx context.Context, cand *candidate) error {
 	m.saveLocked()
 	m.mu.Unlock()
 
-	return m.restart()
+	return m.restart(show)
 }
 
 // Rollback restores the build the last update replaced, and restarts into it.
@@ -556,7 +624,7 @@ func (m *Manager) Rollback(ctx context.Context) (localui.UpdateView, error) {
 		m.saveLocked()
 		m.mu.Unlock()
 		m.opts.Logger.Info("rolled back to the previous build")
-		err = m.restart()
+		err = m.restart(ShowRolledBack)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -570,9 +638,10 @@ func (m *Manager) Rollback(ctx context.Context) (localui.UpdateView, error) {
 }
 
 // restart starts the installed build and stops this one shortly after, so
-// the response that asked for it still reaches the page.
-func (m *Manager) restart() error {
-	if err := m.opts.Applier.Relaunch(os.Getpid()); err != nil {
+// the response that asked for it still reaches the page. show is what the new
+// build opens the app to say, or "" for nothing.
+func (m *Manager) restart(show string) error {
+	if err := m.opts.Applier.Relaunch(relaunchArgs(os.Getpid(), show)); err != nil {
 		return fmt.Errorf("the new build is installed but could not be started; quit and reopen TwoPlacePaste to finish: %w", err)
 	}
 	m.setState(localui.UpdateStateRestarting)

@@ -101,6 +101,16 @@ func runMenu(ctx context.Context, t *Tray, opts Options) {
 	})
 	t.attach(t.paintStatus(statusItem))
 
+	openApp := func() {
+		if err := OpenURL(ctx, opts.URL); err != nil {
+			// The URL carries the launch token, so the failure is logged
+			// without it.
+			t.logger.Error("could not open the browser", "error", err)
+		}
+	}
+	// Opening the app while it runs does what the menu item does.
+	watchReopen(openApp)
+
 	go func() {
 		for {
 			select {
@@ -120,11 +130,7 @@ func runMenu(ctx context.Context, t *Tray, opts Options) {
 					go opts.CheckUpdates()
 				}
 			case <-openItem.ClickedCh:
-				if err := OpenURL(ctx, opts.URL); err != nil {
-					// The URL carries the launch token, so the failure is
-					// logged without it.
-					t.logger.Error("could not open the browser", "error", err)
-				}
+				openApp()
 			case <-quitItem.ClickedCh:
 				if opts.Quit != nil {
 					opts.Quit()

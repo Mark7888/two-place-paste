@@ -30,7 +30,16 @@ The relay server has matching image tags: `latest` for Stable and `beta` for Bet
   **Install and restart** again to retry.
 - Every download is checked against a manifest signed in CI. A build that does not match is not
   installed.
+- On Nightly, a commit whose build is still running shows *still building*. The app looks again
+  every minute (for up to three hours) and offers **Install** as soon as the build finishes. If the
+  build fails, it says so in red, with a link to the run on GitHub.
 - The previous version is kept, and **Roll back to …** in Settings → Updates returns to it in one click.
+- When you install an update (or roll back) from Settings → Updates, the app restarts and opens in a
+  new browser tab with a note saying which version it is now running. An automatic update restarts
+  quietly into the tray and opens nothing.
+- A page left open after the app quits or restarts can no longer reach it, and says so: *TwoPlacePaste
+  was closed or restarted*. The message cannot be dismissed; use the new tab, or open the app again
+  from the tray icon, and close the old one.
 
 <Aside>
 	A build you compiled yourself (version `0.0.0-local`) never replaces itself.

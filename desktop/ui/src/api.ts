@@ -277,6 +277,8 @@ export interface UpdateView {
   nightly_commit?: string;
   state: UpdateState;
   message?: string;
+  /** The GitHub Actions run behind a failed Nightly build, when `state` is "error" for that. */
+  failed_run?: string;
   /** The download in progress while `state` is "downloading", once bytes arrive. */
   progress?: DownloadProgress;
   available?: UpdateCandidate;
@@ -377,8 +379,57 @@ export class ApiError extends Error {
   }
 }
 
+// The token is good for one launch, and the service is on this machine. When
+// the service quits, every request fails outright; when it restarts (an
+// update, a rollback, a quit and reopen) it answers this page's token with
+// 401. Either way nothing on the page will work again, even once a service is
+// back: only the tray holds the new token. The first such answer marks the
+// session lost for good, and the app says to reopen it.
+//
+// It does not matter which of these happened, so nothing tries to tell them
+// apart.
+let sessionLost = false;
+const lostListeners = new Set<() => void>();
+
+function markLost(): void {
+  if (sessionLost) return;
+  sessionLost = true;
+  for (const fn of lostListeners) fn();
+}
+
+/** isSessionLost reports whether the service has stopped accepting this page's token. */
+export function isSessionLost(): boolean {
+  return sessionLost;
+}
+
+/** onSessionLost calls fn once the service stops accepting this page's token,
+ *  and returns a function that stops listening. */
+export function onSessionLost(fn: () => void): () => void {
+  lostListeners.add(fn);
+  return () => {
+    lostListeners.delete(fn);
+  };
+}
+
+/**
+ * call is fetch, watching for the two answers that mean this page's session
+ * is over: no answer at all (the service quit), and 401 (it restarted).
+ */
+async function call(path: string, init: RequestInit): Promise<Response> {
+  let res: Response;
+  try {
+    res = await fetch(path, init);
+  } catch (err) {
+    // A request this page cancelled is not the service going away.
+    if (!(err instanceof DOMException && err.name === "AbortError")) markLost();
+    throw err;
+  }
+  if (res.status === 401) markLost();
+  return res;
+}
+
 function send(method: string, path: string, body?: unknown): Promise<Response> {
-  return fetch(path, {
+  return call(path, {
     method,
     headers: {
       [TOKEN_HEADER]: token,
@@ -510,7 +561,7 @@ async function upload(file: File, details: StoreDetails, allowDuplicate: boolean
   form.append("details", JSON.stringify(details));
   if (allowDuplicate) form.append("allow_duplicate", "true");
   form.append("file", file, file.name);
-  const res = await fetch("/api/store/upload", {
+  const res = await call("/api/store/upload", {
     method: "POST",
     headers: { [TOKEN_HEADER]: token },
     body: form,
@@ -530,8 +581,23 @@ export function events(onEvent: (ev: ServiceEvent) => void): () => void {
   let closed = false;
   let retry: number | undefined;
 
+  // A browser hides why a WebSocket upgrade failed, so a refused token looks
+  // like any dropped connection. Before reconnecting, one ordinary request
+  // asks: no answer means the service quit, and 401 means it restarted (send
+  // marks the session lost either way), and there is nothing to reconnect to.
+  // Without this, an open page would not notice until someone clicked.
+  const reconnect = async () => {
+    try {
+      const res = await send("GET", "/api/status");
+      if (res.status === 401) return;
+    } catch {
+      return;
+    }
+    open();
+  };
+
   const open = () => {
-    if (closed) return;
+    if (closed || sessionLost) return;
     const url = `${window.location.origin.replace(/^http/, "ws")}/api/events?token=${encodeURIComponent(token)}`;
     socket = new WebSocket(url);
     socket.onmessage = (msg) => {
@@ -542,7 +608,7 @@ export function events(onEvent: (ev: ServiceEvent) => void): () => void {
       }
     };
     socket.onclose = () => {
-      if (!closed) retry = window.setTimeout(open, 1500);
+      if (!closed && !sessionLost) retry = window.setTimeout(() => void reconnect(), 1500);
     };
   };
   open();

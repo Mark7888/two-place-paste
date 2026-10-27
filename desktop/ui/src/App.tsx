@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, events, hasToken, type ServiceEvent, type Status } from "./api";
+import {
+  api,
+  events,
+  hasToken,
+  isSessionLost,
+  onSessionLost,
+  type ServiceEvent,
+  type Status,
+} from "./api";
 import { Icon, type IconName } from "./components/Icon";
+import { SessionLostDialog } from "./components/SessionLostDialog";
 import { bytes } from "./format";
 import { SyncPanel } from "./panels/SyncPanel";
 import { HistoryPanel } from "./panels/HistoryPanel";
@@ -20,6 +29,23 @@ const tabs = [
 
 type Tab = (typeof tabs)[number]["id"];
 
+/**
+ * What the build that opened this page did just before: an update or a
+ * rollback someone started from the Updates section relaunches the service,
+ * which opens a fresh page with #updated or #rolled-back. It is read once and
+ * taken out of the address bar, so it is not said again.
+ */
+type Arrival = "updated" | "rolled-back" | null;
+
+function readArrival(): Arrival {
+  const hash = window.location.hash;
+  if (hash !== "#updated" && hash !== "#rolled-back") return null;
+  window.history.replaceState({}, "", window.location.pathname + window.location.search);
+  return hash === "#updated" ? "updated" : "rolled-back";
+}
+
+const arrival = readArrival();
+
 export function App() {
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState<string>("");
@@ -37,6 +63,26 @@ export function App() {
   // than one frame — or null. It is one strip for every tab, because a copy
   // from History and an upload from Sync are the same wait.
   const [transfer, setTransfer] = useState<ServiceEvent | null>(null);
+
+  // The version an update or rollback just brought in, for the notice that
+  // says so; null once dismissed or when this launch was not one.
+  const [arrived, setArrived] = useState<{ kind: Exclude<Arrival, null>; version: string } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (!arrival) return;
+    api
+      .updateStatus()
+      .then((v) => setArrived({ kind: arrival, version: v.current.version }))
+      .catch(() => setArrived({ kind: arrival, version: "" }));
+  }, []);
+
+  // Set once the service stops accepting this page's token: it restarted
+  // (after an update, say) or quit. Nothing here works after that, so a
+  // dialog that cannot be closed says to reopen the app from the tray.
+  const [lost, setLost] = useState(isSessionLost);
+  useEffect(() => onSessionLost(() => setLost(true)), []);
 
   const refresh = useCallback(async () => {
     try {
@@ -139,6 +185,26 @@ export function App() {
             no window was open, and it stays until dismissed or until a newer
             entry lands on either side.
           */}
+          {arrived ? (
+            <div className="notice ok centered" role="status">
+              <Icon name="check" />
+              <span className="grow">
+                {arrived.kind === "updated"
+                  ? "TwoPlacePaste has been updated"
+                  : "TwoPlacePaste has been rolled back"}
+                {arrived.version ? ` to ${arrived.version}` : ""}.
+              </span>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Dismiss"
+                title="Dismiss"
+                onClick={() => setArrived(null)}
+              >
+                <Icon name="close" size={16} />
+              </button>
+            </div>
+          ) : null}
           {status?.skipped ? (
             <div className="notice info" role="status">
               <Icon name="alert" />
@@ -211,6 +277,8 @@ export function App() {
           ) : null}
         </div>
       </main>
+
+      <SessionLostDialog open={lost} />
     </div>
   );
 }

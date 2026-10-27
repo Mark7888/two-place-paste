@@ -17,6 +17,6 @@ func (unsupportedApplier) Ready() error                          { return errNoA
 func (unsupportedApplier) Install(context.Context, string) error { return errNoApplier }
 func (unsupportedApplier) HasPrevious() bool                     { return false }
 func (unsupportedApplier) Rollback(context.Context) error        { return errNoApplier }
-func (unsupportedApplier) Relaunch(int) error                    { return errNoApplier }
+func (unsupportedApplier) Relaunch([]string) error               { return errNoApplier }
 
 func platformApplier() Applier { return unsupportedApplier{} }

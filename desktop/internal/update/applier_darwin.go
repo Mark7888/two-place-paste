@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -128,9 +127,9 @@ func (a *darwinApplier) Rollback(context.Context) error {
 }
 
 // Relaunch opens a new instance of the bundle (-n: this one is still
-// running) and tells it to wait for this one to exit.
-func (a *darwinApplier) Relaunch(pid int) error {
-	cmd := exec.CommandContext(context.Background(), "open", "-n", a.bundle, "--args", waitPIDFlag, strconv.Itoa(pid))
+// running), with args telling it to wait for this one to exit.
+func (a *darwinApplier) Relaunch(args []string) error {
+	cmd := exec.CommandContext(context.Background(), "open", append([]string{"-n", a.bundle, "--args"}, args...)...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("open %s: %w: %s", a.bundle, err, bytes.TrimSpace(out))
 	}

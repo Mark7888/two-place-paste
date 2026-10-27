@@ -278,6 +278,11 @@ the new one binds**, or the new one shows the tray's "port in use" failure:
 3. Swap (platform-specific, below).
 4. Start the new binary with `--wait-pid <old pid>`, then shut down cleanly (`stop()`).
    The new process waits up to 10 s for that PID to exit, then binds and starts.
+   An install or rollback started from the UI also passes `--show-ui=updated` (or
+   `rolled-back`): the new process opens the app at `#updated`, which shows a "has been
+   updated" notice. An automatic update passes nothing and opens nothing. The old page's
+   token stops working with the old process; the UI shows an undismissable "closed or
+   restarted" dialog on the first 401 or failed request, whatever caused it.
 5. On its first healthy start, the new process deletes the `.old` copy left by the
    *previous* update. The copy from *this* update stays until the next one, so the UI can
    offer **Roll back**.
