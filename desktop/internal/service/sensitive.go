@@ -31,8 +31,19 @@ const maxFilterSampleBytes = 1 << 20
 
 type pushPlan struct {
 	digest    [32]byte
+	purpose   pushPurpose
 	expiresAt time.Time
 }
+
+// pushPurpose is what a "push anyway?" answer allows. An answer to "upload
+// this to your other devices?" is not an answer to "keep this in the store
+// until someone deletes it?", so a plan confirms only what it was asked for.
+type pushPurpose string
+
+const (
+	pushUpload pushPurpose = "upload"
+	pushStore  pushPurpose = "store"
+)
 
 // verdictCache remembers the last classification. Status asks on every
 // refresh and the watcher on every change, and with an exact filter set a
@@ -93,21 +104,30 @@ func (s *Service) classify(c clipboard.Content) sensitive.Verdict {
 
 // askToPush records a plan for content refused as sensitive and returns the
 // error the UI and the tray turn into "push anyway?".
-func (s *Service) askToPush(c clipboard.Content, v sensitive.Verdict) error {
+func (s *Service) askToPush(c clipboard.Content, v sensitive.Verdict, purpose pushPurpose) error {
 	id, err := planID()
 	if err != nil {
 		return err
 	}
 	s.mu.Lock()
 	s.sweepPushPlansLocked()
-	s.pushPlans[id] = &pushPlan{digest: c.Digest(), expiresAt: s.now().Add(pushPlanTTL)}
+	s.pushPlans[id] = &pushPlan{digest: c.Digest(), purpose: purpose, expiresAt: s.now().Add(pushPlanTTL)}
 	s.mu.Unlock()
 	return &localui.SensitiveError{PlanID: id, Reason: v.Reason}
 }
 
 // confirmedPush reports whether planID is an unexpired plan for exactly this
-// content. The plan is used up either way: an answer applies once.
-func (s *Service) confirmedPush(planID string, c clipboard.Content) bool {
+// content and purpose. The plan is used up either way: an answer applies once.
+func (s *Service) confirmedPush(planID string, c clipboard.Content, purpose pushPurpose) bool {
+	ok := s.pushPlanValid(planID, c, purpose)
+	s.usePushPlan(planID)
+	return ok
+}
+
+// pushPlanValid is confirmedPush without using the plan up, for a save that
+// can still be refused for another reason — the store's duplicate question —
+// and is then sent again with the same answer.
+func (s *Service) pushPlanValid(planID string, c clipboard.Content, purpose pushPurpose) bool {
 	if planID == "" {
 		return false
 	}
@@ -115,8 +135,14 @@ func (s *Service) confirmedPush(planID string, c clipboard.Content) bool {
 	defer s.mu.Unlock()
 	s.sweepPushPlansLocked()
 	p, ok := s.pushPlans[planID]
+	return ok && p.digest == c.Digest() && p.purpose == purpose
+}
+
+// usePushPlan forgets a plan once its answer has been acted on.
+func (s *Service) usePushPlan(planID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	delete(s.pushPlans, planID)
-	return ok && p.digest == c.Digest()
 }
 
 func (s *Service) sweepPushPlansLocked() {

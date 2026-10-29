@@ -709,8 +709,8 @@ binary, served from localhost and opened in the user's default browser.
 - Device management and pairing (show QR, scan not applicable — paste token)
 - Sensitive content: a clipboard change that its application marked as private (a password
   manager's), or that matches a built-in detector or one of the user's filters, is never
-  uploaded by auto-watch, is masked on screen, and is uploaded by hand only after the user
-  confirms. Detection of the OS marker is on by default; the decision and the filters are
+  uploaded by auto-watch, is masked on screen, and is uploaded by hand, or saved to the
+  store (§6b), only after the user confirms that action for that copy. Detection of the OS marker is on by default; the decision and the filters are
   local to the device and nothing about them reaches the relay or the wire
   (`docs/internal/plans/auto-upload-filters.md`).
 - Pausing auto-sync: one switch, in the UI and the tray menu, holds both automatic

@@ -435,3 +435,54 @@ func TestRevealClipboard(t *testing.T) {
 		t.Errorf("RevealClipboard = %+v, %v; want hunter2", got, err)
 	}
 }
+
+// TestStoreSaveOfSensitiveAsksFirst: saving a protected clipboard to the store
+// asks first, as Upload does; the answer survives the duplicate question that
+// can follow it, is used up once the save goes through, and does not double
+// as an answer to Upload.
+func TestStoreSaveOfSensitiveAsksFirst(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := context.Background()
+	f.enableStore()
+	clip := concealed("pw-for-the-store")
+	f.clip.set(clip)
+
+	_, err := f.svc.SaveToStore(ctx, localui.StoreSaveRequest{Source: "clipboard", StoreDetails: details("Bank")})
+	se := sensitiveError(t, err)
+	if view, _ := f.svc.Store(ctx, localui.StoreQuery{}); view.Total != 0 {
+		t.Fatalf("a protected clipboard was saved without asking (%d items)", view.Total)
+	}
+
+	// An Upload answer is not a store answer, and the reverse.
+	_, err = f.svc.Sync(ctx, localui.SyncRequest{Direction: localui.DirectionUpload, PlanID: se.PlanID})
+	_ = sensitiveError(t, err)
+	if n := f.relay.count(); n != 0 {
+		t.Fatalf("a store answer uploaded the clipboard (%d entries)", n)
+	}
+	_, err = f.svc.SaveToStore(ctx, localui.StoreSaveRequest{Source: "clipboard", StoreDetails: details("Bank")})
+	se = sensitiveError(t, err)
+
+	saved, err := f.svc.SaveToStore(ctx, localui.StoreSaveRequest{Source: "clipboard", StoreDetails: details("Bank"), PlanID: se.PlanID})
+	if err != nil || saved.Name != "Bank" {
+		t.Fatalf("confirmed SaveToStore = %+v, %v; want it saved", saved, err)
+	}
+
+	// Saving it again is a duplicate: the answer is asked for again (the plan
+	// was used), then survives the duplicate question.
+	_, err = f.svc.SaveToStore(ctx, localui.StoreSaveRequest{Source: "clipboard", StoreDetails: details("Again"), PlanID: se.PlanID})
+	se = sensitiveError(t, err)
+	_, err = f.svc.SaveToStore(ctx, localui.StoreSaveRequest{Source: "clipboard", StoreDetails: details("Again"), PlanID: se.PlanID})
+	var dup *localui.DuplicateError
+	if !errors.As(err, &dup) {
+		t.Fatalf("second save = %v, want the duplicate question", err)
+	}
+	if _, err := f.svc.SaveToStore(ctx, localui.StoreSaveRequest{
+		Source: "clipboard", StoreDetails: details("Again"), PlanID: se.PlanID, AllowDuplicate: true,
+	}); err != nil {
+		t.Fatalf("save anyway after both questions = %v, want it saved", err)
+	}
+	if view, _ := f.svc.Store(ctx, localui.StoreQuery{}); view.Total != 2 {
+		t.Errorf("the store holds %d items, want 2", view.Total)
+	}
+}

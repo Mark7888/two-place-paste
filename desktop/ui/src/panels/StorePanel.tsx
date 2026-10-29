@@ -443,7 +443,7 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
         knownTags={knownTags}
         saveLabel={dialog?.kind === "edit" ? "Save changes" : "Save"}
         onClose={() => setDialog(null)}
-        onSubmit={async (details, allowDuplicate) => {
+        onSubmit={async (details, allowDuplicate, planId) => {
           if (dialog?.kind === "edit") {
             const it = await api.editStoreItem(dialog.item.id, details);
             return `saved the changes to “${it.name}”`;
@@ -451,7 +451,7 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
           const it =
             dialog?.kind === "file"
               ? await api.uploadToStore(dialog.file, details, allowDuplicate)
-              : await api.saveToStore({ source: "clipboard" }, details, allowDuplicate);
+              : await api.saveToStore({ source: "clipboard" }, details, allowDuplicate, planId);
           return `saved “${it.name}” to the store`;
         }}
         onDone={(message) => {

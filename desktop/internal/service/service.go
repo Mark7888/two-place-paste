@@ -577,10 +577,10 @@ func (s *Service) upload(ctx context.Context, relay Relay, planID string) (local
 			"the clipboard could not be read")
 	}
 	if v := s.classify(c); v.Sensitive {
-		if !s.confirmedPush(planID, c) {
+		if !s.confirmedPush(planID, c, pushUpload) {
 			s.logger.InfoContext(ctx, "upload of a sensitive clipboard needs confirmation",
 				"source", string(v.Source), "rule", v.Rule)
-			return localui.SyncResult{}, s.askToPush(c, v)
+			return localui.SyncResult{}, s.askToPush(c, v, pushUpload)
 		}
 		s.logger.InfoContext(ctx, "uploading a sensitive clipboard the user confirmed",
 			"source", string(v.Source), "rule", v.Rule)

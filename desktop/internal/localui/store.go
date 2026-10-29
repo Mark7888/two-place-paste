@@ -26,7 +26,8 @@ type StoreAPI interface {
 
 	// SaveToStore saves the clipboard or a history entry with the details
 	// the user typed. A body already in the store is refused with a
-	// *DuplicateError unless the request allows it.
+	// *DuplicateError unless the request allows it, and a sensitive
+	// clipboard with a *SensitiveError unless the request confirms it.
 	SaveToStore(ctx context.Context, req StoreSaveRequest) (StoreItemView, error)
 
 	// UploadToStore saves a file the user dropped or picked.
@@ -141,6 +142,10 @@ type StoreSaveRequest struct {
 	StoreDetails
 	// AllowDuplicate is the dialog's "Save anyway".
 	AllowDuplicate bool `json:"allow_duplicate"`
+
+	// PlanID confirms saving a clipboard the service refused as sensitive:
+	// it names the SensitiveError the user answered "Save anyway" to.
+	PlanID string `json:"plan_id,omitempty"`
 }
 
 // StoreUpload is a file the page sent.

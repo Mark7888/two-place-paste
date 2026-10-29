@@ -639,11 +639,14 @@ export const api = {
     const qs = params.toString();
     return request<StoreView>("GET", `/api/store${qs ? `?${qs}` : ""}`);
   },
-  saveToStore: (src: StoreSource, details: StoreDetails, allowDuplicate = false) =>
+  // planId confirms saving a clipboard the service refused as a protected
+  // entry (protectedEntry).
+  saveToStore: (src: StoreSource, details: StoreDetails, allowDuplicate = false, planId?: string) =>
     request<StoreItemView>("POST", "/api/store/save", {
       ...src,
       ...details,
       allow_duplicate: allowDuplicate,
+      ...(planId ? { plan_id: planId } : {}),
     }),
   uploadToStore: (file: File, details: StoreDetails, allowDuplicate = false) =>
     upload(file, details, allowDuplicate),

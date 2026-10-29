@@ -450,3 +450,18 @@ above, and why.
   building without cgo will read it.
 - `desktop-sync.webp` is unchanged (its state did not change); the masked clipboard and
   the protected-entry dialog have new screenshots, and Settings was retaken.
+
+## 9. After review
+
+- **Store (built in parallel, PR #43–#48).** Saving the clipboard to the store asks
+  first, like Upload, with a plan scoped to the store: an Upload answer does not let a
+  copy into the store, nor the reverse. The plan survives the store's duplicate
+  question and is used up when the save succeeds. Saving a history entry or a dropped
+  file does not ask: the entry is already the group's, and a file is not the clipboard.
+- **Pause auto-sync.** One switch in the Sync tab and the tray holds both automatic
+  directions for five minutes, for copies nothing can detect — a password from a
+  browser extension, which can only write plain text.
+- **Still not covered, by design for now:** the flag stays local, so History and Store
+  previews of an entry pushed anyway show it like any other; and Android, which has no
+  auto-upload, does not check its own sensitive-clip marker
+  (`ClipDescription.EXTRA_IS_SENSITIVE`) on Upload or Save clipboard.

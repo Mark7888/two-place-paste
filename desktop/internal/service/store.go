@@ -215,6 +215,7 @@ func (s *Service) SaveToStore(ctx context.Context, req localui.StoreSaveRequest)
 		return localui.StoreItemView{}, err
 	}
 	var item tppclient.Item
+	confirmed := "" // the push plan a sensitive clipboard was confirmed with
 	switch req.Source {
 	case "clipboard":
 		c, err := s.clip.Read(ctx)
@@ -225,6 +226,17 @@ func (s *Service) SaveToStore(ctx context.Context, req localui.StoreSaveRequest)
 			return localui.StoreItemView{}, localui.Errorf(http.StatusNotImplemented, err, "this build cannot reach a clipboard")
 		case err != nil:
 			return localui.StoreItemView{}, localui.Errorf(http.StatusInternalServerError, err, "the clipboard could not be read")
+		}
+		// A protected entry asks first, as Upload does: the store keeps an
+		// item until someone deletes it, and every device of the group can
+		// open it.
+		if v := s.classify(c); v.Sensitive {
+			if !s.pushPlanValid(req.PlanID, c, pushStore) {
+				s.logger.InfoContext(ctx, "store save of a sensitive clipboard needs confirmation",
+					"source", string(v.Source), "rule", v.Rule)
+				return localui.StoreItemView{}, s.askToPush(c, v, pushStore)
+			}
+			confirmed = req.PlanID
 		}
 		item = tppclient.Item{ContentType: c.ContentType, Filename: c.Filename, Body: c.Body, CreatedAt: s.now()}
 	case "entry":
@@ -243,7 +255,14 @@ func (s *Service) SaveToStore(ctx context.Context, req localui.StoreSaveRequest)
 	default:
 		return localui.StoreItemView{}, localui.Errorf(http.StatusBadRequest, nil, "unknown source %q", req.Source)
 	}
-	return s.saveToStore(ctx, relay, item, req.StoreDetails, req.AllowDuplicate)
+	saved, err := s.saveToStore(ctx, relay, item, req.StoreDetails, req.AllowDuplicate)
+	if err == nil && confirmed != "" {
+		// Used only once the save went through: a save refused as a
+		// duplicate comes back with "Save anyway" and the same answer.
+		s.usePushPlan(confirmed)
+		s.logger.InfoContext(ctx, "saved a sensitive clipboard to the store the user confirmed", "item_id", saved.ID)
+	}
+	return saved, err
 }
 
 // UploadToStore implements localui.StoreAPI: it saves a file from the page.
