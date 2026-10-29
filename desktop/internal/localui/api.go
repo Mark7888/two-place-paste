@@ -9,8 +9,22 @@ type API interface {
 	// Status is the sync screen's model.
 	Status(ctx context.Context) Status
 
-	// Sync moves the latest entry in one direction (SPEC §6).
-	Sync(ctx context.Context, d Direction) (SyncResult, error)
+	// Sync moves the latest entry in one direction (SPEC §6). An upload of
+	// a sensitive clipboard fails with a *SensitiveError until it is
+	// confirmed with the error's plan id.
+	Sync(ctx context.Context, req SyncRequest) (SyncResult, error)
+
+	// SetPaused pauses both automatic directions for a few minutes, or
+	// resumes them.
+	SetPaused(ctx context.Context, paused bool) PauseView
+
+	// RevealClipboard returns the preview of a clipboard the status masked
+	// as sensitive. It is only called when the user asks to see it.
+	RevealClipboard(ctx context.Context) (ClipboardReveal, error)
+
+	// TestFilters reports which detectors and filters match a sample, for the
+	// filter editor.
+	TestFilters(ctx context.Context, t FilterTest) (FilterTestResult, error)
 
 	// DismissSkipped clears the skipped-transfer notice (Status.Skipped).
 	DismissSkipped(ctx context.Context)

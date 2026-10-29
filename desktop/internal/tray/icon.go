@@ -26,6 +26,7 @@ import (
 //   - downloading: one down arrow in place of the lines
 //   - syncing (both at once): an up and a down arrow side by side
 //   - skipped: connected, with an exclamation badge at the bottom right
+//   - paused: connected, with a pause badge (two bars) at the bottom right
 //   - connecting: faded, with three dots in place of the lines
 //   - unpaired: faded and empty
 //   - disconnected and failed: the clipboard struck through
@@ -122,7 +123,9 @@ func drawGlyph(ink color.NRGBA, s Status) *image.NRGBA {
 	case StatusDisconnected, StatusFailed:
 		strike(img, ink)
 	case StatusSkippedUpload, StatusSkippedDownload:
-		badge(img, ink)
+		badge(img, ink, exclamationMark)
+	case StatusPaused:
+		badge(img, ink, pauseMark)
 	}
 	return img
 }
@@ -193,21 +196,26 @@ func strike(img *image.NRGBA, ink color.NRGBA) {
 	}
 }
 
-// badge draws a filled disc with an exclamation mark cut out of it over the
-// board's bottom right corner, with a cleared ring round it so it reads as a
-// badge and not as part of the board. Like strike, its edges are
-// anti-aliased.
-func badge(img *image.NRGBA, ink color.NRGBA) {
+// exclamationMark is the skipped badge's mark: a bar and a dot.
+func exclamationMark(x, y int) bool {
+	return x >= 23 && x < 25 && ((y >= 20 && y < 25) || (y >= 26 && y < 28))
+}
+
+// pauseMark is the paused badge's mark: two upright bars.
+func pauseMark(x, y int) bool {
+	return y >= 21 && y < 28 && ((x >= 21 && x < 23) || (x >= 25 && x < 27))
+}
+
+// badge draws a filled disc with a mark cut out of it over the board's bottom
+// right corner, with a cleared ring round it so it reads as a badge and not
+// as part of the board. Like strike, its edges are anti-aliased.
+func badge(img *image.NRGBA, ink color.NRGBA, mark func(x, y int) bool) {
 	const (
 		cx, cy = 24.0, 24.0 // the disc's centre
 		disc   = 6.2        // its radius
 		ring   = 1.6        // the cleared gap round it
 	)
 	clamp := func(v float64) float64 { return math.Max(0, math.Min(1, v)) }
-	// The exclamation mark, knocked out of the disc: a bar and a dot.
-	mark := func(x, y int) bool {
-		return x >= 23 && x < 25 && ((y >= 20 && y < 25) || (y >= 26 && y < 28))
-	}
 	for y := 0; y < iconSize; y++ {
 		for x := 0; x < iconSize; x++ {
 			d := math.Hypot(float64(x)+0.5-cx, float64(y)+0.5-cy)

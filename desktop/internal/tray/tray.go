@@ -18,11 +18,16 @@
 // which side is newer asks, as the UI does (SPEC §6): with a notification
 // carrying an Upload and a Download button, and with the same two items in
 // the menu for when notifications are turned off.
+//
+// And the protected entry: an upload from the tray of a clipboard the service
+// marked sensitive asks "push anyway?" the same way, with one button and one
+// menu item (docs/internal/plans/auto-upload-filters.md).
 package tray
 
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,6 +47,14 @@ type Options struct {
 	// notification AskDirection posts or from the menu items it reveals. It is
 	// run on its own goroutine.
 	SyncDirection func(Direction)
+
+	// PushSensitive uploads a protected entry the user confirmed, with the
+	// plan id AskSensitive was given. It is run on its own goroutine.
+	PushSensitive func(planID string)
+
+	// TogglePause pauses auto-sync for a few minutes, or resumes it when it
+	// is paused. It is run on its own goroutine. Nil hides the item.
+	TogglePause func()
 
 	// CheckUpdates checks for an update. It is run on its own goroutine.
 	// Nil hides the item.
@@ -100,6 +113,11 @@ const (
 	// StatusSkippedDownload is the same for an entry another device wrote
 	// that was not put on this clipboard automatically.
 	StatusSkippedDownload
+
+	// StatusPaused is a connected, idle device whose auto-sync the user
+	// paused for a few minutes. It outranks a held-back transfer: while
+	// paused, holding things back is what the user asked for.
+	StatusPaused
 )
 
 // transferring reports whether a status is an entry on the move, which is
@@ -131,6 +149,8 @@ func (s Status) label() string {
 		return "Your last copy was not uploaded automatically — open the app"
 	case StatusSkippedDownload:
 		return "A new entry was not downloaded automatically — open the app"
+	case StatusPaused:
+		return "Auto-sync paused"
 	}
 	return ""
 }
@@ -150,8 +170,9 @@ const (
 // The identifiers the notification's buttons carry back. They are the same
 // on every platform, so one parser serves them all.
 const (
-	actionUpload   = "upload"
-	actionDownload = "download"
+	actionUpload     = "upload"
+	actionDownload   = "download"
+	actionPushAnyway = "push-anyway"
 )
 
 // directionForAction maps a notification button back to its direction. Any
@@ -176,6 +197,20 @@ const minSyncShown = 700 * time.Millisecond
 // items would only be clutter.
 const choiceTTL = 5 * time.Minute
 
+// The words of the protected entry question, shared by every platform's
+// notification and the menu.
+const (
+	sensitiveTitle  = "This is a protected entry"
+	sensitivePrompt = "Push it to your other devices anyway?"
+	pushAnywayLabel = "Push anyway"
+	pushMenuLabel   = "Push protected entry anyway"
+)
+
+// sensitiveTTL is how long "push anyway?" stays answerable from the tray: the
+// service's plan lives this long, and an answer after it would only be asked
+// again.
+const sensitiveTTL = 2 * time.Minute
+
 // Tray is the tray icon. Its methods are safe to call from any goroutine,
 // before Run as well as during it: what they change waits for the icon to
 // exist, and shows when it does.
@@ -198,6 +233,18 @@ type Tray struct {
 	onDirection  func(Direction)
 	revealChoice func(bool) // shows or hides the menu's direction items
 	choiceTimer  *time.Timer
+
+	// pause is auto-sync's pause as the menu item shows it, and revealPause
+	// redraws that item.
+	pause       PauseState
+	revealPause func(PauseState)
+
+	// The pending "push anyway?" question: the plan id that answers it, the
+	// callback that does, and the menu item that offers it.
+	onPush         func(planID string)
+	pushPlan       string
+	revealPush     func(bool)
+	sensitiveTimer *time.Timer
 
 	// gone is set once the platform's event loop has ended. From then on
 	// nothing may touch the icon or the menu: on macOS every such call waits
@@ -224,6 +271,7 @@ func New(logger *slog.Logger) *Tray {
 func (t *Tray) Run(ctx context.Context, opts Options) {
 	t.mu.Lock()
 	t.onDirection = opts.SyncDirection
+	t.onPush = opts.PushSensitive
 	if opts.Err != nil {
 		t.want = StatusFailed
 	}
@@ -357,8 +405,129 @@ func (t *Tray) choose(d Direction) {
 
 // chooseAction is a notification button pressed.
 func (t *Tray) chooseAction(action string) {
+	if action == actionPushAnyway {
+		t.pushAnyway()
+		return
+	}
 	if d, ok := directionForAction(action); ok {
 		t.choose(d)
+	}
+}
+
+// AskSensitive asks whether to upload a protected entry anyway: with a
+// notification carrying a Push anyway button, and with a menu item for when
+// notifications are off. reason is what made it protected, in the user's
+// words; planID is what the answer hands to Options.PushSensitive. Neither
+// is logged: a filter's label is the user's own text.
+func (t *Tray) AskSensitive(planID, reason string) {
+	t.mu.Lock()
+	t.pushPlan = planID
+	reveal := t.revealPush
+	if t.sensitiveTimer != nil {
+		t.sensitiveTimer.Stop()
+	}
+	t.sensitiveTimer = time.AfterFunc(sensitiveTTL, t.withdrawSensitive)
+	t.mu.Unlock()
+	if reveal != nil {
+		reveal(true)
+	}
+	if err := postSensitive(sensitiveBody(reason)); err != nil {
+		t.logger.Warn("could not show the protected entry notification; the tray menu offers the choice",
+			"error", err)
+	}
+}
+
+// sensitiveBody is the notification's text for a reason.
+func sensitiveBody(reason string) string {
+	if reason == "" {
+		return sensitivePrompt
+	}
+	return strings.TrimSuffix(reason, ".") + ". " + sensitivePrompt
+}
+
+// pushAnyway is the user answering AskSensitive, from either place it asked.
+// The plan is used once: a second press has nothing to confirm.
+func (t *Tray) pushAnyway() {
+	t.mu.Lock()
+	plan, fn := t.pushPlan, t.onPush
+	t.mu.Unlock()
+	t.withdrawSensitive()
+	if plan != "" && fn != nil {
+		go fn(plan)
+	}
+}
+
+// withdrawSensitive takes the question back.
+func (t *Tray) withdrawSensitive() {
+	t.mu.Lock()
+	t.pushPlan = ""
+	reveal := t.revealPush
+	if t.sensitiveTimer != nil {
+		t.sensitiveTimer.Stop()
+		t.sensitiveTimer = nil
+	}
+	t.mu.Unlock()
+	if reveal != nil {
+		reveal(false)
+	}
+	withdrawSensitivePrompt()
+}
+
+// PauseState is what the pause menu item shows.
+type PauseState struct {
+	// Paused is set while auto-sync is paused, until Until.
+	Paused bool
+	Until  time.Time
+
+	// Available is false when neither automatic direction is on: there is
+	// nothing to pause, and the item is greyed out.
+	Available bool
+}
+
+// pauseMenuTitle is the pause item's text: the action it takes now.
+func pauseMenuTitle(p PauseState) string {
+	if p.Paused {
+		return "Resume auto-sync (paused until " + p.Until.Local().Format("15:04") + ")"
+	}
+	return "Pause auto-sync for 5 minutes"
+}
+
+// SetPause tells the tray whether auto-sync is paused. The icon follows from
+// the status (StatusPaused); this is the menu item.
+func (t *Tray) SetPause(p PauseState) {
+	t.mu.Lock()
+	t.pause = p
+	reveal := t.revealPause
+	t.mu.Unlock()
+	if reveal != nil {
+		reveal(p)
+	}
+}
+
+// setPauseItem is the platform handing over its menu's pause item. Like every
+// menu item, it is left alone once the event loop has ended.
+func (t *Tray) setPauseItem(reveal func(PauseState)) {
+	t.mu.Lock()
+	t.revealPause = func(p PauseState) {
+		if !t.gone.Load() {
+			reveal(p)
+		}
+	}
+	p, show := t.pause, t.revealPause
+	t.mu.Unlock()
+	show(p)
+}
+
+// setPushItem is the platform handing over its menu's Push anyway item. Like
+// the direction items, it is left alone once the event loop has ended: the
+// question's timer can fire during shutdown.
+func (t *Tray) setPushItem(reveal func(bool)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.revealPush = func(show bool) {
+		if !t.gone.Load() {
+			reveal(show)
+		}
 	}
 }
 

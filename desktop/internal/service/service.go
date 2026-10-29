@@ -19,6 +19,7 @@ import (
 	"github.com/Mark7888/two-place-paste/desktop/internal/config"
 	"github.com/Mark7888/two-place-paste/desktop/internal/localui"
 	"github.com/Mark7888/two-place-paste/desktop/internal/preview"
+	"github.com/Mark7888/two-place-paste/desktop/internal/sensitive"
 	"github.com/Mark7888/two-place-paste/pkg/tppclient"
 )
 
@@ -173,6 +174,23 @@ type Service struct {
 	// announcement or a local copy cancels it: either makes it stale.
 	fetching *inflight
 
+	// classifier decides what is sensitive, rebuilt when the settings
+	// change; verdicts caches its last answer.
+	classifier *sensitive.Classifier
+	verdicts   verdictCache
+
+	// sensitiveNote is the last change auto-watch kept on this device
+	// because it was sensitive (localui.Status.SensitiveNote).
+	sensitiveNote *localui.SensitiveNote
+
+	// pushPlans are "push anyway?" questions awaiting an answer.
+	pushPlans map[string]*pushPlan
+
+	// pausedUntil is when a pause of auto-sync ends, or zero (pause.go);
+	// pauseTimer announces the end.
+	pausedUntil time.Time
+	pauseTimer  *time.Timer
+
 	plans       map[string]*plan
 	offerPlans  map[string]*offerPlan
 	offer       Offer
@@ -220,10 +238,17 @@ func New(opts Options) (*Service, error) {
 		store:      newStoreState(),
 		plans:      map[string]*plan{},
 		offerPlans: map[string]*offerPlan{},
+		pushPlans:  map[string]*pushPlan{},
 	}
 	if s.logger == nil {
 		s.logger = slog.Default()
 	}
+	cl, err := buildClassifier(s.settings)
+	if err != nil {
+		s.logger.Warn("the sensitive-content filters could not be built; only password-manager markers and detectors apply",
+			"error", err)
+	}
+	s.classifier = cl
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
 	}
@@ -262,6 +287,7 @@ func (s *Service) SetListenPort(port int) {
 // ctx is done, then ends every UI event stream.
 func (s *Service) Run(ctx context.Context) {
 	defer s.hub.close()
+	defer s.stopPauseTimer()
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -382,17 +408,25 @@ func (s *Service) Status(ctx context.Context) localui.Status {
 		v := *s.skipped // a copy: the UI must not see it change under it
 		skipped = &v
 	}
+	var note *localui.SensitiveNote
+	if s.sensitiveNote != nil {
+		v := *s.sensitiveNote
+		note = &v
+	}
+	pause := s.pauseViewLocked()
 	s.mu.Unlock()
 
 	st := localui.Status{
-		Skipped:      skipped,
-		Connected:    connected,
-		Revoked:      revoked,
-		GroupDeleted: groupDeleted,
-		LastSync:     localui.Optional(lastSync),
-		LastError:    lastErr,
-		Keystore:     s.backend,
-		Clipboard:    s.clipboardView(ctx),
+		Skipped:       skipped,
+		SensitiveNote: note,
+		Pause:         pause,
+		Connected:     connected,
+		Revoked:       revoked,
+		GroupDeleted:  groupDeleted,
+		LastSync:      localui.Optional(lastSync),
+		LastError:     lastErr,
+		Keystore:      s.backend,
+		Clipboard:     s.clipboardView(ctx),
 	}
 	if relay == nil {
 		return st
@@ -470,6 +504,15 @@ func (s *Service) clipboardView(ctx context.Context) localui.ClipboardView {
 	view.Kind = string(c.Kind())
 	view.Filename = c.Filename
 	view.Bytes = len(c.Body)
+	if v := s.classify(c); v.Sensitive {
+		// Masked: the screen says what it is and how long, and shows the
+		// text only when the user asks (RevealClipboard).
+		view.Sensitive, view.SensitiveReason = true, v.Reason
+		if c.Kind() == clipboard.KindText {
+			view.Chars = utf8.RuneCount(c.Body)
+		}
+		return view
+	}
 	view.Preview = clipboardPreview(c)
 	return view
 }
@@ -486,7 +529,8 @@ func clipboardPreview(c clipboard.Content) string {
 //
 // It sets no overall deadline: a transfer takes as long as its size needs,
 // and the client bounds each request in it instead (tppclient.CallTimeout).
-func (s *Service) Sync(ctx context.Context, d localui.Direction) (localui.SyncResult, error) {
+func (s *Service) Sync(ctx context.Context, req localui.SyncRequest) (localui.SyncResult, error) {
+	d := req.Direction
 	relay, err := s.ready()
 	if err != nil {
 		return localui.SyncResult{}, err
@@ -508,7 +552,7 @@ func (s *Service) Sync(ctx context.Context, d localui.Direction) (localui.SyncRe
 
 	switch d {
 	case localui.DirectionUpload:
-		return s.upload(ctx, relay)
+		return s.upload(ctx, relay, req.PlanID)
 	case localui.DirectionDownload:
 		return s.download(ctx, relay)
 	default:
@@ -516,7 +560,11 @@ func (s *Service) Sync(ctx context.Context, d localui.Direction) (localui.SyncRe
 	}
 }
 
-func (s *Service) upload(ctx context.Context, relay Relay) (localui.SyncResult, error) {
+// upload sends the local clipboard. A sensitive one is refused with a plan
+// unless planID confirms that plan for this very content: the clipboard is
+// read again here, and a copy made since the question was asked is a new
+// question, not the answered one.
+func (s *Service) upload(ctx context.Context, relay Relay, planID string) (localui.SyncResult, error) {
 	c, err := s.clip.Read(ctx)
 	switch {
 	case errors.Is(err, clipboard.ErrEmpty):
@@ -527,6 +575,15 @@ func (s *Service) upload(ctx context.Context, relay Relay) (localui.SyncResult, 
 	case err != nil:
 		return localui.SyncResult{}, localui.Errorf(http.StatusInternalServerError, err,
 			"the clipboard could not be read")
+	}
+	if v := s.classify(c); v.Sensitive {
+		if !s.confirmedPush(planID, c, pushUpload) {
+			s.logger.InfoContext(ctx, "upload of a sensitive clipboard needs confirmation",
+				"source", string(v.Source), "rule", v.Rule)
+			return localui.SyncResult{}, s.askToPush(c, v, pushUpload)
+		}
+		s.logger.InfoContext(ctx, "uploading a sensitive clipboard the user confirmed",
+			"source", string(v.Source), "rule", v.Rule)
 	}
 
 	now := s.now()
@@ -547,6 +604,7 @@ func (s *Service) upload(ctx context.Context, relay Relay) (localui.SyncResult, 
 	s.noteLatest(meta.ID)
 
 	s.logger.InfoContext(ctx, "clipboard uploaded", "entry_id", meta.ID, "epoch", meta.Epoch, "bytes", meta.Size)
+	s.clearSensitiveNote()
 	s.clearSkipped()
 	s.hub.publish(localui.Event{Kind: localui.EventSync, Message: "uploaded"})
 	return localui.SyncResult{
@@ -1188,6 +1246,9 @@ func (s *Service) settingsView(set config.Settings) localui.SettingsView {
 		AutoUpdate:           set.AutoUpdate,
 		NightlyCommit:        set.NightlyCommit,
 		RestartRequired:      set.ListenPort() != s.listenPort(),
+		DetectSensitive:      set.SensitiveDetection(),
+		Detectors:            detectorViews(set.EnabledDetectors()),
+		Filters:              filterViews(set.Filters),
 	}
 }
 
@@ -1198,7 +1259,7 @@ func (s *Service) settingsView(set config.Settings) localui.SettingsView {
 // page that asked for it.
 func (s *Service) UpdateSettings(ctx context.Context, p localui.SettingsPatch) (localui.SettingsView, error) {
 	s.mu.Lock()
-	next := s.settings
+	next := s.settings.Clone()
 	s.mu.Unlock()
 
 	if p.Port != nil {
@@ -1264,6 +1325,17 @@ func (s *Service) UpdateSettings(ctx context.Context, p localui.SettingsPatch) (
 			return localui.SettingsView{}, localui.Errorf(http.StatusBadRequest, err, "%v", err)
 		}
 	}
+	if err := applySensitivePatch(&next, p); err != nil {
+		return localui.SettingsView{}, err
+	}
+	classifier := s.currentClassifier()
+	if p.DetectSensitive != nil || p.Detectors != nil || p.Filters != nil {
+		cl, err := buildClassifier(next)
+		if err != nil {
+			return localui.SettingsView{}, localui.Errorf(http.StatusBadRequest, err, "%s", filterMessage(err))
+		}
+		classifier = cl
+	}
 	if p.Autostart != nil {
 		on, err := autostart.Apply(s.auto, *p.Autostart)
 		if err != nil {
@@ -1284,8 +1356,11 @@ func (s *Service) UpdateSettings(ctx context.Context, p localui.SettingsPatch) (
 
 	s.mu.Lock()
 	s.settings = next
+	s.classifier = classifier
 	s.mu.Unlock()
 	s.watcher.SetEnabled(next.AutoWatch && s.clip.Available())
+	// Whether pausing means anything depends on the two auto toggles.
+	s.activityChanged()
 	if s.updates != nil {
 		s.updates.SetPreferences(next)
 	}
@@ -1293,7 +1368,9 @@ func (s *Service) UpdateSettings(ctx context.Context, p localui.SettingsPatch) (
 	s.logger.Info("settings updated",
 		"auto_watch", next.AutoWatch, "auto_apply", next.AutoApply, "autostart", next.Autostart, "port", next.Port,
 		"auto_upload_max_bytes", next.AutoUploadLimit(), "auto_download_max_bytes", next.AutoDownloadLimit(),
-		"update_channel", next.Channel(), "auto_update", next.AutoUpdate)
+		"update_channel", next.Channel(), "auto_update", next.AutoUpdate,
+		"detect_sensitive", next.SensitiveDetection(), "detectors", len(next.EnabledDetectors()),
+		"filters", len(next.Filters))
 	s.hub.publish(localui.Event{Kind: localui.EventSettings})
 	return s.settingsView(next), nil
 }
@@ -1305,10 +1382,28 @@ func (s *Service) onClipboardChange(ctx context.Context, c clipboard.Content, at
 	if err != nil {
 		return
 	}
+	s.clearSensitiveNote()
 	s.hub.publish(localui.Event{Kind: localui.EventClipboard, Message: string(c.Kind())})
 	// The user's copy is newer than anything still downloading: let that go
 	// rather than have it land on top of this.
 	s.cancelDownload(time.Time{})
+
+	// A pause holds everything automatic. The copy is not queued for later:
+	// what is copied while paused stays here (pause.go).
+	if on, _ := s.paused(); on {
+		s.logger.InfoContext(ctx, "clipboard change not uploaded automatically: auto-sync is paused")
+		return
+	}
+
+	// Sensitive before size: a password over the size limit is reported as
+	// what it is, and either way it stays here. Upload still offers it, and
+	// asks first.
+	if v := s.classify(c); v.Sensitive {
+		s.logger.InfoContext(ctx, "clipboard change not uploaded automatically: sensitive",
+			"source", string(v.Source), "rule", v.Rule)
+		s.noteSensitive(v.Reason)
+		return
+	}
 
 	s.mu.Lock()
 	limit := s.settings.AutoUploadLimit()
@@ -1442,6 +1537,9 @@ func (s *Service) catchUp(ctx context.Context) {
 // runs catchUp, so an entry written during the sleep arrives now rather than
 // never.
 func (s *Service) Resumed(slept time.Duration) {
+	// A pause that ran out while the machine slept ends now, not when its
+	// timer catches up (pause.go).
+	s.pauseEnded()
 	s.mu.Lock()
 	relay := s.relay
 	s.mu.Unlock()
@@ -1482,6 +1580,15 @@ func (s *Service) applyAnnounced(ctx context.Context, meta tppclient.EntryMeta) 
 		return
 	}
 	if meta.CreatedAt.Before(applied) || meta.CreatedAt.Before(s.watcher.LastChange()) {
+		return
+	}
+	if paused, _ := s.paused(); paused {
+		s.logger.InfoContext(ctx, "announced entry not applied automatically: auto-sync is paused", "entry_id", meta.ID)
+		s.noteSkipped(localui.SkippedView{
+			Direction: "download", EntryID: meta.ID, Bytes: meta.Size,
+			Message: fmt.Sprintf("A %s entry arrived while auto-sync was paused and was not copied here. Use Download or History to get it.",
+				formatBytes(meta.Size)),
+		})
 		return
 	}
 	if limit > 0 && meta.Size > limit {
@@ -1645,6 +1752,7 @@ func (s *Service) noteSkipped(v localui.SkippedView) {
 func (s *Service) clearSkipped() {
 	s.mu.Lock()
 	s.skipped = nil
+	s.sensitiveNote = nil
 	s.mu.Unlock()
 	s.activityChanged()
 }

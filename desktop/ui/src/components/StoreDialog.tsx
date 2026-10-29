@@ -6,10 +6,23 @@
  * A save of something the store already holds comes back refused with the
  * items it duplicates; the dialog names them and offers "Save anyway", which
  * sends the same save again with permission.
+ *
+ * A save of a protected clipboard — a password manager's copy, or one a
+ * sensitive-content filter matches — is refused the same way first, with the
+ * plan id that confirms it. Its "Save anyway" sends the save again with that
+ * id, which the service keeps valid through a duplicate question after it.
  */
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { ApiError, storeLimits, type StoreDetails, type StoreItemView, type StoreLimitsView } from "../api";
+import {
+  ApiError,
+  protectedEntry,
+  storeLimits,
+  type ProtectedEntry,
+  type StoreDetails,
+  type StoreItemView,
+  type StoreLimitsView,
+} from "../api";
 import { bytes, when } from "../format";
 import { Icon } from "./Icon";
 import { Modal } from "./Modal";
@@ -39,8 +52,9 @@ export function StoreDialog({
   /** Room left in the store, to show; undefined when not known. */
   available?: number;
   saveLabel?: string;
-  /** Sends the save or edit. allowDuplicate is the "Save anyway" answer. */
-  onSubmit: (details: StoreDetails, allowDuplicate: boolean) => Promise<string>;
+  /** Sends the save or edit. allowDuplicate is the "Save anyway" answer to a
+   *  duplicate; planId confirms a protected clipboard. */
+  onSubmit: (details: StoreDetails, allowDuplicate: boolean, planId?: string) => Promise<string>;
   /** Called with the service's message once it succeeded. */
   onDone: (message: string) => void;
   onClose: () => void;
@@ -52,6 +66,9 @@ export function StoreDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [duplicates, setDuplicates] = useState<StoreItemView[] | null>(null);
+  // The protected-entry question, and the plan the user's answer to it holds.
+  const [guarded, setGuarded] = useState<ProtectedEntry | null>(null);
+  const [planId, setPlanId] = useState<string | undefined>(undefined);
   const listId = useId();
 
   // A dialog opened again starts from what it is given, not from last time.
@@ -68,6 +85,8 @@ export function StoreDialog({
     setTagDraft("");
     setError("");
     setDuplicates(null);
+    setGuarded(null);
+    setPlanId(undefined);
   }, [open]);
 
   const addTag = (raw: string) => {
@@ -104,17 +123,22 @@ export function StoreDialog({
   const invalid =
     nameBytes === 0 || nameBytes > storeLimits.name || descBytes > storeLimits.description;
 
-  const submit = async (allowDuplicate: boolean) => {
+  const submit = async (allowDuplicate: boolean, plan: string | undefined = planId) => {
     // A tag still being typed is meant to be one.
     const pending = tagDraft.trim();
     const allTags = pending && !tags.includes(pending) ? [...tags, pending] : tags;
     setBusy(true);
     setError("");
     try {
-      const message = await onSubmit({ name: name.trim(), description, tags: allTags }, allowDuplicate);
+      const message = await onSubmit({ name: name.trim(), description, tags: allTags }, allowDuplicate, plan);
       onDone(message);
     } catch (err) {
-      if (err instanceof ApiError && err.duplicates?.length) {
+      const guard = protectedEntry(err);
+      if (guard) {
+        setGuarded(guard);
+        setDuplicates(null);
+      } else if (err instanceof ApiError && err.duplicates?.length) {
+        setGuarded(null);
         setDuplicates(err.duplicates);
       } else {
         setError(err instanceof Error ? err.message : String(err));
@@ -133,7 +157,26 @@ export function StoreDialog({
       onClose={onClose}
       wide
       footer={
-        duplicates ? (
+        guarded ? (
+          <>
+            <button type="button" className="action" disabled={busy} onClick={() => setGuarded(null)}>
+              Back
+            </button>
+            <button
+              type="button"
+              className="action primary"
+              disabled={busy}
+              onClick={() => {
+                setPlanId(guarded.planId);
+                setGuarded(null);
+                void submit(false, guarded.planId);
+              }}
+            >
+              {busy ? <span className="spinner" /> : null}
+              Save anyway
+            </button>
+          </>
+        ) : duplicates ? (
           <>
             <button type="button" className="action" disabled={busy} onClick={() => setDuplicates(null)}>
               Back
@@ -161,7 +204,16 @@ export function StoreDialog({
         )
       }
     >
-      {duplicates ? (
+      {guarded ? (
+        <div className="notice warn">
+          <Icon name="lock" />
+          <span>
+            This is a protected entry{guarded.reason ? <> — {guarded.reason.charAt(0).toLowerCase() + guarded.reason.slice(1)}</> : null}.
+            The store keeps it until someone deletes it, and every device in the group can open it.
+            Save it anyway?
+          </span>
+        </div>
+      ) : duplicates ? (
         <div className="stack">
           <div className="notice warn">
             <Icon name="alert" />

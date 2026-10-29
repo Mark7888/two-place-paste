@@ -6,6 +6,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 // Concurrent reads of a large image used to crash the process: Windows ties an
@@ -47,5 +50,70 @@ func TestConcurrentReadsOfALargeImage(t *testing.T) {
 	close(errs)
 	for err := range errs {
 		t.Errorf("Read: %v", err)
+	}
+}
+
+// writeMarked puts text on the clipboard together with extra registered
+// formats, the way a password manager does.
+func writeMarked(ctx context.Context, text string, extra map[string][]byte) error {
+	utf16, err := windows.UTF16FromString(text)
+	if err != nil {
+		return err
+	}
+	release, err := acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if r, _, err := procEmptyClipboard.Call(); r == 0 {
+		return err
+	}
+	set := func(format uint32, b []byte) error {
+		h, err := globalFromBytes(b)
+		if err != nil {
+			return err
+		}
+		if r, _, err := procSetClipboardData.Call(uintptr(format), h); r == 0 {
+			_, _, _ = procGlobalFree.Call(h)
+			return err
+		}
+		return nil
+	}
+	if err := set(cfUnicodeText, unsafe.Slice((*byte)(unsafe.Pointer(&utf16[0])), len(utf16)*2)); err != nil {
+		return err
+	}
+	for name, b := range extra {
+		if err := set(registeredFormat(name), b); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func TestReadReportsPrivacyFormats(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	c := newClipboard()
+	tests := []struct {
+		name  string
+		extra map[string][]byte
+		want  string
+	}{
+		{"plain copy", nil, ""},
+		{"excluded from monitors", map[string][]byte{winExcludeFromMonitors: {0}}, ReasonConcealed},
+		{"not for history", map[string][]byte{winCanIncludeInHistory: {0, 0, 0, 0}}, ReasonConcealed},
+		{"fine for history", map[string][]byte{winCanIncludeInHistory: {1, 0, 0, 0}}, ""},
+	}
+	for _, tt := range tests {
+		if err := writeMarked(ctx, "s3cret", tt.extra); err != nil {
+			t.Skipf("this session has no usable clipboard: %v", err)
+		}
+		got, err := c.Read(ctx)
+		if err != nil {
+			t.Fatalf("%s: Read: %v", tt.name, err)
+		}
+		if got.Text() != "s3cret" || got.Concealed != tt.want {
+			t.Errorf("%s: Read = %q, concealed %q; want s3cret, %q", tt.name, got.Text(), got.Concealed, tt.want)
+		}
 	}
 }

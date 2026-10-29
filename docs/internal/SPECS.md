@@ -707,6 +707,16 @@ binary, served from localhost and opened in the user's default browser.
   from bytes the page fetches with its token. A file whose bytes do not match its name
   is not previewed.
 - Device management and pairing (show QR, scan not applicable — paste token)
+- Sensitive content: a clipboard change that its application marked as private (a password
+  manager's), or that matches a built-in detector or one of the user's filters, is never
+  uploaded by auto-watch, is masked on screen, and is uploaded by hand, or saved to the
+  store (§6b), only after the user confirms that action for that copy. Detection of the OS marker is on by default; the decision and the filters are
+  local to the device and nothing about them reaches the relay or the wire
+  (`docs/internal/plans/auto-upload-filters.md`).
+- Pausing auto-sync: one switch, in the UI and the tray menu, holds both automatic
+  directions for five minutes. A copy made while paused is never uploaded on its own, an
+  entry announced while paused is left for Download, and manual sync still works. The
+  pause is local, kept in memory only, and ends by itself or when the user resumes.
 
 **Autostart on login:** user setting, **default off**. Implemented via launchd plist on
 macOS and a registry Run key on Windows.

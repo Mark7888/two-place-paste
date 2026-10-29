@@ -94,7 +94,7 @@ func TestAutoUploadLimit(t *testing.T) {
 
 	// By hand, the limit does not apply.
 	f.clip.set(big)
-	if _, err := f.svc.Sync(ctx, localui.DirectionUpload); err != nil {
+	if _, err := f.svc.Sync(ctx, localui.SyncRequest{Direction: localui.DirectionUpload}); err != nil {
 		t.Fatalf("Sync(upload) of an over-limit clipboard error = %v", err)
 	}
 	if n := f.relay.count(); n != 2 {
@@ -146,7 +146,7 @@ func TestAutoDownloadLimit(t *testing.T) {
 	}
 
 	// By hand, the limit does not apply.
-	if _, err := f.svc.Sync(ctx, localui.DirectionDownload); err != nil {
+	if _, err := f.svc.Sync(ctx, localui.SyncRequest{Direction: localui.DirectionDownload}); err != nil {
 		t.Fatalf("Sync(download) of an over-limit entry error = %v", err)
 	}
 	if got, _ := f.clip.Read(ctx); len(got.Body) != 3<<20 {
@@ -240,7 +240,7 @@ func TestSkippedNoticeLifetime(t *testing.T) {
 		f := setup(t)
 		f.svc.onClipboardChange(ctx, big(2<<20), f.now())
 		f.clip.set(big(2 << 20))
-		if _, err := f.svc.Sync(ctx, localui.DirectionUpload); err != nil {
+		if _, err := f.svc.Sync(ctx, localui.SyncRequest{Direction: localui.DirectionUpload}); err != nil {
 			t.Fatalf("Sync(upload) error = %v", err)
 		}
 		if s := skipped(f); s != nil {

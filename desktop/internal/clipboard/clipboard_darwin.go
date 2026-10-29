@@ -26,7 +26,7 @@ const commandTimeout = 10 * time.Second
 //
 // The cost is a process per flavour per read, which is why the watcher must
 // not read on every poll. Sequence is how it avoids that: the pasteboard's
-// change counter, read through AppKit (changecount_darwin.go), tells it when
+// change counter, read through AppKit (pasteboard_darwin.go), tells it when
 // there is anything new to read at all.
 type darwinClipboard struct{}
 
@@ -44,7 +44,36 @@ func (darwinClipboard) Sequence(context.Context) (uint64, error) {
 	return n, nil
 }
 
+// Read returns the pasteboard's content with its privacy marker.
+//
+// The marker comes from the pasteboard's type list, read through AppKit,
+// and the content from the helper tools: two reads, and another application
+// may copy between them. The change count brackets them. When it moved, the
+// read is tried once more; when it moved again, the marker is taken from
+// both type lists, so a race can mark a plain copy as private but never
+// unmark a password: the first costs a question, the second a leak.
 func (c darwinClipboard) Read(ctx context.Context) (Content, error) {
+	var seen []string
+	for attempt := 0; ; attempt++ {
+		before, countBefore, ok := pasteboardTypes()
+		content, err := c.readContent(ctx)
+		if err != nil || !ok {
+			return content, err
+		}
+		after, countAfter, _ := pasteboardTypes()
+		if countBefore == countAfter {
+			content.Concealed = concealedFromTypes(before)
+			return content, nil
+		}
+		seen = append(append(seen, before...), after...)
+		if attempt == 1 {
+			content.Concealed = concealedFromTypes(seen)
+			return content, nil
+		}
+	}
+}
+
+func (c darwinClipboard) readContent(ctx context.Context) (Content, error) {
 	// File first: a copied file also offers a text flavour holding its name,
 	// and answering with the name instead of the file would be wrong.
 	if path, err := c.readFilePath(ctx); err == nil {

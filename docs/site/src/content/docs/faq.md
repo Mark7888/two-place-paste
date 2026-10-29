@@ -9,6 +9,13 @@ No, and there will not be a way to. Every entry lives exactly 24 hours. The rela
 whole hours of storage at once without looking anything up, and that only works because no entry's
 lifetime can change.
 
+### Will it upload passwords I copy from my password manager?
+
+Not on its own. The desktop app recognises what most password managers mark as private, and keeps it
+on that computer even with *Watch the clipboard* on; you can still push it by hand after a
+confirmation. You can add your own filters too. See
+[Sensitive content](/two-place-paste/guides/sensitive-content/).
+
 ### Can the server operator read my clipboard?
 
 No. The relay only ever has ciphertext and a wrapped copy of your group's key that it cannot

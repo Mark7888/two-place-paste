@@ -29,6 +29,16 @@ fetch it with **Download** or [History](/two-place-paste/guides/history/) — th
 limited. A notice at the top of the app (and a **!** on the [tray icon](/two-place-paste/guides/tray/))
 says what was held back, until you dismiss it or the next entry moves.
 
+## Sensitive content
+
+| Setting | Default | What it does |
+|---|---|---|
+| **Detect password managers and private copies** | On | A copy its app marks as private — a password manager's, most often — is not uploaded automatically, and **Upload** asks before sending it. |
+| **Filters** | Private keys only | Your own filters and the built-in detectors. The line shows how many are on; **Edit…** opens the filter editor. |
+
+See [Sensitive content](/two-place-paste/guides/sensitive-content/) for what each detector and
+filter kind matches.
+
 ## This device
 
 | Setting | Default | What it does |
@@ -62,7 +72,8 @@ the app is built from, as a plain-text page.
 ## The settings file
 
 Settings are stored as plain JSON in `desktop.json`, so you can edit it by hand — for example to
-fix the port when the app cannot start. It holds nothing secret.
+fix the port when the app cannot start. It holds no keys. Your sensitive-content filters are in it
+as you typed them, except an *Exact match*, which is stored only as a hash.
 
 | OS | Location |
 |---|---|

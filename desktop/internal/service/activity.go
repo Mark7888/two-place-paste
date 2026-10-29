@@ -1,6 +1,9 @@
 package service
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 // ErrDirectionUnknown is the cause of the error Sync returns when it was asked
 // to pick a direction and cannot (SPEC §6). The UI answers it with two
@@ -42,6 +45,14 @@ type Activity struct {
 	// back — over the user's size limit, or failed — and is still waiting for
 	// the user to send or fetch it by hand: "upload", "download", or empty.
 	Skipped string
+
+	// Paused is set while auto-sync is paused, until PausedUntil.
+	Paused      bool
+	PausedUntil time.Time
+
+	// AutoSync is whether either automatic direction is switched on, which
+	// is when pausing means anything.
+	AutoSync bool
 }
 
 // beginDownload marks a download as under way, and returns the function that
@@ -74,6 +85,8 @@ func (s *Service) Activity() Activity {
 	if s.skipped != nil {
 		a.Skipped = s.skipped.Direction
 	}
+	a.Paused, a.PausedUntil = s.pausedLocked()
+	a.AutoSync = s.settings.AutoWatch || s.settings.AutoApply
 	relay := s.relay
 	s.mu.Unlock()
 	// Outside the lock: the relay has a lock of its own, and nothing here

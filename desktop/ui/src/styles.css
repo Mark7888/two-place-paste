@@ -880,3 +880,101 @@ button.chip:hover { color: var(--ink); background: var(--surface-sunken); }
 .add-zone-text strong { color: var(--ink); font-weight: 600; }
 .drop-zone.over .add-zone-text strong { color: var(--accent); }
 .add-zone-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+/* --- sensitive content ---------------------------------------------------
+ *
+ * A masked clipboard is a line, not a box: what it is, how long, why, and
+ * an eye to show it. The filter editor's tabs are two buttons over one
+ * draft; a row a test matches is tinted, and a tab hiding one gets a dot. */
+
+.masked {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+  padding: 0.45rem 0.6rem;
+  background: var(--surface-sunken);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+}
+
+input[type="password"] { height: 2.25rem; padding-top: 0; padding-bottom: 0; }
+
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 0.6rem;
+}
+
+.tabs button {
+  position: relative;
+  padding: 0.5rem 0.8rem;
+  font: inherit;
+  font-weight: 600;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+}
+
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+
+.tab-dot {
+  display: inline-block;
+  width: 0.45rem;
+  height: 0.45rem;
+  margin-left: 0.35rem;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.tab-tools { justify-content: flex-end; margin-bottom: 0.6rem; }
+
+.filter-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.filter-line { display: flex; gap: 0.45rem; align-items: center; }
+.filter-line > input[type="checkbox"] { flex: none; width: 1rem; height: 1rem; accent-color: var(--accent); }
+.filter-line > select { flex: 0 1 11rem; }
+.filter-line > .grow { flex: 2 1 auto; }
+.filter-line > input[aria-label="Label"] { flex: 1 1 9rem; }
+
+.filter-row.match,
+label.toggle.match { background: var(--warn-soft); }
+.filter-row.invalid { border-color: var(--danger); }
+
+.filter-test {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 1rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--line-soft);
+}
+
+.filter-test h3 { margin: 0; }
+
+.modal-foot .grow-left { margin-right: auto; align-self: center; }
+
+@media (max-width: 34rem) {
+  .filter-line { flex-wrap: wrap; }
+}
+
+/* The editor keeps its tabs and its test box in view: only the rows scroll. */
+.modal-body:has(.filter-test) { max-height: min(80vh, 48rem); }
+.filter-scroll { max-height: min(38vh, 24rem); overflow-y: auto; padding-right: 0.2rem; }
+
+/* A button that belongs to the row but not to its group, such as pausing
+   auto-sync beside the three sync buttons. */
+.row > .push-right { margin-left: auto; }

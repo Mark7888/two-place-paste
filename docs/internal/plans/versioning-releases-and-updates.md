@@ -256,7 +256,7 @@ Rules that apply to every channel:
 - **macOS:** use **`NSBackgroundActivityScheduler`** (interval 6 h, tolerance 2 h,
   `qualityOfService = .utility`). This is Apple's API for exactly this case. The system
   coalesces the work with other wake-ups and **defers it on battery, in Low Power Mode, and
-  under thermal pressure**. A small cgo shim is enough, the same way `clipboard/changecount_darwin.go`
+  under thermal pressure**. A small cgo shim is enough, the same way `clipboard/pasteboard_darwin.go`
   is done, and the callback calls into Go. Also skip auto-checks when
   `NSProcessInfo.isLowPowerModeEnabled`. A `!cgo` build falls back to the Go loop below.
 - **Windows (and the fallback):** a goroutine with a coarse ticker (30 min) that only does
