@@ -114,6 +114,23 @@ export interface NoticesPort {
   read(): Promise<string | null>;
 }
 
+/** AppVersion is which build of the app is running. */
+export interface AppVersion {
+  /** version is the build's version, as scripts/version.sh computed it ("0.0.0-local" for a local build). */
+  version: string;
+  /**
+   * stamp is the build's stamp: whole seconds since 2025-01-01T00:00:00Z when
+   * CI built it, or 0 when it was built locally or the platform cannot say.
+   */
+  stamp: number;
+}
+
+/** AppInfoPort says which build of the app this is, for Settings. */
+export interface AppInfoPort {
+  /** version resolves with the running build's version and stamp. */
+  version(): Promise<AppVersion>;
+}
+
 /** TilePort is the quick-settings tile (SPEC §7.1). It exists on Android and is a no-op elsewhere. */
 export interface TilePort {
   /** available reports whether this platform has a quick-settings tile at all. */
