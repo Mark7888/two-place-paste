@@ -1,5 +1,5 @@
 /**
- * The two native modules this app ships, declared once.
+ * The native modules this app ships, declared once.
  *
  * `TppTile` is the bridge to the quick-settings tile (SPEC §7.1); `TppClipboard`
  * fills the gap the clipboard library leaves on Android — its image methods are
@@ -89,7 +89,14 @@ export interface TppNoticesModule {
   read(): Promise<string | null>;
 }
 
+/** TppAppInfoModule is implemented by `android/app/src/main/java/.../AppInfoModule.kt`. */
+export interface TppAppInfoModule {
+  /** read resolves with the APK's version name and version code (the build's stamp). */
+  read(): Promise<{ version: string; stamp: number }>;
+}
+
 const modules = NativeModules as {
+  TppAppInfo?: TppAppInfoModule;
   TppCache?: TppCacheModule;
   TppNotices?: TppNoticesModule;
   TppTile?: TppTileModule;
@@ -102,6 +109,7 @@ export const TppClipboard: TppClipboardModule | null = modules.TppClipboard ?? n
 export const TppFiles: TppFilesModule | null = modules.TppFiles ?? null;
 export const TppCache: TppCacheModule | null = modules.TppCache ?? null;
 export const TppNotices: TppNoticesModule | null = modules.TppNotices ?? null;
+export const TppAppInfo: TppAppInfoModule | null = modules.TppAppInfo ?? null;
 
 /** TILE_REQUEST_EVENT is emitted by the native tile bridge when a tap reaches a running app. */
 export const TILE_REQUEST_EVENT = 'TppTileSyncRequested';
