@@ -186,6 +186,11 @@ type Service struct {
 	// pushPlans are "push anyway?" questions awaiting an answer.
 	pushPlans map[string]*pushPlan
 
+	// pausedUntil is when a pause of auto-sync ends, or zero (pause.go);
+	// pauseTimer announces the end.
+	pausedUntil time.Time
+	pauseTimer  *time.Timer
+
 	plans       map[string]*plan
 	offerPlans  map[string]*offerPlan
 	offer       Offer
@@ -282,6 +287,7 @@ func (s *Service) SetListenPort(port int) {
 // ctx is done, then ends every UI event stream.
 func (s *Service) Run(ctx context.Context) {
 	defer s.hub.close()
+	defer s.stopPauseTimer()
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -407,11 +413,13 @@ func (s *Service) Status(ctx context.Context) localui.Status {
 		v := *s.sensitiveNote
 		note = &v
 	}
+	pause := s.pauseViewLocked()
 	s.mu.Unlock()
 
 	st := localui.Status{
 		Skipped:       skipped,
 		SensitiveNote: note,
+		Pause:         pause,
 		Connected:     connected,
 		Revoked:       revoked,
 		GroupDeleted:  groupDeleted,
@@ -1351,6 +1359,8 @@ func (s *Service) UpdateSettings(ctx context.Context, p localui.SettingsPatch) (
 	s.classifier = classifier
 	s.mu.Unlock()
 	s.watcher.SetEnabled(next.AutoWatch && s.clip.Available())
+	// Whether pausing means anything depends on the two auto toggles.
+	s.activityChanged()
 	if s.updates != nil {
 		s.updates.SetPreferences(next)
 	}
@@ -1377,6 +1387,13 @@ func (s *Service) onClipboardChange(ctx context.Context, c clipboard.Content, at
 	// The user's copy is newer than anything still downloading: let that go
 	// rather than have it land on top of this.
 	s.cancelDownload(time.Time{})
+
+	// A pause holds everything automatic. The copy is not queued for later:
+	// what is copied while paused stays here (pause.go).
+	if on, _ := s.paused(); on {
+		s.logger.InfoContext(ctx, "clipboard change not uploaded automatically: auto-sync is paused")
+		return
+	}
 
 	// Sensitive before size: a password over the size limit is reported as
 	// what it is, and either way it stays here. Upload still offers it, and
@@ -1520,6 +1537,9 @@ func (s *Service) catchUp(ctx context.Context) {
 // runs catchUp, so an entry written during the sleep arrives now rather than
 // never.
 func (s *Service) Resumed(slept time.Duration) {
+	// A pause that ran out while the machine slept ends now, not when its
+	// timer catches up (pause.go).
+	s.pauseEnded()
 	s.mu.Lock()
 	relay := s.relay
 	s.mu.Unlock()
@@ -1560,6 +1580,15 @@ func (s *Service) applyAnnounced(ctx context.Context, meta tppclient.EntryMeta) 
 		return
 	}
 	if meta.CreatedAt.Before(applied) || meta.CreatedAt.Before(s.watcher.LastChange()) {
+		return
+	}
+	if paused, _ := s.paused(); paused {
+		s.logger.InfoContext(ctx, "announced entry not applied automatically: auto-sync is paused", "entry_id", meta.ID)
+		s.noteSkipped(localui.SkippedView{
+			Direction: "download", EntryID: meta.ID, Bytes: meta.Size,
+			Message: fmt.Sprintf("A %s entry arrived while auto-sync was paused and was not copied here. Use Download or History to get it.",
+				formatBytes(meta.Size)),
+		})
 		return
 	}
 	if limit > 0 && meta.Size > limit {

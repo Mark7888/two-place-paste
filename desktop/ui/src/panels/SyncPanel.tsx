@@ -28,6 +28,7 @@ export function SyncPanel({ status, onChanged }: { status: Status | null; onChan
   // The masked clipboard's text, fetched only when the eye is pressed.
   const [revealed, setRevealed] = useState<string | null>(null);
   const [revealing, setRevealing] = useState(false);
+  const [pausing, setPausing] = useState(false);
 
   // "changed 2 min ago" counts up on its own; without this it is only as fresh
   // as the last push from the service.
@@ -65,6 +66,21 @@ export function SyncPanel({ status, onChanged }: { status: Status | null; onChan
       }
     } finally {
       setBusy(null);
+    }
+  };
+
+  // One button for both directions of auto-sync: pause for five minutes, or
+  // resume. The notice above every tab says how long is left.
+  const togglePause = async (paused: boolean) => {
+    setPausing(true);
+    setError("");
+    try {
+      await api.setPaused(paused);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPausing(false);
     }
   };
 
@@ -152,6 +168,26 @@ export function SyncPanel({ status, onChanged }: { status: Status | null; onChan
             <Icon name="download" size={16} />
             {busy === "download" ? "Downloading…" : "Download"}
           </button>
+          {status.pause.paused ? (
+            <button className="action push-right" disabled={pausing} onClick={() => void togglePause(false)}>
+              <Icon name="play" size={16} />
+              Resume auto-sync
+            </button>
+          ) : (
+            <button
+              className="action quiet push-right"
+              disabled={pausing || !status.pause.available}
+              title={
+                status.pause.available
+                  ? "Hold automatic uploads and downloads for 5 minutes"
+                  : "Auto-sync is off: turn on Watch the clipboard or Take what other devices upload in Settings"
+              }
+              onClick={() => void togglePause(true)}
+            >
+              <Icon name="pause" size={16} />
+              Pause auto-sync for 5 min
+            </button>
+          )}
         </div>
 
         {error ? (

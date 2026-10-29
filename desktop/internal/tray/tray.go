@@ -52,6 +52,10 @@ type Options struct {
 	// plan id AskSensitive was given. It is run on its own goroutine.
 	PushSensitive func(planID string)
 
+	// TogglePause pauses auto-sync for a few minutes, or resumes it when it
+	// is paused. It is run on its own goroutine. Nil hides the item.
+	TogglePause func()
+
 	// CheckUpdates checks for an update. It is run on its own goroutine.
 	// Nil hides the item.
 	CheckUpdates func()
@@ -109,6 +113,11 @@ const (
 	// StatusSkippedDownload is the same for an entry another device wrote
 	// that was not put on this clipboard automatically.
 	StatusSkippedDownload
+
+	// StatusPaused is a connected, idle device whose auto-sync the user
+	// paused for a few minutes. It outranks a held-back transfer: while
+	// paused, holding things back is what the user asked for.
+	StatusPaused
 )
 
 // transferring reports whether a status is an entry on the move, which is
@@ -140,6 +149,8 @@ func (s Status) label() string {
 		return "Your last copy was not uploaded automatically — open the app"
 	case StatusSkippedDownload:
 		return "A new entry was not downloaded automatically — open the app"
+	case StatusPaused:
+		return "Auto-sync paused"
 	}
 	return ""
 }
@@ -222,6 +233,11 @@ type Tray struct {
 	onDirection  func(Direction)
 	revealChoice func(bool) // shows or hides the menu's direction items
 	choiceTimer  *time.Timer
+
+	// pause is auto-sync's pause as the menu item shows it, and revealPause
+	// redraws that item.
+	pause       PauseState
+	revealPause func(PauseState)
 
 	// The pending "push anyway?" question: the plan id that answers it, the
 	// callback that does, and the menu item that offers it.
@@ -455,6 +471,51 @@ func (t *Tray) withdrawSensitive() {
 		reveal(false)
 	}
 	withdrawSensitivePrompt()
+}
+
+// PauseState is what the pause menu item shows.
+type PauseState struct {
+	// Paused is set while auto-sync is paused, until Until.
+	Paused bool
+	Until  time.Time
+
+	// Available is false when neither automatic direction is on: there is
+	// nothing to pause, and the item is greyed out.
+	Available bool
+}
+
+// pauseMenuTitle is the pause item's text: the action it takes now.
+func pauseMenuTitle(p PauseState) string {
+	if p.Paused {
+		return "Resume auto-sync (paused until " + p.Until.Local().Format("15:04") + ")"
+	}
+	return "Pause auto-sync for 5 minutes"
+}
+
+// SetPause tells the tray whether auto-sync is paused. The icon follows from
+// the status (StatusPaused); this is the menu item.
+func (t *Tray) SetPause(p PauseState) {
+	t.mu.Lock()
+	t.pause = p
+	reveal := t.revealPause
+	t.mu.Unlock()
+	if reveal != nil {
+		reveal(p)
+	}
+}
+
+// setPauseItem is the platform handing over its menu's pause item. Like every
+// menu item, it is left alone once the event loop has ended.
+func (t *Tray) setPauseItem(reveal func(PauseState)) {
+	t.mu.Lock()
+	t.revealPause = func(p PauseState) {
+		if !t.gone.Load() {
+			reveal(p)
+		}
+	}
+	p, show := t.pause, t.revealPause
+	t.mu.Unlock()
+	show(p)
 }
 
 // setPushItem is the platform handing over its menu's Push anyway item. Like

@@ -86,6 +86,10 @@ func runMenu(ctx context.Context, t *Tray, opts Options) {
 	// protected entry.
 	pushItem := systray.AddMenuItem(pushMenuLabel, "Upload the protected clipboard to the group anyway")
 	pushItem.Hide()
+	pauseItem := systray.AddMenuItem(pauseMenuTitle(PauseState{}), "Hold automatic uploads and downloads for a few minutes")
+	if opts.TogglePause == nil {
+		pauseItem.Hide()
+	}
 	openItem := systray.AddMenuItem("Open TwoPlacePaste", "Open the app in your browser")
 	updateItem := systray.AddMenuItem("Check for updates…", "Check the update channel for a newer build")
 	if opts.CheckUpdates == nil {
@@ -109,6 +113,14 @@ func runMenu(ctx context.Context, t *Tray, opts Options) {
 			return
 		}
 		pushItem.Hide()
+	})
+	t.setPauseItem(func(p PauseState) {
+		pauseItem.SetTitle(pauseMenuTitle(p))
+		if p.Paused || p.Available {
+			pauseItem.Enable()
+		} else {
+			pauseItem.Disable()
+		}
 	})
 	t.attach(t.paintStatus(statusItem))
 
@@ -138,6 +150,10 @@ func runMenu(ctx context.Context, t *Tray, opts Options) {
 				t.choose(Download)
 			case <-pushItem.ClickedCh:
 				t.pushAnyway()
+			case <-pauseItem.ClickedCh:
+				if opts.TogglePause != nil {
+					go opts.TogglePause()
+				}
 			case <-updateItem.ClickedCh:
 				if opts.CheckUpdates != nil {
 					go opts.CheckUpdates()

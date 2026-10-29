@@ -14,6 +14,10 @@ type API interface {
 	// confirmed with the error's plan id.
 	Sync(ctx context.Context, req SyncRequest) (SyncResult, error)
 
+	// SetPaused pauses both automatic directions for a few minutes, or
+	// resumes them.
+	SetPaused(ctx context.Context, paused bool) PauseView
+
 	// RevealClipboard returns the preview of a clipboard the status masked
 	// as sensitive. It is only called when the user asks to see it.
 	RevealClipboard(ctx context.Context) (ClipboardReveal, error)

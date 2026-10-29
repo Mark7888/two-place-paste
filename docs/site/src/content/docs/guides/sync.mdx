@@ -7,6 +7,7 @@ import { Aside } from '@astrojs/starlight/components';
 import { Image } from 'astro:assets';
 import sync from '../../../assets/screenshots/desktop-sync.webp';
 import ask from '../../../assets/screenshots/desktop-sync-ask.webp';
+import paused from '../../../assets/screenshots/desktop-sync-paused.webp';
 
 The **Sync** tab shows what is on this computer's clipboard, the group's newest entry, and three
 buttons. The same actions are in the tray menu.
@@ -45,6 +46,24 @@ on another for one-way sync. Content the app put on the clipboard itself is neve
 Automatic syncing has a size limit (25 MB each way by default). A bigger entry is left for you to
 send with **Upload** or fetch with **Download** or [History](/two-place-paste/guides/history/); a
 notice at the top of the app says what was held back.
+
+## Pausing auto-sync
+
+**Pause auto-sync for 5 min** on the Sync tab, or **Pause auto-sync for 5 minutes** in the tray
+menu, holds both automatic directions at once:
+
+- nothing you copy is uploaded on its own — not during the pause and not after it;
+- a new entry from another device is not put on your clipboard; a notice says one arrived, and
+  **Download** or [History](/two-place-paste/guides/history/) gets it.
+
+**Upload**, **Download** and **Sync now** still work. While paused, a notice above every tab says
+until when, the tray icon shows a pause badge, and the same button and menu item read **Resume
+auto-sync**. The pause ends on its own after five minutes, and when the app restarts.
+
+<Image src={paused} alt="The Sync tab while auto-sync is paused, with a notice and a Resume auto-sync button" class="screenshot" />
+
+Pause before copying something you do not want on your other devices, such as a password from a
+browser extension.
 
 ## Passwords and other sensitive copies
 

@@ -64,6 +64,18 @@ type Status struct {
 	// password copy is routine, and the tray does not flag it. It clears when
 	// the clipboard changes again or something is synced.
 	SensitiveNote *SensitiveNote `json:"sensitive_note,omitempty"`
+
+	// Pause says whether auto-sync is paused, and until when.
+	Pause PauseView `json:"pause"`
+}
+
+// PauseView is the pause of auto-sync: both directions held for a few
+// minutes. Available is false when neither automatic direction is on, so
+// there is nothing to pause.
+type PauseView struct {
+	Paused    bool       `json:"paused"`
+	Until     *time.Time `json:"until,omitempty"`
+	Available bool       `json:"available"`
 }
 
 // SensitiveNote says why a clipboard change stayed on this device. It carries
@@ -507,6 +519,10 @@ const (
 	// this device (Status.SensitiveNote). It carries the reason, never the
 	// content.
 	EventSensitive = "sensitive"
+
+	// EventPause says auto-sync was paused or resumed, by the user or by the
+	// pause running out.
+	EventPause = "pause"
 
 	// EventProgress reports a chunked transfer of an entry larger than one
 	// frame, once per chunk.

@@ -713,6 +713,10 @@ binary, served from localhost and opened in the user's default browser.
   confirms. Detection of the OS marker is on by default; the decision and the filters are
   local to the device and nothing about them reaches the relay or the wire
   (`docs/internal/plans/auto-upload-filters.md`).
+- Pausing auto-sync: one switch, in the UI and the tray menu, holds both automatic
+  directions for five minutes. A copy made while paused is never uploaded on its own, an
+  entry announced while paused is left for Download, and manual sync still works. The
+  pause is local, kept in memory only, and ends by itself or when the user resumes.
 
 **Autostart on login:** user setting, **default off**. Implemented via launchd plist on
 macOS and a registry Run key on Windows.

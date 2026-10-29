@@ -974,3 +974,7 @@ label.toggle.match { background: var(--warn-soft); }
 /* The editor keeps its tabs and its test box in view: only the rows scroll. */
 .modal-body:has(.filter-test) { max-height: min(80vh, 48rem); }
 .filter-scroll { max-height: min(38vh, 24rem); overflow-y: auto; padding-right: 0.2rem; }
+
+/* A button that belongs to the row but not to its group, such as pausing
+   auto-sync beside the three sync buttons. */
+.row > .push-right { margin-left: auto; }

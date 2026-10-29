@@ -67,6 +67,16 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+func (s *Server) handleSetPaused(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Paused bool `json:"paused"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	writeJSON(w, http.StatusOK, s.api.SetPaused(r.Context(), body.Paused))
+}
+
 func (s *Server) handleRevealClipboard(w http.ResponseWriter, r *http.Request) {
 	res, err := s.api.RevealClipboard(r.Context())
 	if err != nil {

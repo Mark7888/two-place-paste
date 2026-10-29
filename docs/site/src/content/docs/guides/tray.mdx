@@ -17,6 +17,7 @@ clipboard that changes to show what the app is doing.
 | <TrayIcon state="syncing" alt="Uploading and downloading" /> | **Both at once** (⇅). |
 | <TrayIcon state="disconnected" alt="Disconnected" /> | **Disconnected** — struck through. It keeps retrying on its own. |
 | <TrayIcon state="unpaired" alt="Not paired" /> | **Not paired yet** — faded and empty. Open the app to [create](/two-place-paste/guides/create-a-group/) or [join](/two-place-paste/guides/add-a-device/) a group. |
+| <TrayIcon state="paused" alt="Auto-sync paused" /> | **Auto-sync paused** — the pause badge. Nothing is uploaded or downloaded on its own until the pause ends. See [Pausing auto-sync](/two-place-paste/guides/sync/#pausing-auto-sync). |
 | <TrayIcon state="skipped" alt="Needs attention" /> | **Needs a look** — the **!** badge. An automatic upload or download was held back by your [size limit](/two-place-paste/guides/settings/#automatic-size-limits), or failed. It clears at the next sync or when you dismiss the notice in the app. |
 
 Hovering the icon shows the same state in words, after the group's name — the name whoever runs the
@@ -29,6 +30,7 @@ relay gave it. The app's window shows that name in its title bar too.
 | *(status line)* | The state above, in words. |
 | **Sync now** | Syncs in whichever direction is newer — see [Syncing](/two-place-paste/guides/sync/). |
 | **Upload this clipboard** / **Download the latest** | Appear for a few minutes after **Sync now** could not tell which way to go. |
+| **Pause auto-sync for 5 minutes** / **Resume auto-sync (paused until …)** | One item: pauses both automatic directions for five minutes, and while paused, ends the pause. Greyed out when neither *Watch the clipboard* nor *Take what other devices upload* is on. |
 | **Push protected entry anyway** | Appears for two minutes after a sync from the tray would have uploaded a [sensitive copy](/two-place-paste/guides/sensitive-content/). The same question also arrives as a notification with a **Push anyway** button. |
 | **Open TwoPlacePaste** | Opens the app in your browser. Starting the app again while it runs (from the Start menu, Launchpad or a double-click) does the same. |
 | **Check for updates…** | Checks your [update channel](/two-place-paste/install/updates/). |

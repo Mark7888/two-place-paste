@@ -40,6 +40,14 @@ export interface ClipboardView {
   chars?: number;
 }
 
+/** PauseView is auto-sync's pause. available is false when neither automatic
+ *  direction is on, so there is nothing to pause. */
+export interface PauseView {
+  paused: boolean;
+  until?: string;
+  available: boolean;
+}
+
 /** SensitiveNote is the last copy auto-watch kept here because it was sensitive. */
 export interface SensitiveNote {
   reason: string;
@@ -92,6 +100,8 @@ export interface Status {
    */
   skipped?: SkippedView;
   sensitive_note?: SensitiveNote;
+  /** Auto-sync's pause: both automatic directions held for five minutes. */
+  pause: PauseView;
   in_group: boolean;
   connected: boolean;
   epoch: number;
@@ -571,6 +581,8 @@ export const api = {
   // planId confirms an upload the service refused as a protected entry.
   sync: (direction: Direction, planId?: string) =>
     request<SyncResult>("POST", "/api/sync", planId ? { direction, plan_id: planId } : { direction }),
+  // Pauses both automatic directions for five minutes, or resumes them.
+  setPaused: (paused: boolean) => request<PauseView>("POST", "/api/pause", { paused }),
   // A POST, like previewEntry: it returns clipboard text the status withheld.
   revealClipboard: () => request<{ preview: string }>("POST", "/api/clipboard/reveal", {}),
   testFilters: (t: FilterTest) => request<{ matches: FilterMatch[] }>("POST", "/api/filters/test", t),

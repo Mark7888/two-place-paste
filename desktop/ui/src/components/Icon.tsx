@@ -41,7 +41,9 @@ export type IconName =
   | "trash"
   | "lock"
   | "eye"
-  | "eye-off";
+  | "eye-off"
+  | "pause"
+  | "play";
 
 // Paths are stroked, never filled, so one set reads correctly on both themes.
 const paths: Record<IconName, string> = {
@@ -71,6 +73,8 @@ const paths: Record<IconName, string> = {
   tag: "M3 12V3h9l9 9-9 9zM7.5 7.5h.01",
   edit: "M4 20h4L19 9l-4-4L4 16zM14 6l4 4",
   lock: "M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4",
+  pause: "M9 5v14M15 5v14",
+  play: "M7 5l12 7-12 7z",
   eye: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
   "eye-off":
     "M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3 3.9M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a10 10 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2",

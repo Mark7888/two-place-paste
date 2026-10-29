@@ -71,6 +71,11 @@ func (s *stubAPI) Sync(context.Context, SyncRequest) (SyncResult, error) {
 	return SyncResult{Direction: DirectionUpload, Changed: true, Message: "uploaded"}, s.nextErr
 }
 
+func (s *stubAPI) SetPaused(_ context.Context, paused bool) PauseView {
+	s.record("pause")
+	return PauseView{Paused: paused, Available: true}
+}
+
 func (s *stubAPI) RevealClipboard(context.Context) (ClipboardReveal, error) {
 	s.record("reveal")
 	return ClipboardReveal{Preview: "hunter2"}, nil
@@ -225,6 +230,7 @@ func TestOriginIsValidatedOnEveryRequest(t *testing.T) {
 		{"GET", "/api/status", ""},
 		{"POST", "/api/sync", `{"direction":"upload"}`},
 		{"DELETE", "/api/skipped", ""},
+		{"POST", "/api/pause", `{"paused":true}`},
 		{"POST", "/api/clipboard/reveal", `{}`},
 		{"POST", "/api/filters/test", `{"text":"x"}`},
 		{"GET", "/api/history", ""},

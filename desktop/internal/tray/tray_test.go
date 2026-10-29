@@ -173,7 +173,7 @@ func TestEveryStatusHasItsOwnGlyph(t *testing.T) {
 		StatusSkippedDownload: StatusSkippedUpload,
 	}
 	seen := map[string]Status{}
-	for s := StatusConnecting; s <= StatusSkippedDownload; s++ {
+	for s := StatusConnecting; s <= StatusPaused; s++ {
 		set := icons(inkDark, s)
 		if len(set.png) == 0 || len(set.ico) == 0 {
 			t.Fatalf("icons(%v) is empty", s)
@@ -297,5 +297,42 @@ func TestSensitiveBody(t *testing.T) {
 		if got := sensitiveBody(reason); got != want {
 			t.Errorf("sensitiveBody(%q) = %q, want %q", reason, got, want)
 		}
+	}
+}
+
+func TestPauseMenuItem(t *testing.T) {
+	t.Parallel()
+
+	tr := New(nil)
+	var got []PauseState
+	tr.setPauseItem(func(p PauseState) { got = append(got, p) })
+	if len(got) != 1 || got[0].Paused {
+		t.Fatalf("the item was not drawn as not paused when handed over: %+v", got)
+	}
+
+	until := time.Date(2026, 10, 29, 14, 32, 0, 0, time.Local)
+	tr.SetPause(PauseState{Paused: true, Until: until, Available: true})
+	if last := got[len(got)-1]; !last.Paused || !last.Until.Equal(until) {
+		t.Errorf("item state = %+v, want paused until %v", last, until)
+	}
+
+	tests := []struct {
+		p    PauseState
+		want string
+	}{
+		{PauseState{Available: true}, "Pause auto-sync for 5 minutes"},
+		{PauseState{Paused: true, Until: until, Available: true}, "Resume auto-sync (paused until 14:32)"},
+	}
+	for _, tt := range tests {
+		if got := pauseMenuTitle(tt.p); got != tt.want {
+			t.Errorf("pauseMenuTitle(%+v) = %q, want %q", tt.p, got, tt.want)
+		}
+	}
+
+	tr.gone.Store(true)
+	before := len(got)
+	tr.SetPause(PauseState{})
+	if len(got) != before {
+		t.Error("the pause item changed after the tray went")
 	}
 }

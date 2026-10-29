@@ -176,6 +176,7 @@ func run(logger *slog.Logger) error {
 		Updates:         updater,
 		OnActivity: func(a service.Activity) {
 			tr.SetGroupName(a.GroupName)
+			tr.SetPause(tray.PauseState{Paused: a.Paused, Until: a.PausedUntil, Available: a.AutoSync})
 			tr.SetStatus(trayStatus(a))
 		},
 		Logger: logger,
@@ -302,6 +303,9 @@ func run(logger *slog.Logger) error {
 			}
 			syncFromTray(runCtx, svc, tr, dir, logger)
 		},
+		TogglePause: func() {
+			svc.TogglePause(runCtx)
+		},
 		PushSensitive: func(planID string) {
 			runTraySync(runCtx, svc, tr, localui.SyncRequest{Direction: localui.DirectionUpload, PlanID: planID}, logger)
 		},
@@ -417,6 +421,9 @@ func trayStatus(a service.Activity) tray.Status {
 		return tray.StatusDisconnected
 	case !a.Connected:
 		return tray.StatusConnecting
+	// A pause is the user's own choice and outranks what it holds back.
+	case a.Paused:
+		return tray.StatusPaused
 	// A held-back transfer is the resting state's footnote: it shows only
 	// when nothing more pressing does.
 	case a.Skipped == "upload":
