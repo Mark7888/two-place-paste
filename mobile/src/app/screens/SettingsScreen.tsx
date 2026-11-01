@@ -9,11 +9,12 @@
  * made: in the dialog that leaves the group.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Alert, Linking, Text, View } from 'react-native';
 
 import { publicKey, toHex } from '../../core';
-import { tile } from '../../platform';
+import { appInfo, tile, type AppVersion } from '../../platform';
+import { builtAt } from '../buildStamp';
 import { LicensesScreen } from '../LicensesScreen';
 import { useSession } from '../SessionContext';
 import { failureMessage } from '../session';
@@ -24,8 +25,21 @@ export function SettingsScreen(): React.JSX.Element {
   const session = useSession();
   const [message, setMessage] = useState('');
   const [showLicenses, setShowLicenses] = useState(false);
+  const [build, setBuild] = useState<AppVersion | null>(null);
   const client = session.client;
   const state = client?.snapshot();
+
+  useEffect(() => {
+    let live = true;
+    appInfo.version().then(
+      (v) => live && setBuild(v),
+      // The rows stay "—": a version that cannot be read is not worth an error notice.
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const forget = () => {
     Alert.alert(
@@ -96,6 +110,11 @@ export function SettingsScreen(): React.JSX.Element {
         </View>
       </Section>
 
+      <Section title="Version">
+        <Fact label="Version" value={build === null || build.version === '' ? '—' : build.version} mono />
+        <Fact label="Built" value={builtLabel(build)} />
+      </Section>
+
       <Section title="About">
         <View style={{ gap: 10 }}>
           <Text style={styles.muted}>
@@ -124,6 +143,14 @@ export function SettingsScreen(): React.JSX.Element {
 
 /** SOURCE_URL is where the app's source code is published. */
 const SOURCE_URL = 'https://github.com/Mark7888/two-place-paste';
+
+/** builtLabel says when the running build was made, as the desktop's Updates section does. */
+function builtLabel(build: AppVersion | null): string {
+  if (build === null || build.version === '') {
+    return '—';
+  }
+  return builtAt(build.stamp)?.toLocaleString() ?? 'locally';
+}
 
 /** Fact is one label-and-value row. */
 function Fact({
