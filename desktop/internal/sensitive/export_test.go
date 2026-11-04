@@ -131,7 +131,7 @@ func TestPlanImport(t *testing.T) {
 		"iban":         {ImportUnchanged, false},
 		"quantum_keys": {ImportInvalid, false},
 	} {
-		if d := got[name]; d.Status != w.status || d.Selected != w.selected {
+		if d := got[name]; d.Status != w.status || d.Selected != w.selected || d.Enabled != doc.Detectors[name] {
 			t.Errorf("detector %s = %s selected=%v, want %s selected=%v", name, d.Status, d.Selected, w.status, w.selected)
 		}
 	}

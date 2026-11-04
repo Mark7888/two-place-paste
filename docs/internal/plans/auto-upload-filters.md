@@ -483,6 +483,8 @@ is salted for one install.
 - Import compares the clipboard's export with the editor's draft
   (`sensitive.PlanImport`) and only ever lands in the draft. A filter keeps its ID
   across devices: the same ID with different content is an update (unticked), the same
-  ID or the same match is a duplicate, and a new one is ticked. Turning a detector on
-  starts ticked, turning one off does not. Unknown kinds and detectors from a newer
+  ID or the same match is a duplicate, and a new one is ticked. A built-in
+  detector's box is its state after the import, and every changeable one starts on:
+  one the export turns on is turned on, one the export has off stays on until it is
+  unticked. Unknown kinds and detectors from a newer
   version are listed as not importable.

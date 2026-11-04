@@ -287,6 +287,8 @@ export interface DetectorImportRow {
   name: string;
   title?: string;
   status: DetectorImportStatus;
+  /** Its state in the export; for an unchanged one, also its state here. */
+  enabled: boolean;
   selected: boolean;
   reason?: string;
 }

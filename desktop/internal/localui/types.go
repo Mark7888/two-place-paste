@@ -472,9 +472,12 @@ type FilterImportRow struct {
 // "turn_on", "turn_off", "unchanged" or "invalid" (one this build does not
 // have); a turn-off starts unticked.
 type DetectorImportRow struct {
-	Name     string `json:"name"`
-	Title    string `json:"title,omitempty"`
-	Status   string `json:"status"`
+	Name   string `json:"name"`
+	Title  string `json:"title,omitempty"`
+	Status string `json:"status"`
+	// Enabled is the detector's state in the export: for an unchanged one,
+	// also its state here.
+	Enabled  bool   `json:"enabled"`
 	Selected bool   `json:"selected"`
 	Reason   string `json:"reason,omitempty"`
 }

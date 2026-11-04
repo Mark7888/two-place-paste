@@ -185,6 +185,8 @@ type ImportDetectorRow struct {
 	Name   string
 	Title  string // empty for a detector this build does not have
 	Status ImportStatus
+	// Enabled is the detector's state in the export.
+	Enabled bool
 	// Selected: turning one on starts ticked, turning one off does not. An
 	// import should not quietly lower the protection.
 	Selected bool
@@ -285,7 +287,7 @@ func PlanImport(e Export, current []Filter, enabledDetectors []string) ImportPla
 			if !listed {
 				continue
 			}
-			row := ImportDetectorRow{Name: d.Name, Title: d.Title}
+			row := ImportDetectorRow{Name: d.Name, Title: d.Title, Enabled: want}
 			switch {
 			case want == on[d.Name]:
 				row.Status = ImportUnchanged
@@ -305,7 +307,7 @@ func PlanImport(e Export, current []Filter, enabledDetectors []string) ImportPla
 		slices.Sort(unknown)
 		for _, name := range unknown {
 			plan.Detectors = append(plan.Detectors, ImportDetectorRow{
-				Name: name, Status: ImportInvalid, Reason: "a built-in filter this version does not have",
+				Name: name, Status: ImportInvalid, Enabled: e.Detectors[name], Reason: "a built-in filter this version does not have",
 			})
 		}
 	}

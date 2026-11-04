@@ -22,9 +22,14 @@ export interface ImportChoice {
  * The import dialog: what the clipboard's export would do to the editor's
  * draft, row by row, for the user to tick.
  *
- * New filters start ticked. An update — the same filter, changed on another
- * device — starts unticked, since it overwrites something. Turning a built-in
- * filter on starts ticked and turning one off does not: an import should not
+ * Custom filters are ticked to be imported. New filters start ticked. An
+ * update — the same filter, changed on another device — starts unticked,
+ * since it overwrites something.
+ *
+ * A built-in filter is different: it already exists, so its box is whether it
+ * will be on after the import, like the editor's own switches. One the export
+ * turns on starts ticked; one the export has off also starts ticked — still
+ * on — and is turned off only if the user unticks it. An import should not
  * quietly lower the protection. What this device already has, and what it
  * cannot take, is listed without a box.
  */
@@ -58,7 +63,9 @@ export function FilterImportDialog({
         setTicked(
           new Set([
             ...p.filters.filter((r) => r.selected).map((r) => filterKey(r)),
-            ...p.detectors.filter((r) => r.selected).map((r) => detectorKey(r)),
+            // For a built-in filter, ticked is "on after the import": the
+            // service's selected says whether to apply the export's state.
+            ...p.detectors.filter((r) => canTickDetector(r) && onAfter(r)).map((r) => detectorKey(r)),
           ]),
         );
       } catch (err) {
@@ -90,15 +97,19 @@ export function FilterImportDialog({
   const detectorRows = plan?.detectors ?? [];
   const tickableFilters = filterRows.filter(canTickFilter).map(filterKey);
   const tickableDetectors = detectorRows.filter(canTickDetector).map(detectorKey);
-  const count = [...tickableFilters, ...tickableDetectors].filter((k) => ticked.has(k)).length;
+  // A built-in filter is a change only when its box differs from how it is
+  // set on this device now.
+  const changesDetector = (r: DetectorImportRow) => canTickDetector(r) && ticked.has(detectorKey(r)) !== (r.status === "turn_off");
+  const count =
+    tickableFilters.filter((k) => ticked.has(k)).length + detectorRows.filter(changesDetector).length;
 
   const apply = () => {
     if (!plan) return;
     onImport({
       filters: filterRows.filter((r) => canTickFilter(r) && ticked.has(filterKey(r))).map((r) => r.filter),
       detectors: detectorRows
-        .filter((r) => canTickDetector(r) && ticked.has(detectorKey(r)))
-        .map((r) => ({ name: r.name, enabled: r.status === "turn_on" })),
+        .filter(changesDetector)
+        .map((r) => ({ name: r.name, enabled: ticked.has(detectorKey(r)) })),
     });
   };
 
@@ -177,25 +188,31 @@ export function FilterImportDialog({
             <section className="import-section">
               <div className="spread">
                 <h3>Built-in filters</h3>
-                <SelectAll keys={tickableDetectors} ticked={ticked} setAll={setAll} />
+                <SelectAll
+                  keys={tickableDetectors}
+                  ticked={ticked}
+                  setAll={setAll}
+                  labels={["Turn all on", "Turn all off"]}
+                />
               </div>
+              <p className="muted small">Ticked means on after the import.</p>
               <div className="list">
                 {detectorRows.map((r) => (
                   <label key={detectorKey(r)} className={`toggle import-row${canTickDetector(r) ? "" : " inert"}`}>
                     <input
                       type="checkbox"
                       disabled={!canTickDetector(r)}
-                      checked={canTickDetector(r) && ticked.has(detectorKey(r))}
+                      checked={canTickDetector(r) ? ticked.has(detectorKey(r)) : r.status === "unchanged" && r.enabled}
                       onChange={(e) => toggle(detectorKey(r), e.target.checked)}
                     />
                     <span className="text">
-                      <strong>{detectorTitle(r)}</strong>
-                      {r.status === "turn_off" ? (
-                        <span className="why">Lowers the protection on this device, so it is not ticked for you.</span>
-                      ) : null}
+                      <strong>{r.title || r.name}</strong>
+                      {canTickDetector(r) ? <DetectorChange row={r} on={ticked.has(detectorKey(r))} /> : null}
                       {r.status === "unchanged" || r.status === "invalid" ? (
                         <span className={`import-status ${r.status}`}>
-                          {r.status === "unchanged" ? "Already set the same way" : r.reason}
+                          {r.status === "unchanged"
+                            ? `Already ${r.enabled ? "on" : "off"} here and in the export`
+                            : r.reason}
                         </span>
                       ) : null}
                     </span>
@@ -218,10 +235,12 @@ function SelectAll({
   keys,
   ticked,
   setAll,
+  labels = ["Select all", "Select none"],
 }: {
   keys: string[];
   ticked: Set<string>;
   setAll: (keys: string[], on: boolean) => void;
+  labels?: [string, string];
 }) {
   if (keys.length === 0) return null;
   return (
@@ -232,7 +251,7 @@ function SelectAll({
         disabled={keys.every((k) => ticked.has(k))}
         onClick={() => setAll(keys, true)}
       >
-        Select all
+        {labels[0]}
       </button>
       <button
         type="button"
@@ -240,7 +259,7 @@ function SelectAll({
         disabled={keys.every((k) => !ticked.has(k))}
         onClick={() => setAll(keys, false)}
       >
-        Select none
+        {labels[1]}
       </button>
     </span>
   );
@@ -250,6 +269,25 @@ const filterKey = (r: FilterImportRow) => `f:${r.filter.id}`;
 const detectorKey = (r: DetectorImportRow) => `d:${r.name}`;
 const canTickFilter = (r: FilterImportRow) => r.status === "new" || r.status === "update";
 const canTickDetector = (r: DetectorImportRow) => r.status === "turn_on" || r.status === "turn_off";
+
+/** onAfter is whether a built-in filter starts ticked — on after the import —
+ *  from the service's suggestion: a turn-on it suggests applying ends on, a
+ *  turn-off it suggests not applying also ends on. */
+const onAfter = (r: DetectorImportRow) => (r.status === "turn_on" ? r.selected : !r.selected);
+
+/** DetectorChange says where a built-in filter stands here and in the export,
+ *  and what the box as it is set will do. */
+function DetectorChange({ row, on }: { row: DetectorImportRow; on: boolean }) {
+  const here = row.status === "turn_on" ? "off" : "on";
+  const there = row.status === "turn_on" ? "on" : "off";
+  const changes = on !== (here === "on");
+  return (
+    <span className={`import-status ${changes ? (on ? "new" : "update") : "same"}`}>
+      {`${here === "on" ? "On" : "Off"} here, ${there} in the export — `}
+      {changes ? (on ? "will be turned on" : "will be turned off") : `stays ${here}`}
+    </span>
+  );
+}
 
 function filterStatus(r: FilterImportRow): string {
   switch (r.status) {
@@ -261,17 +299,5 @@ function filterStatus(r: FilterImportRow): string {
       return "Already on this device";
     default:
       return `Can't import — ${r.reason ?? "not valid here"}`;
-  }
-}
-
-function detectorTitle(r: DetectorImportRow): string {
-  const name = r.title || r.name;
-  switch (r.status) {
-    case "turn_on":
-      return `Turn on ${name}`;
-    case "turn_off":
-      return `Turn off ${name}`;
-    default:
-      return name;
   }
 }

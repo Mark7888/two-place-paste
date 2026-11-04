@@ -127,14 +127,23 @@ way, the import shows what it would do:
 
 <Image src={importDialog} alt="The Import filters dialog, listing an updated filter, a new one, one already on the device and one that cannot be imported" class="screenshot" />
 
+Under **Custom filters**, ticked means "import this":
+
 | Row | Starts | |
 |---|---|---|
 | **New** | Ticked | A filter this device does not have. |
 | **Update** | Not ticked | The same filter, changed on another device. Ticking it replaces this device's copy. |
 | **Already on this device** | — | Nothing to do. Matched by the filter itself, or by what it matches. |
 | **Can't import** | — | Says why: a regex that does not compile, a kind of filter from a newer version, no room left. |
-| **Turn on** a built-in filter | Ticked | |
-| **Turn off** a built-in filter | Not ticked | An import never quietly lowers the protection. |
+
+Under **Built-in filters**, ticked means "on after the import", as in the editor's Built-in tab. Each
+row says how the filter is set here and in the export, and what its box will do:
+
+| The export has it | Starts | |
+|---|---|---|
+| **On**, and it is off here | Ticked: *will be turned on* | |
+| **Off**, and it is on here | Ticked: *stays on* | Untick it to turn it off. An import never quietly lowers the protection. |
+| The same as here | Shown greyed out | Nothing to do. |
 
 Imported filters are added to the editor and outlined there. Nothing is saved until you press
 **Save**; **Cancel** throws them away again.

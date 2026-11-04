@@ -203,7 +203,7 @@ func (s *Service) PreviewFilterImport(ctx context.Context, draft localui.FilterI
 	}
 	for _, r := range plan.Detectors {
 		out.Detectors = append(out.Detectors, localui.DetectorImportRow{
-			Name: r.Name, Title: r.Title, Status: string(r.Status), Selected: r.Selected, Reason: r.Reason,
+			Name: r.Name, Title: r.Title, Status: string(r.Status), Enabled: r.Enabled, Selected: r.Selected, Reason: r.Reason,
 		})
 	}
 	s.logger.InfoContext(ctx, "filter import previewed", "filters", len(out.Filters), "detectors", len(out.Detectors))
