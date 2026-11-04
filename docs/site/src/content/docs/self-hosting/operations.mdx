@@ -33,8 +33,9 @@ Two Redis settings are required. The compose file and `deploy/redis.conf` set bo
 	destroying groups with no error anywhere.
 </Aside>
 
-Size `maxmemory` for the last day of small entries (up to 256 KB each). 512 MB is plenty for
-personal use.
+Size `maxmemory` for the last day of small entries (up to 256 KB each), plus about 2 KiB for every
+store item. Store records never expire, so `volatile-lru` cannot evict them: if they alone filled
+`maxmemory`, Redis would refuse writes. 512 MB is plenty for personal use.
 
 ## Backup and restore
 
@@ -61,7 +62,9 @@ docker compose exec server tpp gc --verify
 ```
 
 If you restored Redis without its blobs, `--verify` reports *dangling entries* for anything larger
-than 256 KB. They expire within a day.
+than 256 KB. They expire within a day. Store items whose blob is missing do not: they stay listed,
+reading one fails with "not found", and the relay logs `store item has no blob`. Restore `store/`
+from the blob backup, or delete those items from an app.
 
 ## Checking the blob store
 
@@ -69,7 +72,9 @@ than 256 KB. They expire within a day.
 docker compose exec server tpp gc --verify
 ```
 
-Cross-checks stored blobs against entries and **deletes nothing**. It reports:
+Cross-checks stored blobs against entries and **deletes nothing**. It looks only at the history:
+blobs under `store/` are skipped, neither reported as orphans nor checked against store items. It
+reports:
 
 - **orphans** — blobs no entry refers to. A few are normal: an entry that expired within the last
   hour keeps its blob until cleanup reaches that hour.
