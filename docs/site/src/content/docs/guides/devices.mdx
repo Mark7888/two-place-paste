@@ -36,6 +36,10 @@ What happens:
   cannot rejoin without being paired again.
 - Entries written **before** the revocation stay readable to whoever already had them, and expire
   within 24 hours.
+- [Store](/two-place-paste/guides/store/) items stay readable to the remaining devices. Items
+  saved before the revocation do not expire, and the revoked device held their keys while it was a
+  member, so treat anything in the store as something it may have kept. Items saved from now on are
+  out of its reach.
 - Your clipboard is not touched.
 
 <Aside>

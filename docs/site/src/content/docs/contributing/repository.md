@@ -15,16 +15,25 @@ server/                 Go module: relay + admin UI
   internal/store        Redis persistent zone (groups, devices, wrapped keys)
   internal/entries      Redis ephemeral zone + entry service
   internal/blob         blob backends (disk, S3), expiry-bucket sweeper, verify
+  internal/quota        blob storage accounting, limits and eviction
+  internal/items        the store: items that do not expire, its limits and purges
   internal/ws           WebSocket transport and protocol handlers
   internal/admin        admin JSON API, sessions, login rate limiting, creation tokens
+  internal/pairlink     the pairing hand-off page (/pair)
+  internal/sourcelink   /source, the link to the relay's source code
   web/admin             the admin UI's build, embedded in the binary
   internal/httpapi      route assembly
-pkg/tppclient/          Go module: shared client core
+pkg/tppclient/          Go module: shared client core (pairing, entries, transfers, the store)
   tppcrypto             the crypto profile, validated against spec/vectors
   keystore              where secrets live at rest, per OS
 desktop/                Go module: tray service + embedded React UI
   cmd/tppdesktop        the binary
   internal/service      sync direction, revocation gate, settings
+  internal/config       desktop.json, the non-secret settings
+  internal/sensitive    sensitive-content detection and filters
+  internal/preview      which history entries the UI can preview
+  internal/power        screen lock and wake from sleep, for the updater
+  internal/buildinfo    the version and build stamp, set by CI
   internal/localui      localhost server: token, Origin check, JSON API, events
   internal/clipboard    per-OS clipboard, watcher, self-write suppression
   internal/tray         tray icon and status, menu, notifications
@@ -55,8 +64,9 @@ and a PR does not touch anything outside them. A change to a shared contract —
 `spec/crypto.md`, `go.work`, the `Makefile`, a CI workflow or a license file — goes in its own small PR, opened
 from an issue tagged `contract-change`.
 
-**Standing rule:** no pin, favourite or extend-TTL feature. Entry lifetimes are immutable, and the
-blob garbage collector depends on it.
+**Standing rule:** no pin, favourite or extend-TTL feature for entries. Entry lifetimes are
+immutable, and the blob garbage collector depends on it. Keeping something is what the store is
+for: it saves a separate copy, outside the hour buckets the collector sweeps (SPEC §6b).
 
 ## Licensing
 

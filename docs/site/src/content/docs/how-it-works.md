@@ -12,7 +12,8 @@ description: The relay, groups, devices and keys, in plain language.
 
 **The relay** is a small Go server with a Redis database. Devices keep a WebSocket open to it. It
 stores each clipboard entry — encrypted — for 24 hours and tells the other devices when a new one
-arrives. Small entries live in Redis; large ones in a blob store (a disk volume or S3).
+arrives. Small entries live in Redis; large ones in a blob store (a disk volume or S3). It also
+keeps each group's store items, encrypted too, until a device deletes them.
 
 **A group** is a set of devices that share one symmetric key. You create a group once, with a
 single-use link from the relay's admin page, and then add devices to it.
@@ -34,5 +35,13 @@ exists, how big the ciphertext is, and when it was written.
 
 Every entry expires 24 hours after it was written. There is no way to pin or extend one — that is
 deliberate, and the storage cleanup relies on it.
+
+**The store** is where a group keeps what it needs again: a password hint, an address, a manual.
+Saving to it makes a new copy, encrypted on the device like an entry, with a name, description and
+tags that are encrypted too. The relay sees only that an item exists, how big it is, and when it
+was saved or changed. Items do not expire; they stay until a device deletes them. A revocation does
+not lock the remaining devices out of older items: each new key carries a sealed link back to the
+previous one. The server admin turns the store on per group. See
+[Store](/two-place-paste/guides/store/).
 
 For the full threat model, see [Security](/two-place-paste/security/).

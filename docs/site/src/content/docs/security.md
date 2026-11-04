@@ -7,8 +7,8 @@ description: What TwoPlacePaste protects, from whom, and how.
 
 The relay is **trusted with metadata but not with content**. It relays and stores ciphertext,
 enforces group membership and size limits, and knows how many devices there are and when they were
-active. It cannot decrypt any clipboard entry, and the design does not depend on trusting it for
-confidentiality.
+active. It cannot decrypt any clipboard entry or store item, and the design does not depend on
+trusting it for confidentiality.
 
 ## What the relay sees
 
@@ -19,6 +19,7 @@ confidentiality.
 | Device ids, names and public keys | Plaintext size |
 | Wrapped (encrypted) copies of the group key | The group key itself |
 | Group membership | Device private keys |
+| [Store](/two-place-paste/guides/store/) items: how many, their sizes, and when each was saved, edited or deleted | A store item's content, name, description or tags |
 
 Each entry carries a **sealed header** — type, filename, size and a hash of the content, encrypted
 under the group key — so History can describe an entry without downloading it. Every header is
@@ -32,6 +33,10 @@ nothing about the entry.
 - **Each entry** is encrypted with an AEAD under a key derived from the group key, with a fresh
   random nonce. The group key itself is never used directly.
 - The relay stores the group key only **wrapped** to each device's public key.
+- **The store** has a key per epoch, derived from that epoch's group key. Every rekey uploads a
+  *link*: the previous store key, sealed under the new one. A device walks these links back to read
+  items saved under older keys, but they never lead forward. Each item has its own keys, wrapped
+  under the store key of the epoch it was saved in.
 
 On the device, keys are kept in the **macOS login keychain** or a file sealed with **Windows
 DPAPI** to your user account.
@@ -41,6 +46,11 @@ DPAPI** to your user account.
 Revoking a device creates a new group key (a new *epoch*) and wraps it only to the remaining
 devices. The revoked device cannot read anything written afterwards. Entries written before stay
 readable to whoever already had them, until they expire — at most 24 hours.
+
+Store items are different: they do not expire, and a rekey does not re-encrypt them. The revoked
+device held the keys to every item saved before the revocation, and could have downloaded them
+while it was still a member. It cannot reach anything saved afterwards. If the store held a secret
+that the lost device must not keep, change the secret itself.
 
 ## The desktop app's local page
 

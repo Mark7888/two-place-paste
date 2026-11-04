@@ -16,18 +16,19 @@ cannot read anything it stores.
 | Part | What it is | What it holds |
 |---|---|---|
 | `tpp` | One static Go binary: the relay (`/ws`), the admin page (`/admin/`), group creation and a health check (`/healthz`). | Nothing on its own. |
-| Redis 7 | The only database. | Groups, devices, public keys, wrapped group keys, creation tokens — and entries up to 256 KB. |
+| Redis (7 or newer) | The only database. | Groups, devices, public keys, wrapped group keys, creation tokens, store item records — and entries up to 256 KB. |
 | Blob store | A disk directory or an S3 bucket. | Entries larger than 256 KB, at most 24 hours' worth, and the store items of groups that have one. |
 
 ## What you need
 
-- A Linux host with **Docker** (or Go 1.26 and a Redis 7 if you prefer to build it yourself).
+- A Linux host with **Docker** (or Go 1.26 and Redis 7 or newer if you prefer to build it yourself).
 - A **domain name** pointing at the host, for example `tpp.example.com`.
 - A **reverse proxy** that terminates TLS — Caddy, nginx, Traefik or similar. The relay speaks
   plain HTTP and expects TLS in front of it.
 
-It is light: an idle relay uses about 20 MB of memory and Redis under 10 MB. Redis needs room only
-for the last day of small entries.
+It is light: an idle relay uses about 20 MB of memory and Redis under 10 MB. Redis needs room for
+the last day of small entries, plus about 2 KiB for every store item (at most 1,000 per group by
+default).
 
 <Aside type="caution">
 	**Back up Redis.** It holds your groups. A lost group cannot be recovered — the server never had

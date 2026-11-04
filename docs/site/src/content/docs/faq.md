@@ -5,9 +5,14 @@ description: Short answers to common questions.
 
 ### Can I pin or keep an entry longer than 24 hours?
 
-No, and there will not be a way to. Every entry lives exactly 24 hours. The relay's cleanup deletes
-whole hours of storage at once without looking anything up, and that only works because no entry's
-lifetime can change.
+Not the entry itself: every entry lives exactly 24 hours, and that will not change. The relay's
+cleanup deletes whole hours of storage at once without looking anything up, and that only works
+because no entry's lifetime can change.
+
+To keep something, save it to the group's [Store](/two-place-paste/guides/store/) instead — the
+store button on a [History](/two-place-paste/guides/history/) entry does that. The store keeps its
+own encrypted copy until someone deletes it; the entry still expires as usual. The server admin has
+to turn the store on for your group first.
 
 ### Will it upload passwords I copy from my password manager?
 
@@ -27,7 +32,8 @@ unwrap. See [Security](/two-place-paste/security/).
 
 Someone has to run a relay, but it does not have to be you — a friend's relay works just as well,
 and they still cannot read your entries. They will be able to see how many devices you have, when
-you sync and how big your entries are.
+you sync, how big your entries are, and how many items your
+[Store](/two-place-paste/guides/store/) holds and how big each one is.
 
 ### Can one relay serve several people?
 
@@ -45,8 +51,9 @@ access to everything written afterwards.
 
 ### What happens if I lose all my devices?
 
-The group cannot be recovered — no one but your devices ever had its key. Ask for a new creation
-link and start a new group.
+The group cannot be recovered — no one but your devices ever had its key. That includes its
+[Store](/two-place-paste/guides/store/): the items are still on the relay, but nothing can decrypt
+them any more. Ask for a new creation link and start a new group.
 
 ### Is there a Linux app? An iPhone app?
 
