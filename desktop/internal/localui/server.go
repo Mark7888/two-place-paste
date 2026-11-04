@@ -225,6 +225,7 @@ func (s *Server) routes() http.Handler {
 	api("PUT /api/update/token", s.handleSetUpdateToken)
 	api("DELETE /api/update/token", s.handleDeleteUpdateToken)
 	api("GET /api/store", s.handleStore)
+	api("POST /api/store/check", s.handleStoreCheck)
 	api("POST /api/store/save", s.handleStoreSave)
 	api("POST /api/store/upload", s.handleStoreUpload)
 	api("POST /api/store/edit", s.handleStoreEdit)

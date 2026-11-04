@@ -257,6 +257,7 @@ func TestOriginIsValidatedOnEveryRequest(t *testing.T) {
 		{"PUT", "/api/update/token", `{"token":"github_pat_x"}`},
 		{"DELETE", "/api/update/token", ""},
 		{"GET", "/api/store", ""},
+		{"POST", "/api/store/check", `{}`},
 		{"POST", "/api/store/save", `{"source":"clipboard","name":"x"}`},
 		{"POST", "/api/store/upload", ""},
 		{"POST", "/api/store/edit", `{"item_id":"i1","name":"x"}`},

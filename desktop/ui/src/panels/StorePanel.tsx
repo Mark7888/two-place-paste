@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 import {
   api,
+  protectedEntry,
   type ClipboardView,
+  type ProtectedEntry,
   type EntryPreview,
   type ServiceEvent,
   type StoreDetails,
@@ -29,7 +31,7 @@ import { PreviewBody, entryIcon } from "../preview";
 const emptyDetails: StoreDetails = { name: "", description: "", tags: [] };
 
 type Dialog =
-  | { kind: "clipboard"; clip?: ClipboardView }
+  | { kind: "clipboard"; clip?: ClipboardView; guard?: ProtectedEntry }
   | { kind: "file"; file: File }
   | { kind: "edit"; item: StoreItemView }
   | null;
@@ -154,8 +156,21 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
       setError("The clipboard is empty. Copy something first.");
       return;
     }
+    // A protected entry is asked about before the form: there is no point
+    // naming something the user then decides not to save.
+    let guard: ProtectedEntry | undefined;
+    try {
+      await api.checkClipboardSave();
+    } catch (err) {
+      const g = protectedEntry(err);
+      if (!g) {
+        setError(err instanceof Error ? err.message : String(err));
+        return;
+      }
+      guard = g;
+    }
     setError("");
-    setDialog({ kind: "clipboard", clip });
+    setDialog({ kind: "clipboard", clip, guard });
   };
 
   // A file from the drop zone or the picker is checked before the details
@@ -440,6 +455,7 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
               ? { ...emptyDetails, name: dialog.file.name }
               : { ...emptyDetails, name: dialog?.clip?.filename ?? "" }
         }
+        initialGuard={dialog?.kind === "clipboard" ? dialog.guard : undefined}
         knownTags={knownTags}
         saveLabel={dialog?.kind === "edit" ? "Save changes" : "Save"}
         onClose={() => setDialog(null)}

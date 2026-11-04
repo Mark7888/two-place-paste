@@ -456,7 +456,9 @@ above, and why.
 - **Store (built in parallel, PR #43–#48).** Saving the clipboard to the store asks
   first, like Upload, with a plan scoped to the store: an Upload answer does not let a
   copy into the store, nor the reverse. The plan survives the store's duplicate
-  question and is used up when the save succeeds. Saving a history entry or a dropped
+  question and is used up when the save succeeds. The question comes before the save
+  form (`POST /api/store/check` issues the plan), so nothing is named for a save the
+  user then declines; a copy made while the form is open is asked about again on Save. Saving a history entry or a dropped
   file does not ask: the entry is already the group's, and a file is not the clipboard.
 - **Pause auto-sync.** One switch in the Sync tab and the tray holds both automatic
   directions for five minutes, for copies nothing can detect — a password from a

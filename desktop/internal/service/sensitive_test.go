@@ -486,3 +486,31 @@ func TestStoreSaveOfSensitiveAsksFirst(t *testing.T) {
 		t.Errorf("the store holds %d items, want 2", view.Total)
 	}
 }
+
+// TestStoreCheckAsksBeforeTheForm: the store asks about a protected clipboard
+// before the save form; the save then carries the answer. A copy made between
+// the two is asked about again, and an ordinary clipboard is not asked about.
+func TestStoreCheckAsksBeforeTheForm(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := context.Background()
+	f.enableStore()
+
+	f.clip.set(textContent("ordinary"))
+	if err := f.svc.CheckClipboardSave(ctx); err != nil {
+		t.Fatalf("CheckClipboardSave(ordinary) = %v, want nil", err)
+	}
+
+	f.clip.set(concealed("pw-1"))
+	se := sensitiveError(t, f.svc.CheckClipboardSave(ctx))
+
+	// Copied something else while typing the name: the answer was not for it.
+	f.clip.set(concealed("pw-2"))
+	_, err := f.svc.SaveToStore(ctx, localui.StoreSaveRequest{Source: "clipboard", StoreDetails: details("Bank"), PlanID: se.PlanID})
+	se = sensitiveError(t, err)
+
+	saved, err := f.svc.SaveToStore(ctx, localui.StoreSaveRequest{Source: "clipboard", StoreDetails: details("Bank"), PlanID: se.PlanID})
+	if err != nil || saved.Name != "Bank" {
+		t.Fatalf("save with the check's answer = %+v, %v; want it saved", saved, err)
+	}
+}

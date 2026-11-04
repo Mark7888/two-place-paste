@@ -207,6 +207,38 @@ func unreadableReason(err error) string {
 	return "it could not be decrypted on this device"
 }
 
+// readClipboardForStore reads the clipboard for a store save, with the
+// errors the store's screen shows.
+func (s *Service) readClipboardForStore(ctx context.Context) (clipboard.Content, error) {
+	c, err := s.clip.Read(ctx)
+	switch {
+	case errors.Is(err, clipboard.ErrEmpty):
+		return c, localui.Errorf(http.StatusConflict, err, "the clipboard is empty")
+	case errors.Is(err, clipboard.ErrUnsupported):
+		return c, localui.Errorf(http.StatusNotImplemented, err, "this build cannot reach a clipboard")
+	case err != nil:
+		return c, localui.Errorf(http.StatusInternalServerError, err, "the clipboard could not be read")
+	}
+	return c, nil
+}
+
+// CheckClipboardSave implements localui.StoreAPI. It asks the protected-entry
+// question before the user types a name for something they may not save
+// after all. The plan it issues is for this copy: if the clipboard changes
+// before the save, the save asks again about what is there then.
+func (s *Service) CheckClipboardSave(ctx context.Context) error {
+	c, err := s.readClipboardForStore(ctx)
+	if err != nil {
+		return err
+	}
+	if v := s.classify(c); v.Sensitive {
+		s.logger.InfoContext(ctx, "store save of a sensitive clipboard needs confirmation",
+			"source", string(v.Source), "rule", v.Rule)
+		return s.askToPush(c, v, pushStore)
+	}
+	return nil
+}
+
 // SaveToStore implements localui.StoreAPI: it saves the clipboard or a history
 // entry.
 func (s *Service) SaveToStore(ctx context.Context, req localui.StoreSaveRequest) (localui.StoreItemView, error) {
@@ -218,14 +250,9 @@ func (s *Service) SaveToStore(ctx context.Context, req localui.StoreSaveRequest)
 	confirmed := "" // the push plan a sensitive clipboard was confirmed with
 	switch req.Source {
 	case "clipboard":
-		c, err := s.clip.Read(ctx)
-		switch {
-		case errors.Is(err, clipboard.ErrEmpty):
-			return localui.StoreItemView{}, localui.Errorf(http.StatusConflict, err, "the clipboard is empty")
-		case errors.Is(err, clipboard.ErrUnsupported):
-			return localui.StoreItemView{}, localui.Errorf(http.StatusNotImplemented, err, "this build cannot reach a clipboard")
-		case err != nil:
-			return localui.StoreItemView{}, localui.Errorf(http.StatusInternalServerError, err, "the clipboard could not be read")
+		c, err := s.readClipboardForStore(ctx)
+		if err != nil {
+			return localui.StoreItemView{}, err
 		}
 		// A protected entry asks first, as Upload does: the store keeps an
 		// item until someone deletes it, and every device of the group can

@@ -639,6 +639,9 @@ export const api = {
     const qs = params.toString();
     return request<StoreView>("GET", `/api/store${qs ? `?${qs}` : ""}`);
   },
+  // Asks before the save form whether the clipboard is a protected entry:
+  // answers ok, or fails with the 409 protectedEntry recognises.
+  checkClipboardSave: () => request<{ ok: boolean }>("POST", "/api/store/check", {}),
   // planId confirms saving a clipboard the service refused as a protected
   // entry (protectedEntry).
   saveToStore: (src: StoreSource, details: StoreDetails, allowDuplicate = false, planId?: string) =>

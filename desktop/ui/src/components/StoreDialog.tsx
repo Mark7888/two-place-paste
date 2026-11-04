@@ -7,10 +7,13 @@
  * items it duplicates; the dialog names them and offers "Save anyway", which
  * sends the same save again with permission.
  *
- * A save of a protected clipboard — a password manager's copy, or one a
- * sensitive-content filter matches — is refused the same way first, with the
- * plan id that confirms it. Its "Save anyway" sends the save again with that
- * id, which the service keeps valid through a duplicate question after it.
+ * A protected clipboard — a password manager's copy, or one a
+ * sensitive-content filter matches — is asked about before the form: the
+ * Store tab checks first and opens the dialog on that question (initialGuard),
+ * and Continue leads on to the form with the answer's plan id. Should the
+ * clipboard change while the form is open, the save is refused with a new
+ * question, whose "Save anyway" sends it again. The service keeps the answer
+ * valid through a duplicate question after it.
  */
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
@@ -35,6 +38,7 @@ export function StoreDialog({
   title,
   what,
   initial,
+  initialGuard,
   knownTags,
   available,
   saveLabel = "Save",
@@ -47,6 +51,9 @@ export function StoreDialog({
   /** What is being saved, in a few words: "the clipboard", "report.pdf". */
   what?: string;
   initial: StoreDetails;
+  /** A protected-entry question to ask before the form, from the Store
+   *  tab's check of the clipboard. */
+  initialGuard?: ProtectedEntry;
   /** Tags already in use, offered as the user types. */
   knownTags: string[];
   /** Room left in the store, to show; undefined when not known. */
@@ -69,6 +76,9 @@ export function StoreDialog({
   // The protected-entry question, and the plan the user's answer to it holds.
   const [guarded, setGuarded] = useState<ProtectedEntry | null>(null);
   const [planId, setPlanId] = useState<string | undefined>(undefined);
+  // Whether the question on screen comes before the form (from initialGuard)
+  // rather than after a save the service refused.
+  const [beforeForm, setBeforeForm] = useState(false);
   const listId = useId();
 
   // A dialog opened again starts from what it is given, not from last time.
@@ -76,6 +86,8 @@ export function StoreDialog({
   // not wipe what the user typed.
   const initialRef = useRef(initial);
   initialRef.current = initial;
+  const guardRef = useRef(initialGuard);
+  guardRef.current = initialGuard;
   useEffect(() => {
     if (!open) return;
     const init = initialRef.current;
@@ -85,7 +97,8 @@ export function StoreDialog({
     setTagDraft("");
     setError("");
     setDuplicates(null);
-    setGuarded(null);
+    setGuarded(guardRef.current ?? null);
+    setBeforeForm(guardRef.current !== undefined);
     setPlanId(undefined);
   }, [open]);
 
@@ -135,6 +148,7 @@ export function StoreDialog({
     } catch (err) {
       const guard = protectedEntry(err);
       if (guard) {
+        setBeforeForm(false);
         setGuarded(guard);
         setDuplicates(null);
       } else if (err instanceof ApiError && err.duplicates?.length) {
@@ -159,8 +173,13 @@ export function StoreDialog({
       footer={
         guarded ? (
           <>
-            <button type="button" className="action" disabled={busy} onClick={() => setGuarded(null)}>
-              Back
+            <button
+              type="button"
+              className="action"
+              disabled={busy}
+              onClick={() => (beforeForm ? onClose() : setGuarded(null))}
+            >
+              {beforeForm ? "Cancel" : "Back"}
             </button>
             <button
               type="button"
@@ -169,11 +188,16 @@ export function StoreDialog({
               onClick={() => {
                 setPlanId(guarded.planId);
                 setGuarded(null);
+                if (beforeForm) {
+                  // On to the form; the save carries this answer.
+                  setBeforeForm(false);
+                  return;
+                }
                 void submit(false, guarded.planId);
               }}
             >
               {busy ? <span className="spinner" /> : null}
-              Save anyway
+              {beforeForm ? "Continue" : "Save anyway"}
             </button>
           </>
         ) : duplicates ? (
