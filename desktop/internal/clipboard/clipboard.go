@@ -87,6 +87,10 @@ type Content struct {
 	// It is local knowledge only: not part of Digest (the same bytes copied
 	// without the marker are the same content to change detection), never
 	// part of the encrypted frame, and never sent anywhere.
+	//
+	// On Write, a non-empty Concealed asks for the platform's markers, so
+	// that clipboard history and other clipboard tools leave the content
+	// alone, as they leave a password manager's. Only text is marked.
 	Concealed string
 }
 

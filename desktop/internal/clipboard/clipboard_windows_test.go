@@ -117,3 +117,21 @@ func TestReadReportsPrivacyFormats(t *testing.T) {
 		}
 	}
 }
+
+// Text written as private carries the same markers a password manager's copy
+// does, and reads back as marked.
+func TestWriteConcealedTextIsMarked(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	c := newClipboard()
+	if err := c.Write(ctx, Content{ContentType: TypeText, Body: []byte("exported filters"), Concealed: ReasonConcealed}); err != nil {
+		t.Skipf("this session has no usable clipboard: %v", err)
+	}
+	got, err := c.Read(ctx)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got.Text() != "exported filters" || got.Concealed != ReasonConcealed {
+		t.Errorf("Read = %q, concealed %q; want the text, marked private", got.Text(), got.Concealed)
+	}
+}

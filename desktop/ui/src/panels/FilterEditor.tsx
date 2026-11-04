@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   type DetectorView,
+  type FilterExportResult,
+  type FilterImportCheck,
   type FilterKind,
   type FilterMatch,
   type FilterTarget,
@@ -10,6 +12,21 @@ import {
 } from "../api";
 import { Icon } from "../components/Icon";
 import { Modal } from "../components/Modal";
+import { FilterExportDialog } from "./FilterExportDialog";
+import { FilterImportDialog, type ImportChoice } from "./FilterImportDialog";
+import { KINDS } from "./filterKinds";
+
+/** What the export dialog is asked to export. */
+interface ExportAsk {
+  ids?: string[];
+  summary: string;
+  defaultName: string;
+}
+
+/** kindWords is a kind as the store item's default name says it. */
+function kindWords(kind: FilterKind): string {
+  return KINDS.find((k) => k.kind === kind)?.label.toLowerCase() ?? kind;
+}
 
 /**
  * The filter editor (docs/internal/plans/auto-upload-filters.md §4.7).
@@ -25,14 +42,6 @@ import { Modal } from "../components/Modal";
  */
 
 type Tab = "custom" | "builtin";
-
-const KINDS: { kind: FilterKind; label: string }[] = [
-  { kind: "contains", label: "Contains" },
-  { kind: "prefix", label: "Starts with" },
-  { kind: "suffix", label: "Ends with" },
-  { kind: "regex", label: "Regex" },
-  { kind: "exact", label: "Exact match" },
-];
 
 /** newId names a filter before it is saved, so a test can point at its row. */
 function newId(): string {
@@ -95,6 +104,12 @@ export function FilterEditor({
   const [sampleName, setSampleName] = useState("");
   const [matches, setMatches] = useState<FilterMatch[] | null>(null);
   const [testError, setTestError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [exportAsk, setExportAsk] = useState<ExportAsk | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importCheck, setImportCheck] = useState<FilterImportCheck | null>(null);
+  // What the last import brought in, highlighted until the draft is saved.
+  const [imported, setImported] = useState<Set<string>>(new Set());
 
   // Exact filters that have a hash saved: their secret is never shown, and a
   // row without a new value keeps it.
@@ -116,7 +131,32 @@ export function FilterEditor({
     setSampleName("");
     setMatches(null);
     setTestError("");
+    setNotice("");
+    setExportAsk(null);
+    setImportOpen(false);
+    setImported(new Set());
   }, [open, settings]);
+
+  // Whether the clipboard holds an export, for the Import button. The page
+  // hears of clipboard changes only while auto-watch is on, so it also looks
+  // again whenever the window comes back into focus — which is when the user
+  // returns from copying one.
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    const check = () => {
+      void api
+        .checkFilterImport()
+        .then((c) => live && setImportCheck(c))
+        .catch(() => live && setImportCheck(null));
+    };
+    check();
+    window.addEventListener("focus", check);
+    return () => {
+      live = false;
+      window.removeEventListener("focus", check);
+    };
+  }, [open]);
 
   const dirty = useMemo(
     () =>
@@ -203,6 +243,61 @@ export function FilterEditor({
     }
   };
 
+  // Exports are made from the saved filters, so they are offered only with
+  // nothing left unsaved.
+  const exactCount = settings.filters.filter((f) => f.kind === "exact").length;
+  const onCount = settings.detectors.filter((d) => d.enabled).length;
+  const askExportAll = () => {
+    const n = settings.filters.length - exactCount;
+    let summary = `${n === 1 ? "1 custom filter" : `${n} custom filters`} and the built-in filters' settings (${onCount} of ${settings.detectors.length} on).`;
+    if (exactCount > 0) {
+      summary +=
+        exactCount === 1
+          ? " 1 exact match is left out: only its hash is kept, and that means nothing on another device."
+          : ` ${exactCount} exact matches are left out: only a hash of each is kept, and that means nothing on another device.`;
+    }
+    setExportAsk({ summary, defaultName: `Filters: ${n} custom, ${onCount} built-in on` });
+  };
+  const askExportOne = (f: FilterView) => {
+    const name = f.label ? `Filter: ${f.label}` : `Filter: custom “${kindWords(f.kind)}” filter`;
+    setExportAsk({
+      ids: [f.id],
+      summary: `The custom filter ${f.label ? `“${f.label}”` : `(${kindWords(f.kind)})`}, without the built-in filters' settings.`,
+      defaultName: name,
+    });
+  };
+  const exported = (res: FilterExportResult) => {
+    setExportAsk(null);
+    setNotice(res.message.charAt(0).toUpperCase() + res.message.slice(1) + ".");
+  };
+
+  // Applies what the user ticked to the draft: an update replaces the filter
+  // with the same id, a new one is added at the end.
+  const applyImport = (choice: ImportChoice) => {
+    setImportOpen(false);
+    setFilters((fs) => {
+      const next = [...fs];
+      for (const f of choice.filters) {
+        const i = next.findIndex((x) => x.id === f.id);
+        if (i >= 0) next[i] = { ...f };
+        else next.push({ ...f });
+      }
+      return next;
+    });
+    setDetectors((ds) =>
+      ds.map((d) => {
+        const c = choice.detectors.find((x) => x.name === d.name);
+        return c ? { ...d, enabled: c.enabled } : d;
+      }),
+    );
+    setImported(new Set([...choice.filters.map((f) => f.id), ...choice.detectors.map((d) => d.name)]));
+    const total = choice.filters.length + choice.detectors.length;
+    setNotice(
+      `Imported ${total === 1 ? "1 change" : `${total} changes`}, highlighted below. Review them and press Save to keep them.`,
+    );
+    setTab(choice.filters.length > 0 ? "custom" : "builtin");
+  };
+
   const allCustom = (on: boolean) => setFilters((fs) => fs.map((f) => ({ ...f, enabled: on })));
   const allBuiltin = (on: boolean) => setDetectors((ds) => ds.map((d) => ({ ...d, enabled: on })));
 
@@ -211,246 +306,320 @@ export function FilterEditor({
   const allOff = rows.every((r) => !r.enabled);
 
   return (
-    <Modal
-      open={open}
-      wide
-      title="Sensitive content filters"
-      onClose={close}
-      // With unsaved changes, Escape and the backdrop do nothing: Cancel is
-      // the way out, and it asks before throwing the draft away.
-      dismissable={!dirty}
-      footer={
-        discarding ? (
-          <>
-            <span className="muted small grow-left">Discard your changes?</span>
-            <button className="action" onClick={() => setDiscarding(false)}>
-              Keep editing
-            </button>
-            <button className="action danger" onClick={onClose}>
-              Discard
-            </button>
-          </>
-        ) : (
-          <>
-            <button className="action" disabled={saving} onClick={close}>
-              Cancel
-            </button>
-            <button className="action primary" disabled={saving || !dirty} onClick={() => void save()}>
-              {saving ? <span className="spinner" /> : <Icon name="check" size={16} />}
-              Save
-            </button>
-          </>
-        )
-      }
-    >
-      <div className="tabs" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "custom"}
-          onClick={() => setTab("custom")}
-        >
-          Custom
-          <span className="faint"> · {filters.length}</span>
-          {customMatched && tab !== "custom" ? <span className="tab-dot" aria-label="has a match" /> : null}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "builtin"}
-          onClick={() => setTab("builtin")}
-        >
-          Built-in
-          <span className="faint">
-            {" "}
-            · {detectors.filter((d) => d.enabled).length}/{detectors.length}
-          </span>
-          {builtinMatched && tab !== "builtin" ? <span className="tab-dot" aria-label="has a match" /> : null}
-        </button>
-      </div>
-
-      <div className="row tab-tools">
-        <button
-          type="button"
-          className="action small quiet"
-          disabled={allOn}
-          onClick={() => (tab === "custom" ? allCustom(true) : allBuiltin(true))}
-        >
-          Turn all on
-        </button>
-        <button
-          type="button"
-          className="action small quiet"
-          disabled={allOff}
-          onClick={() => (tab === "custom" ? allCustom(false) : allBuiltin(false))}
-        >
-          Turn all off
-        </button>
-      </div>
-
-      {error ? (
-        <div className="notice error">
-          <Icon name="alert" />
-          <span>{error}</span>
+    <>
+      <Modal
+        open={open}
+        wide
+        title="Sensitive content filters"
+        onClose={close}
+        // With unsaved changes, Escape and the backdrop do nothing: Cancel is
+        // the way out, and it asks before throwing the draft away.
+        dismissable={!dirty}
+        footer={
+          discarding ? (
+            <>
+              <span className="muted small grow-left">Discard your changes?</span>
+              <button className="action" onClick={() => setDiscarding(false)}>
+                Keep editing
+              </button>
+              <button className="action danger" onClick={onClose}>
+                Discard
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="action" disabled={saving} onClick={close}>
+                Cancel
+              </button>
+              <button className="action primary" disabled={saving || !dirty} onClick={() => void save()}>
+                {saving ? <span className="spinner" /> : <Icon name="check" size={16} />}
+                Save
+              </button>
+            </>
+          )
+        }
+      >
+        <div className="tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "custom"}
+            onClick={() => setTab("custom")}
+          >
+            Custom
+            <span className="faint"> · {filters.length}</span>
+            {customMatched && tab !== "custom" ? <span className="tab-dot" aria-label="has a match" /> : null}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "builtin"}
+            onClick={() => setTab("builtin")}
+          >
+            Built-in
+            <span className="faint">
+              {" "}
+              · {detectors.filter((d) => d.enabled).length}/{detectors.length}
+            </span>
+            {builtinMatched && tab !== "builtin" ? <span className="tab-dot" aria-label="has a match" /> : null}
+          </button>
         </div>
-      ) : null}
 
-      {tab === "custom" ? (
-        <div className="stack filter-scroll" style={{ gap: "0.6rem" }} role="tabpanel">
-          {filters.length === 0 ? (
-            <p className="muted">
-              No filters yet. A text you copy that matches one stays on this device unless you
-              push it by hand.
-            </p>
-          ) : null}
-          {filters.map((f, i) => (
-            <div
-              key={f.id}
-              className={`filter-row${matched.has(f.id) ? " match" : ""}${errorRow === i ? " invalid" : ""}`}
+        <div className="row tab-tools">
+          <span className="row tight io">
+            <button
+              type="button"
+              className="action small"
+              disabled={dirty}
+              title={dirty ? "Save your changes first: an export holds the saved filters" : "Export every custom filter and the built-in filters' settings"}
+              onClick={askExportAll}
             >
-              <div className="filter-line">
-                <input
-                  type="checkbox"
-                  aria-label="Enabled"
-                  checked={f.enabled}
-                  onChange={(e) => update(i, { enabled: e.target.checked })}
-                />
-                <select
-                  aria-label="Kind"
-                  value={f.kind}
-                  onChange={(e) => {
-                    const kind = e.target.value as FilterKind;
-                    update(i, {
-                      kind,
-                      // An exact secret is not carried over from another kind's
-                      // value, which was shown in clear.
-                      value: kind === "exact" || f.kind === "exact" ? "" : f.value,
-                      target: kind === "exact" ? "text" : f.target,
-                      case_insensitive: casePossible(kind) ? f.case_insensitive : false,
-                    });
-                  }}
-                >
-                  {KINDS.map((k) => (
-                    <option key={k.kind} value={k.kind} disabled={k.kind === "exact" && f.target === "filename"}>
-                      {k.label}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  aria-label="Applies to"
-                  value={f.target}
-                  onChange={(e) => update(i, { target: e.target.value as FilterTarget })}
-                >
-                  <option value="text">Text</option>
-                  <option value="filename" disabled={f.kind === "exact"}>
-                    File name
-                  </option>
-                </select>
-                <button
-                  type="button"
-                  className="icon-button"
-                  aria-label="Delete filter"
-                  title="Delete filter"
-                  onClick={() => setFilters((fs) => fs.filter((_, j) => j !== i))}
-                >
-                  <Icon name="trash" size={16} />
-                </button>
-              </div>
-              <div className="filter-line">
-                <input
-                  className={f.kind === "regex" ? "mono grow" : "grow"}
-                  type={f.kind === "exact" ? "password" : "text"}
-                  autoComplete="off"
-                  spellCheck={false}
-                  aria-label="Value"
-                  placeholder={
-                    f.kind === "exact"
-                      ? savedExact.has(f.id)
-                        ? "Saved — type to replace"
-                        : "The exact text; only a hash is kept"
-                      : f.kind === "regex"
-                        ? "Regular expression (Go RE2)"
-                        : "Text to look for"
-                  }
-                  value={f.value}
-                  onChange={(e) => update(i, { value: e.target.value })}
-                />
-                <input
-                  type="text"
-                  aria-label="Label"
-                  placeholder="Label (optional)"
-                  value={f.label}
-                  onChange={(e) => update(i, { label: e.target.value })}
-                />
-              </div>
-              {casePossible(f.kind) ? (
-                <label className="row tight small muted">
+              <Icon name="upload" size={14} />
+              Export all…
+            </button>
+            {/* A disabled button shows no tooltip, so the hint is on a wrapper. */}
+            <span
+              title={
+                importCheck?.available
+                  ? "Import the filters on the clipboard"
+                  : "Copy an exported filter set first — from the store or another device"
+              }
+            >
+              <button
+                type="button"
+                className="action small"
+                disabled={!importCheck?.available}
+                onClick={() => setImportOpen(true)}
+              >
+                <Icon name="download" size={14} />
+                Import…
+              </button>
+            </span>
+          </span>
+          <button
+            type="button"
+            className="action small quiet"
+            disabled={allOn}
+            onClick={() => (tab === "custom" ? allCustom(true) : allBuiltin(true))}
+          >
+            Turn all on
+          </button>
+          <button
+            type="button"
+            className="action small quiet"
+            disabled={allOff}
+            onClick={() => (tab === "custom" ? allCustom(false) : allBuiltin(false))}
+          >
+            Turn all off
+          </button>
+        </div>
+
+        {error ? (
+          <div className="notice error">
+            <Icon name="alert" />
+            <span>{error}</span>
+          </div>
+        ) : null}
+        {notice ? (
+          <div className="notice ok" role="status">
+            <Icon name="check" />
+            <span>{notice}</span>
+          </div>
+        ) : null}
+
+        {tab === "custom" ? (
+          <div className="stack filter-scroll" style={{ gap: "0.6rem" }} role="tabpanel">
+            {filters.length === 0 ? (
+              <p className="muted">
+                No filters yet. A text you copy that matches one stays on this device unless you
+                push it by hand.
+              </p>
+            ) : null}
+            {filters.map((f, i) => (
+              <div
+                key={f.id}
+                className={`filter-row${matched.has(f.id) ? " match" : ""}${errorRow === i ? " invalid" : ""}${imported.has(f.id) ? " imported" : ""}`}
+              >
+                <div className="filter-line">
                   <input
                     type="checkbox"
-                    checked={f.case_insensitive}
-                    onChange={(e) => update(i, { case_insensitive: e.target.checked })}
+                    aria-label="Enabled"
+                    checked={f.enabled}
+                    onChange={(e) => update(i, { enabled: e.target.checked })}
                   />
-                  Ignore case
-                </label>
-              ) : null}
+                  <select
+                    aria-label="Kind"
+                    value={f.kind}
+                    onChange={(e) => {
+                      const kind = e.target.value as FilterKind;
+                      update(i, {
+                        kind,
+                        // An exact secret is not carried over from another kind's
+                        // value, which was shown in clear.
+                        value: kind === "exact" || f.kind === "exact" ? "" : f.value,
+                        target: kind === "exact" ? "text" : f.target,
+                        case_insensitive: casePossible(kind) ? f.case_insensitive : false,
+                      });
+                    }}
+                  >
+                    {KINDS.map((k) => (
+                      <option key={k.kind} value={k.kind} disabled={k.kind === "exact" && f.target === "filename"}>
+                        {k.label}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    aria-label="Applies to"
+                    value={f.target}
+                    onChange={(e) => update(i, { target: e.target.value as FilterTarget })}
+                  >
+                    <option value="text">Text</option>
+                    <option value="filename" disabled={f.kind === "exact"}>
+                      File name
+                    </option>
+                  </select>
+                  <span
+                    title={
+                      f.kind === "exact"
+                        ? "An exact match keeps only a hash, so it can't be exported"
+                        : dirty
+                          ? "Save your changes first: an export holds the saved filter"
+                          : "Export this filter"
+                    }
+                  >
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label="Export this filter"
+                      disabled={f.kind === "exact" || dirty}
+                      onClick={() => askExportOne(f)}
+                    >
+                      <Icon name="upload" size={16} />
+                    </button>
+                  </span>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label="Delete filter"
+                    title="Delete filter"
+                    onClick={() => setFilters((fs) => fs.filter((_, j) => j !== i))}
+                  >
+                    <Icon name="trash" size={16} />
+                  </button>
+                </div>
+                <div className="filter-line">
+                  <input
+                    className={f.kind === "regex" ? "mono grow" : "grow"}
+                    type={f.kind === "exact" ? "password" : "text"}
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-label="Value"
+                    placeholder={
+                      f.kind === "exact"
+                        ? savedExact.has(f.id)
+                          ? "Saved — type to replace"
+                          : "The exact text; only a hash is kept"
+                        : f.kind === "regex"
+                          ? "Regular expression (Go RE2)"
+                          : "Text to look for"
+                    }
+                    value={f.value}
+                    onChange={(e) => update(i, { value: e.target.value })}
+                  />
+                  <input
+                    type="text"
+                    aria-label="Label"
+                    placeholder="Label (optional)"
+                    value={f.label}
+                    onChange={(e) => update(i, { label: e.target.value })}
+                  />
+                </div>
+                {casePossible(f.kind) ? (
+                  <label className="row tight small muted">
+                    <input
+                      type="checkbox"
+                      checked={f.case_insensitive}
+                      onChange={(e) => update(i, { case_insensitive: e.target.checked })}
+                    />
+                    Ignore case
+                  </label>
+                ) : null}
+              </div>
+            ))}
+            <div>
+              <button type="button" className="action small" onClick={() => setFilters((fs) => [...fs, blankFilter()])}>
+                <Icon name="plus" size={15} />
+                Add filter
+              </button>
             </div>
-          ))}
-          <div>
-            <button type="button" className="action small" onClick={() => setFilters((fs) => [...fs, blankFilter()])}>
-              <Icon name="plus" size={15} />
-              Add filter
-            </button>
           </div>
-        </div>
-      ) : (
-        <div className="list filter-scroll" role="tabpanel">
-          {detectors.map((d) => (
-            <label key={d.name} className={`toggle${matched.has(d.name) ? " match" : ""}`}>
-              <input
-                type="checkbox"
-                checked={d.enabled}
-                onChange={(e) =>
-                  setDetectors((ds) => ds.map((x) => (x.name === d.name ? { ...x, enabled: e.target.checked } : x)))
-                }
-              />
-              <span className="text">
-                <strong>{d.title}</strong>
-                <span className="why">{d.description}</span>
-              </span>
-            </label>
-          ))}
-        </div>
-      )}
-
-      <div className="filter-test">
-        <h3>Test</h3>
-        <textarea
-          rows={3}
-          spellCheck={false}
-          placeholder="Paste a sample to see which filters match. It is not saved."
-          value={sample}
-          onChange={(e) => setSample(e.target.value)}
-        />
-        <input
-          type="text"
-          spellCheck={false}
-          placeholder="Or a file name, for file name filters"
-          value={sampleName}
-          onChange={(e) => setSampleName(e.target.value)}
-        />
-        {testError ? (
-          <p className="small" style={{ color: "var(--danger)" }}>
-            {testError}
-          </p>
-        ) : matches === null ? null : matches.length === 0 ? (
-          <p className="muted small">No filter matches this sample.</p>
         ) : (
-          <p className="small">
-            <Icon name="lock" size={13} /> Sensitive — matches{" "}
-            {matches.map((m) => (m.name ? `“${m.name}” (${m.source === "detector" ? "built-in" : "custom"})` : m.reason.replace(/^Matches /, ""))).join(", ")}
-          </p>
+          <div className="list filter-scroll" role="tabpanel">
+            {detectors.map((d) => (
+              <label
+                key={d.name}
+                className={`toggle${matched.has(d.name) ? " match" : ""}${imported.has(d.name) ? " imported" : ""}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={d.enabled}
+                  onChange={(e) =>
+                    setDetectors((ds) => ds.map((x) => (x.name === d.name ? { ...x, enabled: e.target.checked } : x)))
+                  }
+                />
+                <span className="text">
+                  <strong>{d.title}</strong>
+                  <span className="why">{d.description}</span>
+                </span>
+              </label>
+            ))}
+          </div>
         )}
-      </div>
-    </Modal>
+
+        <div className="filter-test">
+          <h3>Test</h3>
+          <textarea
+            rows={3}
+            spellCheck={false}
+            placeholder="Paste a sample to see which filters match. It is not saved."
+            value={sample}
+            onChange={(e) => setSample(e.target.value)}
+          />
+          <input
+            type="text"
+            spellCheck={false}
+            placeholder="Or a file name, for file name filters"
+            value={sampleName}
+            onChange={(e) => setSampleName(e.target.value)}
+          />
+          {testError ? (
+            <p className="small" style={{ color: "var(--danger)" }}>
+              {testError}
+            </p>
+          ) : matches === null ? null : matches.length === 0 ? (
+            <p className="muted small">No filter matches this sample.</p>
+          ) : (
+            <p className="small">
+              <Icon name="lock" size={13} /> Sensitive — matches{" "}
+              {matches.map((m) => (m.name ? `“${m.name}” (${m.source === "detector" ? "built-in" : "custom"})` : m.reason.replace(/^Matches /, ""))).join(", ")}
+            </p>
+          )}
+        </div>
+      </Modal>
+      <FilterExportDialog
+        open={exportAsk !== null}
+        ids={exportAsk?.ids}
+        summary={exportAsk?.summary ?? ""}
+        defaultName={exportAsk?.defaultName ?? ""}
+        onClose={() => setExportAsk(null)}
+        onDone={exported}
+      />
+      <FilterImportDialog
+        open={importOpen}
+        draft={{ filters, detectors: detectors.filter((d) => d.enabled).map((d) => d.name) }}
+        onClose={() => setImportOpen(false)}
+        onImport={applyImport}
+      />
+    </>
   );
 }

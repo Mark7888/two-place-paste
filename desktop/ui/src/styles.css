@@ -978,3 +978,19 @@ label.toggle.match { background: var(--warn-soft); }
 /* A button that belongs to the row but not to its group, such as pausing
    auto-sync beside the three sync buttons. */
 .row > .push-right { margin-left: auto; }
+
+/* Export and import of filters: the two buttons start the tools row, and what
+   an import brought in stays outlined until it is saved. */
+.tab-tools > .io { margin-right: auto; }
+.filter-row.imported,
+label.toggle.imported { box-shadow: inset 3px 0 0 var(--accent); }
+
+.import-section h3 { margin: 0; }
+.import-section .list { margin-top: 0.4rem; }
+.import-row.inert { cursor: default; }
+.import-row.inert:hover { background: none; }
+.import-row code { font-size: 0.8rem; overflow-wrap: anywhere; }
+.import-status { display: block; font-size: 0.8rem; margin-top: 0.15rem; color: var(--muted); }
+.import-status.new { color: var(--ok); }
+.import-status.update { color: var(--warn); }
+.import-status.invalid { color: var(--danger); }

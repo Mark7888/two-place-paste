@@ -11,3 +11,7 @@ func pasteboardChangeCount() (uint64, bool) { return 0, false }
 // a build without cgo cannot tell a password manager's copy from any other.
 // Release builds use cgo.
 func pasteboardTypes() ([]string, uint64, bool) { return nil, 0, false }
+
+// pasteboardWriteConcealed is unavailable without cgo: private text is written
+// unmarked.
+func pasteboardWriteConcealed(string) bool { return false }

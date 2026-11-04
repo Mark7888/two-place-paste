@@ -173,6 +173,39 @@ func (windowsClipboard) Write(ctx context.Context, item Content) error {
 	}
 	// Ownership of the handle passed to the clipboard; freeing it here would
 	// hand the next paste freed memory.
+	if item.Concealed != "" && item.Kind() == KindText {
+		return writePrivacyFormats()
+	}
+	return nil
+}
+
+// writePrivacyFormats marks what was just written as private, the way a
+// password manager marks its copies (markers.go): out of clipboard history,
+// out of the cloud clipboard, and left alone by clipboard monitors. It must
+// be called through acquire, after the content is set.
+func writePrivacyFormats() error {
+	no := []byte{0, 0, 0, 0} // a DWORD 0: "no"
+	for _, f := range []struct {
+		name string
+		data []byte
+	}{
+		{winExcludeFromMonitors, []byte{0}},
+		{winCanIncludeInHistory, no},
+		{winCanUploadToCloud, no},
+	} {
+		id := registeredFormat(f.name)
+		if id == 0 {
+			return fmt.Errorf("clipboard: register the %s format", f.name)
+		}
+		h, err := globalFromBytes(f.data)
+		if err != nil {
+			return err
+		}
+		if r, _, err := procSetClipboardData.Call(uintptr(id), h); r == 0 {
+			_, _, _ = procGlobalFree.Call(h)
+			return fmt.Errorf("clipboard: mark the clipboard private: %w", err)
+		}
+	}
 	return nil
 }
 

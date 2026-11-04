@@ -247,6 +247,51 @@ export interface FilterView {
   label: string;
 }
 
+/** FilterExportRequest: ids absent exports everything, with the built-ins. */
+export interface FilterExportRequest {
+  ids?: string[];
+  to: "clipboard" | "store";
+  name?: string;
+}
+
+export interface FilterExportResult {
+  filters: number;
+  detectors: boolean;
+  skipped_exact: number;
+  message: string;
+  item?: StoreItemView;
+}
+
+export interface FilterImportCheck {
+  available: boolean;
+  filters?: number;
+  detectors?: boolean;
+}
+
+export type FilterImportStatus = "new" | "update" | "duplicate" | "invalid";
+export type DetectorImportStatus = "turn_on" | "turn_off" | "unchanged" | "invalid";
+
+export interface FilterImportRow {
+  filter: FilterView;
+  status: FilterImportStatus;
+  selected: boolean;
+  reason?: string;
+  existing_id?: string;
+}
+
+export interface DetectorImportRow {
+  name: string;
+  title?: string;
+  status: DetectorImportStatus;
+  selected: boolean;
+  reason?: string;
+}
+
+export interface FilterImportPlan {
+  filters: FilterImportRow[];
+  detectors: DetectorImportRow[];
+}
+
 export interface FilterTest {
   text: string;
   filename: string;
@@ -585,6 +630,12 @@ export const api = {
   setPaused: (paused: boolean) => request<PauseView>("POST", "/api/pause", { paused }),
   // A POST, like previewEntry: it returns clipboard text the status withheld.
   revealClipboard: () => request<{ preview: string }>("POST", "/api/clipboard/reveal", {}),
+  // Exports saved filters: to the clipboard, marked private, or into the store.
+  exportFilters: (req: FilterExportRequest) => request<FilterExportResult>("POST", "/api/filters/export", req),
+  checkFilterImport: () => request<FilterImportCheck>("POST", "/api/filters/import/check", {}),
+  // Compares the clipboard's export with the editor's draft; saves nothing.
+  previewFilterImport: (draft: { filters: FilterView[]; detectors: string[] }) =>
+    request<FilterImportPlan>("POST", "/api/filters/import/preview", draft),
   testFilters: (t: FilterTest) => request<{ matches: FilterMatch[] }>("POST", "/api/filters/test", t),
   dismissSkipped: () => request<Status>("DELETE", "/api/skipped"),
   history: (before?: string) =>

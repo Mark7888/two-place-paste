@@ -30,10 +30,14 @@ type Source string
 
 // The sources, in the order Classify checks them.
 const (
+	SourceExport   Source = "export"
 	SourceOS       Source = "os"
 	SourceDetector Source = "detector"
 	SourceFilter   Source = "filter"
 )
+
+// ReasonExport is the reason given for an exported filter set.
+const ReasonExport = "An exported filter set"
 
 // Verdict is Classify's answer.
 type Verdict struct {
@@ -138,6 +142,13 @@ func (c *Classifier) Classify(content clipboard.Content) Verdict {
 	if c == nil {
 		return Verdict{}
 	}
+	// A filter export holds the user's filter values in clear, so it is
+	// never uploaded on its own, whatever the settings say. It is checked
+	// first: the app marks its own export private (ReasonConcealed), and
+	// "an exported filter set" is the truer reason.
+	if isExport(content) {
+		return Verdict{Sensitive: true, Source: SourceExport, Reason: ReasonExport}
+	}
 	if c.detectOS && content.Concealed != "" {
 		return Verdict{Sensitive: true, Source: SourceOS, Reason: content.Concealed}
 	}
@@ -202,6 +213,15 @@ func (c *Classifier) matches(content clipboard.Content, first bool) []Verdict {
 
 func filterVerdict(f Filter) Verdict {
 	return Verdict{Sensitive: true, Source: SourceFilter, Reason: f.Reason(), Name: f.Label, Rule: f.ID}
+}
+
+// isExport reports whether content is a filter export. The size check comes
+// before the text is copied out of the body: a large text cannot be one.
+func isExport(content clipboard.Content) bool {
+	if content.Kind() != clipboard.KindText || len(content.Body) > MaxExportBytes {
+		return false
+	}
+	return LooksLikeExport(content.Text())
 }
 
 // NewID returns a random filter id.

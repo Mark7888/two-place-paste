@@ -26,6 +26,17 @@ type API interface {
 	// filter editor.
 	TestFilters(ctx context.Context, t FilterTest) (FilterTestResult, error)
 
+	// ExportFilters exports saved filters to the clipboard, marked private,
+	// or straight into the store.
+	ExportFilters(ctx context.Context, req FilterExportRequest) (FilterExportResult, error)
+
+	// CheckFilterImport says whether the clipboard holds a filter export.
+	CheckFilterImport(ctx context.Context) FilterImportCheck
+
+	// PreviewFilterImport compares the clipboard's export with the editor's
+	// draft. It changes nothing: the editor applies the rows the user ticks.
+	PreviewFilterImport(ctx context.Context, draft FilterImportDraft) (FilterImportPlan, error)
+
 	// DismissSkipped clears the skipped-transfer notice (Status.Skipped).
 	DismissSkipped(ctx context.Context)
 

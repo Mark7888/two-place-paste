@@ -71,6 +71,21 @@ func (s *stubAPI) Sync(context.Context, SyncRequest) (SyncResult, error) {
 	return SyncResult{Direction: DirectionUpload, Changed: true, Message: "uploaded"}, s.nextErr
 }
 
+func (s *stubAPI) ExportFilters(_ context.Context, req FilterExportRequest) (FilterExportResult, error) {
+	s.record("filters-export " + req.To)
+	return FilterExportResult{Filters: 1, Message: "exported"}, nil
+}
+
+func (s *stubAPI) CheckFilterImport(context.Context) FilterImportCheck {
+	s.record("filters-import-check")
+	return FilterImportCheck{Available: true, Filters: 1}
+}
+
+func (s *stubAPI) PreviewFilterImport(context.Context, FilterImportDraft) (FilterImportPlan, error) {
+	s.record("filters-import-preview")
+	return FilterImportPlan{Filters: []FilterImportRow{}, Detectors: []DetectorImportRow{}}, nil
+}
+
 func (s *stubAPI) SetPaused(_ context.Context, paused bool) PauseView {
 	s.record("pause")
 	return PauseView{Paused: paused, Available: true}
@@ -233,6 +248,9 @@ func TestOriginIsValidatedOnEveryRequest(t *testing.T) {
 		{"POST", "/api/pause", `{"paused":true}`},
 		{"POST", "/api/clipboard/reveal", `{}`},
 		{"POST", "/api/filters/test", `{"text":"x"}`},
+		{"POST", "/api/filters/export", `{"to":"clipboard"}`},
+		{"POST", "/api/filters/import/check", `{}`},
+		{"POST", "/api/filters/import/preview", `{"filters":[],"detectors":[]}`},
 		{"GET", "/api/history", ""},
 		{"POST", "/api/entries/copy", `{"entry_id":"e1"}`},
 		{"POST", "/api/entries/preview", `{"entry_id":"e1"}`},

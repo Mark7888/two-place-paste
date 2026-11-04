@@ -713,6 +713,9 @@ binary, served from localhost and opened in the user's default browser.
   store (§6b), only after the user confirms that action for that copy. Detection of the OS marker is on by default; the decision and the filters are
   local to the device and nothing about them reaches the relay or the wire
   (`docs/internal/plans/auto-upload-filters.md`).
+- Filters can be exported (all, or one custom filter) to the clipboard, marked private, or
+  to the store, and imported from the clipboard into the filter editor row by row. An
+  export is never uploaded automatically, and exact matches are never exported.
 - Pausing auto-sync: one switch, in the UI and the tray menu, holds both automatic
   directions for five minutes. A copy made while paused is never uploaded on its own, an
   entry announced while paused is left for Download, and manual sync still works. The

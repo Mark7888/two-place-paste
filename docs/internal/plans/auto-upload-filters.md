@@ -467,3 +467,22 @@ above, and why.
   previews of an entry pushed anyway show it like any other; and Android, which has no
   auto-upload, does not check its own sensitive-clip marker
   (`ClipDescription.EXTRA_IS_SENSITIVE`) on Upload or Save clipboard.
+
+## 10. Export and import
+
+Filters stay per device; a JSON document carries them to another one. It has a
+format marker and a version (`{"format":"twoplacepaste-filters","version":1,…}`), a
+`filters` list and, for a full export only, a `detectors` map — absent means "says
+nothing about detectors", not "all off". Exact matches are never exported: their hash
+is salted for one install.
+
+- Export is from the saved filters, to the clipboard (marked private, as the app's own
+  write) or straight into the store (tag *filters*), never through the clipboard.
+- The classifier recognises an export and never uploads one on its own, whatever the
+  settings.
+- Import compares the clipboard's export with the editor's draft
+  (`sensitive.PlanImport`) and only ever lands in the draft. A filter keeps its ID
+  across devices: the same ID with different content is an update (unticked), the same
+  ID or the same match is a duplicate, and a new one is ticked. Turning a detector on
+  starts ticked, turning one off does not. Unknown kinds and detectors from a newer
+  version are listed as not importable.

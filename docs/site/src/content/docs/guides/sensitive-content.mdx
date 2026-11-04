@@ -8,6 +8,8 @@ import { Image } from 'astro:assets';
 import filters from '../../../assets/screenshots/desktop-filters.webp';
 import masked from '../../../assets/screenshots/desktop-sync-sensitive.webp';
 import protectedEntry from '../../../assets/screenshots/desktop-sync-protected.webp';
+import exportDialog from '../../../assets/screenshots/desktop-filters-export.webp';
+import importDialog from '../../../assets/screenshots/desktop-filters-import.webp';
 
 With **Watch the clipboard** on, everything you copy is uploaded — including a password you copy
 from a password manager. The desktop app can tell some copies apart and keep them on this computer.
@@ -94,6 +96,43 @@ highlighted, and a tab hiding a match gets a dot. What you type there is never s
 	written to the [settings file](/two-place-paste/guides/settings/#the-settings-file) as you typed it.
 	An exact match applies to texts up to 1 KB.
 </Aside>
+
+## Exporting and importing filters
+
+Filters are kept on each computer. To set up another device of the group with the same ones, export
+them on this one and import them there.
+
+**Export all…** in the filter editor exports every custom filter and the on/off setting of every
+built-in filter. The export button on a custom filter's row exports just that filter. Either opens:
+
+<Image src={exportDialog} alt="The Export filters dialog, with a name for the store and the Copy to clipboard and Save to Store buttons" class="screenshot" />
+
+- **Save to Store** saves the export as a [Store](/two-place-paste/guides/store/) item, tagged
+  *filters*, so it reaches your other devices encrypted like everything else. Leave the name empty
+  for one like *Filters: 3 custom, 2 built-in on* or *Filter: Work VPN*.
+- **Copy to clipboard** puts it on this computer's clipboard, marked private: clipboard history
+  skips it, and it is never uploaded on its own.
+
+An export holds each filter's value as you typed it. Exact matches are left out: only a hash of their
+text is kept, and it means nothing on another device, so type those again there. Exporting uses the
+saved filters, so save your changes first.
+
+On the other device, copy the export — **Copy** on its Store item — and open the filters. **Import…**
+is greyed out until the clipboard holds an export, and shows what it would do:
+
+<Image src={importDialog} alt="The Import filters dialog, listing an updated filter, a new one, one already on the device and one that cannot be imported" class="screenshot" />
+
+| Row | Starts | |
+|---|---|---|
+| **New** | Ticked | A filter this device does not have. |
+| **Update** | Not ticked | The same filter, changed on another device. Ticking it replaces this device's copy. |
+| **Already on this device** | — | Nothing to do. Matched by the filter itself, or by what it matches. |
+| **Can't import** | — | Says why: a regex that does not compile, a kind of filter from a newer version, no room left. |
+| **Turn on** a built-in filter | Ticked | |
+| **Turn off** a built-in filter | Not ticked | An import never quietly lowers the protection. |
+
+Imported filters are added to the editor and outlined there. Nothing is saved until you press
+**Save**; **Cancel** throws them away again.
 
 ## On the Sync tab
 

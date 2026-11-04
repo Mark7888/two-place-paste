@@ -402,6 +402,71 @@ type FilterTest struct {
 	Filters   *[]FilterView `json:"filters,omitempty"`
 }
 
+// FilterExportRequest exports filters. IDs nil exports every custom filter
+// and every built-in detector's state; otherwise only those custom filters,
+// and nothing about detectors. To is "clipboard" or "store"; Name names the
+// store item, and a name is made up when it is empty.
+type FilterExportRequest struct {
+	IDs  []string `json:"ids,omitempty"`
+	To   string   `json:"to"`
+	Name string   `json:"name,omitempty"`
+}
+
+// FilterExportResult says what an export held and where it went.
+// SkippedExact counts exact matches left out: only their hash is kept, and
+// it means nothing on another device.
+type FilterExportResult struct {
+	Filters      int            `json:"filters"`
+	Detectors    bool           `json:"detectors"`
+	SkippedExact int            `json:"skipped_exact"`
+	Message      string         `json:"message"`
+	Item         *StoreItemView `json:"item,omitempty"`
+}
+
+// FilterImportCheck says whether the clipboard holds a filter export, for the
+// Import button.
+type FilterImportCheck struct {
+	Available bool `json:"available"`
+	Filters   int  `json:"filters,omitempty"`
+	Detectors bool `json:"detectors,omitempty"`
+}
+
+// FilterImportDraft is the editor's unsaved state an import is compared with.
+type FilterImportDraft struct {
+	Filters   []FilterView `json:"filters"`
+	Detectors []string     `json:"detectors"`
+}
+
+// FilterImportPlan is what importing the clipboard's export would do, row by
+// row, for the user to tick.
+type FilterImportPlan struct {
+	Filters   []FilterImportRow   `json:"filters"`
+	Detectors []DetectorImportRow `json:"detectors"`
+}
+
+// FilterImportRow is one custom filter of an import. Status is "new",
+// "update", "duplicate" or "invalid"; Selected is whether it starts ticked;
+// Reason says why it cannot be imported, or what an update changes;
+// ExistingID is the filter here it matches.
+type FilterImportRow struct {
+	Filter     FilterView `json:"filter"`
+	Status     string     `json:"status"`
+	Selected   bool       `json:"selected"`
+	Reason     string     `json:"reason,omitempty"`
+	ExistingID string     `json:"existing_id,omitempty"`
+}
+
+// DetectorImportRow is one built-in detector of an import. Status is
+// "turn_on", "turn_off", "unchanged" or "invalid" (one this build does not
+// have); a turn-off starts unticked.
+type DetectorImportRow struct {
+	Name     string `json:"name"`
+	Title    string `json:"title,omitempty"`
+	Status   string `json:"status"`
+	Selected bool   `json:"selected"`
+	Reason   string `json:"reason,omitempty"`
+}
+
 // FilterMatch is one rule that matched a test sample. Source is "detector"
 // or "filter"; Rule is the detector's name or the filter's ID. The editor
 // gives a new filter its ID before it is saved, so a draft's matches can be

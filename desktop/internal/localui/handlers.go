@@ -67,6 +67,40 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+func (s *Server) handleExportFilters(w http.ResponseWriter, r *http.Request) {
+	var req FilterExportRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.To != "clipboard" && req.To != "store" {
+		writeError(w, http.StatusBadRequest, `to must be "clipboard" or "store"`)
+		return
+	}
+	res, err := s.api.ExportFilters(r.Context(), req)
+	if err != nil {
+		s.fail(w, r, "export the filters", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) handleCheckFilterImport(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.api.CheckFilterImport(r.Context()))
+}
+
+func (s *Server) handlePreviewFilterImport(w http.ResponseWriter, r *http.Request) {
+	var draft FilterImportDraft
+	if !decodeLimit(w, r, &draft, maxSettingsBytes) {
+		return
+	}
+	res, err := s.api.PreviewFilterImport(r.Context(), draft)
+	if err != nil {
+		s.fail(w, r, "read the filter export", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 func (s *Server) handleSetPaused(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Paused bool `json:"paused"`

@@ -16,6 +16,24 @@ static long tppPasteboardChangeCount(void) {
 	}
 }
 
+// tppWriteConcealedText puts text on the pasteboard together with the
+// nspasteboard.org concealed type, which clipboard managers take as "do not
+// keep this" — what a password manager writes. It returns 0 on failure.
+static int tppWriteConcealedText(const char *text) {
+	@autoreleasepool {
+		NSString *s = [NSString stringWithUTF8String:text];
+		if (s == nil) {
+			return 0;
+		}
+		NSString *concealed = @"org.nspasteboard.ConcealedType";
+		NSPasteboard *pb = [NSPasteboard generalPasteboard];
+		[pb declareTypes:@[ NSPasteboardTypeString, concealed ] owner:nil];
+		BOOL ok = [pb setString:s forType:NSPasteboardTypeString];
+		[pb setString:@"" forType:concealed];
+		return ok ? 1 : 0;
+	}
+}
+
 // tppPasteboardTypes returns the pasteboard's types joined by newlines, in
 // memory the caller frees, and the change count they were read at. Type
 // identifiers are UTIs and legacy names; none contains a newline.
@@ -49,6 +67,14 @@ import (
 // adds no toolchain requirement.
 func pasteboardChangeCount() (uint64, bool) {
 	return uint64(C.tppPasteboardChangeCount()), true
+}
+
+// pasteboardWriteConcealed writes text marked private (markers.go), and
+// reports whether it could.
+func pasteboardWriteConcealed(text string) bool {
+	c := C.CString(text)
+	defer C.free(unsafe.Pointer(c))
+	return C.tppWriteConcealedText(c) == 1
 }
 
 // pasteboardTypes returns the type identifiers on the pasteboard and the

@@ -111,6 +111,12 @@ func (c darwinClipboard) readContent(ctx context.Context) (Content, error) {
 func (c darwinClipboard) Write(ctx context.Context, item Content) error {
 	switch item.Kind() {
 	case KindText:
+		// Private text goes through AppKit, which can add the concealed
+		// type pbcopy cannot. A build without cgo falls back to pbcopy and
+		// writes it unmarked.
+		if item.Concealed != "" && pasteboardWriteConcealed(string(item.Body)) {
+			return nil
+		}
 		cmd := exec.CommandContext(ctx, "/usr/bin/pbcopy")
 		cmd.Env = helperEnv()
 		cmd.Stdin = bytes.NewReader(item.Body)
