@@ -243,6 +243,11 @@ type EntryPreview struct {
 	// for an image too large to be worth inlining, and ImageTooLarge says so.
 	ImageDataURL  string `json:"image_data_url,omitempty"`
 	ImageTooLarge bool   `json:"image_too_large,omitempty"`
+
+	// FilterExport is set when a store item is an exported filter set, so
+	// the page can offer to import it. It is decided on the whole item, not
+	// on Text, which may be cut short.
+	FilterExport *FilterImportCheck `json:"filter_export,omitempty"`
 }
 
 // EntryContent is the decrypted body of an audio or video entry, as the page
@@ -432,9 +437,12 @@ type FilterImportCheck struct {
 }
 
 // FilterImportDraft is the editor's unsaved state an import is compared with.
+// StoreItemID imports the export kept as that store item instead of the one
+// on the clipboard.
 type FilterImportDraft struct {
-	Filters   []FilterView `json:"filters"`
-	Detectors []string     `json:"detectors"`
+	Filters     []FilterView `json:"filters"`
+	Detectors   []string     `json:"detectors"`
+	StoreItemID string       `json:"store_item_id,omitempty"`
 }
 
 // FilterImportPlan is what importing the clipboard's export would do, row by

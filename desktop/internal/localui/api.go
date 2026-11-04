@@ -33,8 +33,9 @@ type API interface {
 	// CheckFilterImport says whether the clipboard holds a filter export.
 	CheckFilterImport(ctx context.Context) FilterImportCheck
 
-	// PreviewFilterImport compares the clipboard's export with the editor's
-	// draft. It changes nothing: the editor applies the rows the user ticks.
+	// PreviewFilterImport compares the clipboard's export — or a store
+	// item's, when the draft names one — with the editor's draft. It changes
+	// nothing: the editor applies the rows the user ticks.
 	PreviewFilterImport(ctx context.Context, draft FilterImportDraft) (FilterImportPlan, error)
 
 	// DismissSkipped clears the skipped-transfer notice (Status.Skipped).

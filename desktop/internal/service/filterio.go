@@ -169,7 +169,13 @@ func (s *Service) CheckFilterImport(ctx context.Context) localui.FilterImportChe
 
 // PreviewFilterImport implements localui.API.
 func (s *Service) PreviewFilterImport(ctx context.Context, draft localui.FilterImportDraft) (localui.FilterImportPlan, error) {
-	doc, err := s.clipboardExport(ctx)
+	var doc sensitive.Export
+	var err error
+	if draft.StoreItemID != "" {
+		doc, err = s.storeExport(ctx, draft.StoreItemID)
+	} else {
+		doc, err = s.clipboardExport(ctx)
+	}
 	if err != nil {
 		return localui.FilterImportPlan{}, err
 	}
@@ -203,6 +209,33 @@ func (s *Service) PreviewFilterImport(ctx context.Context, draft localui.FilterI
 	}
 	s.logger.InfoContext(ctx, "filter import previewed", "filters", len(out.Filters), "detectors", len(out.Detectors))
 	return out, nil
+}
+
+// storeExport reads a filter export kept as a store item, straight from the
+// store: importing it from the Store tab does not go through the clipboard.
+func (s *Service) storeExport(ctx context.Context, itemID string) (sensitive.Export, error) {
+	item, err := s.fetchStoreItem(ctx, itemID)
+	if err != nil {
+		return sensitive.Export{}, err
+	}
+	doc, err := exportFromItem(item)
+	if err != nil {
+		return sensitive.Export{}, localui.Errorf(http.StatusConflict, err, "that store item is not an exported filter set")
+	}
+	return doc, nil
+}
+
+// exportFromItem parses an entry or store item as a filter export.
+func exportFromItem(item tppclient.Item) (sensitive.Export, error) {
+	c := clipboard.Content{ContentType: item.ContentType, Filename: item.Filename, Body: item.Body}
+	if c.Kind() != clipboard.KindText || len(c.Body) > sensitive.MaxExportBytes {
+		return sensitive.Export{}, sensitive.ErrNotExport
+	}
+	doc, err := sensitive.ParseExport(c.Text())
+	if err != nil {
+		return sensitive.Export{}, fmt.Errorf("read the filter export: %w", err)
+	}
+	return doc, nil
 }
 
 // clipboardExport reads a filter export from the clipboard.

@@ -167,6 +167,8 @@ export interface EntryPreview {
   truncated?: boolean;
   image_data_url?: string;
   image_too_large?: boolean;
+  /** Set when a store item is an exported filter set, so it can be imported. */
+  filter_export?: FilterImportCheck;
 }
 
 export interface HistoryPage {
@@ -633,8 +635,9 @@ export const api = {
   // Exports saved filters: to the clipboard, marked private, or into the store.
   exportFilters: (req: FilterExportRequest) => request<FilterExportResult>("POST", "/api/filters/export", req),
   checkFilterImport: () => request<FilterImportCheck>("POST", "/api/filters/import/check", {}),
-  // Compares the clipboard's export with the editor's draft; saves nothing.
-  previewFilterImport: (draft: { filters: FilterView[]; detectors: string[] }) =>
+  // Compares the clipboard's export — or a store item's, given its id — with
+  // the editor's draft; saves nothing.
+  previewFilterImport: (draft: { filters: FilterView[]; detectors: string[]; store_item_id?: string }) =>
     request<FilterImportPlan>("POST", "/api/filters/import/preview", draft),
   testFilters: (t: FilterTest) => request<{ matches: FilterMatch[] }>("POST", "/api/filters/test", t),
   dismissSkipped: () => request<Status>("DELETE", "/api/skipped"),

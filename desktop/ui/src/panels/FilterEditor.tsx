@@ -85,11 +85,15 @@ function rowOfError(message: string): number | null {
 export function FilterEditor({
   open,
   settings,
+  importFrom,
   onClose,
   onSaved,
 }: {
   open: boolean;
   settings: SettingsView;
+  /** A store item holding an exported filter set: the editor opens straight
+   *  into importing it, as the Store tab's Import filters asks. */
+  importFrom?: string;
   onClose: () => void;
   onSaved: (s: SettingsView) => void;
 }) {
@@ -107,6 +111,8 @@ export function FilterEditor({
   const [notice, setNotice] = useState("");
   const [exportAsk, setExportAsk] = useState<ExportAsk | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  // Where the open import reads from: a store item, or the clipboard.
+  const [importSource, setImportSource] = useState<string | undefined>(undefined);
   const [importCheck, setImportCheck] = useState<FilterImportCheck | null>(null);
   // What the last import brought in, highlighted until the draft is saved.
   const [imported, setImported] = useState<Set<string>>(new Set());
@@ -133,8 +139,12 @@ export function FilterEditor({
     setTestError("");
     setNotice("");
     setExportAsk(null);
-    setImportOpen(false);
+    // Opened from a store item, the import comes first; it is compared with
+    // the filters set just above, as the next render sees them.
+    setImportSource(importFrom);
+    setImportOpen(importFrom !== undefined);
     setImported(new Set());
+    // importFrom is read on opening only.
   }, [open, settings]);
 
   // Whether the clipboard holds an export, for the Import button. The page
@@ -389,7 +399,10 @@ export function FilterEditor({
                 type="button"
                 className="action small"
                 disabled={!importCheck?.available}
-                onClick={() => setImportOpen(true)}
+                onClick={() => {
+                setImportSource(undefined);
+                setImportOpen(true);
+              }}
               >
                 <Icon name="download" size={14} />
                 Import…
@@ -617,6 +630,7 @@ export function FilterEditor({
       <FilterImportDialog
         open={importOpen}
         draft={{ filters, detectors: detectors.filter((d) => d.enabled).map((d) => d.name) }}
+        storeItemId={importSource}
         onClose={() => setImportOpen(false)}
         onImport={applyImport}
       />

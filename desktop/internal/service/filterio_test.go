@@ -179,3 +179,46 @@ func TestAutoWatchSkipsAnExport(t *testing.T) {
 		t.Errorf("SensitiveNote = %+v, want the export named", note)
 	}
 }
+
+// TestImportFromAStoreItem: an exported set kept in the store is flagged on
+// its preview and imports straight from the store, without the clipboard;
+// an ordinary item is neither.
+func TestImportFromAStoreItem(t *testing.T) {
+	t.Parallel()
+	f := exportFixture(t)
+	ctx := context.Background()
+	f.enableStore()
+
+	res, err := f.svc.ExportFilters(ctx, localui.FilterExportRequest{To: "store"})
+	if err != nil {
+		t.Fatalf("export to store = %v", err)
+	}
+	view, err := f.svc.StoreItemPreview(ctx, res.Item.ID)
+	if err != nil {
+		t.Fatalf("StoreItemPreview() = %v", err)
+	}
+	if view.FilterExport == nil || !view.FilterExport.Available || view.FilterExport.Filters != 2 || !view.FilterExport.Detectors {
+		t.Errorf("FilterExport = %+v, want the export flagged", view.FilterExport)
+	}
+
+	f.clip.set(textContent("not an export"))
+	plan, err := f.svc.PreviewFilterImport(ctx, localui.FilterImportDraft{StoreItemID: res.Item.ID})
+	if err != nil {
+		t.Fatalf("PreviewFilterImport(store item) = %v", err)
+	}
+	if len(plan.Filters) != 2 || plan.Filters[0].Status != "new" {
+		t.Errorf("filter rows = %+v, want the two exported filters as new", plan.Filters)
+	}
+
+	f.clip.set(textContent("an ordinary note"))
+	note, err := f.svc.SaveToStore(ctx, localui.StoreSaveRequest{Source: "clipboard", StoreDetails: details("Note")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := f.svc.StoreItemPreview(ctx, note.ID); v.FilterExport != nil {
+		t.Errorf("an ordinary item was flagged as an export: %+v", v.FilterExport)
+	}
+	if _, err := f.svc.PreviewFilterImport(ctx, localui.FilterImportDraft{StoreItemID: note.ID}); statusOf(err) != http.StatusConflict {
+		t.Errorf("import from an ordinary item = %v, want a 409", err)
+	}
+}

@@ -15,7 +15,7 @@ import { Caption } from "./Caption";
  * HEVC .mov plays in Safari and often nowhere else. When the browser gives up,
  * the preview says so and points at Copy.
  */
-export function MediaPreview({ preview, loadMedia }: PreviewProps) {
+export function MediaPreview({ preview, loadMedia, action }: PreviewProps) {
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [unplayable, setUnplayable] = useState(false);
@@ -48,7 +48,7 @@ export function MediaPreview({ preview, loadMedia }: PreviewProps) {
   }
   if (unplayable) {
     return (
-      <Caption preview={preview} note="This browser cannot play this file. Copy it to open it elsewhere · " />
+      <Caption preview={preview} note="This browser cannot play this file. Copy it to open it elsewhere · " action={action} />
     );
   }
   if (!src) {
@@ -68,7 +68,7 @@ export function MediaPreview({ preview, loadMedia }: PreviewProps) {
       ) : (
         <audio className="preview-media" src={src} controls preload="metadata" onError={onError} />
       )}
-      <Caption preview={preview} />
+      <Caption preview={preview} action={action} />
     </>
   );
 }

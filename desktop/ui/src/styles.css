@@ -994,3 +994,7 @@ label.toggle.imported { box-shadow: inset 3px 0 0 var(--accent); }
 .import-status.new { color: var(--ok); }
 .import-status.update { color: var(--warn); }
 .import-status.invalid { color: var(--danger); }
+
+/* A preview's caption line with an action at its right (Import filters…). */
+.preview-caption { margin-top: 0.4rem; }
+.preview-caption > p { margin: 0; }

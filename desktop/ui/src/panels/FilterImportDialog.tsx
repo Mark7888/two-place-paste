@@ -31,11 +31,14 @@ export interface ImportChoice {
 export function FilterImportDialog({
   open,
   draft,
+  storeItemId,
   onClose,
   onImport,
 }: {
   open: boolean;
   draft: { filters: FilterView[]; detectors: string[] };
+  /** Import the export kept as this store item, not the clipboard's. */
+  storeItemId?: string;
   onClose: () => void;
   onImport: (choice: ImportChoice) => void;
 }) {
@@ -50,7 +53,7 @@ export function FilterImportDialog({
     setError("");
     void (async () => {
       try {
-        const p = await api.previewFilterImport(draft);
+        const p = await api.previewFilterImport(storeItemId ? { ...draft, store_item_id: storeItemId } : draft);
         setPlan(p);
         setTicked(
           new Set([
@@ -125,7 +128,7 @@ export function FilterImportDialog({
       ) : !plan ? (
         <div className="row">
           <span className="spinner" />
-          <span className="muted">Reading the clipboard…</span>
+          <span className="muted">{storeItemId ? "Reading the store item…" : "Reading the clipboard…"}</span>
         </div>
       ) : (
         <div className="stack">

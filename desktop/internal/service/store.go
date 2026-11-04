@@ -461,6 +461,11 @@ func (s *Service) StoreItemPreview(ctx context.Context, itemID string) (localui.
 		return localui.EntryPreview{}, err
 	}
 	view := previewView(it.ID, it.WrapEpoch, item, format)
+	// An exported filter set offers Import. The whole item is parsed: the
+	// preview's text may be cut short.
+	if doc, err := exportFromItem(item); err == nil {
+		view.FilterExport = &localui.FilterImportCheck{Available: true, Filters: len(doc.Filters), Detectors: doc.Detectors != nil}
+	}
 	s.logger.DebugContext(ctx, "store item previewed", "item_id", it.ID, "render", view.Render)
 	return view, nil
 }
