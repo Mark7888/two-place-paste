@@ -168,7 +168,7 @@ export function SyncPanel({ status, onChanged }: { status: Status | null; onChan
             <Icon name="download" size={16} />
             {busy === "download" ? "Downloading…" : "Download"}
           </button>
-          {status.pause.paused ? (
+          {status.pause?.paused ? (
             <button className="action push-right" disabled={pausing} onClick={() => void togglePause(false)}>
               <Icon name="play" size={16} />
               Resume auto-sync
@@ -176,9 +176,9 @@ export function SyncPanel({ status, onChanged }: { status: Status | null; onChan
           ) : (
             <button
               className="action quiet push-right"
-              disabled={pausing || !status.pause.available}
+              disabled={pausing || !status.pause?.available}
               title={
-                status.pause.available
+                status.pause?.available
                   ? "Hold automatic uploads and downloads for 5 minutes"
                   : "Auto-sync is off: turn on Watch the clipboard or Take what other devices upload in Settings"
               }
@@ -317,7 +317,7 @@ export function SyncPanel({ status, onChanged }: { status: Status | null; onChan
       */}
       <Modal
         open={guarded !== null}
-        title="This is a protected entry"
+        title="Push to your other devices"
         onClose={() => setGuarded(null)}
         footer={
           <>
@@ -335,13 +335,16 @@ export function SyncPanel({ status, onChanged }: { status: Status | null; onChan
           </>
         }
       >
-        <p>
-          {guarded?.reason ? <>{guarded.reason}. </> : null}
-          Push it to your other devices anyway?
-        </p>
-        <p className="muted small">
-          It is encrypted like every entry, and stays in the group&apos;s history for 24 hours.
-        </p>
+        {/* The same warning as the store's Save clipboard asks with. */}
+        <div className="notice warn">
+          <Icon name="lock" />
+          <span>
+            This is a protected entry
+            {guarded?.reason ? <> — {lowerFirst(guarded.reason)}</> : null}. It is encrypted like every
+            entry and stays in the group&apos;s history for 24 hours, where every device in the group can
+            open it. Push it anyway?
+          </span>
+        </div>
       </Modal>
 
       {/*
