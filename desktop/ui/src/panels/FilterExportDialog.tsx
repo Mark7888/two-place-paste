@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type FilterExportResult } from "../api";
+import { ApiError, api, type FilterExportResult } from "../api";
 import { Icon } from "../components/Icon";
 import { Modal } from "../components/Modal";
 
@@ -12,6 +12,10 @@ import { Modal } from "../components/Modal";
  *
  * The export is made from the saved filters; the editor only offers it when
  * nothing is left unsaved.
+ *
+ * Saving an export the store already holds is a question, not a failure: the
+ * dialog names the item it duplicates and offers "Save anyway", which saves
+ * it again under the name given here.
  */
 export function FilterExportDialog({
   open,
@@ -34,21 +38,35 @@ export function FilterExportDialog({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState<"clipboard" | "store" | null>(null);
   const [error, setError] = useState("");
+  // The name of the store item an export to the store duplicates, while the
+  // dialog asks whether to save it anyway.
+  const [duplicateOf, setDuplicateOf] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setName("");
     setError("");
+    setDuplicateOf(null);
   }, [open]);
 
-  const run = async (to: "clipboard" | "store") => {
+  const run = async (to: "clipboard" | "store", allowDuplicate = false) => {
     setBusy(to);
     setError("");
+    setDuplicateOf(null);
     try {
-      const res = await api.exportFilters({ ids, to, name: to === "store" ? name.trim() || undefined : undefined });
+      const res = await api.exportFilters({
+        ids,
+        to,
+        name: to === "store" ? name.trim() || undefined : undefined,
+        allow_duplicate: allowDuplicate || undefined,
+      });
       onDone(res);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (err instanceof ApiError && err.duplicates?.length) {
+        setDuplicateOf(err.duplicates[0].name);
+      } else {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
       setBusy(null);
     }
@@ -93,6 +111,21 @@ export function FilterExportDialog({
           <span className="label">Name in the store</span>
           <input type="text" value={name} placeholder={defaultName} onChange={(e) => setName(e.target.value)} />
         </label>
+        {duplicateOf !== null ? (
+          <div className="notice warn centered">
+            <Icon name="alert" />
+            <span className="grow">The store already holds this export, as “{duplicateOf}”.</span>
+            <button
+              type="button"
+              className="action small"
+              disabled={busy !== null}
+              onClick={() => void run("store", true)}
+            >
+              {busy === "store" ? <span className="spinner" /> : null}
+              Save anyway
+            </button>
+          </div>
+        ) : null}
         {error ? (
           <div className="notice error">
             <Icon name="alert" />

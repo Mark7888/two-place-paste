@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -114,9 +115,16 @@ func TestExportToStore(t *testing.T) {
 	if err != nil || one.Item.Name != "Filter: custom “ends with” filter" {
 		t.Errorf("single export to store = %+v, %v", one.Item, err)
 	}
-	if _, err := f.svc.ExportFilters(ctx, localui.FilterExportRequest{To: "store"}); statusOf(err) != http.StatusConflict ||
-		!strings.Contains(err.Error(), "Filters: 2 custom") {
-		t.Errorf("same export again = %v, want a 409 naming the item", err)
+	// The same export again is the store's duplicate question, naming the
+	// item; Save anyway saves it under the name given.
+	_, err = f.svc.ExportFilters(ctx, localui.FilterExportRequest{To: "store"})
+	var dup *localui.DuplicateError
+	if !errors.As(err, &dup) || len(dup.Duplicates) != 1 || dup.Duplicates[0].Name != "Filters: 2 custom, 1 built-in on" {
+		t.Fatalf("same export again = %v, want a DuplicateError naming the item", err)
+	}
+	again, err := f.svc.ExportFilters(ctx, localui.FilterExportRequest{To: "store", Name: "f1", AllowDuplicate: true})
+	if err != nil || again.Item.Name != "f1" {
+		t.Errorf("save anyway = %+v, %v; want it saved as f1", again.Item, err)
 	}
 }
 

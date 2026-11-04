@@ -254,6 +254,8 @@ export interface FilterExportRequest {
   ids?: string[];
   to: "clipboard" | "store";
   name?: string;
+  /** "Save anyway" when the store already holds the same export. */
+  allow_duplicate?: boolean;
 }
 
 export interface FilterExportResult {

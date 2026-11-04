@@ -85,15 +85,14 @@ func (s *Service) ExportFilters(ctx context.Context, req localui.FilterExportReq
 		// Straight into the store, not through the clipboard: the export
 		// holds filter values, and a round trip through the clipboard would
 		// ask the protected-entry question about the user's own filters.
+		//
+		// The same export already in the store comes back as the store's
+		// own *DuplicateError, naming the item, so the dialog can offer
+		// "Save anyway", which sends AllowDuplicate.
 		item, err := s.saveToStore(ctx, relay,
 			tppclient.Item{ContentType: content.ContentType, Body: content.Body, CreatedAt: s.now()},
-			localui.StoreDetails{Name: name, Tags: []string{exportStoreTag}}, false)
-		var dup *localui.DuplicateError
-		switch {
-		case errors.As(err, &dup) && len(dup.Duplicates) > 0:
-			return localui.FilterExportResult{}, localui.Errorf(http.StatusConflict, err,
-				"the store already holds this export, as “%s”", dup.Duplicates[0].Name)
-		case err != nil:
+			localui.StoreDetails{Name: name, Tags: []string{exportStoreTag}}, req.AllowDuplicate)
+		if err != nil {
 			return localui.FilterExportResult{}, err
 		}
 		res.Item = &item

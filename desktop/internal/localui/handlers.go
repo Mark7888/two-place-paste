@@ -78,7 +78,8 @@ func (s *Server) handleExportFilters(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := s.api.ExportFilters(r.Context(), req)
 	if err != nil {
-		s.fail(w, r, "export the filters", err)
+		// The store's duplicate answer, with the items it duplicates.
+		s.storeFail(w, r, "export the filters", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)

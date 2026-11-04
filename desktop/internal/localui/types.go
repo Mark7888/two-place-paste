@@ -411,10 +411,14 @@ type FilterTest struct {
 // and every built-in detector's state; otherwise only those custom filters,
 // and nothing about detectors. To is "clipboard" or "store"; Name names the
 // store item, and a name is made up when it is empty.
+//
+// The same export already in the store is refused with a *DuplicateError;
+// AllowDuplicate is the dialog's "Save anyway".
 type FilterExportRequest struct {
-	IDs  []string `json:"ids,omitempty"`
-	To   string   `json:"to"`
-	Name string   `json:"name,omitempty"`
+	IDs            []string `json:"ids,omitempty"`
+	To             string   `json:"to"`
+	Name           string   `json:"name,omitempty"`
+	AllowDuplicate bool     `json:"allow_duplicate,omitempty"`
 }
 
 // FilterExportResult says what an export held and where it went.
