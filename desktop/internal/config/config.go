@@ -7,6 +7,11 @@
 // an ordinary user-readable JSON file and must stay that way, because SPEC
 // §7.2 requires the port to be overridable by hand after a bind failure — a
 // user cannot edit what they cannot read.
+//
+// The sensitive-content filters are the one place a user may put something
+// private here: a "contains" filter's value is whatever they typed. That is
+// why an exact-match filter, the kind meant for a literal secret, keeps only
+// a salted hash (internal/sensitive), and why the documentation recommends it.
 package config
 
 import (
@@ -16,6 +21,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/Mark7888/two-place-paste/desktop/internal/sensitive"
 )
 
 // DefaultPort is the fixed localhost port of SPEC §7.2: dynamic/private range,
@@ -35,7 +42,9 @@ const FileName = "desktop.json"
 // Every toggle defaults to false and stay false until the user says otherwise
 // (SPEC §7.2): a clipboard watcher, a clipboard that changes by itself and a
 // login item are things a user opts into, never things an installer decides
-// for them.
+// for them. The exceptions protect rather than act: password-manager
+// detection and the private-key detector are on unless turned off, because a
+// protection a user has to discover first is one most users never get.
 type Settings struct {
 	// Port overrides DefaultPort. Zero means the default.
 	Port int `json:"port"`
@@ -81,6 +90,67 @@ type Settings struct {
 	// NightlyCommit is the full SHA of the commit whose build the Nightly
 	// channel installs. Only meaningful on ChannelNightly.
 	NightlyCommit string `json:"nightly_commit"`
+
+	// DetectSensitive marks content that a password manager or another
+	// application flagged as private, keeping it out of auto-upload. Absent
+	// means on.
+	DetectSensitive *bool `json:"detect_sensitive,omitempty"`
+
+	// Detectors names the built-in sensitive-content detectors that are on.
+	// Absent means sensitive.DefaultDetectors; an empty list means none.
+	Detectors *[]string `json:"detectors,omitempty"`
+
+	// Filters are the user's own sensitive-content rules.
+	Filters []sensitive.Filter `json:"filters,omitempty"`
+
+	// FilterSalt is the install-wide salt exact-match filters are hashed
+	// with, base64. Created the first time one is saved.
+	FilterSalt string `json:"filter_salt,omitempty"`
+}
+
+// SensitiveDetection is whether OS markers are honoured.
+func (s Settings) SensitiveDetection() bool {
+	return s.DetectSensitive == nil || *s.DetectSensitive
+}
+
+// EnabledDetectors resolves the detectors that are on.
+func (s Settings) EnabledDetectors() []string {
+	if s.Detectors == nil {
+		return sensitive.DefaultDetectors()
+	}
+	return append([]string(nil), *s.Detectors...)
+}
+
+// SensitiveConfig is what a sensitive.Classifier is built from.
+func (s Settings) SensitiveConfig() (sensitive.Config, error) {
+	cfg := sensitive.Config{
+		DetectOS:  s.SensitiveDetection(),
+		Detectors: s.EnabledDetectors(),
+		Filters:   s.Filters,
+	}
+	if s.FilterSalt != "" {
+		salt, err := sensitive.DecodeSalt(s.FilterSalt)
+		if err != nil {
+			return sensitive.Config{}, fmt.Errorf("config: %w", err)
+		}
+		cfg.Salt = salt
+	}
+	return cfg, nil
+}
+
+// Clone returns a copy that shares no slices with s, so a caller can change
+// one without the other seeing it.
+func (s Settings) Clone() Settings {
+	if s.Detectors != nil {
+		d := append([]string(nil), *s.Detectors...)
+		s.Detectors = &d
+	}
+	s.Filters = append([]sensitive.Filter(nil), s.Filters...)
+	if s.DetectSensitive != nil {
+		v := *s.DetectSensitive
+		s.DetectSensitive = &v
+	}
+	return s
 }
 
 // DefaultAutoMaxBytes is the automatic transfer limit when the settings file
@@ -231,6 +301,18 @@ func (s Settings) Validate() error {
 	}
 	if s.NightlyCommit != "" && !IsFullSHA(s.NightlyCommit) {
 		return fmt.Errorf("config: nightly commit %q is not a full 40-character commit hash", s.NightlyCommit)
+	}
+	if err := sensitive.ValidateList(s.Filters); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// Built from the settings, the classifier is what checks that exact
+	// filters have a salt to be compared with.
+	cfg, err := s.SensitiveConfig()
+	if err != nil {
+		return err
+	}
+	if _, err := sensitive.New(cfg); err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
 	return nil
 }

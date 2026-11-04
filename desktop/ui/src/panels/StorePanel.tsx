@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 import {
   api,
+  protectedEntry,
   type ClipboardView,
+  type ProtectedEntry,
   type EntryPreview,
   type ServiceEvent,
+  type SettingsView,
   type StoreDetails,
   type StoreItemView,
   type StoreSort,
@@ -12,6 +15,7 @@ import {
 import { Icon } from "../components/Icon";
 import { Modal } from "../components/Modal";
 import { StoreDialog, storeRoom } from "../components/StoreDialog";
+import { FilterEditor } from "./FilterEditor";
 import { bytes, relative, useNow, when } from "../format";
 import { PreviewBody, entryIcon } from "../preview";
 
@@ -29,7 +33,7 @@ import { PreviewBody, entryIcon } from "../preview";
 const emptyDetails: StoreDetails = { name: "", description: "", tags: [] };
 
 type Dialog =
-  | { kind: "clipboard"; clip?: ClipboardView }
+  | { kind: "clipboard"; clip?: ClipboardView; guard?: ProtectedEntry }
   | { kind: "file"; file: File }
   | { kind: "edit"; item: StoreItemView }
   | null;
@@ -45,7 +49,20 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
   const [dialog, setDialog] = useState<Dialog>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<{ id: string; name: string } | null>(null);
+  // An exported filter set being imported, in the filter editor, from here.
+  const [filterImport, setFilterImport] = useState<{ itemId: string; settings: SettingsView } | null>(null);
   const seq = useRef(0);
+
+  // Opens the filter editor straight into importing a store item. The
+  // editor needs the saved filters to compare with, so they are read first.
+  const importFilters = async (itemId: string) => {
+    setError("");
+    try {
+      setFilterImport({ itemId, settings: await api.settings() });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   // Previews are kept per item id, as in the History, so reopening one does
   // not fetch it again. An edit keeps the content, so its preview stays good.
@@ -154,8 +171,21 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
       setError("The clipboard is empty. Copy something first.");
       return;
     }
+    // A protected entry is asked about before the form: there is no point
+    // naming something the user then decides not to save.
+    let guard: ProtectedEntry | undefined;
+    try {
+      await api.checkClipboardSave();
+    } catch (err) {
+      const g = protectedEntry(err);
+      if (!g) {
+        setError(err instanceof Error ? err.message : String(err));
+        return;
+      }
+      guard = g;
+    }
     setError("");
-    setDialog({ kind: "clipboard", clip });
+    setDialog({ kind: "clipboard", clip, guard });
   };
 
   // A file from the drop zone or the picker is checked before the details
@@ -384,7 +414,22 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
                             <span>{preview.error}</span>
                           </div>
                         ) : (
-                          <PreviewBody preview={preview} loadMedia={api.storeItemMedia} />
+                          <PreviewBody
+                            preview={preview}
+                            loadMedia={api.storeItemMedia}
+                            action={
+                              preview.filter_export?.available ? (
+                                <button
+                                  type="button"
+                                  className="action small"
+                                  onClick={() => void importFilters(item.id)}
+                                >
+                                  <Icon name="download" size={14} />
+                                  Import filters…
+                                </button>
+                              ) : undefined
+                            }
+                          />
                         )}
                       </div>
                     ) : null}
@@ -422,6 +467,16 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
         </>
       )}
 
+      {filterImport ? (
+        <FilterEditor
+          open
+          settings={filterImport.settings}
+          importFrom={filterImport.itemId}
+          onClose={() => setFilterImport(null)}
+          onSaved={() => setNotice("Saved the imported filters. They apply on this device from now on.")}
+        />
+      ) : null}
+
       <StoreDialog
         open={dialog !== null}
         title={dialog?.kind === "edit" ? "Edit item" : "Save to store"}
@@ -440,10 +495,11 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
               ? { ...emptyDetails, name: dialog.file.name }
               : { ...emptyDetails, name: dialog?.clip?.filename ?? "" }
         }
+        initialGuard={dialog?.kind === "clipboard" ? dialog.guard : undefined}
         knownTags={knownTags}
         saveLabel={dialog?.kind === "edit" ? "Save changes" : "Save"}
         onClose={() => setDialog(null)}
-        onSubmit={async (details, allowDuplicate) => {
+        onSubmit={async (details, allowDuplicate, planId) => {
           if (dialog?.kind === "edit") {
             const it = await api.editStoreItem(dialog.item.id, details);
             return `saved the changes to “${it.name}”`;
@@ -451,7 +507,7 @@ export function StorePanel({ inGroup, lastEvent }: { inGroup: boolean; lastEvent
           const it =
             dialog?.kind === "file"
               ? await api.uploadToStore(dialog.file, details, allowDuplicate)
-              : await api.saveToStore({ source: "clipboard" }, details, allowDuplicate);
+              : await api.saveToStore({ source: "clipboard" }, details, allowDuplicate, planId);
           return `saved “${it.name}” to the store`;
         }}
         onDone={(message) => {

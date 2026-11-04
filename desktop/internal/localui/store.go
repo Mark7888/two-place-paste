@@ -24,9 +24,16 @@ type StoreAPI interface {
 	// the tags in use, and the items that could not be opened.
 	Store(ctx context.Context, q StoreQuery) (StoreView, error)
 
+	// CheckClipboardSave asks the protected-entry question before the save
+	// form opens: it returns a *SensitiveError, whose plan a SaveToStore of
+	// the clipboard then carries, when the clipboard is sensitive, and nil
+	// when it is not.
+	CheckClipboardSave(ctx context.Context) error
+
 	// SaveToStore saves the clipboard or a history entry with the details
 	// the user typed. A body already in the store is refused with a
-	// *DuplicateError unless the request allows it.
+	// *DuplicateError unless the request allows it, and a sensitive
+	// clipboard with a *SensitiveError unless the request confirms it.
 	SaveToStore(ctx context.Context, req StoreSaveRequest) (StoreItemView, error)
 
 	// UploadToStore saves a file the user dropped or picked.
@@ -141,6 +148,10 @@ type StoreSaveRequest struct {
 	StoreDetails
 	// AllowDuplicate is the dialog's "Save anyway".
 	AllowDuplicate bool `json:"allow_duplicate"`
+
+	// PlanID confirms saving a clipboard the service refused as sensitive:
+	// it names the SensitiveError the user answered "Save anyway" to.
+	PlanID string `json:"plan_id,omitempty"`
 }
 
 // StoreUpload is a file the page sent.
@@ -194,6 +205,20 @@ func (s *Server) handleStore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// handleStoreCheck answers whether saving the clipboard needs the user to
+// confirm a protected entry first: 200 when it does not, the usual 409 with a
+// plan id when it does.
+func (s *Server) handleStoreCheck(w http.ResponseWriter, r *http.Request) {
+	if s.storeOff(w) {
+		return
+	}
+	if err := s.store.CheckClipboardSave(r.Context()); err != nil {
+		s.storeFail(w, r, "check the clipboard", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (s *Server) handleStoreSave(w http.ResponseWriter, r *http.Request) {

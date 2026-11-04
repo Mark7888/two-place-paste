@@ -58,6 +58,32 @@ type Status struct {
 	// lands on either side — an upload from here, or an entry put on this
 	// clipboard — so a UI opened after the fact still shows it.
 	Skipped *SkippedView `json:"skipped,omitempty"`
+
+	// SensitiveNote is the latest clipboard change auto-watch did not upload
+	// because it was sensitive, or nil. It is deliberately not a Skipped: a
+	// password copy is routine, and the tray does not flag it. It clears when
+	// the clipboard changes again or something is synced.
+	SensitiveNote *SensitiveNote `json:"sensitive_note,omitempty"`
+
+	// Pause says whether auto-sync is paused, and until when.
+	Pause PauseView `json:"pause"`
+}
+
+// PauseView is the pause of auto-sync: both directions held for a few
+// minutes. Available is false when neither automatic direction is on, so
+// there is nothing to pause.
+type PauseView struct {
+	Paused    bool       `json:"paused"`
+	Until     *time.Time `json:"until,omitempty"`
+	Available bool       `json:"available"`
+}
+
+// SensitiveNote says why a clipboard change stayed on this device. It carries
+// the reason the user is shown — the OS marker, a detector's title or a
+// filter's label — never the content.
+type SensitiveNote struct {
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
 }
 
 // SkippedView is an automatic upload or download that was not made: over the
@@ -85,6 +111,20 @@ type ClipboardView struct {
 	Preview   string     `json:"preview,omitempty"`
 	ChangedAt *time.Time `json:"changed_at,omitempty"`
 	Error     string     `json:"error,omitempty"`
+
+	// Sensitive is set when the content is a password manager's copy or
+	// matches a detector or filter. Preview is then empty: the text is
+	// masked, Chars says how long it is, and RevealClipboard shows it on
+	// request.
+	Sensitive       bool   `json:"sensitive,omitempty"`
+	SensitiveReason string `json:"sensitive_reason,omitempty"`
+	Chars           int    `json:"chars,omitempty"`
+}
+
+// ClipboardReveal is the preview of a masked clipboard, fetched only when the
+// user asks to see it.
+type ClipboardReveal struct {
+	Preview string `json:"preview"`
 }
 
 // EntryView is one entry as the history browser shows it. Only the metadata
@@ -203,6 +243,11 @@ type EntryPreview struct {
 	// for an image too large to be worth inlining, and ImageTooLarge says so.
 	ImageDataURL  string `json:"image_data_url,omitempty"`
 	ImageTooLarge bool   `json:"image_too_large,omitempty"`
+
+	// FilterExport is set when a store item is an exported filter set, so
+	// the page can offer to import it. It is decided on the whole item, not
+	// on Text, which may be cut short.
+	FilterExport *FilterImportCheck `json:"filter_export,omitempty"`
 }
 
 // EntryContent is the decrypted body of an audio or video entry, as the page
@@ -315,6 +360,166 @@ type SettingsView struct {
 	// RestartRequired is true when a saved port differs from the one this
 	// process is listening on: the service binds once, at startup.
 	RestartRequired bool `json:"restart_required"`
+
+	// DetectSensitive honours password managers' privacy markers.
+	DetectSensitive bool `json:"detect_sensitive"`
+
+	// Detectors is every built-in detector, each with whether it is on.
+	Detectors []DetectorView `json:"detectors"`
+
+	// Filters are the user's own rules. An exact filter's value is never
+	// returned.
+	Filters []FilterView `json:"filters"`
+}
+
+// DetectorView is a built-in detector as the filter editor lists it: fixed,
+// and only switched on or off.
+type DetectorView struct {
+	Name        string `json:"name"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Enabled     bool   `json:"enabled"`
+}
+
+// FilterView is one of the user's filters, as the editor shows and sends it.
+// A filter sent without an ID is given one when saved.
+//
+// Sent back, it replaces the saved filter with the same ID. An exact filter
+// is sent with a Value only when the user typed a new secret; without one, it
+// keeps the hash already saved under its ID.
+type FilterView struct {
+	ID              string `json:"id"`
+	Kind            string `json:"kind"`
+	Target          string `json:"target"`
+	Value           string `json:"value"`
+	CaseInsensitive bool   `json:"case_insensitive"`
+	Enabled         bool   `json:"enabled"`
+	Label           string `json:"label"`
+}
+
+// FilterTest asks which detectors and filters match a sample. Detectors and
+// Filters are the editor's unsaved draft; nil means what is saved. Nothing
+// in it is stored or logged.
+type FilterTest struct {
+	Text      string        `json:"text"`
+	Filename  string        `json:"filename"`
+	Detectors *[]string     `json:"detectors,omitempty"`
+	Filters   *[]FilterView `json:"filters,omitempty"`
+}
+
+// FilterExportRequest exports filters. IDs nil exports every custom filter
+// and every built-in detector's state; otherwise only those custom filters,
+// and nothing about detectors. To is "clipboard" or "store"; Name names the
+// store item, and a name is made up when it is empty.
+//
+// The same export already in the store is refused with a *DuplicateError;
+// AllowDuplicate is the dialog's "Save anyway".
+type FilterExportRequest struct {
+	IDs            []string `json:"ids,omitempty"`
+	To             string   `json:"to"`
+	Name           string   `json:"name,omitempty"`
+	AllowDuplicate bool     `json:"allow_duplicate,omitempty"`
+}
+
+// FilterExportResult says what an export held and where it went.
+// SkippedExact counts exact matches left out: only their hash is kept, and
+// it means nothing on another device.
+type FilterExportResult struct {
+	Filters      int            `json:"filters"`
+	Detectors    bool           `json:"detectors"`
+	SkippedExact int            `json:"skipped_exact"`
+	Message      string         `json:"message"`
+	Item         *StoreItemView `json:"item,omitempty"`
+}
+
+// FilterImportCheck says whether the clipboard holds a filter export, for the
+// Import button.
+type FilterImportCheck struct {
+	Available bool `json:"available"`
+	Filters   int  `json:"filters,omitempty"`
+	Detectors bool `json:"detectors,omitempty"`
+}
+
+// FilterImportDraft is the editor's unsaved state an import is compared with.
+// StoreItemID imports the export kept as that store item instead of the one
+// on the clipboard.
+type FilterImportDraft struct {
+	Filters     []FilterView `json:"filters"`
+	Detectors   []string     `json:"detectors"`
+	StoreItemID string       `json:"store_item_id,omitempty"`
+}
+
+// FilterImportPlan is what importing the clipboard's export would do, row by
+// row, for the user to tick.
+type FilterImportPlan struct {
+	Filters   []FilterImportRow   `json:"filters"`
+	Detectors []DetectorImportRow `json:"detectors"`
+}
+
+// FilterImportRow is one custom filter of an import. Status is "new",
+// "update", "duplicate" or "invalid"; Selected is whether it starts ticked;
+// Reason says why it cannot be imported, or what an update changes;
+// ExistingID is the filter here it matches.
+type FilterImportRow struct {
+	Filter     FilterView `json:"filter"`
+	Status     string     `json:"status"`
+	Selected   bool       `json:"selected"`
+	Reason     string     `json:"reason,omitempty"`
+	ExistingID string     `json:"existing_id,omitempty"`
+}
+
+// DetectorImportRow is one built-in detector of an import. Status is
+// "turn_on", "turn_off", "unchanged" or "invalid" (one this build does not
+// have); a turn-off starts unticked.
+type DetectorImportRow struct {
+	Name   string `json:"name"`
+	Title  string `json:"title,omitempty"`
+	Status string `json:"status"`
+	// Enabled is the detector's state in the export: for an unchanged one,
+	// also its state here.
+	Enabled  bool   `json:"enabled"`
+	Selected bool   `json:"selected"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// FilterMatch is one rule that matched a test sample. Source is "detector"
+// or "filter"; Rule is the detector's name or the filter's ID. The editor
+// gives a new filter its ID before it is saved, so a draft's matches can be
+// pointed at too.
+type FilterMatch struct {
+	Source string `json:"source"`
+	Rule   string `json:"rule"`
+	Reason string `json:"reason"`
+	// Name is the detector's title or the filter's label; empty for a filter
+	// without a label.
+	Name string `json:"name,omitempty"`
+}
+
+// FilterTestResult lists every match, in the order a clipboard change is
+// checked.
+type FilterTestResult struct {
+	Matches []FilterMatch `json:"matches"`
+}
+
+// SyncRequest is a sync the user asked for. PlanID confirms an upload the
+// service refused as sensitive: it names the SensitiveError the user said
+// "push anyway" to.
+type SyncRequest struct {
+	Direction Direction `json:"direction"`
+	PlanID    string    `json:"plan_id,omitempty"`
+}
+
+// SensitiveError is a manual upload held back because the clipboard is
+// sensitive. The user confirms it by syncing again with PlanID, which is
+// valid for a short while and only while the clipboard holds the same
+// content.
+type SensitiveError struct {
+	PlanID string
+	Reason string
+}
+
+func (e *SensitiveError) Error() string {
+	return "the clipboard is a protected entry: " + e.Reason
 }
 
 // SettingsPatch is a partial settings update. A nil field is left alone, which
@@ -336,6 +541,15 @@ type SettingsPatch struct {
 	// NightlyCommit is the commit whose build the Nightly channel installs:
 	// a full or abbreviated hash, resolved to a full one before it is saved.
 	NightlyCommit *string `json:"nightly_commit"`
+
+	DetectSensitive *bool `json:"detect_sensitive"`
+
+	// Detectors replaces the list of built-in detectors that are on.
+	Detectors *[]string `json:"detectors"`
+
+	// Filters replaces the whole filter list (FilterView says how an exact
+	// filter keeps its secret).
+	Filters *[]FilterView `json:"filters"`
 }
 
 // Event is a push from the service to the UI.
@@ -380,6 +594,15 @@ const (
 	// the entry is over the user's limit for it; Direction and Total say
 	// which and how big. The user can still send or fetch it by hand.
 	EventSkipped = "skipped"
+
+	// EventSensitive says auto-watch kept a sensitive clipboard change on
+	// this device (Status.SensitiveNote). It carries the reason, never the
+	// content.
+	EventSensitive = "sensitive"
+
+	// EventPause says auto-sync was paused or resumed, by the user or by the
+	// pause running out.
+	EventPause = "pause"
 
 	// EventProgress reports a chunked transfer of an entry larger than one
 	// frame, once per chunk.

@@ -377,7 +377,7 @@ func TestSyncLoopIsClosed(t *testing.T) {
 	done := make(chan struct{})
 	go func() { defer close(done); f.svc.Run(runCtx) }()
 
-	res, err := f.svc.Sync(ctx, localui.DirectionDownload)
+	res, err := f.svc.Sync(ctx, localui.SyncRequest{Direction: localui.DirectionDownload})
 	if err != nil {
 		t.Fatalf("Sync(download) error = %v", err)
 	}
@@ -480,7 +480,7 @@ func TestAutoSyncRefusesToGuess(t *testing.T) {
 	f.clip.set(textContent("something the user copied before the service started"))
 	f.relay.push(tppclient.Item{ContentType: clipboard.TypeText, Body: []byte("from the phone"), CreatedAt: f.now()})
 
-	_, err := f.svc.Sync(context.Background(), localui.DirectionAuto)
+	_, err := f.svc.Sync(context.Background(), localui.SyncRequest{Direction: localui.DirectionAuto})
 	var se *localui.StatusError
 	if !errors.As(err, &se) {
 		t.Fatalf("Sync(auto) error = %v, want a StatusError", err)
@@ -503,7 +503,7 @@ func TestUploadThenDownloadRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	f.clip.set(textContent("copied here"))
 
-	res, err := f.svc.Sync(ctx, localui.DirectionUpload)
+	res, err := f.svc.Sync(ctx, localui.SyncRequest{Direction: localui.DirectionUpload})
 	if err != nil {
 		t.Fatalf("Sync(upload) error = %v", err)
 	}
@@ -519,7 +519,7 @@ func TestUploadThenDownloadRoundTrip(t *testing.T) {
 	}
 
 	f.clip.set(textContent("replaced locally"))
-	if _, err := f.svc.Sync(ctx, localui.DirectionDownload); err != nil {
+	if _, err := f.svc.Sync(ctx, localui.SyncRequest{Direction: localui.DirectionDownload}); err != nil {
 		t.Fatalf("Sync(download) error = %v", err)
 	}
 	if got := string(f.clip.content.Body); got != "copied here" {
@@ -534,7 +534,7 @@ func TestDownloadOfAStaleEntryIsSilent(t *testing.T) {
 	f.clip.set(textContent("what the user has now"))
 	f.relay.getErr = tppclient.ErrStaleEntry
 
-	res, err := f.svc.Sync(context.Background(), localui.DirectionDownload)
+	res, err := f.svc.Sync(context.Background(), localui.SyncRequest{Direction: localui.DirectionDownload})
 	if err != nil {
 		t.Fatalf("Sync(download) with a stale entry = %v, want no error", err)
 	}
@@ -663,7 +663,7 @@ func TestOperationsRefuseWithoutAGroup(t *testing.T) {
 	f.relay.inGroup = false
 	ctx := context.Background()
 
-	if _, err := f.svc.Sync(ctx, localui.DirectionUpload); err == nil {
+	if _, err := f.svc.Sync(ctx, localui.SyncRequest{Direction: localui.DirectionUpload}); err == nil {
 		t.Error("Sync() succeeded without a group")
 	}
 	if _, err := f.svc.Devices(ctx); err == nil {
@@ -686,7 +686,7 @@ func TestRevokedDeviceStopsOperating(t *testing.T) {
 	if !status.Revoked {
 		t.Error("Status() does not report the device as revoked")
 	}
-	_, err := f.svc.Sync(context.Background(), localui.DirectionUpload)
+	_, err := f.svc.Sync(context.Background(), localui.SyncRequest{Direction: localui.DirectionUpload})
 	var se *localui.StatusError
 	if !errors.As(err, &se) || se.Code != http.StatusForbidden {
 		t.Errorf("Sync() after revocation = %v, want a 403", err)
@@ -716,7 +716,7 @@ func TestDeletedGroupIsSaidPlainly(t *testing.T) {
 	if !status.Revoked || !status.GroupDeleted {
 		t.Errorf("Status() = revoked %v, group deleted %v; want both", status.Revoked, status.GroupDeleted)
 	}
-	_, err := f.svc.Sync(context.Background(), localui.DirectionUpload)
+	_, err := f.svc.Sync(context.Background(), localui.SyncRequest{Direction: localui.DirectionUpload})
 	var se *localui.StatusError
 	if !errors.As(err, &se) || se.Code != http.StatusForbidden || !strings.Contains(se.Message, "deleted") {
 		t.Errorf("Sync() after deletion = %v, want a 403 that says the group was deleted", err)
@@ -955,7 +955,7 @@ func TestDownloadUpdatesTheClipboardTimestamp(t *testing.T) {
 		t.Fatalf("Status().Clipboard.ChangedAt = %v before any change, want nil", before.Clipboard.ChangedAt)
 	}
 
-	if _, err := f.svc.Sync(ctx, localui.DirectionDownload); err != nil {
+	if _, err := f.svc.Sync(ctx, localui.SyncRequest{Direction: localui.DirectionDownload}); err != nil {
 		t.Fatalf("Sync(download) error = %v", err)
 	}
 

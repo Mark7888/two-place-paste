@@ -38,3 +38,15 @@ func TestToastXMLIsWellFormedWhateverTheText(t *testing.T) {
 		t.Error("the toast is not silent")
 	}
 }
+
+func TestSensitiveToastHasOnePushButton(t *testing.T) {
+	t.Parallel()
+
+	doc := toastXML(sensitiveTitle, sensitiveBody("Mine"), [2]string{pushAnywayLabel, actionPushAnyway})
+	if err := xml.Unmarshal([]byte(doc), new(struct{})); err != nil {
+		t.Fatalf("toastXML is not well-formed: %v\n%s", err, doc)
+	}
+	if strings.Count(doc, "<action ") != 1 || !strings.Contains(doc, `arguments="`+actionPushAnyway+`"`) {
+		t.Errorf("toast = %s, want one %s action", doc, actionPushAnyway)
+	}
+}

@@ -32,6 +32,26 @@ export interface ClipboardView {
   preview?: string;
   changed_at?: string;
   error?: string;
+  /** Set for a password manager's copy or a detector or filter match. The
+   *  preview is then withheld; revealClipboard fetches it on request. */
+  sensitive?: boolean;
+  sensitive_reason?: string;
+  /** The length of a masked text, in characters. */
+  chars?: number;
+}
+
+/** PauseView is auto-sync's pause. available is false when neither automatic
+ *  direction is on, so there is nothing to pause. */
+export interface PauseView {
+  paused: boolean;
+  until?: string;
+  available: boolean;
+}
+
+/** SensitiveNote is the last copy auto-watch kept here because it was sensitive. */
+export interface SensitiveNote {
+  reason: string;
+  at: string;
 }
 
 export interface EntryView {
@@ -79,6 +99,9 @@ export interface Status {
    * it until it is dismissed or a newer entry lands on either side.
    */
   skipped?: SkippedView;
+  sensitive_note?: SensitiveNote;
+  /** Auto-sync's pause: both automatic directions held for five minutes. */
+  pause: PauseView;
   in_group: boolean;
   connected: boolean;
   epoch: number;
@@ -144,6 +167,8 @@ export interface EntryPreview {
   truncated?: boolean;
   image_data_url?: string;
   image_too_large?: boolean;
+  /** Set when a store item is an exported filter set, so it can be imported. */
+  filter_export?: FilterImportCheck;
 }
 
 export interface HistoryPage {
@@ -194,6 +219,100 @@ export interface SettingsView {
   auto_update: boolean;
   nightly_commit: string;
   restart_required: boolean;
+  detect_sensitive: boolean;
+  detectors: DetectorView[];
+  filters: FilterView[];
+}
+
+/** DetectorView is a built-in detector: fixed, only switched on or off. */
+export interface DetectorView {
+  name: string;
+  title: string;
+  description: string;
+  enabled: boolean;
+}
+
+export type FilterKind = "contains" | "prefix" | "suffix" | "regex" | "exact";
+export type FilterTarget = "text" | "filename";
+
+/**
+ * FilterView is one of the user's filters. An exact filter's value is never
+ * sent back by the service; sending one without a value keeps the saved hash.
+ */
+export interface FilterView {
+  id: string;
+  kind: FilterKind;
+  target: FilterTarget;
+  value: string;
+  case_insensitive: boolean;
+  enabled: boolean;
+  label: string;
+}
+
+/** FilterExportRequest: ids absent exports everything, with the built-ins. */
+export interface FilterExportRequest {
+  ids?: string[];
+  to: "clipboard" | "store";
+  name?: string;
+  /** "Save anyway" when the store already holds the same export. */
+  allow_duplicate?: boolean;
+}
+
+export interface FilterExportResult {
+  filters: number;
+  detectors: boolean;
+  skipped_exact: number;
+  message: string;
+  item?: StoreItemView;
+}
+
+export interface FilterImportCheck {
+  available: boolean;
+  filters?: number;
+  detectors?: boolean;
+}
+
+export type FilterImportStatus = "new" | "update" | "duplicate" | "invalid";
+export type DetectorImportStatus = "turn_on" | "turn_off" | "unchanged" | "invalid";
+
+export interface FilterImportRow {
+  filter: FilterView;
+  status: FilterImportStatus;
+  selected: boolean;
+  reason?: string;
+  existing_id?: string;
+}
+
+export interface DetectorImportRow {
+  name: string;
+  title?: string;
+  status: DetectorImportStatus;
+  /** Its state in the export; for an unchanged one, also its state here. */
+  enabled: boolean;
+  selected: boolean;
+  reason?: string;
+}
+
+export interface FilterImportPlan {
+  filters: FilterImportRow[];
+  detectors: DetectorImportRow[];
+}
+
+export interface FilterTest {
+  text: string;
+  filename: string;
+  detectors?: string[];
+  filters?: FilterView[];
+}
+
+export interface FilterMatch {
+  source: "os" | "detector" | "filter";
+  /** A detector's name or a filter's id. */
+  rule: string;
+  /** A sentence: "Matches custom filter “VPN”". */
+  reason: string;
+  /** The detector's title or the filter's label; absent for an unlabelled filter. */
+  name?: string;
 }
 
 export interface SettingsPatch {
@@ -207,6 +326,9 @@ export interface SettingsPatch {
   update_channel?: UpdateChannel;
   auto_update?: boolean;
   nightly_commit?: string;
+  detect_sensitive?: boolean;
+  detectors?: string[];
+  filters?: FilterView[];
 }
 
 export type UpdateChannel = "stable" | "beta" | "nightly";
@@ -370,10 +492,18 @@ export class ApiError extends Error {
   readonly status: number;
   /** A refused save's duplicates, when the store already holds its content. */
   readonly duplicates?: StoreItemView[];
+  /** The rest of the error body's strings: code, and what goes with it. */
+  readonly details: Record<string, string>;
 
-  constructor(status: number, message: string, duplicates?: StoreItemView[]) {
+  constructor(
+    status: number,
+    message: string,
+    duplicates?: StoreItemView[],
+    details: Record<string, string> = {},
+  ) {
     super(message);
     this.status = status;
+    this.details = details;
     this.name = "ApiError";
     this.duplicates = duplicates;
   }
@@ -428,6 +558,23 @@ async function call(path: string, init: RequestInit): Promise<Response> {
   return res;
 }
 
+/** ProtectedEntry is a manual upload the service held back as sensitive. */
+export interface ProtectedEntry {
+  planId: string;
+  reason: string;
+}
+
+/**
+ * protectedEntry recognises the service's "push anyway?" answer: a 409 with
+ * code "sensitive" and the plan id that confirms it.
+ */
+export function protectedEntry(err: unknown): ProtectedEntry | null {
+  if (err instanceof ApiError && err.status === 409 && err.details.code === "sensitive" && err.details.plan_id) {
+    return { planId: err.details.plan_id, reason: err.details.reason ?? "" };
+  }
+  return null;
+}
+
 function send(method: string, path: string, body?: unknown): Promise<Response> {
   return call(path, {
     method,
@@ -457,7 +604,13 @@ function failure(status: number, text: string): ApiError {
     typeof parsed === "object" && parsed !== null && "duplicates" in parsed
       ? ((parsed as { duplicates: StoreItemView[] }).duplicates ?? undefined)
       : undefined;
-  return new ApiError(status, message, duplicates);
+  const details: Record<string, string> = {};
+  if (typeof parsed === "object" && parsed !== null) {
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === "string") details[k] = v;
+    }
+  }
+  return new ApiError(status, message, duplicates, details);
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -476,7 +629,21 @@ async function requestBlob(method: string, path: string, body?: unknown): Promis
 
 export const api = {
   status: () => request<Status>("GET", "/api/status"),
-  sync: (direction: Direction) => request<SyncResult>("POST", "/api/sync", { direction }),
+  // planId confirms an upload the service refused as a protected entry.
+  sync: (direction: Direction, planId?: string) =>
+    request<SyncResult>("POST", "/api/sync", planId ? { direction, plan_id: planId } : { direction }),
+  // Pauses both automatic directions for five minutes, or resumes them.
+  setPaused: (paused: boolean) => request<PauseView>("POST", "/api/pause", { paused }),
+  // A POST, like previewEntry: it returns clipboard text the status withheld.
+  revealClipboard: () => request<{ preview: string }>("POST", "/api/clipboard/reveal", {}),
+  // Exports saved filters: to the clipboard, marked private, or into the store.
+  exportFilters: (req: FilterExportRequest) => request<FilterExportResult>("POST", "/api/filters/export", req),
+  checkFilterImport: () => request<FilterImportCheck>("POST", "/api/filters/import/check", {}),
+  // Compares the clipboard's export — or a store item's, given its id — with
+  // the editor's draft; saves nothing.
+  previewFilterImport: (draft: { filters: FilterView[]; detectors: string[]; store_item_id?: string }) =>
+    request<FilterImportPlan>("POST", "/api/filters/import/preview", draft),
+  testFilters: (t: FilterTest) => request<{ matches: FilterMatch[] }>("POST", "/api/filters/test", t),
   dismissSkipped: () => request<Status>("DELETE", "/api/skipped"),
   history: (before?: string) =>
     request<HistoryPage>(
@@ -530,11 +697,17 @@ export const api = {
     const qs = params.toString();
     return request<StoreView>("GET", `/api/store${qs ? `?${qs}` : ""}`);
   },
-  saveToStore: (src: StoreSource, details: StoreDetails, allowDuplicate = false) =>
+  // Asks before the save form whether the clipboard is a protected entry:
+  // answers ok, or fails with the 409 protectedEntry recognises.
+  checkClipboardSave: () => request<{ ok: boolean }>("POST", "/api/store/check", {}),
+  // planId confirms saving a clipboard the service refused as a protected
+  // entry (protectedEntry).
+  saveToStore: (src: StoreSource, details: StoreDetails, allowDuplicate = false, planId?: string) =>
     request<StoreItemView>("POST", "/api/store/save", {
       ...src,
       ...details,
       allow_duplicate: allowDuplicate,
+      ...(planId ? { plan_id: planId } : {}),
     }),
   uploadToStore: (file: File, details: StoreDetails, allowDuplicate = false) =>
     upload(file, details, allowDuplicate),

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, type ServiceEvent, type SettingsView, type Status } from "../api";
 import { Icon } from "../components/Icon";
 import { Modal } from "../components/Modal";
+import { FilterEditor } from "./FilterEditor";
 import { UpdatesSection } from "./UpdatesSection";
 
 /**
@@ -29,6 +30,7 @@ export function SettingsPanel({
   const [notice, setNotice] = useState("");
   const [confirmingLeave, setConfirmingLeave] = useState(false);
   const [leaving, setLeaving] = useState(false);
+  const [editingFilters, setEditingFilters] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -198,6 +200,42 @@ export function SettingsPanel({
       </section>
 
       <section className="group">
+        <h2>Sensitive content</h2>
+        <div className="list">
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={settings.detect_sensitive}
+              onChange={(e) => void patch({ detect_sensitive: e.target.checked })}
+            />
+            <span className="text">
+              <strong>Detect password managers and private copies</strong>
+              <span className="why">
+                A copy its app marks as private is not uploaded automatically, and Upload asks
+                first. On by default.
+              </span>
+            </span>
+          </label>
+          <div className="item">
+            <div className="body">
+              <div className="title">Filters</div>
+              <div className="muted small">
+                {settings.filters.length} custom ({settings.filters.filter((f) => f.enabled).length} on)
+                {" · "}
+                {settings.detectors.filter((d) => d.enabled).length} of {settings.detectors.length}{" "}
+                built-in on
+              </div>
+            </div>
+            <div className="actions">
+              <button className="action" onClick={() => setEditingFilters(true)}>
+                Edit…
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="group">
         <h2>This device</h2>
         <div className="card stack" style={{ gap: "1rem" }}>
           <div className="inline-form">
@@ -310,6 +348,17 @@ export function SettingsPanel({
           </p>
         </div>
       </section>
+
+      <FilterEditor
+        open={editingFilters}
+        settings={settings}
+        onClose={() => setEditingFilters(false)}
+        onSaved={(s) => {
+          setSettings(s);
+          setError("");
+          setNotice("Saved.");
+        }}
+      />
 
       <Modal
         open={confirmingLeave}

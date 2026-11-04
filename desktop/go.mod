@@ -23,17 +23,21 @@ replace github.com/Mark7888/two-place-paste/pkg/tppclient => ../pkg/tppclient
 //   - x/sys: the Windows registry Run key and the Windows keystore backend.
 //     Pinned to the version pkg/tppclient uses so the workspace builds both
 //     against one release.
+//   - x/crypto: argon2id, for the exact-match sensitive-content filter, which
+//     keeps a slow salted hash of the user's secret instead of the secret
+//     (internal/sensitive). Local only; no protocol crypto. Already in the
+//     module graph through pkg/tppclient, at the same version.
 require (
 	fyne.io/systray v1.12.2
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3
 	github.com/Mark7888/two-place-paste/pkg/tppclient v0.0.0-00010101000000-000000000000
 	github.com/coder/websocket v1.8.15
+	golang.org/x/crypto v0.56.0
 	golang.org/x/sys v0.47.0
 )
 
 require (
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
-	golang.org/x/crypto v0.56.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )

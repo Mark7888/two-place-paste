@@ -40,6 +40,8 @@ func run(ctx context.Context, t *Tray, opts Options) {
 func postPrompt() error             { return errNoNotifications }
 func postText(string, string) error { return errNoNotifications }
 func withdrawPrompt()               {}
+func postSensitive(string) error    { return errNoNotifications }
+func withdrawSensitivePrompt()      {}
 
 // printURL is this build's substitute for a tray menu item: the URL carries
 // the launch token, so it goes to the terminal the user started the service

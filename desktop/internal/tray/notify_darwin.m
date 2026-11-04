@@ -5,12 +5,16 @@
 
 #include "_cgo_export.h"
 
-static NSString *const TPPCategory = @"tpp.sync.direction";
+// The categories are notify_darwin.go's directionCategory and
+// sensitiveCategory.
+static NSString *const TPPCategoryDirection = @"tpp.sync.direction";
+static NSString *const TPPCategorySensitive = @"tpp.sync.sensitive";
 
-// The action identifiers are tray.go's actionUpload and actionDownload, which
-// it maps back to a direction.
+// The action identifiers are tray.go's actionUpload, actionDownload and
+// actionPushAnyway, which it maps back to what the user chose.
 static NSString *const TPPActionUpload = @"upload";
 static NSString *const TPPActionDownload = @"download";
+static NSString *const TPPActionPushAnyway = @"push-anyway";
 
 @interface TPPNotifyDelegate : NSObject <UNUserNotificationCenterDelegate>
 @end
@@ -41,7 +45,7 @@ int tppNotifyAvailable(void) {
 	return [[NSBundle mainBundle] bundleIdentifier] != nil;
 }
 
-void tppNotifySetup(const char *uploadTitle, const char *downloadTitle) {
+void tppNotifySetup(const char *uploadTitle, const char *downloadTitle, const char *pushTitle) {
 	@autoreleasepool {
 		UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
 		if (tppDelegate == nil) {
@@ -60,23 +64,32 @@ void tppNotifySetup(const char *uploadTitle, const char *downloadTitle) {
 			[UNNotificationAction actionWithIdentifier:TPPActionDownload
 			                                     title:[NSString stringWithUTF8String:downloadTitle]
 			                                   options:UNNotificationActionOptionNone];
-		UNNotificationCategory *category =
-			[UNNotificationCategory categoryWithIdentifier:TPPCategory
+		UNNotificationCategory *direction =
+			[UNNotificationCategory categoryWithIdentifier:TPPCategoryDirection
 			                                       actions:@[ upload, download ]
 			                             intentIdentifiers:@[]
 			                                       options:UNNotificationCategoryOptionNone];
-		[center setNotificationCategories:[NSSet setWithObject:category]];
+		UNNotificationAction *push =
+			[UNNotificationAction actionWithIdentifier:TPPActionPushAnyway
+			                                     title:[NSString stringWithUTF8String:pushTitle]
+			                                   options:UNNotificationActionOptionNone];
+		UNNotificationCategory *sensitive =
+			[UNNotificationCategory categoryWithIdentifier:TPPCategorySensitive
+			                                       actions:@[ push ]
+			                             intentIdentifiers:@[]
+			                                       options:UNNotificationCategoryOptionNone];
+		[center setNotificationCategories:[NSSet setWithObjects:direction, sensitive, nil]];
 	}
 }
 
-void tppNotifyPost(const char *ident, const char *title, const char *body, int withActions) {
+void tppNotifyPost(const char *ident, const char *title, const char *body, const char *category) {
 	@autoreleasepool {
 		// Copied now: the C strings are freed as soon as this returns, and
 		// the blocks below run later.
 		NSString *identifier = [NSString stringWithUTF8String:ident];
 		NSString *titleText = [NSString stringWithUTF8String:title];
 		NSString *bodyText = [NSString stringWithUTF8String:body];
-		BOOL actions = withActions != 0;
+		NSString *categoryIdentifier = [NSString stringWithUTF8String:category];
 
 		UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
 		// Asks the first time only; afterwards it answers with the user's
@@ -92,8 +105,8 @@ void tppNotifyPost(const char *ident, const char *title, const char *body, int w
 			UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
 			content.title = titleText;
 			content.body = bodyText;
-			if (actions) {
-				content.categoryIdentifier = TPPCategory;
+			if (categoryIdentifier.length > 0) {
+				content.categoryIdentifier = categoryIdentifier;
 			}
 			UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:identifier
 			                                                                      content:content

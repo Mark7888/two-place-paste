@@ -35,7 +35,14 @@ export function Modal({
   useEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
+    if (open && !dialog.open) {
+      dialog.showModal();
+      // showModal focuses the first focusable element, which is the close
+      // button. A dialog whose safe answer should take Enter marks that
+      // button with data-autofocus. (React's autoFocus runs when the closed
+      // dialog mounts, which is too early to count.)
+      dialog.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+    }
     if (!open && dialog.open) dialog.close();
   }, [open]);
 

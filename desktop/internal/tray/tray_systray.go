@@ -82,6 +82,14 @@ func runMenu(ctx context.Context, t *Tray, opts Options) {
 	downloadItem := systray.AddMenuItem(downloadLabel, "Put the group's latest entry on this clipboard")
 	uploadItem.Hide()
 	downloadItem.Hide()
+	// Hidden until an upload from the tray has had to ask about a
+	// protected entry.
+	pushItem := systray.AddMenuItem(pushMenuLabel, "Upload the protected clipboard to the group anyway")
+	pushItem.Hide()
+	pauseItem := systray.AddMenuItem(pauseMenuTitle(PauseState{}), "Hold automatic uploads and downloads for a few minutes")
+	if opts.TogglePause == nil {
+		pauseItem.Hide()
+	}
 	openItem := systray.AddMenuItem("Open TwoPlacePaste", "Open the app in your browser")
 	updateItem := systray.AddMenuItem("Check for updates…", "Check the update channel for a newer build")
 	if opts.CheckUpdates == nil {
@@ -98,6 +106,21 @@ func runMenu(ctx context.Context, t *Tray, opts Options) {
 		}
 		uploadItem.Hide()
 		downloadItem.Hide()
+	})
+	t.setPushItem(func(show bool) {
+		if show {
+			pushItem.Show()
+			return
+		}
+		pushItem.Hide()
+	})
+	t.setPauseItem(func(p PauseState) {
+		pauseItem.SetTitle(pauseMenuTitle(p))
+		if p.Paused || p.Available {
+			pauseItem.Enable()
+		} else {
+			pauseItem.Disable()
+		}
 	})
 	t.attach(t.paintStatus(statusItem))
 
@@ -125,6 +148,12 @@ func runMenu(ctx context.Context, t *Tray, opts Options) {
 				t.choose(Upload)
 			case <-downloadItem.ClickedCh:
 				t.choose(Download)
+			case <-pushItem.ClickedCh:
+				t.pushAnyway()
+			case <-pauseItem.ClickedCh:
+				if opts.TogglePause != nil {
+					go opts.TogglePause()
+				}
 			case <-updateItem.ClickedCh:
 				if opts.CheckUpdates != nil {
 					go opts.CheckUpdates()

@@ -28,6 +28,10 @@ func TestTrayStatus(t *testing.T) {
 		{name: "download held back", a: with(up, func(a *service.Activity) { a.Skipped = "download" }), want: tray.StatusSkippedDownload},
 		{name: "a transfer outranks a held-back one", a: with(up, func(a *service.Activity) { a.Skipped, a.Downloading = "upload", true }), want: tray.StatusDownloading},
 		{name: "a lost connection outranks a held-back one", a: service.Activity{InGroup: true, EverConnected: true, Skipped: "upload"}, want: tray.StatusDisconnected},
+		{name: "paused", a: with(up, func(a *service.Activity) { a.Paused = true }), want: tray.StatusPaused},
+		{name: "a pause outranks what it held back", a: with(up, func(a *service.Activity) { a.Paused, a.Skipped = true, "download" }), want: tray.StatusPaused},
+		{name: "a manual transfer outranks a pause", a: with(up, func(a *service.Activity) { a.Paused, a.Uploading = true, true }), want: tray.StatusUploading},
+		{name: "a lost connection outranks a pause", a: service.Activity{InGroup: true, EverConnected: true, Paused: true}, want: tray.StatusDisconnected},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

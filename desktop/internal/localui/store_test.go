@@ -19,6 +19,11 @@ func (s *stubAPI) Store(_ context.Context, q StoreQuery) (StoreView, error) {
 	return StoreView{Enabled: true, Items: []StoreItemView{}, Tags: []StoreTagView{}, Unreadable: []StoreUnreadableView{}}, nil
 }
 
+func (s *stubAPI) CheckClipboardSave(context.Context) error {
+	s.record("store-check")
+	return nil
+}
+
 func (s *stubAPI) SaveToStore(_ context.Context, req StoreSaveRequest) (StoreItemView, error) {
 	s.record("store-save " + req.Source)
 	if !req.AllowDuplicate && req.Name == "dup" {

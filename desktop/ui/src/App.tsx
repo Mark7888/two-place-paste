@@ -9,6 +9,7 @@ import {
   type Status,
 } from "./api";
 import { Icon, type IconName } from "./components/Icon";
+import { PauseNotice } from "./components/PauseNotice";
 import { SessionLostDialog } from "./components/SessionLostDialog";
 import { bytes } from "./format";
 import { SyncPanel } from "./panels/SyncPanel";
@@ -204,6 +205,9 @@ export function App() {
                 <Icon name="close" size={16} />
               </button>
             </div>
+          ) : null}
+          {status?.pause ? (
+            <PauseNotice pause={status.pause} onChanged={() => void refresh()} onError={setError} />
           ) : null}
           {status?.skipped ? (
             <div className="notice info" role="status">

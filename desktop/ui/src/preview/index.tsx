@@ -9,7 +9,7 @@
  * type checker will not let you forget.
  */
 
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import { api, type EntryPreview, type EntryView, type Render } from "../api";
 import type { IconName } from "../components/Icon";
 import { ImagePreview } from "./ImagePreview";
@@ -22,6 +22,8 @@ import { TextPreview } from "./TextPreview";
 export interface PreviewProps {
   preview: EntryPreview;
   loadMedia: (id: string) => Promise<Blob>;
+  /** Drawn at the right of the caption line, under the preview. */
+  action?: ReactNode;
 }
 
 const renderers: Record<Render, ComponentType<PreviewProps>> = {
@@ -36,12 +38,14 @@ const renderers: Record<Render, ComponentType<PreviewProps>> = {
 export function PreviewBody({
   preview,
   loadMedia = api.entryContent,
+  action,
 }: {
   preview: EntryPreview;
   loadMedia?: (id: string) => Promise<Blob>;
+  action?: ReactNode;
 }) {
   const Body = renderers[preview.render];
-  return <Body preview={preview} loadMedia={loadMedia} />;
+  return <Body preview={preview} loadMedia={loadMedia} action={action} />;
 }
 
 /** entryIcon picks a row's icon: what the entry previews as when it does,

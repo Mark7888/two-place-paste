@@ -7,8 +7,8 @@ package tray
 #include <stdlib.h>
 
 int tppNotifyAvailable(void);
-void tppNotifySetup(const char *uploadTitle, const char *downloadTitle);
-void tppNotifyPost(const char *ident, const char *title, const char *body, int withActions);
+void tppNotifySetup(const char *uploadTitle, const char *downloadTitle, const char *pushTitle);
+void tppNotifyPost(const char *ident, const char *title, const char *body, const char *category);
 void tppNotifyRemove(const char *ident);
 */
 import "C"
@@ -23,9 +23,9 @@ import (
 // Notifications on macOS.
 //
 // UNUserNotificationCenter carries the buttons: the direction prompt is posted
-// in a category with an Upload and a Download action, which macOS shows on
-// the banner, and the delegate in notify_darwin.m hands the one pressed back
-// to notifyAction. The first notification asks the user for permission; one
+// in a category with an Upload and a Download action, and the protected entry
+// question in one with a Push anyway action, which macOS shows on the banner;
+// the delegate in notify_darwin.m hands the one pressed back to notifyAction. The first notification asks the user for permission; one
 // they refuse is logged, and the tray menu still offers the choice.
 //
 // The framework only works for a process inside an app bundle — it throws
@@ -36,8 +36,16 @@ import (
 // one replaces whatever is on screen under the same identifier, so a second
 // "Sync now" does not stack a second question under the first.
 const (
-	promptIdent = "tpp.sync.direction"
-	textIdent   = "tpp.sync.result"
+	promptIdent    = "tpp.sync.direction"
+	sensitiveIdent = "tpp.sync.sensitive"
+	textIdent      = "tpp.sync.result"
+)
+
+// The notification categories, which decide the buttons. They match
+// notify_darwin.m.
+const (
+	directionCategory = "tpp.sync.direction"
+	sensitiveCategory = "tpp.sync.sensitive"
 )
 
 var errNoBundle = errors.New("tray: notifications need the app bundle")
@@ -57,22 +65,31 @@ func setupNotifications(_ context.Context, onAction func(string), onFailure func
 	notifyOnAction, notifyOnFailure = onAction, onFailure
 	notifyMu.Unlock()
 
-	up, down := C.CString(uploadLabel), C.CString(downloadLabel)
+	up, down, push := C.CString(uploadLabel), C.CString(downloadLabel), C.CString(pushAnywayLabel)
 	defer C.free(unsafe.Pointer(up))
 	defer C.free(unsafe.Pointer(down))
-	C.tppNotifySetup(up, down)
+	defer C.free(unsafe.Pointer(push))
+	C.tppNotifySetup(up, down, push)
 	return nil
 }
 
-func postPrompt() error { return post(promptIdent, promptTitle, promptBody, true) }
+func postPrompt() error { return post(promptIdent, promptTitle, promptBody, directionCategory) }
 
-func postText(title, body string) error { return post(textIdent, title, body, false) }
+func postSensitive(body string) error {
+	return post(sensitiveIdent, sensitiveTitle, body, sensitiveCategory)
+}
 
-func withdrawPrompt() {
+func postText(title, body string) error { return post(textIdent, title, body, "") }
+
+func withdrawPrompt() { remove(promptIdent) }
+
+func withdrawSensitivePrompt() { remove(sensitiveIdent) }
+
+func remove(ident string) {
 	if C.tppNotifyAvailable() == 0 {
 		return
 	}
-	id := C.CString(promptIdent)
+	id := C.CString(ident)
 	defer C.free(unsafe.Pointer(id))
 	C.tppNotifyRemove(id)
 }
@@ -80,19 +97,18 @@ func withdrawPrompt() {
 // post hands a notification to the notification centre. It returns before
 // macOS has shown it — permission is asked for asynchronously — so a refusal
 // arrives at tppNotifyFailed rather than here.
-func post(ident, title, body string, withActions bool) error {
+//
+// category names the buttons; empty means none.
+func post(ident, title, body, category string) error {
 	if C.tppNotifyAvailable() == 0 {
 		return errNoBundle
 	}
-	cIdent, cTitle, cBody := C.CString(ident), C.CString(title), C.CString(body)
+	cIdent, cTitle, cBody, cCategory := C.CString(ident), C.CString(title), C.CString(body), C.CString(category)
 	defer C.free(unsafe.Pointer(cIdent))
 	defer C.free(unsafe.Pointer(cTitle))
 	defer C.free(unsafe.Pointer(cBody))
-	actions := C.int(0)
-	if withActions {
-		actions = 1
-	}
-	C.tppNotifyPost(cIdent, cTitle, cBody, actions)
+	defer C.free(unsafe.Pointer(cCategory))
+	C.tppNotifyPost(cIdent, cTitle, cBody, cCategory)
 	return nil
 }
 

@@ -207,6 +207,38 @@ func unreadableReason(err error) string {
 	return "it could not be decrypted on this device"
 }
 
+// readClipboardForStore reads the clipboard for a store save, with the
+// errors the store's screen shows.
+func (s *Service) readClipboardForStore(ctx context.Context) (clipboard.Content, error) {
+	c, err := s.clip.Read(ctx)
+	switch {
+	case errors.Is(err, clipboard.ErrEmpty):
+		return c, localui.Errorf(http.StatusConflict, err, "the clipboard is empty")
+	case errors.Is(err, clipboard.ErrUnsupported):
+		return c, localui.Errorf(http.StatusNotImplemented, err, "this build cannot reach a clipboard")
+	case err != nil:
+		return c, localui.Errorf(http.StatusInternalServerError, err, "the clipboard could not be read")
+	}
+	return c, nil
+}
+
+// CheckClipboardSave implements localui.StoreAPI. It asks the protected-entry
+// question before the user types a name for something they may not save
+// after all. The plan it issues is for this copy: if the clipboard changes
+// before the save, the save asks again about what is there then.
+func (s *Service) CheckClipboardSave(ctx context.Context) error {
+	c, err := s.readClipboardForStore(ctx)
+	if err != nil {
+		return err
+	}
+	if v := s.classify(c); v.Sensitive {
+		s.logger.InfoContext(ctx, "store save of a sensitive clipboard needs confirmation",
+			"source", string(v.Source), "rule", v.Rule)
+		return s.askToPush(c, v, pushStore)
+	}
+	return nil
+}
+
 // SaveToStore implements localui.StoreAPI: it saves the clipboard or a history
 // entry.
 func (s *Service) SaveToStore(ctx context.Context, req localui.StoreSaveRequest) (localui.StoreItemView, error) {
@@ -215,16 +247,23 @@ func (s *Service) SaveToStore(ctx context.Context, req localui.StoreSaveRequest)
 		return localui.StoreItemView{}, err
 	}
 	var item tppclient.Item
+	confirmed := "" // the push plan a sensitive clipboard was confirmed with
 	switch req.Source {
 	case "clipboard":
-		c, err := s.clip.Read(ctx)
-		switch {
-		case errors.Is(err, clipboard.ErrEmpty):
-			return localui.StoreItemView{}, localui.Errorf(http.StatusConflict, err, "the clipboard is empty")
-		case errors.Is(err, clipboard.ErrUnsupported):
-			return localui.StoreItemView{}, localui.Errorf(http.StatusNotImplemented, err, "this build cannot reach a clipboard")
-		case err != nil:
-			return localui.StoreItemView{}, localui.Errorf(http.StatusInternalServerError, err, "the clipboard could not be read")
+		c, err := s.readClipboardForStore(ctx)
+		if err != nil {
+			return localui.StoreItemView{}, err
+		}
+		// A protected entry asks first, as Upload does: the store keeps an
+		// item until someone deletes it, and every device of the group can
+		// open it.
+		if v := s.classify(c); v.Sensitive {
+			if !s.pushPlanValid(req.PlanID, c, pushStore) {
+				s.logger.InfoContext(ctx, "store save of a sensitive clipboard needs confirmation",
+					"source", string(v.Source), "rule", v.Rule)
+				return localui.StoreItemView{}, s.askToPush(c, v, pushStore)
+			}
+			confirmed = req.PlanID
 		}
 		item = tppclient.Item{ContentType: c.ContentType, Filename: c.Filename, Body: c.Body, CreatedAt: s.now()}
 	case "entry":
@@ -243,7 +282,14 @@ func (s *Service) SaveToStore(ctx context.Context, req localui.StoreSaveRequest)
 	default:
 		return localui.StoreItemView{}, localui.Errorf(http.StatusBadRequest, nil, "unknown source %q", req.Source)
 	}
-	return s.saveToStore(ctx, relay, item, req.StoreDetails, req.AllowDuplicate)
+	saved, err := s.saveToStore(ctx, relay, item, req.StoreDetails, req.AllowDuplicate)
+	if err == nil && confirmed != "" {
+		// Used only once the save went through: a save refused as a
+		// duplicate comes back with "Save anyway" and the same answer.
+		s.usePushPlan(confirmed)
+		s.logger.InfoContext(ctx, "saved a sensitive clipboard to the store the user confirmed", "item_id", saved.ID)
+	}
+	return saved, err
 }
 
 // UploadToStore implements localui.StoreAPI: it saves a file from the page.
@@ -415,6 +461,11 @@ func (s *Service) StoreItemPreview(ctx context.Context, itemID string) (localui.
 		return localui.EntryPreview{}, err
 	}
 	view := previewView(it.ID, it.WrapEpoch, item, format)
+	// An exported filter set offers Import. The whole item is parsed: the
+	// preview's text may be cut short.
+	if doc, err := exportFromItem(item); err == nil {
+		view.FilterExport = &localui.FilterImportCheck{Available: true, Filters: len(doc.Filters), Detectors: doc.Detectors != nil}
+	}
 	s.logger.DebugContext(ctx, "store item previewed", "item_id", it.ID, "render", view.Render)
 	return view, nil
 }
