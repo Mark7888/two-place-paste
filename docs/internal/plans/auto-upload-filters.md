@@ -1,8 +1,8 @@
 # Plan — Sensitive clipboard content and auto-upload filters (desktop)
 
-**Status:** implemented on `claude/auto-upload-filters-wsfin5`, in the six commits of §6.
-§8 records where the build differs from the plan below, and why; the plan itself is kept
-as it was agreed.
+**Status:** implemented (PR #37). §8 records where the build differs from the plan below,
+and why; §9 and §10 what was added after review — the store, pausing auto-sync, and export
+and import of filters. The plan itself is kept as it was agreed.
 **Touches:** `/desktop/**` (clipboard, config, service, localui, tray, UI),
 `/docs/internal/SPECS.md` §7.2, `/docs/site/**`. No change to `/proto`, `/spec`, the
 server, `pkg/tppclient` or mobile.

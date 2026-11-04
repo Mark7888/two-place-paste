@@ -966,10 +966,12 @@ moving the risk onto the member, and the work split are in
 
 ## Desktop feature — sensitive content and auto-upload filters
 
-🔍 **In review.** Keeps password-manager copies and anything matching a built-in detector
-or a user filter out of auto-upload, masks it on the Sync screen, and asks before a manual
-push, from the UI or the tray, and adds a five-minute pause of both automatic
-directions (for copies no detector can see, such as a browser extension's). Desktop only and local only: no wire, spec or server
+✅ **Done** (#37). Keeps password-manager copies and anything matching a built-in
+detector or a user filter out of auto-upload, masks it on the Sync screen, and asks
+before a manual push or a save to the store, from the UI or the tray. Filters can be
+exported and imported between devices, through the store or the clipboard. A
+five-minute pause holds both automatic directions, for copies no detector can see,
+such as a browser extension's. Desktop only and local only: no wire, spec or server
 change. Plan, decisions and what was built differently are in
 [`docs/internal/plans/auto-upload-filters.md`](plans/auto-upload-filters.md).
 
