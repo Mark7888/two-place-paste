@@ -57,7 +57,11 @@ func (s *Service) ExportFilters(ctx context.Context, req localui.FilterExportReq
 			"an exact match keeps only a hash, so it cannot be exported")
 	}
 	text, err := doc.Encode()
-	if err != nil {
+	switch {
+	case errors.Is(err, sensitive.ErrExportTooLarge):
+		return localui.FilterExportResult{}, localui.Errorf(http.StatusRequestEntityTooLarge, err,
+			"these filters are too large to export in one piece; export fewer of them, one at a time")
+	case err != nil:
 		return localui.FilterExportResult{}, fmt.Errorf("export the filters: %w", err)
 	}
 	res := localui.FilterExportResult{Filters: len(doc.Filters), Detectors: all, SkippedExact: skipped}

@@ -90,11 +90,22 @@ func BuildExport(filters []Filter, detectors []string) (doc Export, skipped int)
 	return doc, skipped
 }
 
+// ErrExportTooLarge refuses an export larger than an import reads.
+var ErrExportTooLarge = errors.New("sensitive: the export is too large to import")
+
 // Encode renders an export as indented JSON: it is meant to be read.
+//
+// An export is refused past MaxExportBytes, the most ParseExport reads: one
+// that could not be imported again is no use. 200 filters fit in practice,
+// but a value of control characters is escaped to six bytes each, so the
+// limit can be reached.
 func (e Export) Encode() (string, error) {
 	b, err := json.MarshalIndent(e, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("encode the filter export: %w", err)
+	}
+	if len(b) > MaxExportBytes {
+		return "", fmt.Errorf("%w: %d bytes, an import reads at most %d", ErrExportTooLarge, len(b), MaxExportBytes)
 	}
 	return string(b), nil
 }

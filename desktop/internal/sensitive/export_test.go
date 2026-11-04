@@ -174,3 +174,24 @@ func TestClassifyRecognisesAnExport(t *testing.T) {
 		t.Errorf("Classify(other json) = %+v, want nothing", v)
 	}
 }
+
+// An export an import would refuse is not made: 200 filters whose values are
+// control characters escape to well past what ParseExport reads.
+func TestEncodeRefusesAnUnimportableExport(t *testing.T) {
+	t.Parallel()
+	var filters []Filter
+	for i := range MaxFilters {
+		filters = append(filters, Filter{
+			ID:   strings.Repeat("i", 1+i%60) + string(rune('a'+i%26)) + string(rune('a'+i/26)),
+			Kind: KindContains, Target: TargetText, Value: strings.Repeat("\x01", MaxValueBytes),
+		})
+	}
+	doc, _ := BuildExport(filters, nil)
+	if _, err := doc.Encode(); !errors.Is(err, ErrExportTooLarge) {
+		t.Fatalf("Encode(oversized) = %v, want ErrExportTooLarge", err)
+	}
+	small, _ := BuildExport(filters[:1], nil)
+	if _, err := small.Encode(); err != nil {
+		t.Errorf("Encode(one filter) = %v", err)
+	}
+}
