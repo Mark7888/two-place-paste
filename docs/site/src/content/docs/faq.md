@@ -11,9 +11,11 @@ lifetime can change.
 
 ### Will it upload passwords I copy from my password manager?
 
-Not on its own. The desktop app recognises what most password managers mark as private, and keeps it
-on that computer even with *Watch the clipboard* on; you can still push it by hand after a
-confirmation. You can add your own filters too. See
+Not on its own. The desktop app recognises what password managers mark as private — it works with
+almost any of them, for example 1Password, Bitwarden, Proton Pass and KeePassXC — and keeps it on
+that computer even with *Watch the clipboard* on; you can still push it by hand after a
+confirmation. A password copied from a browser extension is the exception: browsers do not let an
+extension mark a copy as private, so pause auto-sync first or use autofill. You can add your own filters too. See
 [Sensitive content](/two-place-paste/guides/sensitive-content/).
 
 ### Can the server operator read my clipboard?

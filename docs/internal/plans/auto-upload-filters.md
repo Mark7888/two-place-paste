@@ -383,9 +383,11 @@ above, and why.
   private (it costs a question) but can never unmark a password (it would cost a leak).
 - Windows reads a DWORD format through a dedicated `readDWORD`, which copies four bytes
   and no more, instead of the general `readBytes`.
-- **Not done here:** the manual test matrix with real password managers, and compiling
-  the macOS cgo code (`pasteboard_darwin.go`, `notify_darwin.m`), which this Linux
-  environment cannot do. Both need a Mac and a Windows machine before merge.
+- The manual test with real password managers was done by hand on Windows and macOS
+  before merge, and their app copies are detected (1Password, Bitwarden, Proton Pass,
+  KeePassXC among them). Their browser extensions are not, and cannot be: a browser lets
+  an extension write plain text only — hence the pause (§9). The macOS cgo code
+  (`pasteboard_darwin.go`, `notify_darwin.m`) is compiled by the PR's macOS CI jobs.
 
 **Classifier (§4.2)**
 
