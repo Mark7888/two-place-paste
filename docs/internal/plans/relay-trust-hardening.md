@@ -81,6 +81,16 @@ store key of epoch `E` and must yield the store key of `E-1`.
 - `spec/crypto.md` §7 gains the rule; SPEC §3.3 gains the server requirement. No byte
   layout changes, so this is a revision note, not a new profile.
 
+Two cases have no link to check, and both are refused rather than waved through, because
+a hostile relay can fake either one:
+
+- **A relay older than v1.2.0** has no `StoreLinksRequest`. The client refuses every new
+  epoch on it and says the relay needs updating. Everything else keeps working.
+- **An epoch made by a client older than v1.2.0** carries no link. Once the relay
+  requires one, such a rekey cannot happen; on a relay that does not yet require one, a
+  new device refuses that epoch. Its way back is to leave and pair again, which loses
+  nothing: it starts empty either way, and it reads the store again from the new epoch.
+
 What it does not stop: a revoked device holds the old key, so a relay working with one
 can still forge a link. Phase 2 closes that.
 
@@ -97,7 +107,30 @@ Docs tell users, once every device runs the new version: open Devices, compare t
 fingerprints, revoke anything unknown. A relay that already took a key under H1 keeps it
 until the next rekey. Phase 1 has no rekey without a revocation; Phase 2 adds one (§4.5).
 
-### 3.5 Phase 1 work, in landing order
+### 3.5 Phase 1 compatibility
+
+"Old" is a released client or relay without Phase 1. v1.2.0 is the first release whose
+relay serves store links and whose clients send one with every rekey.
+
+| Pairing | Result |
+|---|---|
+| New member invites, old device joins | Works. The member gets the confirmation; an old joiner does not show its fingerprint on the join screen, so the user compares the name only — or opens that device's "show a code" view, which shows the same key's fingerprint. |
+| Old member invites, new device joins | Works, unprotected: the old member still wraps without asking. |
+| Either direction with an offer | Unchanged; it already confirms. |
+
+| Rekey | Result |
+|---|---|
+| Rekey by a v1.2+ client, new devices receive it | Works and is checked. |
+| Rekey by any client, old devices receive it | Works, unchecked, as today. |
+| Rekey by a pre-1.2 client, new relay | Refused with "update this app", as pre-store clients are already told when the store holds items. |
+| Rekey by a pre-1.2 client, v1.2 relay | Goes through without a link; new devices refuse that epoch and have to pair again. |
+| New clients on a pre-1.2 relay | Pairing, sync and history work; every new epoch is refused until the relay is updated. |
+
+Fingerprints in Devices and in the revoke dialog need both devices updated, since an old
+client cannot show them. The Go and TypeScript `Fingerprint` already agree, because the
+offer flow compares them across clients.
+
+### 3.6 Phase 1 work, in landing order
 
 1. **Go client** — `completePairing` split into notice → pending join → `Confirm`;
    invitation matching; epoch verification against store links; `Fingerprint` on roster
@@ -189,15 +222,30 @@ nothing about them — its checks are not part of the trust path.
 ### 4.4 Rollout and compatibility
 
 A wire change lands in the server and both clients together (CLAUDE.md, "Shared
-contracts"). Until a group is upgraded (§4.5), new clients behave as Phase 1 does, so:
+contracts"). Every addition is a new protobuf field or message, which older code skips,
+so nothing breaks on contact. What changes is how much is checked, and it is decided
+per group: until a group is upgraded (§4.5) every new client behaves as Phase 1 does.
 
-- new relay + old clients: works as today;
-- old relay + new clients: an old relay drops the new fields, so the client sees no certs
-  and stays at Phase 1 behaviour. It must not let that disable the downgrade rule for a
-  group already verified.
-- mixed clients in one group: an old client cannot open a `0x02` wrap. The upgrade step
-  checks every device's last-seen client version through the relay and refuses until all
-  are new; a device that is left behind is told to update, as pre-store clients are today.
+**Before the group is upgraded**
+
+| Situation | Result |
+|---|---|
+| New relay, old clients | Works as today. |
+| Old relay, new clients | Works at Phase 1 level. An old relay drops the new fields, so there are no certs to check and the upgrade is not offered. |
+| New member invites, old device joins | The joiner sends no proof. The member falls back to the Phase 1 confirmation and an unauthenticated wrap, which the old joiner can open. |
+| Old member invites, new device joins | The member sends no authenticated wrap. The joiner accepts it, as it would today, and says the pairing could not be verified because the other device is out of date. It has no earlier state to defend, so this is no weaker than Phase 1. |
+| New code read by an old client | Works: the secret and the inviter key are fields the old decoder skips. The QR code is slightly denser. |
+
+**After the group is upgraded**
+
+| Situation | Result |
+|---|---|
+| Old client in the group | Cannot open a `0x02` wrap, so it is stuck at the old epoch and told to update and pair again. To avoid stranding anyone, the upgrade step reads every device's last-seen client version from the relay and refuses until all are new. That check only keeps devices from being left behind; it is not trusted for security. |
+| Old device joining | Refused: it cannot send a proof or open an authenticated wrap. It is told to update first. |
+| Relay downgraded, or pretending to be old | The upgraded clients' downgrade rule (§4.3) still holds: they refuse unauthenticated wraps, unproven joins and rows without certs. The group stops admitting devices and rekeying until the relay is back, and the client says so. |
+
+So upgrading a group is one-way, and it waits until every device and the relay run the
+new version.
 
 ### 4.5 Upgrading an existing group
 
