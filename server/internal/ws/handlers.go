@@ -487,8 +487,9 @@ func (s *Server) handleRekey(ctx context.Context, env *tppv1.Envelope, deviceID,
 		}
 		keys = append(keys, store.RekeyKey{DeviceID: k.GetDeviceId(), Key: k.GetWrappedGroupKey()})
 	}
-	// The link is opaque here; its length is fixed (/spec/crypto.md §7a.2),
-	// and a client that predates the store sends none.
+	// The link is opaque here; its length is fixed (/spec/crypto.md §7a.2).
+	// A client that predates the store sends none, and the store refuses
+	// that once it has checked everything else.
 	if n := len(req.GetStoreLink()); n != 0 && n != storeLinkSize {
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT,
 			"store_link must be empty or %d bytes", storeLinkSize)
@@ -497,10 +498,11 @@ func (s *Server) handleRekey(ctx context.Context, env *tppv1.Envelope, deviceID,
 	group, err := s.store.ApplyRekey(ctx, groupID, req.GetRevokedDeviceId(), req.GetExpectedEpoch(), keys, req.GetStoreLink())
 	switch {
 	case errors.Is(err, store.ErrStoreLinkRequired):
-		// A client that predates the store cannot seal the link, and
-		// applying its rekey would leave every store item unreadable.
+		// A client that predates the store cannot seal the link. Its rekey
+		// would leave store items unreadable, and the remaining devices
+		// would refuse the key it made (/spec/crypto.md §7.1).
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_CLIENT_OUTDATED,
-			"this group has store items; update the app to revoke devices in it")
+			"update the app to revoke devices in this group")
 	case errors.Is(err, store.ErrEpochConflict):
 		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_EPOCH_CONFLICT,
 			"the group has moved past epoch %d; refetch the roster and retry", req.GetExpectedEpoch())

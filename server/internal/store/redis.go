@@ -421,7 +421,7 @@ func (s *RedisStore) ApplyRekey(ctx context.Context, groupID, revokedDeviceID st
 	}
 
 	code, err := s.applyRekey.Run(ctx, s.rdb,
-		[]string{groupKey(groupID), groupDevicesKey(groupID), storeLinksKey(groupID), storeIndexKey(groupID)}, argv...).Int64()
+		[]string{groupKey(groupID), groupDevicesKey(groupID), storeLinksKey(groupID)}, argv...).Int64()
 	if err != nil {
 		return Group{}, fmt.Errorf("apply rekey for group %s: %w", groupID, err)
 	}
