@@ -53,6 +53,7 @@ import {
   PairingStartResponse,
   PairingWrappedKeyUpload,
 } from '../../../protocol/gen/tpp/v1/pairing';
+import { StoreLinksResponse } from '../../../protocol/gen/tpp/v1/store';
 import { Socket, SocketFactory } from '../connection';
 
 interface StoredEntry {
@@ -182,6 +183,7 @@ export class FakeRelay {
       }
 
       case MessageType.MESSAGE_TYPE_PAIRING_WRAPPED_KEY_UPLOAD: {
+        this.uploads++;
         const request = PairingWrappedKeyUpload.decode(env.payload);
         const complete = PairingComplete.encode({
           groupId: this.groupId,
@@ -404,10 +406,57 @@ export class FakeRelay {
         return;
       }
 
+      case MessageType.MESSAGE_TYPE_STORE_LINKS_REQUEST: {
+        if (this.refuseLinks !== null) {
+          fail(this.refuseLinks, 'no links from this relay');
+          return;
+        }
+        reply(
+          MessageType.MESSAGE_TYPE_STORE_LINKS_RESPONSE,
+          StoreLinksResponse.encode({
+            links: [...this.storeLinks].map(([epoch, link]) => ({ epoch: epoch.toString(), link })),
+          }).finish(),
+        );
+        return;
+      }
+
       default:
         fail(ErrorCode.ERROR_CODE_UNSUPPORTED_MESSAGE, 'unsupported message');
     }
   }
+
+  /**
+   * refuseLinks makes StoreLinksRequest fail with this code: UNSUPPORTED is a
+   * relay that predates the store, STORE_DISABLED a v1.2 relay with the store
+   * off. Null serves them.
+   */
+  refuseLinks: ErrorCode | null = null;
+
+  /** pushWrappedKey is the relay handing a device a key of its own making (spec/crypto.md §7.1). */
+  pushWrappedKey(deviceId: string, epoch: bigint, wrapped: Uint8Array): void {
+    this.sockets.get(deviceId)?.push({
+      id: 'forged',
+      type: MessageType.MESSAGE_TYPE_WRAPPED_KEY_AVAILABLE,
+      payload: WrappedKeyAvailable.encode({ epoch: epoch.toString(), wrappedGroupKey: wrapped }).finish(),
+    });
+  }
+
+  /** pushJoinNotice is the relay reporting a join, real or made up (SPEC §3.2 step 3). */
+  pushJoinNotice(deviceId: string, token: string, name: string, publicKey: Uint8Array): void {
+    this.sockets.get(deviceId)?.push({
+      id: 'notice',
+      type: MessageType.MESSAGE_TYPE_PAIRING_JOIN_NOTICE,
+      payload: PairingJoinNotice.encode({
+        pairingToken: token,
+        deviceId: 'made-up',
+        deviceName: name,
+        devicePublicKey: publicKey,
+      }).finish(),
+    });
+  }
+
+  /** uploads counts wrapped keys handed over for joining devices. */
+  uploads = 0;
 
   /** storeLinks are the store links rekeys sent, by the epoch each leads into. */
   readonly storeLinks = new Map<bigint, Uint8Array>();
