@@ -44,6 +44,15 @@ var (
 	// stops; a caller that checks for this one can say why, and offer to
 	// create or join another group.
 	ErrGroupDeleted = fmt.Errorf("tppclient: this device's group was deleted by the server admin: %w", ErrRevoked)
+
+	// ErrJoinRejected means the device asking to join with an invitation was
+	// turned down, or handing it the key failed: Invitation.Wait returns it.
+	ErrJoinRejected = errors.New("tppclient: the join was not completed")
+
+	// ErrUnverifiedKey means the relay offered a group key for a new epoch
+	// that does not chain back, through the store links, to the key this
+	// device holds (/spec/crypto.md §7.1). The key is not installed.
+	ErrUnverifiedKey = errors.New("tppclient: the relay offered a group key this device could not verify")
 )
 
 // ProtocolError is an Error frame from the server. Callers branch on Code,

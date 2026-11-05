@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/protobuf/encoding/protowire"
@@ -21,29 +22,145 @@ import (
 // Payload is what the user transports out of band: rendered as a QR code, or
 // copied as text. The two are the same string — pairing is symmetric, and a
 // phone must be able to read what a desktop shows.
+//
+// A device that joins with it does not get the group key straight away. The
+// relay reports the join, the client turns that into a JoinRequest, and only
+// JoinRequest.Confirm wraps the key (SPEC §3.2 step 4). The joining device's
+// public key reaches this client through the relay, so the user comparing its
+// fingerprint is what keeps a relay from substituting its own.
 type Invitation struct {
 	Payload   string
 	Token     string
 	ExpiresAt time.Time
 
-	joined chan Device
+	// claimed is set, under the client's mutex, once a join has been reported
+	// for this token: one invitation admits one device, and a second notice
+	// for it is the relay misbehaving.
+	claimed  bool
+	requests chan *JoinRequest
+	joined   chan Device
 }
 
-// Wait blocks until a device joins with this invitation, or ctx is done.
-//
-// The join is completed by the client itself: the inviter is the only device
-// holding the group key, so it wraps it for the joiner as soon as the relay
-// reports the join (SPEC §3.2 steps 3-4).
+// Request blocks until a device asks to join with this invitation, or ctx is
+// done. It is the same JoinRequest Handlers.OnJoinRequest receives.
+func (i *Invitation) Request(ctx context.Context) (*JoinRequest, error) {
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("tppclient: waiting for a device to ask to join: %w", ctx.Err())
+	case r := <-i.requests:
+		return r, nil
+	}
+}
+
+// Wait blocks until a device has joined with this invitation — its join
+// request was confirmed and it was handed the group key — or ctx is done. A
+// join that was rejected returns ErrJoinRejected.
 func (i *Invitation) Wait(ctx context.Context) (Device, error) {
 	select {
 	case <-ctx.Done():
 		return Device{}, fmt.Errorf("tppclient: waiting for a device to join: %w", ctx.Err())
 	case d, ok := <-i.joined:
 		if !ok {
-			return Device{}, fmt.Errorf("tppclient: the pairing ended without a device joining")
+			return Device{}, ErrJoinRejected
 		}
 		return d, nil
 	}
+}
+
+// JoinRequest is a device asking to join through one of this client's
+// invitations, waiting for the user's consent. It is the shape of
+// OfferAcceptance and Revocation, for the same reason: the library gathers
+// what a confirmation dialog needs and stops.
+//
+// Nothing is wrapped until Confirm is called, and a UI that has not rendered
+// DeviceName and Fingerprint has nothing to confirm with.
+type JoinRequest struct {
+	// DeviceID is the id the relay gave the joining device.
+	DeviceID string
+
+	// DeviceName is what the joining device calls itself. It is display text
+	// chosen by a device that is not in the group yet, carried by the relay:
+	// it proves nothing.
+	DeviceName string
+
+	// PublicKey is the key the group key will be wrapped to. It came through
+	// the relay, which is why the user has to check it.
+	PublicKey []byte
+
+	// Fingerprint is PublicKey rendered for a person to compare with what the
+	// joining device is showing. It is the part of the dialog that actually
+	// identifies the device.
+	Fingerprint string
+
+	// ExpiresAt is when the invitation's token expires. The relay refuses the
+	// key after that, so a dialog still open then has nothing to confirm.
+	ExpiresAt time.Time
+
+	client *Client
+	inv    *Invitation
+	mu     sync.Mutex
+	done   bool
+}
+
+// Confirm admits the joining device: it wraps the current group key to the
+// public key the user just checked and hands it over (SPEC §3.2 step 4).
+func (r *JoinRequest) Confirm(ctx context.Context) (Device, error) {
+	r.mu.Lock()
+	if r.done {
+		r.mu.Unlock()
+		return Device{}, fmt.Errorf("tppclient: this join request has already been answered")
+	}
+	r.done = true
+	r.mu.Unlock()
+	c := r.client
+
+	state := c.State()
+	if !state.InGroup() {
+		return Device{}, ErrNoGroup
+	}
+	wrapped, err := tppcrypto.Wrap(state.GroupKey, r.PublicKey, state.Epoch)
+	if err != nil {
+		return Device{}, fmt.Errorf("tppclient: wrap the group key for the joining device: %w", err)
+	}
+
+	var resp tppv1.PairingComplete
+	err = c.call(ctx, tppv1.MessageType_MESSAGE_TYPE_PAIRING_WRAPPED_KEY_UPLOAD, &tppv1.PairingWrappedKeyUpload{
+		PairingToken:    r.inv.Token,
+		DeviceId:        r.DeviceID,
+		WrappedGroupKey: wrapped,
+	}, &resp)
+	if err != nil {
+		c.endInvitation(r.inv, nil)
+		return Device{}, fmt.Errorf("tppclient: hand the group key to the joining device: %w", err)
+	}
+
+	device := Device{
+		ID:        r.DeviceID,
+		Name:      r.DeviceName,
+		PublicKey: r.PublicKey,
+		CreatedAt: c.now(),
+	}
+	c.logger.Info("a device joined the group", slog.String("device_id", device.ID))
+	c.endInvitation(r.inv, &device)
+	if c.handlers.OnDevicePaired != nil {
+		c.handlers.OnDevicePaired(device)
+	}
+	return device, nil
+}
+
+// Reject turns the join down. The device gets no key. The relay has already
+// made a record for it, which stays keyless and shows in the roster until it
+// is revoked; nothing on the wire tells the relay about a rejection yet.
+func (r *JoinRequest) Reject() {
+	r.mu.Lock()
+	if r.done {
+		r.mu.Unlock()
+		return
+	}
+	r.done = true
+	r.mu.Unlock()
+	r.client.logger.Info("a join request was rejected", slog.String("device_id", r.DeviceID))
+	r.client.endInvitation(r.inv, nil)
 }
 
 // StartPairing mints a pairing token and returns the payload to show
@@ -86,6 +203,7 @@ func (c *Client) StartPairing(ctx context.Context) (*Invitation, error) {
 		Payload:   payload,
 		Token:     resp.GetPairingToken(),
 		ExpiresAt: msToTime(resp.GetExpiresAtUnixMs()),
+		requests:  make(chan *JoinRequest, 1),
 		joined:    make(chan Device, 1),
 	}
 	c.mu.Lock()
@@ -94,70 +212,78 @@ func (c *Client) StartPairing(ctx context.Context) (*Invitation, error) {
 	return inv, nil
 }
 
-// completePairing runs on the inviter when the relay reports a joiner
-// (SPEC §3.2 step 4): it wraps the current group key to the joiner's public
-// key at the current epoch and uploads it. The relay cannot unwrap what it
-// relays.
-func (c *Client) completePairing(notice *tppv1.PairingJoinNotice) {
-	ctx, cancel := context.WithTimeout(c.runContext(), 30*time.Second)
-	defer cancel()
+// onJoinNotice runs on the inviter when the relay reports a joiner
+// (SPEC §3.2 step 3). It wraps nothing: it turns the notice into a
+// JoinRequest for the user to confirm.
+//
+// A notice is acted on only for a token this client minted, still open and
+// not yet used. Anything else is the relay sending a join nobody asked for —
+// with a public key of its own choosing — and is dropped.
+func (c *Client) onJoinNotice(notice *tppv1.PairingJoinNotice) {
+	now := c.now()
 
-	state := c.State()
-	if !state.InGroup() {
-		c.logger.Warn("a pairing notice arrived before this device had a group key")
+	c.mu.Lock()
+	var inv *Invitation
+	open := c.invitations[:0]
+	for _, i := range c.invitations {
+		if !i.ExpiresAt.After(now) {
+			continue // expired: the relay refuses its key anyway
+		}
+		open = append(open, i)
+		if i.Token == notice.GetPairingToken() && !i.claimed && inv == nil {
+			inv = i
+		}
+	}
+	c.invitations = open
+	if inv != nil {
+		inv.claimed = true
+	}
+	c.mu.Unlock()
+
+	if inv == nil {
+		c.logger.Warn("ignored a join notice for a pairing this device did not start or has already used",
+			slog.String("device_id", notice.GetDeviceId()))
 		return
 	}
-	wrapped, err := tppcrypto.Wrap(state.GroupKey, notice.GetDevicePublicKey(), state.Epoch)
-	if err != nil {
-		c.logger.Error("wrapping the group key for a joining device failed", slog.Any("error", err))
-		return
-	}
 
-	var resp tppv1.PairingComplete
-	err = c.call(ctx, tppv1.MessageType_MESSAGE_TYPE_PAIRING_WRAPPED_KEY_UPLOAD, &tppv1.PairingWrappedKeyUpload{
-		PairingToken:    notice.GetPairingToken(),
-		DeviceId:        notice.GetDeviceId(),
-		WrappedGroupKey: wrapped,
-	}, &resp)
-	if err != nil {
-		c.logger.Error("handing the group key to a joining device failed",
-			slog.String("device_id", notice.GetDeviceId()), slog.Any("error", err))
-		return
+	req := &JoinRequest{
+		DeviceID:    notice.GetDeviceId(),
+		DeviceName:  notice.GetDeviceName(),
+		PublicKey:   notice.GetDevicePublicKey(),
+		Fingerprint: Fingerprint(notice.GetDevicePublicKey()),
+		ExpiresAt:   inv.ExpiresAt,
+		client:      c,
+		inv:         inv,
 	}
-
-	device := Device{
-		ID:        notice.GetDeviceId(),
-		Name:      notice.GetDeviceName(),
-		PublicKey: notice.GetDevicePublicKey(),
-		CreatedAt: c.now(),
+	inv.requests <- req // buffered for exactly this one request
+	if c.handlers.OnJoinRequest != nil {
+		c.handlers.OnJoinRequest(req)
 	}
-	c.logger.Info("a device joined the group", slog.String("device_id", device.ID))
-	c.notifyPaired(notice.GetPairingToken(), device)
 }
 
-// notifyPaired wakes the Invitation that produced this token, and the caller's
-// handler.
-func (c *Client) notifyPaired(token string, d Device) {
+// endInvitation retires an invitation and wakes its Wait: with the device
+// that joined, or with nothing when the join was rejected or failed.
+func (c *Client) endInvitation(inv *Invitation, d *Device) {
 	c.mu.Lock()
 	remaining := c.invitations[:0]
-	var matched *Invitation
-	for _, inv := range c.invitations {
-		if inv.Token == token && matched == nil {
-			matched = inv
+	found := false
+	for _, i := range c.invitations {
+		if i == inv {
+			found = true
 			continue
 		}
-		remaining = append(remaining, inv)
+		remaining = append(remaining, i)
 	}
 	c.invitations = remaining
 	c.mu.Unlock()
 
-	if matched != nil {
-		matched.joined <- d
-		close(matched.joined)
+	if !found {
+		return // already ended, or dropped by Forget
 	}
-	if c.handlers.OnDevicePaired != nil {
-		c.handlers.OnDevicePaired(d)
+	if d != nil {
+		inv.joined <- *d
 	}
+	close(inv.joined)
 }
 
 // JoinPairing joins the group described by a pairing payload — scanned from a
