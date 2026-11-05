@@ -1,6 +1,9 @@
 # Plan — Demo mode for the Android app
 
-**Status:** proposed. Nothing has landed.
+**Status:** done. The relay and the demo session are in `mobile/src/core/demo/`,
+the app's side (the `everJoined` gate and the swap between the real and the demo
+client) in `mobile/src/app/demo.ts`, wired through `sessionStore.ts`; the user docs
+are in `docs/site/src/content/docs/install/android.mdx`.
 
 ---
 
@@ -117,8 +120,9 @@ On start, after pairing:
 
 - the phone creates the group ("Demo group") through a creation token the
   relay hands out, like an operator's creation link;
-- the laptop writes three history entries: a short text, a small PNG image
-  generated in code (no binary asset in the repo), and a small text file;
+- the laptop and the tablet write three history entries: a short text, a
+  small PNG image generated in code (no binary asset in the repo), and a
+  small text file;
 - the store gets two items: a text snippet and the same image.
 
 While the demo runs:
@@ -142,7 +146,10 @@ timer running.
 ## 6. Session wiring (`src/app/`)
 
 `sessionStore.ts` gains `startDemo()`, `closeDemo()` and a `demo: boolean`
-in the snapshot (and in `SessionState` in `SessionContext.tsx`).
+in the snapshot (and in `SessionState` in `SessionContext.tsx`). The logic
+that can run without React Native — the gate below, and holding the real
+client aside — is in `src/app/demo.ts` (`DemoGate`, `DemoMode`), so it is
+tested in Node.
 
 `startDemo()`:
 
@@ -178,7 +185,7 @@ group."
 ## 7. Screens
 
 - **`ui.tsx`:** a `LinkButton`: underlined text in the accent colour, no
-  background or border, a 44 dp touch target, and
+  background or border, the app's 48 dp touch target, and
   `accessibilityRole="button"`.
 - **`SetupScreen.tsx`:** while `session.demoAvailable` is true, a
   `LinkButton` labelled "Try a demo" below the last
@@ -226,7 +233,7 @@ restricted", and add one entry with no username or password:
 **Docs site:** a short "Try the demo" section in
 `docs/site/src/content/docs/install/android.mdx` (what it is, what it does
 not test, how to close it), and a line in `guides/settings.mdx` for
-**Close demo**. Retake the setup screen screenshot, which now shows the link.
+**Close demo**. The site has no Android screenshots yet, so there is none to retake.
 
 ## 10. Order of work
 
