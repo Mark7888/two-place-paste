@@ -84,8 +84,11 @@ store key of epoch `E` and must yield the store key of `E-1`.
 Two cases have no link to check, and both are refused rather than waved through, because
 a hostile relay can fake either one:
 
-- **A relay older than v1.2.0** has no `StoreLinksRequest`. The client refuses every new
-  epoch on it and says the relay needs updating. Everything else keeps working.
+- **A relay that does not hand the links over.** One older than v1.2.0 has no
+  `StoreLinksRequest`, and v1.2 refuses it with `STORE_DISABLED` while the group's store
+  is off — which is the default. The relay is changed to serve links whatever the store
+  switch says; against an older one the client refuses every new epoch and says the relay
+  needs updating. Everything else keeps working.
 - **An epoch made by a client older than v1.2.0** carries no link. Once the relay
   requires one, such a rekey cannot happen; on a relay that does not yet require one, a
   new device refuses that epoch. Its way back is to leave and pair again, which loses
@@ -124,7 +127,7 @@ relay serves store links and whose clients send one with every rekey.
 | Rekey by any client, old devices receive it | Works, unchecked, as today. |
 | Rekey by a pre-1.2 client, new relay | Refused with "update this app", as pre-store clients are already told when the store holds items. |
 | Rekey by a pre-1.2 client, v1.2 relay | Goes through without a link; new devices refuse that epoch and have to pair again. |
-| New clients on a pre-1.2 relay | Pairing, sync and history work; every new epoch is refused until the relay is updated. |
+| New clients on a relay without Phase 1 | Pairing, sync and history work. Every new epoch is refused until the relay is updated — on v1.2 only while the group's store is off, which is the default. |
 
 Fingerprints in Devices and in the revoke dialog need both devices updated, since an old
 client cannot show them. The Go and TypeScript `Fingerprint` already agree, because the
@@ -140,7 +143,8 @@ never holds a client whose library asks for a confirmation its app does not show
    with a revision note), SPEC §3.2 (every join is confirmed) and §3.3 (every rekey carries
    a link). No byte layout or vector changes.
 2. **Implementation** — after 1 is merged:
-   - Server: `store_link` required on every rekey, with a test of the refusal.
+   - Server: `store_link` required on every rekey, with a test of the refusal; store
+     links served whether or not the group's store is on.
    - Go and TypeScript clients: `completePairing` split into notice → pending join →
      `Confirm`; invitation matching; epoch verification against store links; fingerprints
      on roster devices. Tests: a notice for an unknown, expired or used token wraps

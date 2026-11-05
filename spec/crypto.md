@@ -528,17 +528,21 @@ chain it back to the key it already holds:
   or ends at a different key fails the check.
 - The comparison in step 3 is constant-time.
 - On failure the client keeps its current epoch, does not install the key, and
-  tells the user that the relay offered a key it could not verify. It does not
-  retry the same key. A key that was refused stays refused: a device whose
-  every later epoch fails has to leave the group and pair again, which loses
-  nothing, because a new device starts empty and reads the store from its new
-  epoch.
+  tells the user that the relay offered a key it could not verify. When the
+  relay offers the key again, such as on the next connect, the client checks it
+  again from the start; it never installs a key that has not passed. A device
+  whose every later epoch fails has to leave the group and pair again, which
+  loses nothing, because a new device starts empty and reads the store from its
+  new epoch.
 - A client that skipped several epochs walks every link between them; one check
   covers them all.
-- A relay without `StoreLinksRequest` (one that predates the store) cannot pass
-  the check, and a client refuses every new epoch on it rather than install a key
-  it cannot verify. A relay can claim to be that old, so "no links" is never
-  read as "nothing to check".
+- The relay serves the links whether or not the group's store is turned on
+  (SPEC §4.6). A relay that does not hand them over — one without
+  `StoreLinksRequest`, which predates the store, or one from before this rule,
+  which refuses them while the store is off — cannot pass the check, and a
+  client refuses every new epoch on it rather than install a key it cannot
+  verify. A relay can claim to be either, so "no links" is never read as
+  "nothing to check".
 
 This check does not cover a device's **first** key, the one pairing hands it: it
 has no earlier key to chain to (§11.4). Nor does it stop a device revoked at `E`,
@@ -1005,4 +1009,4 @@ cannot be confused on the wire.
 | 1.2 | §8: two rows for joiner-emitted pairing, where the code travels from the device without a group key to a member, and a note that the wrap target may be learned from either side's out-of-band code. The wrap is §4.2 exactly as it stands: no byte layout, domain-separation string, derivation or primitive changed, the profile is still `tpp-crypto-v1`, the version byte is still `0x01`, and every vector in `spec/vectors/` is byte-identical. It lands with the `PairingOffer` message types that make the other direction expressible. |
 | 1.3 | Additions only, for the store (SPEC §6b): §5.5.1 header version 2, §7a store keys, links, item keys and the metadata record, a note in §7, rows in §1, §2.3, §8 and §11.4, and three vector suites. No existing byte layout, domain-separation string, derivation or primitive changed, so the profile is still `tpp-crypto-v1` and the version byte is still `0x01`: the header has carried its own version byte since §5.5 so that it could grow this way, and the new strings name new purposes. Every existing vector is byte-identical except two failure vectors: `header-decode-unknown-version` now uses `0xff`, because `0x02` is a version now, and `header-wrong-length` says "neither 297 nor 553 bytes". A v1.2 reader rejects a v2 header and shows the entry's type as unknown, the behaviour §5.5 already specified. |
 | 1.4 | §10.1: how an installation keeps several groups, one active and the others parked, and a note in §7 that the one `(epoch, group_key)` pair is per group. No byte layout, domain-separation string, derivation or primitive changed, so the profile is still `tpp-crypto-v1`, the version byte is still `0x01` and every vector in `spec/vectors/` is byte-identical. It states storage rules for a client feature and has nothing on the wire. |
-| 1.5 | §7.1: a client checks a new epoch's key against the store links before it installs it, and refuses it when they are missing. Two rows in §11.4: the relay choosing a joining device's key, and a revoked device working with the relay; the roster row names the fingerprint the user confirms. No byte layout, domain-separation string, derivation or primitive changed — the check opens links exactly as §7a.6 already does — so the profile is still `tpp-crypto-v1`, the version byte is still `0x01` and every vector in `spec/vectors/` is byte-identical. |
+| 1.5 | §7.1: a client checks a new epoch's key against the store links before it installs it, and refuses it when they are missing; the relay serves the links whether or not the store is on. Two rows in §11.4: the relay choosing a joining device's key, and a revoked device working with the relay; the roster row names the fingerprint the user confirms. No byte layout, domain-separation string, derivation or primitive changed — the check opens links exactly as §7a.6 already does — so the profile is still `tpp-crypto-v1`, the version byte is still `0x01` and every vector in `spec/vectors/` is byte-identical. |
