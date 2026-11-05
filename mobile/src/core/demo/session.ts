@@ -337,9 +337,14 @@ export class DemoSession {
   }
 }
 
-/** join pairs `joiner` into `member`'s group through the ordinary invitation flow. */
+/**
+ * join pairs `joiner` into `member`'s group through the ordinary invitation
+ * flow, confirming the join as the member's user would (SPEC §3.2 step 4).
+ */
 async function join(member: Client, joiner: Client): Promise<void> {
   const invitation = await member.startPairing();
-  await joiner.joinPairing(invitation.payload);
+  const joining = joiner.joinPairing(invitation.payload);
+  await (await invitation.request).confirm();
+  await joining;
   await invitation.joined;
 }

@@ -167,7 +167,10 @@ describeInterop('the store reads the same on the phone and in Go', () => {
 
   test('after the phone rekeys, the Go client opens every item through the phone’s link', async () => {
     const invitation = await phone.startPairing();
-    const watchJoined = await watch.send(`join ${invitation.payload}`);
+    const joining = watch.send(`join ${invitation.payload}`);
+    // The phone's user confirms the watch before it gets the key (SPEC §3.2 step 4).
+    await (await invitation.request).confirm();
+    const watchJoined = await joining;
     await invitation.joined;
     const revocation = await phone.prepareRevoke(String(watchJoined.device_id));
     const roster = await revocation.confirm();

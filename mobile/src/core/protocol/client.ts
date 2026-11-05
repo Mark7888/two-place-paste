@@ -157,6 +157,7 @@ import {
   withoutGroup,
   type ParkedGroup,
 } from './groups';
+import { chainsBack } from './epochs';
 import {
   decodePairingOffer,
   decodePairingPayload,
@@ -538,8 +539,20 @@ function chunkTimeoutMs(bytes: number): number {
   return REQUEST_TIMEOUT_MS + Math.ceil((bytes / MIN_TRANSFER_BYTES_PER_SEC) * 1000);
 }
 
-/** PAIRING_WRAP_TIMEOUT_MS bounds a joiner's wait for the inviter to hand over the group key. */
-export const PAIRING_WRAP_TIMEOUT_MS = 120_000;
+/**
+ * INVITATION_OPEN_MS is how long an invitation this device showed stays open
+ * for a join, timed on this device's own clock: the relay's pairing token
+ * lifetime (SPEC §3.2). The expiry the relay reports is on the relay's clock,
+ * and a device whose clock runs ahead would otherwise ignore every join.
+ */
+export const INVITATION_OPEN_MS = 5 * 60_000;
+
+/**
+ * PAIRING_WRAP_TIMEOUT_MS bounds a joiner's wait for the inviter to hand over
+ * the group key. The inviter's user has to read this device's fingerprint and
+ * confirm first (SPEC §3.2 step 4), so it is the lifetime of a pairing token.
+ */
+export const PAIRING_WRAP_TIMEOUT_MS = 5 * 60_000;
 
 /**
  * OFFER_WAIT_TIMEOUT_MS bounds a device's wait for a member to accept the code
@@ -621,8 +634,21 @@ export interface Handlers {
   onEpoch?: (epoch: bigint) => void;
   /** onDeviceRevoked fires when the group loses a device (SPEC §3.3). A UI refreshes its roster. */
   onDeviceRevoked?: (deviceId: string, epoch: bigint) => void;
+  /**
+   * onJoinRequest fires on the inviting device when a device asks to join with
+   * one of its invitations (SPEC §3.2 step 3). Nothing is handed over until the
+   * user confirms: the screen shows the request's name and fingerprint and
+   * calls `confirm` or `reject`.
+   */
+  onJoinRequest?: (request: JoinRequest) => void;
   /** onDevicePaired fires on the inviting device once a joiner has been handed the group key. */
   onDevicePaired?: (device: Device) => void;
+  /**
+   * onKeyRefused fires when the relay offered a group key for a new epoch that
+   * this client could not verify (spec/crypto.md §7.1). The key is not
+   * installed and the client stays at its epoch. A screen tells the user.
+   */
+  onKeyRefused?: (epoch: bigint, err: TppError) => void;
   /**
    * onProbablyRevoked fires when the relay is reachable but refuses this
    * device's socket: the likeliest cause is that it was revoked while away
@@ -711,14 +737,60 @@ export interface ClientOptions {
   cache?: EntryCache;
 }
 
-/** Invitation is a pairing in progress on the inviting device (SPEC §3.2 step 1). */
+/**
+ * Invitation is a pairing in progress on the inviting device (SPEC §3.2 step 1).
+ *
+ * A device that joins with it does not get the group key straight away. The
+ * relay reports the join, the client turns that into a JoinRequest, and only
+ * its `confirm` wraps the key (SPEC §3.2 step 4). The joining device's public
+ * key reaches this client through the relay, so the user comparing its
+ * fingerprint is what keeps a relay from substituting its own.
+ */
 export interface Invitation {
   /** payload is what the user transports out of band: rendered as a QR code, or copied as text. The two are one string. */
   payload: string;
   token: string;
   expiresAt: Date;
-  /** joined resolves when a device joins with this invitation. */
+  /** request resolves when a device asks to join with this invitation. It is the request onJoinRequest receives. */
+  request: Promise<JoinRequest>;
+  /**
+   * joined resolves once the request was confirmed and the device handed the
+   * group key; it rejects with a 'join-rejected' TppError when it was turned
+   * down or the hand-over failed.
+   */
   joined: Promise<Device>;
+}
+
+/**
+ * JoinRequest is a device asking to join through one of this client's
+ * invitations, waiting for the user's consent. It is the shape of
+ * OfferAcceptance, for the same reason: nothing is wrapped until `confirm`,
+ * and a screen that has not rendered `deviceName` and `fingerprint` has
+ * nothing to confirm with.
+ */
+export interface JoinRequest {
+  /** deviceId is the id the relay gave the joining device. */
+  deviceId: string;
+  /** deviceName is what the joining device calls itself, as the relay passed it on. It proves nothing. */
+  deviceName: string;
+  /** publicKey is the key the group key will be wrapped to. It came through the relay. */
+  publicKey: Uint8Array;
+  /** fingerprint is publicKey rendered for a person to compare with what the joining device shows. */
+  fingerprint: string;
+  /** expiresAt is when the invitation runs out, on this device's clock: the relay refuses the key after it. */
+  expiresAt: Date;
+  confirm(): Promise<Device>;
+  reject(): void;
+}
+
+/** PendingInvitation is what the client keeps of an invitation it showed. */
+interface PendingInvitation {
+  /** openUntil is on this device's clock (INVITATION_OPEN_MS); the relay's may differ. */
+  openUntil: Date;
+  claimed: boolean;
+  resolveRequest: (request: JoinRequest) => void;
+  resolveJoined: (device: Device) => void;
+  rejectJoined: (err: TppError) => void;
 }
 
 /**
@@ -868,7 +940,9 @@ export class Client {
   private backoffMs = MIN_BACKOFF_MS;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private refusals = 0;
-  private invitations = new Map<string, (device: Device) => void>();
+  private invitations = new Map<string, PendingInvitation>();
+  /** installing runs offered group keys through their check one at a time. */
+  private installing: Promise<void> = Promise.resolve();
   /**
    * storeKeys are the store keys and links of one group key, opened as needed
    * and never persisted (spec/crypto.md §7a.2). A new group key starts over.
@@ -1393,7 +1467,7 @@ export class Client {
         // A key that was waiting for this device arrives here on connect, so a
         // device that was offline during a rekey catches up without asking.
         const event = WrappedKeyAvailable.decode(env.payload);
-        await this.installWrappedKey(asBigInt(event.epoch), event.wrappedGroupKey);
+        await this.offerWrappedKey(asBigInt(event.epoch), event.wrappedGroupKey);
         break;
       }
       case MessageType.MESSAGE_TYPE_EPOCH_CHANGED: {
@@ -1444,9 +1518,9 @@ export class Client {
         break;
       }
       case MessageType.MESSAGE_TYPE_PAIRING_JOIN_NOTICE: {
-        // The inviter is the only device holding the group key, so wrapping for
-        // the joiner happens here and cannot be deferred (SPEC §3.2 step 4).
-        await this.completePairing(PairingJoinNotice.decode(env.payload));
+        // Nothing is wrapped here: the notice becomes a JoinRequest the user
+        // has to confirm first (SPEC §3.2 step 4).
+        this.onJoinNotice(PairingJoinNotice.decode(env.payload));
         break;
       }
       default:
@@ -1456,18 +1530,86 @@ export class Client {
   }
 
   /**
-   * installWrappedKey unwraps a delivered group key and advances the epoch.
+   * offerWrappedKey checks and installs a group key the relay delivered, and
+   * reports a key it refused. Keys are taken one at a time: two deliveries
+   * racing could otherwise check against a key the other was replacing.
+   */
+  private offerWrappedKey(epoch: bigint, wrapped: Uint8Array): Promise<void> {
+    const next = this.installing.then(async () => {
+      try {
+        await this.installWrappedKey(epoch, wrapped);
+      } catch (err) {
+        if (err instanceof TppError && err.kind === 'unverified-key') {
+          this.handlers.onKeyRefused?.(epoch, err);
+          return;
+        }
+        // Anything else — the socket went, the wrap was for someone else — is
+        // offered again on the next connect.
+      }
+    });
+    this.installing = next;
+    return next;
+  }
+
+  /**
+   * installWrappedKey unwraps a delivered group key, checks it, and advances
+   * the epoch.
    *
    * A key for an epoch this client already has, or an older one, is dropped:
    * epochs only move forward, and keeping an older key would silently defeat
    * the forward secrecy the rekey exists for.
+   *
+   * A key for a newer epoch is installed only once the store links chain it
+   * back to the key this client holds (spec/crypto.md §7.1). Unwrapping proves
+   * only that the key was made for this device, and anyone can make one of
+   * those: the links prove it was made by someone who held the previous key.
    */
   private async installWrappedKey(epoch: bigint, wrapped: Uint8Array): Promise<void> {
-    if (epoch <= this.state.epoch) {
+    const current = this.state.epoch;
+    const currentKey = this.state.groupKey;
+    if (epoch <= current) {
       return;
     }
     const groupKey = unwrap(wrapped, this.state.devicePrivateKey, epoch);
+    chainsBack(await this.fetchLinksToCheck(epoch), current, currentKey, epoch, groupKey);
+    if (this.state.epoch !== current || this.state.groupKey !== currentKey) {
+      // This device's own rekey installed a key while this one was being
+      // checked against the one it replaced: a newer key is offered again.
+      return;
+    }
     await this.setGroupKey(epoch, groupKey);
+  }
+
+  /**
+   * fetchLinksToCheck asks for the store links fresh, rather than from the
+   * store-key cache: the link into the new epoch is newer than anything the
+   * cache was filled with.
+   */
+  private async fetchLinksToCheck(epoch: bigint): Promise<Map<bigint, Uint8Array>> {
+    let resp: StoreLinksResponse;
+    try {
+      resp = await (await this.connection()).call(
+        MessageType.MESSAGE_TYPE_STORE_LINKS_REQUEST,
+        { codec: StoreLinksRequest, message: {} },
+        StoreLinksResponse,
+      );
+    } catch (err) {
+      if (
+        isCode(err, ErrorCode.ERROR_CODE_UNSUPPORTED_MESSAGE) ||
+        isCode(err, ErrorCode.ERROR_CODE_STORE_DISABLED)
+      ) {
+        // A relay that predates the store has no links, and one from before
+        // this check refuses them while the store is off. A hostile relay can
+        // claim to be either: "no links" is never "nothing to check".
+        throw new TppError(
+          'unverified-key',
+          `the relay did not hand over the store links to check the key of epoch ${epoch} against; it needs updating`,
+          { cause: err },
+        );
+      }
+      throw err;
+    }
+    return new Map(resp.links.map((l) => [asBigInt(l.epoch), l.link]));
   }
 
   private async setGroupKey(epoch: bigint, groupKey: Uint8Array): Promise<void> {
@@ -1568,51 +1710,120 @@ export class Client {
       inviterEphemeralPublicKey: ephemeralPublic,
     });
 
-    let resolveJoined: (device: Device) => void = () => {};
-    const joined = new Promise<Device>((resolve) => {
-      resolveJoined = resolve;
+    let resolveRequest: (request: JoinRequest) => void = () => {};
+    const request = new Promise<JoinRequest>((resolve) => {
+      resolveRequest = resolve;
     });
-    this.invitations.set(response.pairingToken, resolveJoined);
+    let resolveJoined: (device: Device) => void = () => {};
+    let rejectJoined: (err: TppError) => void = () => {};
+    const joined = new Promise<Device>((resolve, reject) => {
+      resolveJoined = resolve;
+      rejectJoined = reject;
+    });
+    // A screen that never awaits `joined` must not turn a rejection into an
+    // unhandled one; a screen that does still sees it.
+    joined.catch(() => {});
+    const expiresAt = msToDate(response.expiresAtUnixMs) ?? this.now();
+    this.invitations.set(response.pairingToken, {
+      openUntil: new Date(this.now().getTime() + INVITATION_OPEN_MS),
+      claimed: false,
+      resolveRequest,
+      resolveJoined,
+      rejectJoined,
+    });
 
-    return {
-      payload,
-      token: response.pairingToken,
-      expiresAt: msToDate(response.expiresAtUnixMs) ?? this.now(),
-      joined,
-    };
+    return { payload, token: response.pairingToken, expiresAt, request, joined };
   }
 
-  /** completePairing runs on the inviter when the relay reports a joiner (SPEC §3.2 step 4). */
-  private async completePairing(notice: PairingJoinNotice): Promise<void> {
-    if (!this.inGroup) {
+  /**
+   * onJoinNotice runs on the inviter when the relay reports a joiner
+   * (SPEC §3.2 step 3). It wraps nothing: it turns the notice into a
+   * JoinRequest for the user to confirm.
+   *
+   * A notice is acted on only for a token this client minted, still open and
+   * not yet used. Anything else is the relay sending a join nobody asked for —
+   * with a public key of its own choosing — and is dropped.
+   */
+  private onJoinNotice(notice: PairingJoinNotice): void {
+    const now = this.now().getTime();
+    for (const [token, inv] of this.invitations) {
+      if (inv.openUntil.getTime() <= now) {
+        this.invitations.delete(token);
+      }
+    }
+    const inv = this.invitations.get(notice.pairingToken);
+    if (inv === undefined || inv.claimed) {
       return;
     }
-    const conn = await this.connection();
-    const wrapped = wrap(this.state.groupKey, notice.devicePublicKey, this.state.epoch);
-    await conn.call(
-      MessageType.MESSAGE_TYPE_PAIRING_WRAPPED_KEY_UPLOAD,
-      {
-        codec: PairingWrappedKeyUpload,
-        message: {
-          pairingToken: notice.pairingToken,
-          deviceId: notice.deviceId,
-          wrappedGroupKey: wrapped,
-        },
-      },
-      PairingComplete,
-    );
+    inv.claimed = true;
+    const token = notice.pairingToken;
 
-    const device: Device = {
-      id: notice.deviceId,
-      name: notice.deviceName,
-      publicKey: notice.devicePublicKey,
-      createdAt: this.now(),
-      lastSeen: null,
-      self: false,
+    let answered = false;
+    const end = (device: Device | null, err?: TppError): void => {
+      if (this.invitations.get(token) !== inv) {
+        return; // already ended, or dropped by forget
+      }
+      this.invitations.delete(token);
+      if (device !== null) {
+        inv.resolveJoined(device);
+      } else {
+        inv.rejectJoined(err ?? new TppError('join-rejected', 'the join was turned down'));
+      }
     };
-    this.invitations.get(notice.pairingToken)?.(device);
-    this.invitations.delete(notice.pairingToken);
-    this.handlers.onDevicePaired?.(device);
+
+    const request: JoinRequest = {
+      deviceId: notice.deviceId,
+      deviceName: notice.deviceName,
+      publicKey: notice.devicePublicKey,
+      fingerprint: fingerprint(notice.devicePublicKey),
+      expiresAt: inv.openUntil,
+      confirm: async (): Promise<Device> => {
+        if (answered) {
+          throw new TppError('invalid', 'this join request has already been answered');
+        }
+        answered = true;
+        if (this.invitations.get(token) !== inv) {
+          // The invitation ended — expired, or this device switched or left
+          // its group — so the key on hand may not be the group it was for.
+          throw new TppError('join-rejected', 'that pairing is no longer open; show a new code');
+        }
+        this.requireGroup();
+        const wrapped = wrap(this.state.groupKey, notice.devicePublicKey, this.state.epoch);
+        try {
+          await (await this.connection()).call(
+            MessageType.MESSAGE_TYPE_PAIRING_WRAPPED_KEY_UPLOAD,
+            {
+              codec: PairingWrappedKeyUpload,
+              message: { pairingToken: token, deviceId: notice.deviceId, wrappedGroupKey: wrapped },
+            },
+            PairingComplete,
+          );
+        } catch (err) {
+          end(null, new TppError('join-rejected', 'handing the group key to the joining device failed', { cause: err }));
+          throw err;
+        }
+        const device: Device = {
+          id: notice.deviceId,
+          name: notice.deviceName,
+          publicKey: notice.devicePublicKey,
+          createdAt: this.now(),
+          lastSeen: null,
+          self: false,
+        };
+        end(device);
+        this.handlers.onDevicePaired?.(device);
+        return device;
+      },
+      reject: (): void => {
+        if (answered) {
+          return;
+        }
+        answered = true;
+        end(null);
+      },
+    };
+    inv.resolveRequest(request);
+    this.handlers.onJoinRequest?.(request);
   }
 
   /**

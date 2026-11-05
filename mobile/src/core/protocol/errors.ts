@@ -54,7 +54,15 @@ export type TppErrorKind =
    * The groups set aside could not be read — a newer build's record, or a
    * damaged one. They are left as they are, so nothing that changes them runs.
    */
-  | 'parked-unreadable';
+  | 'parked-unreadable'
+  /**
+   * The relay offered a group key for a new epoch that does not chain back,
+   * through the store links, to the key this device holds (spec/crypto.md
+   * §7.1). It was not installed.
+   */
+  | 'unverified-key'
+  /** A device asking to join was turned down, or handing it the key failed. */
+  | 'join-rejected';
 
 /** TppError is a local failure with a kind a caller can switch on. */
 export class TppError extends Error {

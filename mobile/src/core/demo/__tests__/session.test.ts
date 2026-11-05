@@ -131,6 +131,10 @@ test('a pairing code this phone shows is joined by a simulated device a few seco
   expect([...scheduler.timeouts.values()].map((t) => t.ms)).toEqual([DEMO_JOIN_DELAY_MS]);
 
   scheduler.fireTimeouts();
+  // The phone asks its user first, as it does for a real device (SPEC §3.2 step 4).
+  const request = await invitation.request;
+  expect(request.deviceName).toBe('Demo phone');
+  await request.confirm();
   const device = await invitation.joined;
   expect(device.name).toBe('Demo phone');
   await settle();
