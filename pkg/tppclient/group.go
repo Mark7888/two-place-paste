@@ -21,6 +21,10 @@ type Device struct {
 	This      bool      // true for the device this client runs on
 }
 
+// Fingerprint renders the device's public key for a person to compare with
+// what that device shows about itself (see Fingerprint).
+func (d Device) Fingerprint() string { return Fingerprint(d.PublicKey) }
+
 // Roster is the group's device list at one epoch.
 type Roster struct {
 	Devices []Device

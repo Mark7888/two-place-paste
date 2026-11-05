@@ -130,13 +130,24 @@ func run() error {
 				reply(map[string]any{"ok": false, "error": "no pairing is in progress"})
 				break
 			}
-			device, err := pending.Wait(ctx)
+			// The confirmation SPEC §3.2 step 4 asks of the user, done by the
+			// peer: the reply carries the fingerprint it agreed to, so the
+			// test can check it is the one the joining device shows.
+			request, err := pending.Request(ctx)
+			if err != nil {
+				reply(failure(err))
+				break
+			}
+			device, err := request.Confirm(ctx)
 			if err != nil {
 				reply(failure(err))
 				break
 			}
 			pending = nil
-			reply(map[string]any{"ok": true, "device_id": device.ID, "device_name": device.Name})
+			reply(map[string]any{
+				"ok": true, "device_id": device.ID, "device_name": device.Name,
+				"fingerprint": request.Fingerprint,
+			})
 
 		case "read-offer":
 			// The consent gate of docs/internal/plans/joiner-emitted-pairing.md §5,

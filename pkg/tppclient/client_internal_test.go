@@ -2,6 +2,7 @@ package tppclient
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"go/parser"
 	"go/token"
@@ -147,8 +148,10 @@ func TestHeaderIsReadOnlyWhenItOpens(t *testing.T) {
 
 // TestInstallWrappedKeyOnlyMovesForward pins the other half of §7: a client
 // holds exactly one (epoch, group key) pair, and never goes back to an older
-// one.
+// one. Moving forward needs the relay's links (§7.1), which
+// TestRekeyIsCheckedAgainstTheStoreLinks covers against a real relay.
 func TestInstallWrappedKeyOnlyMovesForward(t *testing.T) {
+	ctx := context.Background()
 	c := newOfflineClient(t, 2)
 	pub, err := c.state.PublicKey()
 	if err != nil {
@@ -164,31 +167,11 @@ func TestInstallWrappedKeyOnlyMovesForward(t *testing.T) {
 	if err != nil {
 		t.Fatalf("wrap: %v", err)
 	}
-	if err := c.installWrappedKey(1, wrappedOlder); err != nil {
+	if err := c.installWrappedKey(ctx, 1, wrappedOlder); err != nil {
 		t.Fatalf("installWrappedKey (older): %v", err)
 	}
 	if c.Epoch() != 2 || !bytes.Equal(c.state.GroupKey, original) {
 		t.Error("a wrapped key for an older epoch was installed; epochs only move forward")
-	}
-
-	newer, err := tppcrypto.GenerateGroupKey()
-	if err != nil {
-		t.Fatalf("group key: %v", err)
-	}
-	wrappedNewer, err := tppcrypto.Wrap(newer, pub, 3)
-	if err != nil {
-		t.Fatalf("wrap: %v", err)
-	}
-	var seen uint64
-	c.handlers.OnEpoch = func(e uint64) { seen = e }
-	if err := c.installWrappedKey(3, wrappedNewer); err != nil {
-		t.Fatalf("installWrappedKey (newer): %v", err)
-	}
-	if c.Epoch() != 3 || !bytes.Equal(c.state.GroupKey, newer) {
-		t.Errorf("epoch = %d, want 3 with the new key", c.Epoch())
-	}
-	if seen != 3 {
-		t.Errorf("OnEpoch saw %d, want 3", seen)
 	}
 
 	// A key that does not belong to this device is a failure, not a silent
@@ -201,15 +184,84 @@ func TestInstallWrappedKeyOnlyMovesForward(t *testing.T) {
 	if err != nil {
 		t.Fatalf("public key: %v", err)
 	}
-	wrappedElsewhere, err := tppcrypto.Wrap(newer, strangerPub, 4)
+	wrappedElsewhere, err := tppcrypto.Wrap(older, strangerPub, 4)
 	if err != nil {
 		t.Fatalf("wrap: %v", err)
 	}
-	if err := c.installWrappedKey(4, wrappedElsewhere); err == nil {
+	if err := c.installWrappedKey(ctx, 4, wrappedElsewhere); err == nil {
 		t.Error("a wrapped key addressed to another device was accepted")
 	}
-	if c.Epoch() != 3 {
+	if c.Epoch() != 2 {
 		t.Errorf("a failed install moved the epoch to %d", c.Epoch())
+	}
+}
+
+// TestChainsBack is /spec/crypto.md §7.1: a new epoch's key is accepted only
+// when the store links lead from it to the key this device holds.
+func TestChainsBack(t *testing.T) {
+	t.Parallel()
+
+	keys := make([][]byte, 5) // keys[e] is the group key of epoch e
+	for e := 1; e < len(keys); e++ {
+		k, err := tppcrypto.GenerateGroupKey()
+		if err != nil {
+			t.Fatalf("group key: %v", err)
+		}
+		keys[e] = k
+	}
+	link := func(t *testing.T, older, newer []byte, epoch uint64) []byte {
+		t.Helper()
+		l, err := storeLink(older, newer, epoch)
+		if err != nil {
+			t.Fatalf("storeLink: %v", err)
+		}
+		return l
+	}
+	honest := map[uint64][]byte{
+		2: link(t, keys[1], keys[2], 2),
+		3: link(t, keys[2], keys[3], 3),
+		4: link(t, keys[3], keys[4], 4),
+	}
+
+	// What a relay can make on its own: a key of its choosing, and a link
+	// from it to a store key it also chose, since it never held keys[1].
+	forged, err := tppcrypto.GenerateGroupKey()
+	if err != nil {
+		t.Fatalf("group key: %v", err)
+	}
+	invented, err := tppcrypto.GenerateGroupKey()
+	if err != nil {
+		t.Fatalf("group key: %v", err)
+	}
+	withForgery := map[uint64][]byte{2: link(t, invented, forged, 2)}
+
+	tests := []struct {
+		name      string
+		links     map[uint64][]byte
+		current   uint64
+		epoch     uint64
+		candidate []byte
+		ok        bool
+	}{
+		{name: "one epoch", links: honest, current: 1, epoch: 2, candidate: keys[2], ok: true},
+		{name: "three epochs at once", links: honest, current: 1, epoch: 4, candidate: keys[4], ok: true},
+		{name: "relay's own key and link", links: withForgery, current: 1, epoch: 2, candidate: forged},
+		{name: "relay's own key, honest links", links: honest, current: 1, epoch: 2, candidate: forged},
+		{name: "no links at all", links: map[uint64][]byte{}, current: 1, epoch: 2, candidate: keys[2]},
+		{name: "a link missing in the middle", links: map[uint64][]byte{2: honest[2], 4: honest[4]}, current: 1, epoch: 4, candidate: keys[4]},
+		{name: "link presented for another epoch", links: map[uint64][]byte{3: honest[2]}, current: 2, epoch: 3, candidate: keys[3]},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := chainsBack(tt.links, tt.current, keys[tt.current], tt.epoch, tt.candidate)
+			if tt.ok && err != nil {
+				t.Errorf("chainsBack() error = %v, want nil", err)
+			}
+			if !tt.ok && !errors.Is(err, ErrUnverifiedKey) {
+				t.Errorf("chainsBack() error = %v, want %v", err, ErrUnverifiedKey)
+			}
+		})
 	}
 }
 
