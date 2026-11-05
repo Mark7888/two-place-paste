@@ -2,8 +2,8 @@
 
 **Status:** done. The relay and the demo session are in `mobile/src/core/demo/`,
 the app's side (the `everJoined` gate and the swap between the real and the demo
-client) in `mobile/src/app/demo.ts`, wired through `sessionStore.ts`; the user docs
-are in `docs/site/src/content/docs/install/android.mdx`.
+client) in `mobile/src/app/demo.ts`, wired through `sessionStore.ts`. The user
+docs wait for the Play Store release (§9).
 
 ---
 
@@ -230,10 +230,8 @@ restricted", and add one entry with no username or password:
 > to the first screen. The demo is not kept if the app is closed: tap
 > **Try a demo** again.
 
-**Docs site:** a short "Try the demo" section in
-`docs/site/src/content/docs/install/android.mdx` (what it is, what it does
-not test, how to close it), and a line in `guides/settings.mdx` for
-**Close demo**. The site has no Android screenshots yet, so there is none to retake.
+**Docs site:** nothing yet. The site does not document the Android app until
+it is published on the Play Store; the demo is documented with it then.
 
 ## 10. Order of work
 
@@ -246,7 +244,7 @@ Commits in this order:
 4. Wire `startDemo`, `closeDemo` and the `everJoined` flag into the
    session store.
 5. Screens: `LinkButton`, setup link, banner, Close demo, pairing notes.
-6. Docs site section, screenshot, and this plan's status.
+6. This plan's status. (The docs site waits for the Play Store release.)
 
 Checks before pushing: `npm test`, `npm run lint`, `npm run typecheck` in
 `mobile/`, and `npm run build` in `docs/site/`. Then a manual run on a device

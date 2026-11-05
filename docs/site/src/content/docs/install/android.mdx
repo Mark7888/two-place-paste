@@ -17,29 +17,3 @@ import { Aside } from '@astrojs/starlight/components';
 
 It uses the same groups, relay and encryption as the desktop app, so a phone will join your
 existing group like any other device.
-
-## Try the demo
-
-You can look around the Android app without a relay. On a fresh install, the bottom of the first
-screen has a **Try a demo** link. It starts a demo group that lives only inside the app: a
-simulated relay and two simulated devices, **Demo laptop** and **Demo tablet**. Nothing leaves the
-phone, and the app makes no network requests while the demo runs.
-
-Every tab works in the demo:
-
-- **History** and **Store** start with a few sample entries and items.
-- About every 90 seconds while the app is open, a simulated device copies a new line of text.
-- **Devices** lists the group, and you can revoke a simulated device, which re-keys the group.
-- **Pairing** → **Show a pairing code** is answered by a simulated device a few seconds later.
-  Reading a code from another device needs a real device and a real relay.
-- The quick-settings tile syncs with the demo group.
-
-A banner above every tab says you are in the demo. To leave it, open **Settings** and tap
-**Close demo**: the demo's group, history and store are discarded and the app returns to its
-first screen. The demo is also discarded whenever the app is closed.
-
-The demo uses keys of its own. Your phone's real keys are not touched, so you can close the demo
-and then join your real group as usual.
-
-The link is only offered until the phone first joins a real group. After that it does not
-come back, even if you leave the group, unless you clear the app's storage or reinstall it.
