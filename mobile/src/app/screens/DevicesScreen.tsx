@@ -11,6 +11,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 
 import type { Device, Revocation } from '../../core';
+import { fingerprint } from '../../core';
 import { useSession } from '../SessionContext';
 import { failureMessage } from '../session';
 import { Button, Card, Notice, Screen, Sheet } from '../ui';
@@ -127,11 +128,18 @@ export function DevicesScreen(): React.JSX.Element {
               A new group key will be generated and handed to every device below. Anything written
               before now becomes unreadable to all of them and expires within 24 hours.
             </Text>
+            <Text style={styles.muted}>
+              Check each fingerprint against the one that device shows in Settings. A device you do
+              not recognise here would get the new key too.
+            </Text>
             {plan.remaining.map((device) => (
-              <Text key={device.id} style={styles.muted}>
-                • {device.name}
-                {device.self ? ' (this device)' : ''}
-              </Text>
+              <View key={device.id}>
+                <Text style={styles.text}>
+                  • {device.name}
+                  {device.self ? ' (this device)' : ''}
+                </Text>
+                <Text style={styles.mono}>{fingerprint(device.publicKey)}</Text>
+              </View>
             ))}
             <View style={styles.inline}>
               <View style={{ flex: 1 }}>
@@ -150,6 +158,9 @@ export function DevicesScreen(): React.JSX.Element {
           <Text style={styles.muted}>
             Joined {device.createdAt.toLocaleString()}
             {device.lastSeen === null ? ' · never connected' : ` · last seen ${device.lastSeen.toLocaleString()}`}
+          </Text>
+          <Text style={styles.mono} selectable>
+            {fingerprint(device.publicKey)}
           </Text>
           {device.self ? (
             <Text style={{ color: colors.ok, fontSize: 13 }}>This device</Text>

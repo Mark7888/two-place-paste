@@ -66,10 +66,12 @@ export function PairingScreen(): React.JSX.Element {
         const started = await client.startPairing();
         setInvitation(started);
         setOk(true);
-        setMessage('Scan this from the joining device, or send it the text below.');
-        // The inviter is the only device holding the group key, so it wraps it
-        // for the joiner as soon as the relay reports the join (§3.2 step 4).
-        // That happens on the client's own connection; this only reports it.
+        setMessage(
+          'Scan this from the joining device, or send it the text below. When it uses the code, this device asks you to check its fingerprint before it gets anything.',
+        );
+        // Nothing is handed over when the relay reports the join: the shell's
+        // JoinRequestSheet asks the user first (§3.2 step 4). This only
+        // reports the outcome.
         started.joined
           .then((device) => setMessage(`${device.name} joined the group.`))
           .catch(() => undefined);

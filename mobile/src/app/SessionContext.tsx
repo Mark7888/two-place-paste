@@ -10,8 +10,9 @@
 
 import React, { createContext, useContext, useMemo, useSyncExternalStore } from 'react';
 
-import type { Client, ParkedGroup, Progress } from '../core';
+import type { Client, Device, JoinRequest, ParkedGroup, Progress } from '../core';
 import {
+  answerJoin,
   answerQuestion,
   claimPendingCode,
   clearError,
@@ -77,6 +78,12 @@ export interface SessionState {
   activeRef: string;
   /** parkedGroups are the groups set aside on this device. */
   parkedGroups: readonly ParkedGroup[];
+  /** joinRequests are devices asking to join with an invitation this device showed. */
+  joinRequests: readonly JoinRequest[];
+  /** keyRefused says the relay offered a group key this device could not verify, or is "". */
+  keyRefused: string;
+  /** answerJoin confirms or turns down a join request; confirming resolves with the device admitted. */
+  answerJoin(request: JoinRequest, confirm: boolean): Promise<Device | null>;
   setError(message: string): void;
   clearError(): void;
   /** claimPendingCode hands the deep-linked code to exactly one screen. */
@@ -150,6 +157,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
       hideSpaceBanners: snapshot.hideSpaceBanners,
       activeRef: snapshot.activeRef,
       parkedGroups: snapshot.parkedGroups,
+      joinRequests: snapshot.joinRequests,
+      keyRefused: snapshot.keyRefused,
+      answerJoin,
       answer: answerQuestion,
       setError,
       clearError,

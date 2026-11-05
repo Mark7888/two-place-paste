@@ -203,6 +203,11 @@ export function SyncScreen(): React.JSX.Element {
             </Text>
           </Section>
         )}
+        {session.keyRefused !== '' && !session.groupDeleted && (
+          <Section title="A new key was refused">
+            <Text style={styles.text}>{session.keyRefused}</Text>
+          </Section>
+        )}
         {!session.groupDeleted && !session.outdated && session.probablyRevoked && (
           <Section title="This device may have been removed">
             <Text style={styles.text}>
