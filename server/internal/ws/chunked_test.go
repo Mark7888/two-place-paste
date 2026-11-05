@@ -189,6 +189,7 @@ func TestChunkedCommitAfterRekey(t *testing.T) {
 		RevokedDeviceId: complete.GetDeviceId(),
 		ExpectedEpoch:   1,
 		WrappedKeys:     []*tppv1.WrappedKey{{DeviceId: created.GetDeviceId(), WrappedGroupKey: []byte("k2")}},
+		StoreLink:       testStoreLink,
 	})
 	laptop.await(tppv1.MessageType_MESSAGE_TYPE_REKEY_RESPONSE, nil)
 

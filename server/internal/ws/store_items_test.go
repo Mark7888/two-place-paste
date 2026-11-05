@@ -295,10 +295,11 @@ func TestStoreRefusals(t *testing.T) {
 	}
 }
 
-// TestRekeyNeedsALinkOnceItemsExist: a rekey without a store link is fine
-// while the store is empty and refused as outdated once an item is saved,
-// because the item would be left unreadable (/spec/crypto.md §7a.2).
-func TestRekeyNeedsALinkOnceItemsExist(t *testing.T) {
+// TestRekeyNeedsALink: a rekey without a store link is refused as outdated,
+// whether or not the group has items yet. Items would be left unreadable,
+// and the remaining devices check the new key against the link
+// (/spec/crypto.md §7.1).
+func TestRekeyNeedsALink(t *testing.T) {
 	t.Parallel()
 
 	h := newStoreHarness(t, testStoreConfig)
@@ -307,13 +308,23 @@ func TestRekeyNeedsALinkOnceItemsExist(t *testing.T) {
 	_, tablet := h.pair(t, laptop, "tablet")
 	h.enableStore(t, created.GetGroupId())
 
+	both := []*tppv1.WrappedKey{
+		{DeviceId: created.GetDeviceId(), WrappedGroupKey: []byte("next")},
+		{DeviceId: tablet.GetDeviceId(), WrappedGroupKey: []byte("next")},
+	}
+	laptop.send("rekey-empty-nolink", tppv1.MessageType_MESSAGE_TYPE_REKEY_REQUEST, &tppv1.RekeyRequest{
+		RevokedDeviceId: phone.GetDeviceId(),
+		ExpectedEpoch:   1,
+		WrappedKeys:     both,
+	})
+	if got := laptop.awaitError().GetCode(); got != tppv1.ErrorCode_ERROR_CODE_CLIENT_OUTDATED {
+		t.Errorf("rekey without a link over an empty store = %s, want %s", got, tppv1.ErrorCode_ERROR_CODE_CLIENT_OUTDATED)
+	}
 	laptop.send("rekey-empty", tppv1.MessageType_MESSAGE_TYPE_REKEY_REQUEST, &tppv1.RekeyRequest{
 		RevokedDeviceId: phone.GetDeviceId(),
 		ExpectedEpoch:   1,
-		WrappedKeys: []*tppv1.WrappedKey{
-			{DeviceId: created.GetDeviceId(), WrappedGroupKey: []byte("next")},
-			{DeviceId: tablet.GetDeviceId(), WrappedGroupKey: []byte("next")},
-		},
+		WrappedKeys:     both,
+		StoreLink:       testStoreLink,
 	})
 	laptop.await(tppv1.MessageType_MESSAGE_TYPE_REKEY_RESPONSE, nil)
 

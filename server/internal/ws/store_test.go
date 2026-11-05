@@ -135,6 +135,11 @@ func TestRelayWithoutAStore(t *testing.T) {
 	}
 }
 
+// testStoreLink is a store link of the right length. The relay never opens
+// one, so its content does not matter, but every rekey must carry one
+// (/spec/crypto.md §7a.2 fixes the length at 49 bytes).
+var testStoreLink = make([]byte, 49)
+
 // rekey revokes victim from the caller's group, sending link as the store
 // link, and returns the frame the relay answered with.
 func rekey(c *client, victim, keeper string, epoch uint64, link []byte) *tppv1.Envelope {

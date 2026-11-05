@@ -340,17 +340,15 @@ func (m *MemoryStore) ApplyRekey(_ context.Context, groupID, revokedDeviceID str
 			return Group{}, ErrInvalidRekey
 		}
 	}
-	if len(storeLink) == 0 && m.committedItemsLocked(groupID) > 0 {
+	if len(storeLink) == 0 {
 		return Group{}, ErrStoreLinkRequired
 	}
 
 	next := expectedEpoch + 1
-	if len(storeLink) > 0 {
-		if m.storeLinks[groupID] == nil {
-			m.storeLinks[groupID] = make(map[uint64][]byte)
-		}
-		m.storeLinks[groupID][next] = append([]byte(nil), storeLink...)
+	if m.storeLinks[groupID] == nil {
+		m.storeLinks[groupID] = make(map[uint64][]byte)
 	}
+	m.storeLinks[groupID][next] = append([]byte(nil), storeLink...)
 	for _, k := range keys {
 		m.wrapped[k.DeviceID] = WrappedKey{Epoch: next, Key: k.Key}
 	}
