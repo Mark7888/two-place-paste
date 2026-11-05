@@ -132,29 +132,27 @@ offer flow compares them across clients.
 
 ### 3.6 Phase 1 work, in landing order
 
-Every merge to `master` ships to the Beta channel, so each PR must leave `master` safe to
-use on its own. That decides the order. Each client and its app land together: the
-library's new confirmation step would otherwise break pairing in an app that does not
-show the dialog yet. Docs site changes go in the PR that changes the behaviour.
+Two PRs: the contract change on its own (CLAUDE.md, "Shared contracts"), then everything
+else together. Landing the server, both clients and both apps in one PR means `master`
+never holds a client whose library asks for a confirmation its app does not show yet.
 
 1. **Spec** — `spec/crypto.md` §7 (a new epoch must chain back through its store link,
    with a revision note), SPEC §3.2 (every join is confirmed) and §3.3 (every rekey carries
-   a link). No byte layout or vector changes. Its own PR, as a shared contract.
-2. **Server** — `store_link` required on every rekey, with a test of the refusal and a
-   line in the docs site's upgrade notes.
-3. **Go client and desktop** — `completePairing` split into notice → pending join →
-   `Confirm`; invitation matching; epoch verification against store links; fingerprints
-   on roster devices. Desktop: the join dialog, the joiner's own fingerprint,
-   fingerprints in Devices, the revoke dialog and Settings, the refused-key message.
-   Docs: pairing and devices pages, desktop screenshots retaken. Tests: a notice for an
-   unknown, expired or used token wraps nothing; a key for a new epoch with a missing,
-   wrong or forged link is refused; a real rekey across one and across two epochs is
-   accepted.
-4. **TypeScript client and Android** — the same, with the same tests, plus the interop
-   test pairing in both directions through the new confirmation. Docs: the Android parts
-   of the same pages, and a short section on what the relay can and cannot do.
+   a link). No byte layout or vector changes.
+2. **Implementation** — after 1 is merged:
+   - Server: `store_link` required on every rekey, with a test of the refusal.
+   - Go and TypeScript clients: `completePairing` split into notice → pending join →
+     `Confirm`; invitation matching; epoch verification against store links; fingerprints
+     on roster devices. Tests: a notice for an unknown, expired or used token wraps
+     nothing; a key for a new epoch with a missing, wrong or forged link is refused; a
+     real rekey across one and across two epochs is accepted; the interop test pairs in
+     both directions through the new confirmation.
+   - Desktop and Android: the join dialog, the joiner's own fingerprint, fingerprints in
+     Devices, the revoke dialog and Settings, the refused-key message.
+   - Docs site: pairing and devices pages, upgrade notes, a short section on what the
+     relay can and cannot do; desktop screenshots retaken.
 
-Steps 2–4 depend only on step 1 and can be written in parallel. A release follows step 4.
+A release follows 2.
 
 ## 4. Phase 2 — authenticated pairing and membership
 
@@ -273,27 +271,27 @@ banner.
 
 ### 4.6 Phase 2 work, in landing order
 
-The same rule as §3.6: each PR leaves `master` safe. The one dangerous intermediate state
-is a group upgraded while one app cannot yet open an authenticated wrap, so **Verify
-devices** lands last, after both apps understand everything it produces.
+Two PRs again: both contracts together, then the implementation. Because Verify devices
+lands in the same PR as both apps' support for authenticated wraps, no build on `master`
+can upgrade a group that another build cannot read.
 
-1. **Spec** — `spec/crypto.md` 1.4 (§4.1 here), the reference generator in
-   `spec/vectors/gen` and the new vectors, SPEC §2.1 and §3.2–§3.3, and the roster row of
-   §11.4 changed from "mitigated at the UI level" to what this phase guarantees. Its own
-   PR.
-2. **Proto** — the fields of §4.2, plus the client version each device reports on
-   connect; `make proto` and both generated trees. Its own PR.
-3. **Server** — store and return certs and proofs, rekey without a revocation,
-   `PairingJoinReject`, client version per device. Tests against Redis.
-4. **Go client and desktop** — `tppcrypto` wrap v2, proofs and certs against the
-   vectors; the rules of §4.3 and the downgrade flag in `State`; the "not verified"
-   banner, unverified rows and the rekey notice. Docs for each.
-5. **TypeScript client and Android** — the same, the same vectors; the interop test in
-   both pairing directions and across a rekey. Docs for each.
-6. **Verify devices** — the upgrade flow of §4.5 in both clients and both apps, and its
-   docs page.
+1. **Spec and proto** — `spec/crypto.md` 1.4 (§4.1 here), the reference generator in
+   `spec/vectors/gen` and the new vectors, SPEC §2.1 and §3.2–§3.3, the roster row of
+   §11.4 changed from "mitigated at the UI level" to what this phase guarantees; the
+   fields of §4.2 plus the client version each device reports on connect, with
+   `make proto` and both generated trees.
+2. **Implementation** — after 1 is merged:
+   - Server: store and return certs and proofs, rekey without a revocation,
+     `PairingJoinReject`, client version per device. Tests against Redis.
+   - Go and TypeScript clients: wrap v2, proofs and certs against the vectors; the rules
+     of §4.3 and the downgrade flag; the interop test in both pairing directions and
+     across a rekey.
+   - Desktop and Android: the "not verified" banner, unverified rows, the rekey notice,
+     and Verify devices (§4.5).
+   - Docs site for all of it.
 
-Steps 4 and 5 can be written in parallel once step 3 is merged. A release follows step 6.
+A release follows 2. This PR is large (most of the estimate in §6); it is reviewed in
+one go, commit by commit.
 
 ## 5. What stays out of scope
 
@@ -315,8 +313,8 @@ tests.
 
 | Phase | PRs | Rough size | Comparable to |
 |---|---|---|---|
-| 1 | 5–6 | ~1.5–2.5k lines, no wire or spec change beyond two rules | Smaller than joiner-emitted pairing |
-| 2 | 8 | ~5–8k lines, a crypto spec revision, new vectors, a proto change across server and both clients | Joiner-emitted pairing plus most of the persistent store's client work |
+| 1 | 2 | ~1.5–2.5k lines, no wire or spec change beyond two rules | Smaller than joiner-emitted pairing |
+| 2 | 2 | ~5–8k lines, a crypto spec revision, new vectors, a proto change across server and both clients | Joiner-emitted pairing plus most of the persistent store's client work |
 
 Phase 1 is the urgent part: it closes the two holes a relay can use with no user action.
 Phase 2 is the full fix, and it means every device must update before a group can be
