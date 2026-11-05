@@ -118,6 +118,15 @@ function Shell(): React.JSX.Element {
 
   return (
     <View style={[styles.screen, frame]}>
+      {/*
+        Over every tab, so the demo can never be mistaken for a real group —
+        by a reviewer, or by a user who found the link by accident.
+      */}
+      {session.demo && (
+        <View style={styles.demoBanner} accessibilityRole="text">
+          <Text style={styles.demoBannerText}>Demo — nothing leaves this phone</Text>
+        </View>
+      )}
       <View style={{ flex: 1 }}>
         <Screen />
       </View>

@@ -1,6 +1,7 @@
 /**
  * What this installation is, and the two things a user can do to it: name this
- * device, and leave the group.
+ * device, and leave the group. In the demo, leaving is "Close demo": there is
+ * no relay to warn about, only a simulation to discard.
  *
  * The screen used to explain itself at length — four cards, each with a
  * paragraph, one of them a rationale for a feature that does not exist. The
@@ -66,13 +67,30 @@ export function SettingsScreen(): React.JSX.Element {
     );
   };
 
+  const closeDemo = () => {
+    Alert.alert(
+      'Close the demo?',
+      'Its group, history and store are discarded and the app returns to its setup screen.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Close demo', style: 'destructive', onPress: () => session.closeDemo() },
+      ],
+    );
+  };
+
+  const relay = session.demo
+    ? 'Demo (simulated)'
+    : state?.serverUrl === ''
+      ? 'not paired'
+      : (state?.serverUrl ?? '—');
+
   return (
     <Screen>
       <Text style={styles.title}>Settings</Text>
 
       <Section title="This device">
         <Fact label="Name" value={state?.deviceName ?? '—'} />
-        <Fact label="Relay" value={state?.serverUrl === '' ? 'not paired' : (state?.serverUrl ?? '—')} />
+        <Fact label="Relay" value={relay} />
         <Fact label="Key generation" value={`epoch ${session.epoch.toString()}`} />
         {/*
           The public key is shown; the private key and the group key are in the
@@ -101,13 +119,23 @@ export function SettingsScreen(): React.JSX.Element {
       </Section>
 
       <Section title="Group">
-        <View style={{ gap: 10 }}>
-          <Text style={styles.muted}>
-            Deletes this device’s keys and returns the app to its setup screen. This is also how the
-            device is moved to another group.
-          </Text>
-          <Button label="Leave the group" variant="danger" onPress={forget} />
-        </View>
+        {session.demo ? (
+          <View style={{ gap: 10 }}>
+            <Text style={styles.muted}>
+              This is the demo: its relay and other devices are simulated on this phone. Closing it
+              discards them and returns the app to its setup screen.
+            </Text>
+            <Button label="Close demo" variant="danger" onPress={closeDemo} />
+          </View>
+        ) : (
+          <View style={{ gap: 10 }}>
+            <Text style={styles.muted}>
+              Deletes this device’s keys and returns the app to its setup screen. This is also how
+              the device is moved to another group.
+            </Text>
+            <Button label="Leave the group" variant="danger" onPress={forget} />
+          </View>
+        )}
       </Section>
 
       <Section title="Version">

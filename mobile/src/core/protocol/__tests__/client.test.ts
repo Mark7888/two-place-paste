@@ -1,5 +1,5 @@
 /**
- * The client's rules, driven against the in-process relay in `fakeRelay.ts`:
+ * The client's rules, driven against the in-process relay in `src/core/demo/relay.ts`:
  * the flows of SPEC §3 and §6, the epoch handling of spec/crypto.md §7, and
  * the two places this client is required to refuse.
  */
@@ -9,7 +9,7 @@ import { HEADER_CONTAINER_SIZE, HEADER_V2_CONTAINER_SIZE, openStoreLink, storeKe
 import { Client } from '../client';
 import { TppError, describe as describeError } from '../errors';
 import { classifyCode, decodePairingPayload, fingerprint } from '../pairing';
-import { FakeRelay, MemoryStore } from './fakeRelay';
+import { FakeRelay, MemoryStore } from '../../demo';
 
 /**
  * Every client a test opens is disconnected afterwards. A connected client

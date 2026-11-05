@@ -26,8 +26,8 @@
 
 import { AppState, Linking, type AppStateStatus } from 'react-native';
 
-import type { Client, Progress } from '../core';
-import { tile } from '../platform';
+import type { Client, Handlers, Progress } from '../core';
+import { secureStore, tile } from '../platform';
 import { stripCodeEnvelope } from '../core';
 import {
   download,
@@ -38,6 +38,7 @@ import {
   upload,
   type FileChoice,
 } from './session';
+import { DemoGate, DemoMode } from './demo';
 import { clearStore, invalidate as invalidateStore, storeEvents } from './storeState';
 
 /** DirectionChoice is what the user answers a direction question with. */
@@ -105,6 +106,10 @@ export interface Snapshot {
    * eviction, not just the first.
    */
   evicted: { id: string; seq: number } | null;
+  /** demo is true while the demo runs in place of the device's real client. */
+  demo: boolean;
+  /** demoAvailable is true while the setup screen may offer the demo: until this device first joins a real group. */
+  demoAvailable: boolean;
 }
 
 type Listener = () => void;
@@ -121,6 +126,10 @@ let pendingCode = '';
 const transfers = new Map<string, Progress>();
 let evicted: { id: string; seq: number } | null = null;
 let answer: ((choice: Answer | null) => void) | null = null;
+/** demoMode holds the real client aside while a demo runs. */
+const demoMode = new DemoMode();
+/** gate is read once the secure store is open; until then the demo is not offered. */
+let gate: DemoGate | null = null;
 let nextQuestionId = 1;
 
 let started = false;
@@ -145,9 +154,14 @@ let snapshot: Snapshot = {
   pendingCode: '',
   transfers: [],
   evicted: null,
+  demo: false,
+  demoAvailable: false,
 };
 
 function emit(): void {
+  // Every change passes through here, so this is where a first real group is
+  // noticed — whichever flow joined it.
+  gate?.observe(client?.inGroup ?? false, demoMode.active);
   snapshot = {
     client,
     ready,
@@ -164,6 +178,8 @@ function emit(): void {
     pendingCode,
     transfers: [...transfers.values()],
     evicted,
+    demo: demoMode.active,
+    demoAvailable: !demoMode.active && (gate?.available ?? false),
   };
   for (const listener of listeners) {
     listener();
@@ -224,6 +240,10 @@ export function claimPendingCode(): string {
  * is no second way in while it still holds a group key.
  */
 export async function forget(): Promise<void> {
+  if (demoMode.active) {
+    closeDemo();
+    return;
+  }
   if (client === null) {
     return;
   }
@@ -231,6 +251,56 @@ export async function forget(): Promise<void> {
   clearStore();
   probablyRevoked = false;
   notice = '';
+  emit();
+}
+
+/** resetScreens drops what the screens showed of the group that is going away. */
+function resetScreens(): void {
+  clearStore();
+  transfers.clear();
+  probablyRevoked = false;
+  notice = '';
+  lastError = '';
+  evicted = null;
+}
+
+/**
+ * startDemo puts a demo group in place of the device's real client
+ * (docs/internal/plans/demo-mode.md). Only a device that has never been in a
+ * real group is offered it, and only from the setup screen.
+ */
+export async function startDemo(): Promise<void> {
+  const real = client;
+  if (real === null || real.inGroup || demoMode.active || !(gate?.available ?? false)) {
+    return;
+  }
+  try {
+    const demo = await demoMode.start(real, {
+      handlers,
+      onActivity: (message) => setNotice(message),
+    });
+    client = demo;
+    resetScreens();
+    demoMode.setForeground(AppState.currentState === 'active');
+    emit();
+    await demo.connect().catch((err: unknown) => setNotice(failureMessage(err)));
+  } catch (err) {
+    lastError = failureMessage(err);
+  }
+  emit();
+}
+
+/**
+ * closeDemo ends the demo and puts the device's real client back, which is
+ * still on the setup screen: the demo never touched it.
+ */
+export function closeDemo(): void {
+  const real = demoMode.stop();
+  if (real === null) {
+    return;
+  }
+  client = real;
+  resetScreens();
   emit();
 }
 
@@ -262,6 +332,60 @@ function ask(
 }
 
 /**
+ * handlers are the client's callbacks. The real client and a demo's are given
+ * the same ones, so every screen behaves the same in either.
+ */
+const handlers: Handlers = {
+  onConnected: () => {
+    // Store events sent while this device was away were missed: the
+    // store is listed again when next needed.
+    invalidateStore();
+    emit();
+  },
+  onDisconnected: () => emit(),
+  onEpoch: (epoch) => {
+    // A rekey installs a key and nothing else: the local clipboard is
+    // never touched here (SPEC §3.3).
+    notice = `The group was re-keyed; this device is at epoch ${epoch}.`;
+    emit();
+  },
+  onDeviceRevoked: () => {
+    notice = 'A device was removed from the group.';
+    emit();
+  },
+  onDevicePaired: (device) => {
+    notice = `${device.name} joined the group.`;
+    emit();
+  },
+  onProbablyRevoked: () => {
+    probablyRevoked = true;
+    emit();
+  },
+  onGroupDeleted: () => {
+    notice = 'The server admin deleted this group.';
+    emit();
+  },
+  onGroupName: () => emit(),
+  onStoreItemAdded: storeEvents.put,
+  onStoreItemUpdated: storeEvents.put,
+  onStoreItemDeleted: storeEvents.remove,
+  onStoreState: storeEvents.state,
+  onEntryEvicted: (id) => {
+    evicted = { id, seq: (evicted?.seq ?? 0) + 1 };
+    emit();
+  },
+  onProgress: (p) => {
+    const key = `${p.direction}:${p.entryId}`;
+    if (p.done < p.total) {
+      transfers.set(key, p);
+    } else {
+      transfers.delete(key);
+    }
+    emit();
+  },
+};
+
+/**
  * init opens the session. It is called once, from `index.js`, before any
  * window exists — which is the point: the tile's handler has to be listening
  * whether or not a screen is mounted.
@@ -274,63 +398,17 @@ export function init(): void {
 
   void (async () => {
     try {
-      const opened = await openSession({
-        onConnected: () => {
-          // Store events sent while this device was away were missed: the
-          // store is listed again when next needed.
-          invalidateStore();
-          emit();
-        },
-        onDisconnected: () => emit(),
-        onEpoch: (epoch) => {
-          // A rekey installs a key and nothing else: the local clipboard is
-          // never touched here (SPEC §3.3).
-          notice = `The group was re-keyed; this device is at epoch ${epoch}.`;
-          emit();
-        },
-        onDeviceRevoked: () => {
-          notice = 'A device was removed from the group.';
-          emit();
-        },
-        onDevicePaired: (device) => {
-          notice = `${device.name} joined the group.`;
-          emit();
-        },
-        onProbablyRevoked: () => {
-          probablyRevoked = true;
-          emit();
-        },
-        onGroupDeleted: () => {
-          notice = 'The server admin deleted this group.';
-          emit();
-        },
-        onGroupName: () => emit(),
-        onStoreItemAdded: storeEvents.put,
-        onStoreItemUpdated: storeEvents.put,
-        onStoreItemDeleted: storeEvents.remove,
-        onStoreState: storeEvents.state,
-        onEntryEvicted: (id) => {
-          evicted = { id, seq: (evicted?.seq ?? 0) + 1 };
-          emit();
-        },
-        onProgress: (p) => {
-          const key = `${p.direction}:${p.entryId}`;
-          if (p.done < p.total) {
-            transfers.set(key, p);
-          } else {
-            transfers.delete(key);
-          }
-          emit();
-        },
-      });
+      const opened = await openSession(handlers);
       client = opened;
+      gate = new DemoGate(secureStore);
+      await gate.load();
       ready = true;
       emit();
       if (opened.inGroup) {
         await opened.connect().catch((err: unknown) => setNotice(failureMessage(err)));
         emit();
       }
-      watchForeground(opened);
+      watchForeground();
       // A tap that arrived while the store was opening has been held; this is
       // where it is answered.
       drainTileRequest();
@@ -372,6 +450,13 @@ function watchLinks(): void {
     if (code === '' || code === url.trim()) {
       return;
     }
+    if (demoMode.active) {
+      // A code from a real relay means nothing to the demo's, which would
+      // refuse to dial it anyway. Said plainly rather than failed later.
+      lastError = 'Close the demo first to join a real group.';
+      emit();
+      return;
+    }
     pendingCode = code;
     emit();
   };
@@ -389,9 +474,12 @@ function watchLinks(): void {
  * the user is here, gone when they leave. The overlay counts as here — it is a
  * window of this app, and the sync it was opened for needs the socket.
  */
-function watchForeground(c: Client): void {
+function watchForeground(): void {
   AppState.addEventListener('change', (state: AppStateStatus) => {
-    if (!c.inGroup) {
+    // The client is looked up on every change: a demo swaps it.
+    demoMode.setForeground(state === 'active');
+    const c = client;
+    if (c === null || !c.inGroup) {
       return;
     }
     if (state === 'active') {

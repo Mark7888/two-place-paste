@@ -17,6 +17,12 @@
  * itself which flow it is (`enterGroup`), because the user holding the phone up
  * to a screen should not have to have pressed the right button first.
  *
+ * At the very bottom, while this device has never been in a real group, is a
+ * text link to the demo (docs/internal/plans/demo-mode.md): a simulated relay
+ * and devices in memory, for anyone — an app-store reviewer above all — who
+ * has no relay to try the app with. It is a link, not a button, because it is
+ * not one of the ways in.
+ *
  * Joining lives here and nowhere else, for a reason worth stating: a device
  * that already holds a group key cannot join a second group without
  * discarding the key it has. Moving a paired device to another group is
@@ -32,7 +38,7 @@ import type { Offer } from '../../core';
 import { fingerprint, pairingLink } from '../../core';
 import { useSession } from '../SessionContext';
 import { enterGroup, failureMessage } from '../session';
-import { Button, Card, CopyButton, Notice, Screen } from '../ui';
+import { Button, Card, CopyButton, LinkButton, Notice, Screen } from '../ui';
 import { useExpiry } from '../expiry';
 import { colors, styles } from '../theme';
 
@@ -127,6 +133,19 @@ export function SetupScreen(): React.JSX.Element {
         session.refresh();
       }
     })();
+  };
+
+  const tryDemo = () => {
+    if (busy) {
+      return;
+    }
+    offer?.cancel();
+    setOffer(null);
+    setMessage('');
+    setBusy(true);
+    // Success swaps this screen for the app's tabs; a failure is left in the
+    // session's error, rendered below.
+    void session.startDemo().finally(() => setBusy(false));
   };
 
   const scan = () => {
@@ -290,6 +309,16 @@ export function SetupScreen(): React.JSX.Element {
       </Card>
 
       {message !== '' && <Notice message={message} tone={ok ? 'ok' : 'error'} />}
+      {session.error !== '' && <Notice message={session.error} tone="error" />}
+
+      {session.demoAvailable && (
+        <View style={{ alignItems: 'center', marginTop: 8 }}>
+          <LinkButton label="Try a demo" onPress={tryDemo} disabled={busy} />
+          <Text style={[styles.small, { textAlign: 'center' }]}>
+            Simulated relay and devices. Nothing leaves this phone.
+          </Text>
+        </View>
+      )}
     </Screen>
   );
 }

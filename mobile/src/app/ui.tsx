@@ -70,6 +70,34 @@ export function Button({
 }
 
 /**
+ * LinkButton is an action drawn as underlined text: for something a user
+ * should be able to find without it competing with the screen's real choices.
+ * It keeps a full-size touch target; only its look is small.
+ */
+export function LinkButton({
+  label,
+  onPress,
+  disabled,
+}: {
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+}): React.JSX.Element {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: disabled === true }}
+      onPress={onPress}
+      disabled={disabled}
+      style={[styles.linkButton, disabled === true && styles.buttonDisabled]}
+    >
+      <Text style={styles.linkButtonLabel}>{label}</Text>
+    </Pressable>
+  );
+}
+
+/**
  * Section is the screen's unit of grouping: a small heading over one surface.
  *
  * The rows inside it are separated by a hairline rather than each getting its

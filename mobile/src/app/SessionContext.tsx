@@ -15,12 +15,14 @@ import {
   answerQuestion,
   claimPendingCode,
   clearError,
+  closeDemo,
   forget,
   getSnapshot,
   init,
   refresh,
   setError,
   setNotice,
+  startDemo,
   subscribe,
   type Answer,
   type Question,
@@ -54,6 +56,10 @@ export interface SessionState {
   transfers: readonly Progress[];
   /** evicted is the last entry the relay removed early; seq changes with each one. */
   evicted: { id: string; seq: number } | null;
+  /** demo is true while the demo runs in place of this device's real group (docs/internal/plans/demo-mode.md). */
+  demo: boolean;
+  /** demoAvailable is true while the setup screen may offer the demo: until this device first joins a real group. */
+  demoAvailable: boolean;
   setError(message: string): void;
   clearError(): void;
   /** claimPendingCode hands the deep-linked code to exactly one screen. */
@@ -69,6 +75,10 @@ export interface SessionState {
    * group: there is no second way in while it still holds a group key.
    */
   forget(): Promise<void>;
+  /** startDemo starts the demo from the setup screen. A failure is left in `error`. */
+  startDemo(): Promise<void>;
+  /** closeDemo ends the demo and returns to the setup screen, with the device's real keys as they were. */
+  closeDemo(): void;
 }
 
 const SessionContext = createContext<SessionState | null>(null);
@@ -105,6 +115,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
       pendingCode: snapshot.pendingCode,
       transfers: snapshot.transfers,
       evicted: snapshot.evicted,
+      demo: snapshot.demo,
+      demoAvailable: snapshot.demoAvailable,
       answer: answerQuestion,
       setError,
       clearError,
@@ -112,6 +124,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
       refresh,
       setNotice,
       forget,
+      startDemo,
+      closeDemo,
     }),
     [snapshot],
   );
