@@ -132,21 +132,29 @@ offer flow compares them across clients.
 
 ### 3.6 Phase 1 work, in landing order
 
-1. **Go client** — `completePairing` split into notice → pending join → `Confirm`;
-   invitation matching; epoch verification against store links; `Fingerprint` on roster
-   devices. Tests: a notice for an unknown, expired or used token wraps nothing; a key for
-   a new epoch with a missing, wrong or forged link is refused; a real rekey across one and
-   across two epochs is accepted.
-2. **Server** — `store_link` required on every rekey. Test the refusal.
-3. **TypeScript client** — the same as 1, with the same tests, plus the interop test
-   pairing in both directions through the new confirmation.
-4. **Desktop** — join confirmation dialog, joiner fingerprint, fingerprints in Devices and
-   in the revoke dialog.
-5. **Mobile** — the same screens.
-6. **Docs site** — pairing pages (the new confirmation), devices page (fingerprints), a
-   short security page section on what the relay can and cannot do.
+Every merge to `master` ships to the Beta channel, so each PR must leave `master` safe to
+use on its own. That decides the order. Each client and its app land together: the
+library's new confirmation step would otherwise break pairing in an app that does not
+show the dialog yet. Docs site changes go in the PR that changes the behaviour.
 
-Each of 1–5 is its own PR; 6 goes with 4 and 5.
+1. **Spec** — `spec/crypto.md` §7 (a new epoch must chain back through its store link,
+   with a revision note), SPEC §3.2 (every join is confirmed) and §3.3 (every rekey carries
+   a link). No byte layout or vector changes. Its own PR, as a shared contract.
+2. **Server** — `store_link` required on every rekey, with a test of the refusal and a
+   line in the docs site's upgrade notes.
+3. **Go client and desktop** — `completePairing` split into notice → pending join →
+   `Confirm`; invitation matching; epoch verification against store links; fingerprints
+   on roster devices. Desktop: the join dialog, the joiner's own fingerprint,
+   fingerprints in Devices, the revoke dialog and Settings, the refused-key message.
+   Docs: pairing and devices pages, desktop screenshots retaken. Tests: a notice for an
+   unknown, expired or used token wraps nothing; a key for a new epoch with a missing,
+   wrong or forged link is refused; a real rekey across one and across two epochs is
+   accepted.
+4. **TypeScript client and Android** — the same, with the same tests, plus the interop
+   test pairing in both directions through the new confirmation. Docs: the Android parts
+   of the same pages, and a short section on what the relay can and cannot do.
+
+Steps 2–4 depend only on step 1 and can be written in parallel. A release follows step 4.
 
 ## 4. Phase 2 — authenticated pairing and membership
 
@@ -265,18 +273,27 @@ banner.
 
 ### 4.6 Phase 2 work, in landing order
 
-1. **Spec** (`spec/crypto.md` 1.4, SPEC §3.2–§3.3, §2.1) and vectors — its own PR.
-2. **Proto** — the fields of §4.2; `make proto` and both generated trees.
-3. **Server** — store and return certs, accept proofs, rekey without a revocation,
+The same rule as §3.6: each PR leaves `master` safe. The one dangerous intermediate state
+is a group upgraded while one app cannot yet open an authenticated wrap, so **Verify
+devices** lands last, after both apps understand everything it produces.
+
+1. **Spec** — `spec/crypto.md` 1.4 (§4.1 here), the reference generator in
+   `spec/vectors/gen` and the new vectors, SPEC §2.1 and §3.2–§3.3, and the roster row of
+   §11.4 changed from "mitigated at the UI level" to what this phase guarantees. Its own
+   PR.
+2. **Proto** — the fields of §4.2, plus the client version each device reports on
+   connect; `make proto` and both generated trees. Its own PR.
+3. **Server** — store and return certs and proofs, rekey without a revocation,
    `PairingJoinReject`, client version per device. Tests against Redis.
-4. **Go client** — `tppcrypto` wrap v2, proofs, certs (vectors); the rules of §4.3; the
-   upgrade flow; the downgrade flag in `State`.
-5. **TypeScript client** — the same, the same vectors; interop test in both pairing
-   directions and across a rekey.
-6. **Desktop** — "not verified" banner, Verify devices, unverified rows, rekey notice.
-7. **Mobile** — the same screens.
-8. **Docs site and `spec/crypto.md` §11.4** — the roster row in §11.4 changes from
-   "mitigated at the UI level" to what Phase 2 guarantees.
+4. **Go client and desktop** — `tppcrypto` wrap v2, proofs and certs against the
+   vectors; the rules of §4.3 and the downgrade flag in `State`; the "not verified"
+   banner, unverified rows and the rekey notice. Docs for each.
+5. **TypeScript client and Android** — the same, the same vectors; the interop test in
+   both pairing directions and across a rekey. Docs for each.
+6. **Verify devices** — the upgrade flow of §4.5 in both clients and both apps, and its
+   docs page.
+
+Steps 4 and 5 can be written in parallel once step 3 is merged. A release follows step 6.
 
 ## 5. What stays out of scope
 
