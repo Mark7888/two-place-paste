@@ -255,6 +255,43 @@ describe('store (SPEC §6b)', () => {
   });
 });
 
+describe('code lifetimes', () => {
+  test('a pairing code is refused once it has expired', async () => {
+    let clock = 1_000_000;
+    const relay = relayWith({ now: () => clock });
+    const a = await open(relay, 'laptop');
+    await a.createGroup(relay.creationURL);
+    const invitation = await a.startPairing();
+    expect(invitation.expiresAt.getTime()).toBe(clock + 300_000);
+
+    clock += 300_000;
+    const late = await open(relay, 'phone');
+    const err = await late.joinPairing(invitation.payload).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProtocolError);
+    expect((err as ProtocolError).code).toBe(ErrorCode.ERROR_CODE_TOKEN_EXPIRED);
+    expect(relay.deviceIds).toHaveLength(1);
+  });
+
+  test('an offer is refused once it has expired', async () => {
+    let clock = 1_000_000;
+    const relay = relayWith({ now: () => clock });
+    const member = await open(relay, 'laptop');
+    await member.createGroup(relay.creationURL);
+    const joiner = await open(relay, 'phone');
+    const offer = await joiner.startOffer(relay.baseUrl);
+    offer.accepted.catch(() => undefined);
+    expect(offer.expiresAt.getTime()).toBe(clock + 300_000);
+
+    clock += 300_000;
+    const acceptance = await member.prepareAcceptOffer(offer.code);
+    const err = await acceptance.confirm().catch((e: unknown) => e);
+    offer.cancel();
+    expect(err).toBeInstanceOf(ProtocolError);
+    expect((err as ProtocolError).code).toBe(ErrorCode.ERROR_CODE_TOKEN_EXPIRED);
+    expect(relay.deviceIds).toHaveLength(1);
+  });
+});
+
 describe('addresses', () => {
   test.each([
     ['another host', 'https://elsewhere.test/creation-token'],

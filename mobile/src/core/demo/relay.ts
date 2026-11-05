@@ -109,6 +109,8 @@ interface StoredOffer {
   publicKey: Uint8Array;
   /** socket is the offering device's own, which is the only way to reach it: it has no identity yet. */
   socket: RelaySocket;
+  /** expiresAt is when the offer stops being accepted, by the relay's clock. */
+  expiresAt: number;
   consumed?: boolean;
 }
 
@@ -348,18 +350,20 @@ export class FakeRelay {
           return;
         }
         const code = `offer-${this.nextId++}`;
+        const expiresAt = this.now() + CODE_LIFETIME_MS;
         // The public key is stored at mint time precisely so the accept can be
         // checked against it, which is the real relay's whole defence here.
         this.offers.set(code, {
           name: request.deviceName,
           publicKey: request.devicePublicKey,
           socket,
+          expiresAt,
         });
         reply(
           MessageType.MESSAGE_TYPE_PAIRING_OFFER_RESPONSE,
           PairingOfferResponse.encode({
             offerCode: code,
-            expiresAtUnixMs: (this.now() + CODE_LIFETIME_MS).toString(),
+            expiresAtUnixMs: expiresAt.toString(),
           }).finish(),
         );
         return;
@@ -368,7 +372,7 @@ export class FakeRelay {
       case MessageType.MESSAGE_TYPE_PAIRING_OFFER_ACCEPT_REQUEST: {
         const request = PairingOfferAcceptRequest.decode(env.payload);
         const offer = this.offers.get(request.offerCode);
-        if (offer === undefined) {
+        if (offer === undefined || offer.expiresAt <= this.now()) {
           fail(ErrorCode.ERROR_CODE_TOKEN_EXPIRED, 'no such offer');
           return;
         }

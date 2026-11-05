@@ -3,7 +3,8 @@
 **Status:** done. The relay and the demo session are in `mobile/src/core/demo/`,
 the app's side (the `everJoined` gate and the swap between the real and the demo
 client) in `mobile/src/app/demo.ts`, wired through `sessionStore.ts`. The user
-docs wait for the Play Store release (§9).
+docs wait for the Play Store release (§9). The manual run on a device (§10)
+is still to do.
 
 ---
 
@@ -15,8 +16,8 @@ runs, and there is no public one to point a reviewer at. Running a relay only
 for review does not work either, because every update is reviewed again and a
 review can take days.
 
-A demo mode solves this inside the app. One tap starts a simulated relay and a
-simulated second device in memory. The Sync, History, Store, Devices, Pairing
+A demo mode solves this inside the app. One tap starts a simulated relay and
+simulated devices in memory. The Sync, History, Store, Devices, Pairing
 and Settings screens then work as they do in a real group, and nothing leaves
 the phone.
 
@@ -97,19 +98,30 @@ deleted, sent to the other sockets in the group).
 It stays a protocol fake, not a second server: no TTLs and no reclamation.
 It does need to:
 
-- cap memory: entry history to the last 20, total stored bytes to a few
-  megabytes, with limits reported through `ENTRY_LIMITS` and `STORE_LIMITS`
-  so the client's own size checks apply;
+- cap memory, with the limits reported through `ENTRY_LIMITS` and
+  `STORE_LIMITS` so the client's own size checks apply. The demo uses: the
+  last 20 entries and 48 MiB of them in all, the oldest evicted (with
+  `ENTRY_EVICTED` to every device) past either; one entry up to 16 MiB, in
+  1 MiB chunks, inline up to 64 KiB; a store of 32 MiB, 50 items and 16 MiB
+  an item. That is large enough to show a chunked transfer (anything over the
+  10 MiB frame) and small enough for the app's own memory. The tests' relay
+  has no caps unless a test sets them;
 - expire offers and invitations by the clock it is given, so the pairing
   screen's countdown behaves;
-- answer `healthCheck` with `true` and `deviceStatus` with `200` for devices
-  that are in the group.
+- refuse an entry or store write sealed at an epoch other than the group's,
+  as the real relay does, page history by `limit` and `before`, and push
+  `ENTRY_ADDED` to the other devices;
+- answer `healthCheck` with `true` without a request, and `deviceStatus` with
+  what the real relay answers a plain GET of its endpoint: 426 for a device
+  in the group, 401 for one it does not know, 410 after the group is deleted.
 
 New tests (`src/core/demo/__tests__/relay.test.ts`) cover the added handlers
 with the real `Client`: a chunked upload and fetch round trip, and each store
-operation, including the events another socket receives.
+operation, including the events another socket receives. They also cover the
+epoch refusal, history paging and eviction, code expiry, and the refusal of
+other addresses.
 
-## 5. The simulated devices (`src/core/demo/devices.ts`)
+## 5. The simulated devices (`src/core/demo/session.ts`)
 
 Two simulated devices, **Demo laptop** and **Demo tablet**, are real `Client`
 instances with in-memory stores, joined to the demo group through the real
@@ -118,8 +130,11 @@ reviewer can revoke one and still see sync work with the other.
 
 On start, after pairing:
 
-- the phone creates the group ("Demo group") through a creation token the
-  relay hands out, like an operator's creation link;
+- the laptop creates the group ("Demo group") from the relay's creation link,
+  and the phone and the tablet join it through the laptop's pairing codes —
+  the way a phone usually joins a group a desktop already holds. The phone
+  is then a joiner, so it shows no "joined" notices for the simulated
+  devices on start;
 - the laptop and the tablet write three history entries: a short text, a
   small PNG image generated in code (no binary asset in the repo), and a
   small text file;
@@ -127,21 +142,28 @@ On start, after pairing:
 
 While the demo runs:
 
-- every 90 seconds, and only while the app is in the foreground, the laptop
-  copies a new line of text, so the reviewer sees an entry arrive;
+- every 90 seconds, and only while the app is in the foreground, the first
+  simulated device still in the group (the laptop, or the tablet once the
+  laptop is revoked) copies a new line of text, and the Sync screen says so;
 - when the phone shows a pairing invitation, a third simulated device
-  ("Demo phone") joins with it after 5 seconds, so the pairing screen
-  completes. When the phone accepts or offers a code, it explains that a
-  real device is needed, because there is nothing to scan.
+  ("Demo phone", then "Demo phone 2" and so on) joins with it after 5
+  seconds, so the pairing screen completes. A phone in a group can only read
+  another device's code, not offer its own; in the demo the Pairing screen
+  says that reading one needs a real device, because there is nothing to
+  scan.
+
+The sample image is drawn in code (`src/core/demo/png.ts`), so no binary is
+added to the repository.
 
 Every timer is owned by one `DemoSession` object with a `stop()` that clears
 all of them and closes every simulated client. Nothing runs after the demo
 closes.
 
-Tests (`src/core/demo/__tests__/devices.test.ts`) use an injected clock and
-check: the seeded history and store, an entry from the timer, revoking the
-laptop rekeys the group and the tablet keeps syncing, and `stop()` leaves no
-timer running.
+Tests (`src/core/demo/__tests__/session.test.ts`) drive the timers through
+an injected scheduler that the test fires by hand, and check: the seeded history and store, an entry from the timer, revoking the
+laptop rekeys the group and the tablet keeps syncing, a shown pairing code
+being joined, and `stop()` leaving no timer running.
+`src/core/demo/__tests__/png.test.ts` checks the image is a valid PNG.
 
 ## 6. Session wiring (`src/app/`)
 
@@ -171,7 +193,8 @@ replaces the device's whole state with a new one (`Client.forget`), so the
 state itself cannot say whether the device was ever in a group. A separate
 flag does: `everJoined`, one value under its own name in the platform secure
 store, set to `"1"` the first time the real client is in a group and never
-cleared by the app. It is set from `refresh()` and on launch, so a phone that
+cleared by the app. It is checked in `emit()`, which every change goes
+through (`refresh()` included), and on launch, so a phone that
 updates from a version without the flag and is already in a group gets it on
 first start. The demo client never sets it: its store is the in-memory one.
 Clearing the app's storage removes it with everything else, which is what
@@ -235,19 +258,20 @@ it is published on the Play Store; the demo is documented with it then.
 
 ## 10. Order of work
 
-One PR, all in `mobile/` and `docs/`; no wire, proto or server change.
-Commits in this order:
+One PR, in `mobile/` plus this plan; no wire, proto or server change. It
+landed as these commits:
 
-1. Move the fake relay to `src/core/demo/relay.ts`, update test imports.
-2. Add chunked entry and store handling to it, with tests.
-3. Add `DemoSession` with the simulated devices and its tests.
-4. Wire `startDemo`, `closeDemo` and the `everJoined` flag into the
-   session store.
-5. Screens: `LinkButton`, setup link, banner, Close demo, pairing notes.
-6. This plan's status. (The docs site waits for the Play Store release.)
+1. The relay moved to `src/core/demo/relay.ts` with chunked entries and the
+   store, and `DemoSession` with the simulated devices, all with their tests.
+   (Moving and extending the relay in one commit kept every commit's tests
+   green without an intermediate copy of the file.)
+2. The session store (`startDemo`, `closeDemo`, the `everJoined` gate) and
+   the screens: `LinkButton`, the setup link, the banner, Close demo, the
+   pairing notes.
+3. This plan's status. The docs site waits for the Play Store release.
 
 Checks before pushing: `npm test`, `npm run lint`, `npm run typecheck` in
-`mobile/`, and `npm run build` in `docs/site/`. Then a manual run on a device
+`mobile/`. Then a manual run on a device
 or emulator: start the demo, go through every tab, use the tile, close the
 demo, and check the setup screen is back with the same device fingerprint.
 
