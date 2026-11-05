@@ -193,6 +193,11 @@ export function PairingScreen(): React.JSX.Element {
           The code is short-lived and pairs exactly one device. The joining device scans it, or
           pastes the same string.
         </Text>
+        {session.demo && (
+          <Text style={styles.muted}>
+            In the demo, a simulated device joins with the code a few seconds after it is shown.
+          </Text>
+        )}
         <Button
           label={invitation === null ? 'Show a pairing code' : 'New pairing code'}
           onPress={show}
@@ -250,6 +255,11 @@ export function PairingScreen(): React.JSX.Element {
           The other way round, for when that device is the one with the screen you are looking at —
           a desktop, which cannot scan. It shows a code; read it here.
         </Text>
+        {session.demo && (
+          <Text style={styles.muted}>
+            The demo has no device to show a code: this needs a real device and a real relay.
+          </Text>
+        )}
         <Button label="Scan its code" variant="secondary" onPress={scan} disabled={busy} />
         <TextInput
           style={styles.input}

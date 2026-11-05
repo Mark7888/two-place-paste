@@ -177,6 +177,23 @@ export const styles = StyleSheet.create({
     overflow: 'hidden',
   },
 
+  /** A text link: an action that should be findable but not prominent. */
+  linkButton: {
+    minHeight: touchTarget,
+    alignSelf: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  linkButtonLabel: { color: colors.accent, fontSize: 14, textDecorationLine: 'underline' },
+
+  /** The strip above every tab while the demo runs. */
+  demoBanner: {
+    backgroundColor: colors.accentSoft,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+  },
+  demoBannerText: { color: colors.accent, fontSize: 12, fontWeight: '600', textAlign: 'center' },
+
   inline: { flexDirection: 'row', gap: 10, alignItems: 'center' },
   status: { paddingHorizontal: 16, paddingVertical: 8 },
 
