@@ -36,6 +36,20 @@ its devices. To carry on, open **Settings → Leave the group**, then either cre
 new creation link from the relay's admin, or pair with a device that is in another group. On
 Android the same message is on the **Sync** screen, and **Leave the group** is in Settings too.
 
+## The app says it refused a new key
+
+When a device is removed, the others get a new group key. Each one checks that the new key was
+made from the key it already holds, using data the relay keeps for every key change. If that check
+fails, the device keeps its old key and says so; it stops receiving what the others copy.
+
+- **The relay is out of date.** A relay older than the apps cannot hand over what the check needs.
+  Whoever runs it updates it ([Upgrading](/two-place-paste/self-hosting/docker/#upgrading)), then reopen the app.
+- **A device older than the relay removed someone.** Update every app. On the device that refused
+  the key, use **Settings → Leave the group**, then pair it again. Nothing is lost: a new device
+  starts with an empty history and reads the store again.
+- If neither is the case, the relay offered a key that did not come from one of your devices. Do
+  not trust that relay until you know why.
+
 ## Something I copied was not uploaded
 
 - Is **Watch the clipboard** on? It is off by default.
