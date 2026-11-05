@@ -333,6 +333,45 @@ func (s *Server) handleStartOffer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, view)
 }
 
+func (s *Server) handleConfirmJoin(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		PlanID string `json:"plan_id"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.PlanID == "" {
+		// Confirming hands over the group key, so the confirmation dialog's
+		// plan id is the only way in (SPEC §3.2 step 4).
+		writeError(w, http.StatusBadRequest, "plan_id is required")
+		return
+	}
+	device, err := s.api.ConfirmJoin(r.Context(), body.PlanID)
+	if err != nil {
+		s.fail(w, r, "admit that device", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, device)
+}
+
+func (s *Server) handleRejectJoin(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		PlanID string `json:"plan_id"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.PlanID == "" {
+		writeError(w, http.StatusBadRequest, "plan_id is required")
+		return
+	}
+	if err := s.api.RejectJoin(r.Context(), body.PlanID); err != nil {
+		s.fail(w, r, "turn that device down", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func (s *Server) handleCancelOffer(w http.ResponseWriter, r *http.Request) {
 	if err := s.api.CancelOffer(r.Context()); err != nil {
 		s.fail(w, r, "withdraw that pairing code", err)
