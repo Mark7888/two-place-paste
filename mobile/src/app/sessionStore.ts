@@ -26,7 +26,7 @@
 
 import { AppState, Linking, type AppStateStatus } from 'react-native';
 
-import type { Client, Progress } from '../core';
+import type { Client, Device, JoinRequest, Progress } from '../core';
 import { tile } from '../platform';
 import { stripCodeEnvelope } from '../core';
 import {
@@ -105,6 +105,17 @@ export interface Snapshot {
    * eviction, not just the first.
    */
   evicted: { id: string; seq: number } | null;
+  /**
+   * joinRequests are devices asking to join with an invitation this device
+   * showed, oldest first. Nothing has been handed to any of them until the
+   * user confirms one (SPEC §3.2 step 4).
+   */
+  joinRequests: readonly JoinRequest[];
+  /**
+   * keyRefused says the relay offered a group key this device could not
+   * verify (spec/crypto.md §7.1), or is "". It clears when a key is installed.
+   */
+  keyRefused: string;
 }
 
 type Listener = () => void;
@@ -120,6 +131,8 @@ let pendingCode = '';
 /** transfers is keyed by direction and entry id, so an entry's progress replaces its own last report. */
 const transfers = new Map<string, Progress>();
 let evicted: { id: string; seq: number } | null = null;
+let joinRequests: JoinRequest[] = [];
+let keyRefused = '';
 let answer: ((choice: Answer | null) => void) | null = null;
 let nextQuestionId = 1;
 
@@ -145,6 +158,8 @@ let snapshot: Snapshot = {
   pendingCode: '',
   transfers: [],
   evicted: null,
+  joinRequests: [],
+  keyRefused: '',
 };
 
 function emit(): void {
@@ -164,6 +179,8 @@ function emit(): void {
     pendingCode,
     transfers: [...transfers.values()],
     evicted,
+    joinRequests: [...joinRequests],
+    keyRefused,
   };
   for (const listener of listeners) {
     listener();
@@ -231,7 +248,32 @@ export async function forget(): Promise<void> {
   clearStore();
   probablyRevoked = false;
   notice = '';
+  joinRequests = [];
+  keyRefused = '';
   emit();
+}
+
+/**
+ * answerJoin confirms or turns down a device asking to join, and takes it off
+ * the list either way. Confirming resolves with the device that was admitted.
+ */
+export async function answerJoin(request: JoinRequest, confirm: boolean): Promise<Device | null> {
+  joinRequests = joinRequests.filter((r) => r !== request);
+  emit();
+  if (!confirm) {
+    request.reject();
+    return null;
+  }
+  return request.confirm();
+}
+
+/** dropExpiredJoins forgets requests whose invitation ran out: the relay refuses their key anyway. */
+export function dropExpiredJoins(now: Date): void {
+  const kept = joinRequests.filter((r) => r.expiresAt.getTime() > now.getTime());
+  if (kept.length !== joinRequests.length) {
+    joinRequests = kept;
+    emit();
+  }
 }
 
 /**
@@ -286,6 +328,17 @@ export function init(): void {
           // A rekey installs a key and nothing else: the local clipboard is
           // never touched here (SPEC §3.3).
           notice = `The group was re-keyed; this device is at epoch ${epoch}.`;
+          keyRefused = '';
+          emit();
+        },
+        onKeyRefused: (_epoch, err) => {
+          keyRefused =
+            `The server offered this device a new group key it could not verify, so it kept the one it has (${err.message}). ` +
+            'If this keeps happening, the server needs updating or is not to be trusted; leaving the group and pairing this device again fixes it either way.';
+          emit();
+        },
+        onJoinRequest: (request) => {
+          joinRequests = [...joinRequests, request];
           emit();
         },
         onDeviceRevoked: () => {

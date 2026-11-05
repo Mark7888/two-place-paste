@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +48,12 @@ const previewTextRunes = 4000
 
 // requestTimeout bounds one relay round trip made on the UI's behalf.
 const requestTimeout = 30 * time.Second
+
+// pairingWaitTimeout bounds how long this device, joining with a code from
+// another one, waits for the group key. The other device's user has to read
+// this device's fingerprint and confirm first (SPEC §3.2 step 4), so it is
+// the lifetime of a pairing token rather than of one request.
+const pairingWaitTimeout = 5 * time.Minute
 
 // Options configures a Service.
 type Options struct {
@@ -193,8 +200,13 @@ type Service struct {
 
 	plans       map[string]*plan
 	offerPlans  map[string]*offerPlan
+	joinPlans   map[string]*joinPlan
 	offer       Offer
 	offerCancel context.CancelFunc
+
+	// keyRefused is the last group key the relay offered that this device
+	// could not verify, or nil (localui.Status.KeyRefused).
+	keyRefused *localui.KeyRefusedNote
 }
 
 // inflight is one automatic download, cancellable.
@@ -211,6 +223,11 @@ type plan struct {
 type offerPlan struct {
 	accept    OfferAcceptance
 	expiresAt time.Time
+}
+
+type joinPlan struct {
+	request   JoinRequest
+	createdAt time.Time
 }
 
 // New builds the service. The relay is attached separately: the client's
@@ -238,6 +255,7 @@ func New(opts Options) (*Service, error) {
 		store:      newStoreState(),
 		plans:      map[string]*plan{},
 		offerPlans: map[string]*offerPlan{},
+		joinPlans:  map[string]*joinPlan{},
 		pushPlans:  map[string]*pushPlan{},
 	}
 	if s.logger == nil {
@@ -324,7 +342,14 @@ func (s *Service) ClientHandlers() tppclient.Handlers {
 			s.hub.publish(localui.Event{Kind: localui.EventDisconnected, Message: msg})
 		},
 		OnEpoch: func(epoch uint64) {
+			s.mu.Lock()
+			s.keyRefused = nil
+			s.mu.Unlock()
 			s.hub.publish(localui.Event{Kind: localui.EventEpoch, Epoch: epoch})
+		},
+		OnKeyRefused: s.onKeyRefused,
+		OnJoinRequest: func(r *tppclient.JoinRequest) {
+			s.onJoinRequest(clientJoinRequest{r})
 		},
 		OnDevicePaired: func(d tppclient.Device) {
 			s.hub.publish(localui.Event{Kind: localui.EventDevicePaired, DeviceID: d.ID, Name: d.Name})
@@ -414,9 +439,17 @@ func (s *Service) Status(ctx context.Context) localui.Status {
 		note = &v
 	}
 	pause := s.pauseViewLocked()
+	joins := s.joinViewsLocked()
+	var keyRefused *localui.KeyRefusedNote
+	if s.keyRefused != nil {
+		v := *s.keyRefused
+		keyRefused = &v
+	}
 	s.mu.Unlock()
 
 	st := localui.Status{
+		JoinRequests:  joins,
+		KeyRefused:    keyRefused,
 		Skipped:       skipped,
 		SensitiveNote: note,
 		Pause:         pause,
@@ -437,6 +470,9 @@ func (s *Service) Status(ctx context.Context) localui.Status {
 	st.DeviceID = state.DeviceID
 	st.DeviceName = state.DeviceName
 	st.ServerURL = state.ServerURL
+	if pub, err := state.PublicKey(); err == nil {
+		st.Fingerprint = tppclient.Fingerprint(pub)
+	}
 	if st.InGroup {
 		st.GroupName = state.GroupName
 	}
@@ -947,6 +983,119 @@ func (s *Service) sweepPlansLocked() {
 			delete(s.offerPlans, id)
 		}
 	}
+	for id, p := range s.joinPlans {
+		if now.After(p.request.ExpiresAt()) {
+			// The relay refuses the key after this, so there is nothing
+			// left to confirm.
+			delete(s.joinPlans, id)
+		}
+	}
+}
+
+// onJoinRequest holds a device asking to join with one of this device's
+// invitations until the user answers (SPEC §3.2 step 4). It runs on the
+// client's read loop, so it only records and announces.
+func (s *Service) onJoinRequest(r JoinRequest) {
+	id, err := planID()
+	if err != nil {
+		s.logger.Error("a join request could not be held for confirmation", "error", err)
+		r.Reject()
+		return
+	}
+	s.mu.Lock()
+	s.sweepPlansLocked()
+	s.joinPlans[id] = &joinPlan{request: r, createdAt: s.now()}
+	s.mu.Unlock()
+	s.activityChanged()
+	s.hub.publish(localui.Event{Kind: localui.EventJoinRequest, Name: r.DeviceName()})
+}
+
+// joinViewsLocked lists the pending join requests, oldest first. The caller
+// holds s.mu.
+func (s *Service) joinViewsLocked() []localui.JoinPlan {
+	s.sweepPlansLocked()
+	out := make([]localui.JoinPlan, 0, len(s.joinPlans))
+	for id, p := range s.joinPlans {
+		out = append(out, localui.JoinPlan{
+			ID:          id,
+			DeviceName:  p.request.DeviceName(),
+			Fingerprint: p.request.Fingerprint(),
+			ExpiresAt:   p.request.ExpiresAt(),
+		})
+	}
+	slices.SortFunc(out, func(a, b localui.JoinPlan) int {
+		return s.joinPlans[a.ID].createdAt.Compare(s.joinPlans[b.ID].createdAt)
+	})
+	return out
+}
+
+// takeJoinPlan removes and returns a pending join request.
+func (s *Service) takeJoinPlan(planID string) (JoinRequest, error) {
+	s.mu.Lock()
+	s.sweepPlansLocked()
+	p, ok := s.joinPlans[planID]
+	delete(s.joinPlans, planID)
+	s.mu.Unlock()
+	if !ok {
+		return nil, localui.Errorf(http.StatusConflict, nil,
+			"that device is no longer waiting to join; show a new pairing code and try again")
+	}
+	return p.request, nil
+}
+
+// ConfirmJoin implements localui.API: it hands the group key to the device a
+// join request names, and it is the only way a device is admitted through an
+// invitation.
+func (s *Service) ConfirmJoin(ctx context.Context, planID string) (localui.DeviceView, error) {
+	if _, err := s.ready(); err != nil {
+		return localui.DeviceView{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+
+	r, err := s.takeJoinPlan(planID)
+	if err != nil {
+		return localui.DeviceView{}, err
+	}
+	s.activityChanged()
+	device, err := r.Confirm(ctx)
+	if err != nil {
+		return localui.DeviceView{}, s.relayError("admit that device", err)
+	}
+	s.logger.InfoContext(ctx, "device admitted from a pairing invitation", "device_id", device.ID)
+	return deviceView(device), nil
+}
+
+// RejectJoin implements localui.API.
+func (s *Service) RejectJoin(ctx context.Context, planID string) error {
+	r, err := s.takeJoinPlan(planID)
+	if err != nil {
+		return err
+	}
+	s.activityChanged()
+	r.Reject()
+	s.logger.InfoContext(ctx, "a join request was turned down")
+	return nil
+}
+
+// onKeyRefused records a group key the relay offered that this device could
+// not verify (/spec/crypto.md §7.1). The client has already refused it; this
+// is for the screen and the tray.
+func (s *Service) onKeyRefused(epoch uint64, err error) {
+	note := &localui.KeyRefusedNote{Epoch: epoch, Message: keyRefusedMessage(err), At: s.now()}
+	s.mu.Lock()
+	s.keyRefused = note
+	s.mu.Unlock()
+	s.activityChanged()
+	s.hub.publish(localui.Event{Kind: localui.EventKeyRefused, Epoch: epoch, Message: note.Message})
+}
+
+// keyRefusedMessage says what happened in the user's terms. The client's
+// error says why, which is worth having for the relay operator.
+func keyRefusedMessage(err error) string {
+	return "the server offered this device a new group key it could not verify, so it kept the one it has (" +
+		err.Error() + "). If this keeps happening, the server needs updating or is not to be trusted; " +
+		"leaving the group and pairing this device again fixes it either way."
 }
 
 // StartOffer implements localui.API: this device, which is in no group, shows
@@ -1133,7 +1282,7 @@ func (s *Service) JoinPairing(ctx context.Context, payload string) error {
 	if relay == nil {
 		return localui.Errorf(http.StatusServiceUnavailable, nil, "the service is still starting")
 	}
-	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	ctx, cancel := context.WithTimeout(ctx, pairingWaitTimeout)
 	defer cancel()
 
 	if err := relay.JoinPairing(ctx, strings.TrimSpace(payload)); err != nil {
@@ -1199,6 +1348,8 @@ func (s *Service) Forget(context.Context) error {
 	s.latestID, s.latestKnown = "", false
 	s.plans = map[string]*plan{}
 	s.offerPlans = map[string]*offerPlan{}
+	s.joinPlans = map[string]*joinPlan{}
+	s.keyRefused = nil
 	s.mu.Unlock()
 	s.store.clear()
 
@@ -1950,11 +2101,12 @@ func headerKind(h tppclient.EntryHeader) clipboard.Kind {
 
 func deviceView(d tppclient.Device) localui.DeviceView {
 	return localui.DeviceView{
-		ID:        d.ID,
-		Name:      d.Name,
-		CreatedAt: d.CreatedAt,
-		LastSeen:  localui.Optional(d.LastSeen),
-		This:      d.This,
+		ID:          d.ID,
+		Name:        d.Name,
+		Fingerprint: d.Fingerprint(),
+		CreatedAt:   d.CreatedAt,
+		LastSeen:    localui.Optional(d.LastSeen),
+		This:        d.This,
 	}
 }
 

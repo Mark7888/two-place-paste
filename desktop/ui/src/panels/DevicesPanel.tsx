@@ -12,6 +12,10 @@ import { Modal } from "../components/Modal";
 // is nothing to confirm with until it does. It is a real modal now rather than
 // a panel that appeared below the table — the previous one could be scrolled
 // off screen while it was the only thing waiting for an answer.
+//
+// Every device carries its fingerprint. The new key is wrapped to the public
+// keys the relay lists, and a name is whatever the relay says it is, so the
+// fingerprint is the one thing the user can check against the device itself.
 export function DevicesPanel({ inGroup, onChanged }: { inGroup: boolean; onChanged: () => void }) {
   const [roster, setRoster] = useState<RosterView | null>(null);
   const [plan, setPlan] = useState<RevokePlan | null>(null);
@@ -106,6 +110,9 @@ export function DevicesPanel({ inGroup, onChanged }: { inGroup: boolean; onChang
                 <div className="muted small">
                   added {when(d.created_at)} · last seen {relative(d.last_seen)}
                 </div>
+                <div className="muted small mono" title="Fingerprint">
+                  {d.fingerprint}
+                </div>
               </div>
               <div className="actions">
                 {d.this ? null : (
@@ -144,6 +151,10 @@ export function DevicesPanel({ inGroup, onChanged }: { inGroup: boolean; onChang
               pairing again.
             </p>
             <h3 style={{ margin: "1rem 0 0.4rem" }}>Devices that keep access</h3>
+            <p className="muted small">
+              Check each fingerprint against the one that device shows in Settings. A device you do
+              not recognise here would get the new key too.
+            </p>
             <div className="list">
               {plan.remaining.map((d) => (
                 <div className="item" key={d.id}>
@@ -152,6 +163,7 @@ export function DevicesPanel({ inGroup, onChanged }: { inGroup: boolean; onChang
                       {d.name}
                       {d.this ? <span className="muted small"> · this device</span> : null}
                     </div>
+                    <div className="muted small mono">{d.fingerprint}</div>
                   </div>
                 </div>
               ))}

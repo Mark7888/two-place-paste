@@ -79,18 +79,19 @@ return 0
 //
 // Return codes: 0 applied, 1 no such group, 2 epoch conflict, 3 the revoked
 // device is not a member, 4 the wrapped keys do not cover exactly the
-// remaining devices, 5 no store link while the group has store items.
+// remaining devices, 5 no store link.
 //
 //	KEYS[1] group key            ARGV[1] revoked device id
 //	KEYS[2] group devices set    ARGV[2] expected epoch
 //	KEYS[3] group store links    ARGV[3] device key prefix
-//	KEYS[4] group store index    ARGV[4] wrapped key suffix
+//	                             ARGV[4] wrapped key suffix
 //	                             ARGV[5] store link ("" for none)
 //	                             ARGV[6..] device id, wrapped key, ...
 //
-// The store check reads the same index an item is committed to, and an
-// item's commit checks the epoch in a script of its own: the two serialise,
-// so an item saved at the old epoch is either seen here or refused there.
+// Every rekey carries a link, whether or not the group holds store items:
+// it is what lets the remaining devices check the new key
+// (/spec/crypto.md §7.1). The link check comes last so a rekey that is wrong
+// in some other way is told so first.
 //
 // The write order matters and is asserted by TestApplyRekeyPartialApply: the
 // epoch is bumped last, so an interrupted apply leaves the group at its old
@@ -109,8 +110,6 @@ for _, id in ipairs(redis.call('SMEMBERS', KEYS[2])) do
   end
 end
 
-if ARGV[5] == '' and redis.call('ZCARD', KEYS[4]) > 0 then return 5 end
-
 local supplied_n = 0
 for i = 6, #ARGV, 2 do
   local id = ARGV[i]
@@ -119,14 +118,13 @@ for i = 6, #ARGV, 2 do
   supplied_n = supplied_n + 1
 end
 if supplied_n ~= remaining_n then return 4 end
+if ARGV[5] == '' then return 5 end
 
 local next_epoch = tostring(tonumber(ARGV[2]) + 1)
 for i = 6, #ARGV, 2 do
   redis.call('HSET', ARGV[3] .. ARGV[i] .. ARGV[4], 'epoch', next_epoch, 'key', ARGV[i + 1])
 end
-if ARGV[5] ~= '' then
-  redis.call('HSET', KEYS[3], next_epoch, ARGV[5])
-end
+redis.call('HSET', KEYS[3], next_epoch, ARGV[5])
 -- Test seam: scripts_test.go swaps the next line for an error() to prove that
 -- an apply interrupted here leaves the group at its old epoch. Nothing below
 -- this point has run at that moment, which is the whole reason the epoch is

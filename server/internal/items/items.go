@@ -277,11 +277,15 @@ func (s *Service) Limits(ctx context.Context, groupID string) (Limits, error) {
 
 // Links returns the group's store links, oldest first: one per rekey, each
 // leading from an epoch's store key back to the one before
-// (/spec/crypto.md §7a.2). They are refused, like every store request but
-// Limits, while the store is off.
+// (/spec/crypto.md §7a.2).
+//
+// Unlike the other store requests, it is answered while the store is off:
+// a device checks every new epoch's key against these links
+// (/spec/crypto.md §7.1), and the store's switch has nothing to do with that.
+// The links are opaque to the relay and say nothing it does not know already.
 func (s *Service) Links(ctx context.Context, groupID string) ([]store.ItemLink, error) {
-	if _, err := s.enabledGroup(ctx, groupID); err != nil {
-		return nil, err
+	if _, err := s.reg.GetGroup(ctx, groupID); err != nil {
+		return nil, fmt.Errorf("read group %s: %w", groupID, err)
 	}
 	links, err := s.reg.StoreLinks(ctx, groupID)
 	if err != nil {

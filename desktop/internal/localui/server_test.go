@@ -161,6 +161,16 @@ func (s *stubAPI) JoinPairing(context.Context, string) error {
 	return s.nextErr
 }
 
+func (s *stubAPI) ConfirmJoin(_ context.Context, planID string) (DeviceView, error) {
+	s.record("join-confirm " + planID)
+	return DeviceView{ID: "joiner", Name: "phone"}, s.nextErr
+}
+
+func (s *stubAPI) RejectJoin(_ context.Context, planID string) error {
+	s.record("join-reject " + planID)
+	return s.nextErr
+}
+
 func (s *stubAPI) StartOffer(_ context.Context, serverURL string) (OfferView, error) {
 	s.record("offer-start")
 	if serverURL == "" {
@@ -260,6 +270,8 @@ func TestOriginIsValidatedOnEveryRequest(t *testing.T) {
 		{"POST", "/api/devices/revoke/confirm", `{"plan_id":"plan-1"}`},
 		{"POST", "/api/pairing/start", `{}`},
 		{"POST", "/api/pairing/join", `{"payload":"tpp1:abc"}`},
+		{"POST", "/api/pairing/join-requests/confirm", `{"plan_id":"join-1"}`},
+		{"POST", "/api/pairing/join-requests/reject", `{"plan_id":"join-1"}`},
 		{"POST", "/api/pairing/offer/start", `{"server_url":"https://tpp.example.com"}`},
 		{"POST", "/api/pairing/offer/cancel", `{}`},
 		{"POST", "/api/pairing/offer/accept/prepare", `{"code":"tpp1:offer"}`},
@@ -621,6 +633,31 @@ func TestAcceptingAnOfferNeedsAPlan(t *testing.T) {
 	rec = do(t, srv, "POST", "/api/pairing/offer/accept/confirm", `{"plan_id":"`+plan.ID+`"}`, headers)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("confirming a prepared acceptance = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+// TestConfirmingAJoinNeedsAPlan: admitting a device that joined with an
+// invitation takes the id of a join request the service holds, never
+// anything that names the device itself (SPEC §3.2 step 4).
+func TestConfirmingAJoinNeedsAPlan(t *testing.T) {
+	t.Parallel()
+
+	srv, api := newTestServer(t)
+	origin := fmt.Sprintf("http://127.0.0.1:%d", srv.Port())
+	headers := map[string]string{"Origin": origin, tokenHeader: "test-token"}
+
+	for _, path := range []string{"/api/pairing/join-requests/confirm", "/api/pairing/join-requests/reject"} {
+		rec := do(t, srv, "POST", path, `{"plan_id":""}`, headers)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s with no plan = %d, want %d", path, rec.Code, http.StatusBadRequest)
+		}
+	}
+	if api.called("join-confirm ") || api.called("join-reject ") {
+		t.Fatal("a join answer with no plan reached the service")
+	}
+	rec := do(t, srv, "POST", "/api/pairing/join-requests/confirm", `{"plan_id":"join-1"}`, headers)
+	if rec.Code != http.StatusOK || !api.called("join-confirm join-1") {
+		t.Errorf("confirming a plan = %d, reached the service: %v", rec.Code, api.called("join-confirm join-1"))
 	}
 }
 

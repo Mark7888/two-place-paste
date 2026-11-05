@@ -196,15 +196,15 @@ func TestRekeyAndCommitSerialise(t *testing.T) {
 		it := items(t, s)
 		keys := []store.RekeyKey{{DeviceID: keeper, Key: []byte("w2")}}
 
-		// Reserved at epoch 1, not committed yet: a rekey without a link
-		// still goes through, and the item can no longer be committed.
+		// Reserved at epoch 1, not committed yet: a rekey goes through, and
+		// the item can no longer be committed.
 		late := uniqueName(t, "late")
 		reserve(ctx, t, it, gid, late, 10)
 		other, err := s.AddDevice(ctx, gid, store.NewDevice{Name: "tablet", PublicKey: []byte("pk3")})
 		if err != nil {
 			t.Fatalf("AddDevice() error = %v", err)
 		}
-		if _, err := s.ApplyRekey(ctx, gid, other.ID, 1, []store.RekeyKey{{DeviceID: keeper, Key: []byte("w2")}, {DeviceID: victim.ID, Key: []byte("w2")}}, nil); err != nil {
+		if _, err := s.ApplyRekey(ctx, gid, other.ID, 1, []store.RekeyKey{{DeviceID: keeper, Key: []byte("w2")}, {DeviceID: victim.ID, Key: []byte("w2")}}, []byte("link")); err != nil {
 			t.Fatalf("ApplyRekey(no items yet) error = %v", err)
 		}
 		_, err = it.CommitItem(ctx, store.ItemCommit{GroupID: gid, ItemID: late, Epoch: 1, WrappedKeys: []byte("k"), SealedMeta: []byte("m"), SavedAt: time.Now()})
@@ -212,7 +212,8 @@ func TestRekeyAndCommitSerialise(t *testing.T) {
 			t.Errorf("CommitItem(after a rekey) error = %v, want %v", err, store.ErrEpochConflict)
 		}
 
-		// Committed at epoch 2: now a rekey needs a link.
+		// Committed at epoch 2: a rekey without a link is refused, as it is
+		// with no items at all (TestApplyRekey).
 		saved := uniqueName(t, "saved")
 		if err := it.ReserveItem(ctx, store.ItemReservation{GroupID: gid, ItemID: saved, Epoch: 2, Size: 1, Accounted: 1, StartedAt: time.Now()}, roomy); err != nil {
 			t.Fatalf("ReserveItem() error = %v", err)

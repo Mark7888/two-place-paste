@@ -37,7 +37,15 @@ export type TppErrorKind =
    * A store item's keys, metadata or blob did not open: a missing link,
    * tampering or corruption. It is reported, never silently dropped.
    */
-  | 'store-unreadable';
+  | 'store-unreadable'
+  /**
+   * The relay offered a group key for a new epoch that does not chain back,
+   * through the store links, to the key this device holds (spec/crypto.md
+   * §7.1). It was not installed.
+   */
+  | 'unverified-key'
+  /** A device asking to join was turned down, or handing it the key failed. */
+  | 'join-rejected';
 
 /** TppError is a local failure with a kind a caller can switch on. */
 export class TppError extends Error {

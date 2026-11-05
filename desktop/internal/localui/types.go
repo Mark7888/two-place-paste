@@ -40,6 +40,21 @@ type Status struct {
 	// empty.
 	GroupName string `json:"group_name,omitempty"`
 
+	// Fingerprint is this device's public key as another device's
+	// confirmation dialog shows it, for the user to compare (SPEC §3.2). It
+	// is empty only if the keystore holds no keypair yet.
+	Fingerprint string `json:"fingerprint,omitempty"`
+
+	// JoinRequests are devices asking to join with an invitation this device
+	// showed, waiting for the user to confirm or reject them (SPEC §3.2
+	// step 4). Nothing has been handed over to any of them.
+	JoinRequests []JoinPlan `json:"join_requests,omitempty"`
+
+	// KeyRefused is set when the relay offered a group key for a new epoch
+	// that this device could not verify (/spec/crypto.md §7.1). It clears
+	// once a key is installed.
+	KeyRefused *KeyRefusedNote `json:"key_refused,omitempty"`
+
 	// Clipboard describes what is on the local clipboard right now, for the
 	// direction the user is about to choose. It is never sent anywhere else.
 	Clipboard ClipboardView `json:"clipboard"`
@@ -259,8 +274,14 @@ type EntryContent struct {
 
 // DeviceView is one group member, by name, as SPEC §3.3 step 2 requires.
 type DeviceView struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+
+	// Fingerprint is the device's public key rendered for a person to compare
+	// with what that device shows about itself. The revoke dialog lists it:
+	// the new key is wrapped to these keys, and a name proves nothing.
+	Fingerprint string `json:"fingerprint"`
+
 	CreatedAt time.Time  `json:"created_at"`
 	LastSeen  *time.Time `json:"last_seen,omitempty"`
 	This      bool       `json:"this"`
@@ -333,6 +354,36 @@ type OfferPlan struct {
 	Fingerprint string `json:"fingerprint"`
 
 	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// JoinPlan is a device asking to join with one of this device's invitations,
+// waiting for the user's confirmation (SPEC §3.2 step 4).
+//
+// It is the mirror of OfferPlan: the joining device's public key reached this
+// device through the relay, so ConfirmJoin takes nothing but the id of a
+// plan the UI has rendered with its Fingerprint.
+type JoinPlan struct {
+	ID string `json:"id"`
+
+	// DeviceName is what the joining device calls itself, as the relay
+	// passed it on. It proves nothing.
+	DeviceName string `json:"device_name"`
+
+	// Fingerprint is the joining device's public key, for the user to compare
+	// with what that device is showing.
+	Fingerprint string `json:"fingerprint"`
+
+	// ExpiresAt is when the invitation runs out; the relay refuses the key
+	// after it.
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// KeyRefusedNote says the relay offered a group key this device could not
+// verify, so it stayed at its epoch (/spec/crypto.md §7.1).
+type KeyRefusedNote struct {
+	Epoch   uint64    `json:"epoch"`
+	Message string    `json:"message"`
+	At      time.Time `json:"at"`
 }
 
 // SettingsView is the settings screen's model.
@@ -579,6 +630,8 @@ const (
 	EventDisconnected  = "disconnected"
 	EventEpoch         = "epoch"
 	EventDevicePaired  = "device_paired"
+	EventJoinRequest   = "join_request"
+	EventKeyRefused    = "key_refused"
 	EventOffer         = "offer"
 	EventDeviceRevoked = "device_revoked"
 	EventRevoked       = "revoked"

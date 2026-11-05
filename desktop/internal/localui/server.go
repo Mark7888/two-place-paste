@@ -213,6 +213,8 @@ func (s *Server) routes() http.Handler {
 	api("POST /api/devices/revoke/confirm", s.handleConfirmRevoke)
 	api("POST /api/pairing/start", s.handleStartPairing)
 	api("POST /api/pairing/join", s.handleJoinPairing)
+	api("POST /api/pairing/join-requests/confirm", s.handleConfirmJoin)
+	api("POST /api/pairing/join-requests/reject", s.handleRejectJoin)
 	api("POST /api/pairing/offer/start", s.handleStartOffer)
 	api("POST /api/pairing/offer/cancel", s.handleCancelOffer)
 	api("POST /api/pairing/offer/accept/prepare", s.handlePrepareAcceptOffer)

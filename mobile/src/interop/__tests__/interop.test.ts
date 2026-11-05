@@ -20,6 +20,7 @@ import {
   EntryCache,
   type CacheStore,
   TppError,
+  fingerprint,
   fromUTF8,
   toHex,
   utf8,
@@ -122,6 +123,8 @@ describeInterop('the phone and the Go client are one implementation of one contr
     const joined = await joinedPromise;
 
     expect(joined.device_name).toBe('Anna — phone');
+    // The fingerprint the Go client's user confirmed is the one the phone shows.
+    expect(joined.fingerprint).toBe(fingerprint(phone.publicKey));
     expect(phone.inGroup).toBe(true);
     expect(phone.epoch).toBe(1n);
   });

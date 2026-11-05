@@ -291,6 +291,14 @@ export function SettingsPanel({
             <dl className="facts">
               <dt>Keys stored in</dt>
               <dd>{status.keystore}</dd>
+              {status.fingerprint ? (
+                <>
+                  {/* What another device's join or revoke dialog shows for
+                      this one, so the user can compare the two. */}
+                  <dt>Fingerprint</dt>
+                  <dd className="mono">{status.fingerprint}</dd>
+                </>
+              ) : null}
             </dl>
           ) : null}
         </div>

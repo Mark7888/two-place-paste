@@ -342,6 +342,18 @@ func pair(ctx context.Context, t *testing.T, inviter, joiner *tppclient.Client) 
 	errCh := make(chan error, 1)
 	go func() { errCh <- joiner.JoinPairing(ctx, invitation.Payload) }()
 
+	// Nothing is handed over until the user confirms (SPEC §3.2 step 4): the
+	// request must show the fingerprint the joining device shows.
+	request, err := invitation.Request(ctx)
+	if err != nil {
+		t.Fatalf("waiting for the join request: %v", err)
+	}
+	if want, err := joiner.Fingerprint(); err != nil || request.Fingerprint != want {
+		t.Errorf("join request fingerprint = %q, want the joiner's %q (%v)", request.Fingerprint, want, err)
+	}
+	if _, err := request.Confirm(ctx); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
 	device, err := invitation.Wait(ctx)
 	if err != nil {
 		t.Fatalf("waiting for the joiner: %v", err)

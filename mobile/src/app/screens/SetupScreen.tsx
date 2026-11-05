@@ -29,7 +29,7 @@ import { Camera, CameraType } from 'react-native-camera-kit';
 import QRCode from 'react-native-qrcode-svg';
 
 import type { Offer } from '../../core';
-import { fingerprint, pairingLink } from '../../core';
+import { classifyCode, fingerprint, pairingLink } from '../../core';
 import { useSession } from '../SessionContext';
 import { enterGroup, failureMessage } from '../session';
 import { Button, Card, CopyButton, Notice, Screen } from '../ui';
@@ -116,6 +116,13 @@ export function SetupScreen(): React.JSX.Element {
     void (async () => {
       try {
         setOk(true);
+        if (classifyCode(code) === 'pairing-code') {
+          // The other device's user confirms this phone before it hands the
+          // key over (SPEC §3.2 step 4), so joining waits on a person.
+          setMessage(
+            `Waiting for the other device. Check that it shows this phone’s fingerprint: ${fingerprint(client.publicKey)}`,
+          );
+        }
         setMessage(await enterGroup(client, code));
       } catch (err) {
         setOk(false);
@@ -174,7 +181,11 @@ export function SetupScreen(): React.JSX.Element {
       <Card title="Join a group">
         <Text style={styles.muted}>
           On a device that is already in the group, open Pairing and show its code. Scan it, or
-          paste it below — both carry the same string.
+          paste it below — both carry the same string. That device then asks its user to check
+          this phone’s fingerprint:
+        </Text>
+        <Text style={styles.mono} selectable>
+          {fingerprint(session.client?.publicKey ?? new Uint8Array())}
         </Text>
         <Button label="Scan a QR code" onPress={scan} disabled={busy} />
       </Card>

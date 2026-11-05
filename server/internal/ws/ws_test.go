@@ -359,6 +359,7 @@ func TestProtocolEndToEnd(t *testing.T) {
 		WrappedKeys: []*tppv1.WrappedKey{
 			{DeviceId: created.GetDeviceId(), WrappedGroupKey: []byte("wrapped-laptop-epoch2")},
 		},
+		StoreLink: testStoreLink,
 	})
 
 	var rekey tppv1.RekeyResponse
@@ -836,6 +837,7 @@ func TestOfflineDeviceCollectsItsWrappedKeyOnConnect(t *testing.T) {
 			{DeviceId: created.GetDeviceId(), WrappedGroupKey: []byte("laptop-e2")},
 			{DeviceId: tabletComplete.GetDeviceId(), WrappedGroupKey: []byte("tablet-e2")},
 		},
+		StoreLink: testStoreLink,
 	})
 	laptop.await(tppv1.MessageType_MESSAGE_TYPE_REKEY_RESPONSE, nil)
 	if err := phone.awaitClose(); err == nil {
