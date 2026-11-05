@@ -156,7 +156,7 @@ A release follows 2.
 
 ## 4. Phase 2 — authenticated pairing and membership
 
-### 4.1 Crypto additions (`spec/crypto.md` 1.4, additions only)
+### 4.1 Crypto additions (`spec/crypto.md` 1.5, additions only)
 
 Following the 1.3 precedent: new strings name new purposes and every container carries
 its own version byte, so this stays `tpp-crypto-v1` and every existing vector stays
@@ -275,7 +275,7 @@ Two PRs again: both contracts together, then the implementation. Because Verify 
 lands in the same PR as both apps' support for authenticated wraps, no build on `master`
 can upgrade a group that another build cannot read.
 
-1. **Spec and proto** — `spec/crypto.md` 1.4 (§4.1 here), the reference generator in
+1. **Spec and proto** — `spec/crypto.md` 1.5 (§4.1 here), the reference generator in
    `spec/vectors/gen` and the new vectors, SPEC §2.1 and §3.2–§3.3, the roster row of
    §11.4 changed from "mitigated at the UI level" to what this phase guarantees; the
    fields of §4.2 plus the client version each device reports on connect, with
