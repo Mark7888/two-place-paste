@@ -894,6 +894,104 @@ func TestAcceptingAnOfferNeedsTheDialog(t *testing.T) {
 	}
 }
 
+// fakeJoin is a device asking to join with an invitation, as the client hands
+// one to the service.
+type fakeJoin struct {
+	name, fingerprint string
+	expires           time.Time
+	confirmed         atomic.Int32
+	rejected          atomic.Int32
+}
+
+func (j *fakeJoin) DeviceName() string   { return j.name }
+func (j *fakeJoin) Fingerprint() string  { return j.fingerprint }
+func (j *fakeJoin) ExpiresAt() time.Time { return j.expires }
+func (j *fakeJoin) Reject()              { j.rejected.Add(1) }
+
+func (j *fakeJoin) Confirm(context.Context) (tppclient.Device, error) {
+	j.confirmed.Add(1)
+	return tppclient.Device{ID: "joiner", Name: j.name, PublicKey: []byte("joiner-key")}, nil
+}
+
+// TestAJoinWaitsForTheUser is SPEC §3.2 step 4 at the service level: a
+// device asking to join is shown in the status with its fingerprint, and is
+// handed nothing until the user confirms that request by its id.
+func TestAJoinWaitsForTheUser(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := context.Background()
+	join := &fakeJoin{name: "phone", fingerprint: "6668 7AAD F862 BD77", expires: f.now().Add(5 * time.Minute)}
+	f.svc.onJoinRequest(join)
+
+	st := f.svc.Status(ctx)
+	if len(st.JoinRequests) != 1 {
+		t.Fatalf("Status().JoinRequests = %+v, want the one request", st.JoinRequests)
+	}
+	plan := st.JoinRequests[0]
+	if plan.DeviceName != "phone" || plan.Fingerprint != join.fingerprint || plan.ID == "" {
+		t.Errorf("join request = %+v, want the name and fingerprint to show", plan)
+	}
+	if join.confirmed.Load() != 0 {
+		t.Fatal("the joining device was admitted before anyone confirmed")
+	}
+
+	if _, err := f.svc.ConfirmJoin(ctx, "made-up"); err == nil {
+		t.Error("confirming a request nobody showed succeeded")
+	}
+	device, err := f.svc.ConfirmJoin(ctx, plan.ID)
+	if err != nil {
+		t.Fatalf("ConfirmJoin() error = %v", err)
+	}
+	if device.ID != "joiner" || device.Fingerprint == "" {
+		t.Errorf("admitted device = %+v, want the joiner with its fingerprint", device)
+	}
+	if _, err := f.svc.ConfirmJoin(ctx, plan.ID); err == nil {
+		t.Error("confirming the same request twice succeeded")
+	}
+	if got := join.confirmed.Load(); got != 1 {
+		t.Errorf("the device was admitted %d times, want 1", got)
+	}
+	if got := f.svc.Status(ctx).JoinRequests; len(got) != 0 {
+		t.Errorf("after confirming, Status().JoinRequests = %+v, want none", got)
+	}
+
+	// Rejected, and an expired one that simply goes away.
+	other := &fakeJoin{name: "tablet", expires: f.now().Add(time.Minute)}
+	f.svc.onJoinRequest(other)
+	id := f.svc.Status(ctx).JoinRequests[0].ID
+	if err := f.svc.RejectJoin(ctx, id); err != nil {
+		t.Fatalf("RejectJoin() error = %v", err)
+	}
+	if other.rejected.Load() != 1 || other.confirmed.Load() != 0 {
+		t.Error("RejectJoin did not turn the device down")
+	}
+	f.svc.onJoinRequest(&fakeJoin{name: "late", expires: f.now().Add(-time.Second)})
+	if got := f.svc.Status(ctx).JoinRequests; len(got) != 0 {
+		t.Errorf("an expired request is still shown: %+v", got)
+	}
+}
+
+// TestARefusedKeyIsShownUntilAKeyIsInstalled: the client refusing a key the
+// relay offered is something the user sees (/spec/crypto.md §7.1).
+func TestARefusedKeyIsShownUntilAKeyIsInstalled(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := context.Background()
+	h := f.svc.ClientHandlers()
+	h.OnKeyRefused(3, tppclient.ErrUnverifiedKey)
+
+	note := f.svc.Status(ctx).KeyRefused
+	if note == nil || note.Epoch != 3 || note.Message == "" {
+		t.Fatalf("Status().KeyRefused = %+v, want a note for epoch 3", note)
+	}
+	h.OnEpoch(4)
+	if note := f.svc.Status(ctx).KeyRefused; note != nil {
+		t.Errorf("after a key was installed, Status().KeyRefused = %+v, want none", note)
+	}
+}
+
 // TestShowingASecondOfferWithdrawsTheFirst: the socket an offer holds open is
 // the relay's only route to a device with no identity, so an offer that is no
 // longer on screen must not stay live. Two live codes for one device would be

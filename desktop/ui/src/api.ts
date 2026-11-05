@@ -119,6 +119,18 @@ export interface Status {
   outdated: boolean;
   /** The group's display name, as the server admin set it. */
   group_name?: string;
+  /**
+   * This device's public key as another device's confirmation dialog shows
+   * it, for the user to compare (SPEC §3.2).
+   */
+  fingerprint?: string;
+  /**
+   * Devices asking to join with an invitation this device showed. Nothing has
+   * been handed to any of them until the user confirms one.
+   */
+  join_requests?: JoinPlan[];
+  /** Set when the relay offered a group key this device could not verify. */
+  key_refused?: KeyRefusedNote;
   last_sync?: string;
   last_error?: string;
   clipboard: ClipboardView;
@@ -189,6 +201,8 @@ export interface SyncResult {
 export interface DeviceView {
   id: string;
   name: string;
+  /** The device's public key, for comparing with what that device shows. */
+  fingerprint: string;
   created_at: string;
   last_seen?: string;
   this: boolean;
@@ -258,6 +272,24 @@ export interface OfferPlan {
   device_name: string;
   fingerprint: string;
   expires_at: string;
+}
+
+// JoinPlan is a device asking to join with one of this device's invitations.
+// Its public key came through the relay, so the only way to admit it is the
+// plan id of a dialog that showed its fingerprint (SPEC §3.2 step 4).
+export interface JoinPlan {
+  id: string;
+  device_name: string;
+  fingerprint: string;
+  expires_at: string;
+}
+
+// KeyRefusedNote: the relay offered a new group key this device could not
+// verify against its store links, so it kept the one it has.
+export interface KeyRefusedNote {
+  epoch: number;
+  message: string;
+  at: string;
 }
 
 export interface SettingsView {
@@ -733,6 +765,10 @@ export const api = {
     request<RosterView>("POST", "/api/devices/revoke/confirm", { plan_id: planId }),
   startPairing: () => request<Invite>("POST", "/api/pairing/start", {}),
   joinPairing: (payload: string) => request<{ ok: boolean }>("POST", "/api/pairing/join", { payload }),
+  confirmJoin: (planId: string) =>
+    request<DeviceView>("POST", "/api/pairing/join-requests/confirm", { plan_id: planId }),
+  rejectJoin: (planId: string) =>
+    request<{ ok: boolean }>("POST", "/api/pairing/join-requests/reject", { plan_id: planId }),
   startOffer: (serverUrl: string) =>
     request<Offer>("POST", "/api/pairing/offer/start", { server_url: serverUrl }),
   cancelOffer: () => request<{ ok: boolean }>("POST", "/api/pairing/offer/cancel", {}),

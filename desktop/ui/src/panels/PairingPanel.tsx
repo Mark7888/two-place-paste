@@ -68,7 +68,12 @@ export function PairingPanel({ status, onChanged }: { status: Status | null; onC
       ) : (
         <>
           <ShowOfferPanel guard={guard} setNotice={setNotice} onChanged={onChanged} />
-          <JoinPanel guard={guard} setNotice={setNotice} onChanged={onChanged} />
+          <JoinPanel
+            guard={guard}
+            setNotice={setNotice}
+            onChanged={onChanged}
+            fingerprint={status?.fingerprint ?? ""}
+          />
           <CreateGroupPanel guard={guard} setNotice={setNotice} onChanged={onChanged} />
         </>
       )}
@@ -172,6 +177,8 @@ function InvitePanel({ guard, setNotice }: { guard: Guard; setNotice: SetNotice 
       <div className="card">
         <p className="muted">
           Show this to the joining device. The token is short-lived and pairs exactly one device.
+          When the device uses it, this window asks you to check its fingerprint before it gets
+          anything.
         </p>
         <button
           className="action primary"
@@ -373,16 +380,24 @@ function ShowOfferPanel({
 }
 
 // Joining with a code a member is showing (SPEC §3.2, the original direction).
+//
+// The member's user has to confirm this device's fingerprint before it hands
+// the key over, so joining waits on a person, not only on the network: the
+// fingerprint is shown here for them to compare, and the button says what it
+// is waiting for.
 function JoinPanel({
   guard,
   setNotice,
   onChanged,
+  fingerprint,
 }: {
   guard: Guard;
   setNotice: SetNotice;
   onChanged: () => void;
+  fingerprint: string;
 }) {
   const [payload, setPayload] = useState("");
+  const [waiting, setWaiting] = useState(false);
 
   return (
     <section className="group">
@@ -394,23 +409,41 @@ function JoinPanel({
           value={payload}
           onChange={(e) => setPayload(e.target.value)}
           placeholder="tpp pairing payload"
+          disabled={waiting}
         />
         <div className="row">
           <button
             className="action primary"
-            disabled={!payload.trim()}
+            disabled={!payload.trim() || waiting}
             onClick={() =>
               void guard(async () => {
-                await api.joinPairing(payload.trim());
+                setWaiting(true);
+                try {
+                  await api.joinPairing(payload.trim());
+                } finally {
+                  setWaiting(false);
+                }
                 setPayload("");
-                setNotice("Paired. The group key arrives from the inviting device.");
+                setNotice("Paired. This device now holds the group key.");
                 onChanged();
               })
             }
           >
-            Join
+            {waiting ? <span className="spinner" /> : null}
+            {waiting ? "Waiting for the other device…" : "Join"}
           </button>
         </div>
+        {fingerprint ? (
+          <>
+            <p className="muted small">
+              The other device will ask its user to check this device&apos;s fingerprint before it
+              hands anything over. This device&apos;s fingerprint is:
+            </p>
+            <div className="copy-row">
+              <code className="value mono">{fingerprint}</code>
+            </div>
+          </>
+        ) : null}
       </div>
     </section>
   );
