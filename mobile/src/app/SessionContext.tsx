@@ -10,8 +10,9 @@
 
 import React, { createContext, useContext, useMemo, useSyncExternalStore } from 'react';
 
-import type { Client, Progress } from '../core';
+import type { Client, Device, JoinRequest, Progress } from '../core';
 import {
+  answerJoin,
   answerQuestion,
   claimPendingCode,
   clearError,
@@ -54,6 +55,12 @@ export interface SessionState {
   transfers: readonly Progress[];
   /** evicted is the last entry the relay removed early; seq changes with each one. */
   evicted: { id: string; seq: number } | null;
+  /** joinRequests are devices asking to join with an invitation this device showed. */
+  joinRequests: readonly JoinRequest[];
+  /** keyRefused says the relay offered a group key this device could not verify, or is "". */
+  keyRefused: string;
+  /** answerJoin confirms or turns down a join request; confirming resolves with the device admitted. */
+  answerJoin(request: JoinRequest, confirm: boolean): Promise<Device | null>;
   setError(message: string): void;
   clearError(): void;
   /** claimPendingCode hands the deep-linked code to exactly one screen. */
@@ -105,6 +112,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
       pendingCode: snapshot.pendingCode,
       transfers: snapshot.transfers,
       evicted: snapshot.evicted,
+      joinRequests: snapshot.joinRequests,
+      keyRefused: snapshot.keyRefused,
+      answerJoin,
       answer: answerQuestion,
       setError,
       clearError,

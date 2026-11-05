@@ -45,6 +45,7 @@ import { ActivityIndicator, Pressable, StatusBar, Text, View } from 'react-nativ
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Icon, type IconName } from './icons';
+import { JoinRequestSheet } from './JoinRequestSheet';
 import { PairingRequest } from './PairingRequest';
 import { SessionProvider, useSession } from './SessionContext';
 import { DevicesScreen } from './screens/DevicesScreen';
@@ -127,6 +128,7 @@ function Shell(): React.JSX.Element {
         will not answer.
       */}
       <PairingRequest />
+      <JoinRequestSheet />
       <View
         accessibilityRole="tablist"
         style={[styles.tabBar, { paddingBottom: insets.bottom }]}
