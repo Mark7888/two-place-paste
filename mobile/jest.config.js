@@ -17,7 +17,7 @@
 module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>/src/core', '<rootDir>/src/app'],
-  // Only *.test.ts is a test; the fake relay next to them is a helper.
+  // Only *.test.ts is a test; helpers next to them are not.
   testMatch: ['**/*.test.ts'],
   // @noble/* ship ESM only (spec/crypto.md §2.2 pins them), so they are
   // transformed rather than ignored like the rest of node_modules.

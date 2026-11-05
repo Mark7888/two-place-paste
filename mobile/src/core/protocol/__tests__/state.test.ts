@@ -13,7 +13,7 @@ import {
 } from '../state';
 import { classifyCode, encodePairingPayload } from '../pairing';
 import { normalizeServerURL, splitCreationURL, websocketURL } from '../urls';
-import { MemoryStore } from './fakeRelay';
+import { MemoryStore } from '../../demo';
 
 describe('stored state', () => {
   test('round trips, including an epoch no JSON number could hold', () => {

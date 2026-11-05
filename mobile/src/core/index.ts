@@ -12,3 +12,4 @@ export * from './bytes';
 export * from './random';
 export * from './crypto';
 export * from './protocol';
+export * from './demo';
