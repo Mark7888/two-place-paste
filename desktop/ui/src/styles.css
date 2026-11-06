@@ -1054,6 +1054,3 @@ button.choice[aria-checked="true"] .choice-tag { color: inherit; }
 .setup-row .text { display: flex; flex-direction: column; min-width: 12rem; flex: 1 1 12rem; }
 .setup-row .text .why { color: var(--muted); font-size: 0.85rem; }
 .setup-row button.choice { min-width: 4.5rem; }
-
-/* A control under a settings group, outside its bordered list. */
-.section-foot { margin-top: 0.6rem; }

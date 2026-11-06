@@ -180,14 +180,6 @@ export function SettingsPanel({
             </span>
           </label>
         </div>
-        <div className="row section-foot">
-          <button type="button" className="action" onClick={onRunSetup}>
-            Run setup again…
-          </button>
-          <span className="muted small">
-            The first-run questions: login, updates, syncing and this device&rsquo;s name.
-          </span>
-        </div>
       </section>
 
       <section className="group">
@@ -304,6 +296,15 @@ export function SettingsPanel({
               <dd>{status.keystore}</dd>
             </dl>
           ) : null}
+
+          <div className="row">
+            <button type="button" className="action" onClick={onRunSetup}>
+              Run setup again…
+            </button>
+            <span className="muted small">
+              The first-run questions: login, updates, syncing and this device&rsquo;s name.
+            </span>
+          </div>
         </div>
       </section>
 
