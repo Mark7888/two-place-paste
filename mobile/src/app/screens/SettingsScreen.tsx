@@ -11,7 +11,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Alert, Linking, Text, View } from 'react-native';
+import { Alert, Linking, Switch, Text, View } from 'react-native';
 
 import { publicKey, toHex } from '../../core';
 import { appInfo, tile, type AppVersion } from '../../platform';
@@ -20,7 +20,7 @@ import { LicensesScreen } from '../LicensesScreen';
 import { useSession } from '../SessionContext';
 import { failureMessage } from '../session';
 import { Button, Notice, Screen, Section } from '../ui';
-import { styles } from '../theme';
+import { colors, styles } from '../theme';
 
 export function SettingsScreen(): React.JSX.Element {
   const session = useSession();
@@ -64,6 +64,18 @@ export function SettingsScreen(): React.JSX.Element {
           },
         },
       ],
+    );
+  };
+
+  // Turning it off hides the Groups tab and nothing else: the group in use
+  // stays in use, and the ones set aside keep their keys.
+  const toggleMultiGroup = (on: boolean) => {
+    void session.setMultiGroup(on).then(
+      () =>
+        setMessage(
+          on ? '' : 'The group in use stays. The others are kept for when you turn this back on.',
+        ),
+      (err: unknown) => setMessage(failureMessage(err)),
     );
   };
 
@@ -130,10 +142,28 @@ export function SettingsScreen(): React.JSX.Element {
         ) : (
           <View style={{ gap: 10 }}>
             <Text style={styles.muted}>
-              Deletes this device’s keys and returns the app to its setup screen. This is also how
-              the device is moved to another group.
+              {session.multiGroup
+                ? 'Deletes this device’s keys for the group in use and returns the app to its setup screen. The groups set aside keep their keys.'
+                : 'Deletes this device’s keys and returns the app to its setup screen. This is also how the device is moved to another group, unless Keep several groups is on.'}
             </Text>
             <Button label="Leave the group" variant="danger" onPress={forget} />
+          </View>
+        )}
+        {!session.demo && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <View style={styles.rowBody}>
+              <Text style={styles.text}>Keep several groups</Text>
+              <Text style={styles.muted}>
+                Adds a Groups tab to keep other groups next to this one and switch between them. Off
+                by default.
+              </Text>
+            </View>
+            <Switch
+              accessibilityLabel="Keep several groups"
+              value={session.multiGroup}
+              onValueChange={toggleMultiGroup}
+              trackColor={{ false: colors.border, true: colors.accent }}
+            />
           </View>
         )}
       </Section>

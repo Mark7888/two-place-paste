@@ -10,20 +10,24 @@
 
 import React, { createContext, useContext, useMemo, useSyncExternalStore } from 'react';
 
-import type { Client, Progress } from '../core';
+import type { Client, ParkedGroup, Progress } from '../core';
 import {
   answerQuestion,
   claimPendingCode,
   clearError,
+  addGroup,
   closeDemo,
   forget,
   getSnapshot,
   init,
   refresh,
+  removeGroup,
   setError,
+  setMultiGroup,
   setNotice,
   startDemo,
   subscribe,
+  switchGroup,
   type Answer,
   type Question,
 } from './sessionStore';
@@ -60,6 +64,12 @@ export interface SessionState {
   demo: boolean;
   /** demoAvailable is true while the setup screen may offer the demo: until this device first joins a real group. */
   demoAvailable: boolean;
+  /** multiGroup is the "Keep several groups" setting: it shows the Groups tab. */
+  multiGroup: boolean;
+  /** activeRef names the group in use, or is "" in none. */
+  activeRef: string;
+  /** parkedGroups are the groups set aside on this device. */
+  parkedGroups: readonly ParkedGroup[];
   setError(message: string): void;
   clearError(): void;
   /** claimPendingCode hands the deep-linked code to exactly one screen. */
@@ -79,6 +89,14 @@ export interface SessionState {
   startDemo(): Promise<void>;
   /** closeDemo ends the demo and returns to the setup screen, with the device's real keys as they were. */
   closeDemo(): void;
+  /** setMultiGroup turns "Keep several groups" on or off. Off keeps every group. */
+  setMultiGroup(on: boolean): Promise<void>;
+  /** switchGroup makes a group set aside the one in use, and connects it. */
+  switchGroup(ref: string): Promise<void>;
+  /** addGroup sets the group in use aside; the setup screen then creates or joins the new one. */
+  addGroup(): Promise<void>;
+  /** removeGroup deletes the keys of a group set aside. */
+  removeGroup(ref: string): Promise<void>;
 }
 
 const SessionContext = createContext<SessionState | null>(null);
@@ -117,6 +135,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
       evicted: snapshot.evicted,
       demo: snapshot.demo,
       demoAvailable: snapshot.demoAvailable,
+      multiGroup: snapshot.multiGroup,
+      activeRef: snapshot.activeRef,
+      parkedGroups: snapshot.parkedGroups,
       answer: answerQuestion,
       setError,
       clearError,
@@ -126,6 +147,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
       forget,
       startDemo,
       closeDemo,
+      setMultiGroup,
+      switchGroup,
+      addGroup,
+      removeGroup,
     }),
     [snapshot],
   );

@@ -2,7 +2,7 @@
  * The app shell: a tab per screen, the setup gate in front of them, and the
  * window insets.
  *
- * The navigation is six tabs and a piece of state. A navigation library would
+ * The navigation is six tabs — seven with Groups — and a piece of state. A navigation library would
  * be a dependency to keep current for a stack that is one level deep
  * (docs/internal/conventions.md §9).
  *
@@ -48,6 +48,7 @@ import { Icon, type IconName } from './icons';
 import { PairingRequest } from './PairingRequest';
 import { SessionProvider, useSession } from './SessionContext';
 import { DevicesScreen } from './screens/DevicesScreen';
+import { GroupsScreen } from './screens/GroupsScreen';
 import { HistoryScreen } from './screens/HistoryScreen';
 import { PairingScreen } from './screens/PairingScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
@@ -56,13 +57,14 @@ import { SetupScreen } from './screens/SetupScreen';
 import { SyncScreen } from './screens/SyncScreen';
 import { colors, styles } from './theme';
 
-type Tab = 'sync' | 'history' | 'store' | 'devices' | 'pairing' | 'settings';
+type Tab = 'sync' | 'history' | 'store' | 'devices' | 'groups' | 'pairing' | 'settings';
 
 const TABS: { id: Tab; label: string; icon: IconName }[] = [
   { id: 'sync', label: 'Sync', icon: 'sync' },
   { id: 'history', label: 'History', icon: 'history' },
   { id: 'store', label: 'Store', icon: 'store' },
   { id: 'devices', label: 'Devices', icon: 'devices' },
+  { id: 'groups', label: 'Groups', icon: 'groups' },
   { id: 'pairing', label: 'Pairing', icon: 'link' },
   { id: 'settings', label: 'Settings', icon: 'settings' },
 ];
@@ -72,6 +74,7 @@ const SCREENS: Record<Tab, () => React.JSX.Element> = {
   history: HistoryScreen,
   store: StoreScreen,
   devices: DevicesScreen,
+  groups: GroupsScreen,
   pairing: PairingScreen,
   settings: SettingsScreen,
 };
@@ -113,7 +116,11 @@ function Shell(): React.JSX.Element {
   // correcting the state from an effect after the fact — is what guarantees
   // that the screen on show and the tab lit in the bar are the same tab, on
   // every frame including the first one after a group is joined or left.
-  const active: Tab = TABS.some((t) => t.id === requested) ? requested : 'sync';
+  // Groups is a tab only while "Keep several groups" is on, and never in the
+  // demo, whose client is not the device's. Turning the setting off while on
+  // the tab lands on Sync, by the same rule as any tab that is not shown.
+  const tabs = TABS.filter((t) => t.id !== 'groups' || (session.multiGroup && !session.demo));
+  const active: Tab = tabs.some((t) => t.id === requested) ? requested : 'sync';
   const Screen = SCREENS[active];
 
   return (
@@ -140,7 +147,7 @@ function Shell(): React.JSX.Element {
         accessibilityRole="tablist"
         style={[styles.tabBar, { paddingBottom: insets.bottom }]}
       >
-        {TABS.map((entry) => {
+        {tabs.map((entry) => {
           const selected = entry.id === active;
           return (
             <Pressable
