@@ -36,6 +36,13 @@ type fakeRelay struct {
 	name    string
 
 	reconnects int
+	connects   int
+
+	// active and parked model the groups the client core keeps
+	// (groups.go); parkErr fails the next ParkActive or SwitchGroup.
+	active  string
+	parked  []tppclient.ParkedGroup
+	parkErr error
 
 	// store is the relay's store; storeLists counts its listings.
 	store      *fakeStore
@@ -64,7 +71,7 @@ func (f *fakeRelay) wait(ctx context.Context, gate func(*fakeRelay) chan struct{
 }
 
 func newFakeRelay(now func() time.Time) *fakeRelay {
-	return &fakeRelay{inGroup: true, now: now}
+	return &fakeRelay{inGroup: true, active: "ref-home", now: now}
 }
 
 func (f *fakeRelay) State() tppclient.State {
@@ -76,9 +83,18 @@ func (f *fakeRelay) SetDeviceName(name string) error {
 	f.name = name
 	return nil
 }
-func (f *fakeRelay) InGroup() bool                             { return f.inGroup }
-func (f *fakeRelay) Epoch() uint64                             { return 3 }
-func (f *fakeRelay) Connect(context.Context) error             { return nil }
+func (f *fakeRelay) InGroup() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.inGroup
+}
+func (f *fakeRelay) Epoch() uint64 { return 3 }
+func (f *fakeRelay) Connect(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.connects++
+	return nil
+}
 func (f *fakeRelay) Reconnect()                                { f.mu.Lock(); f.reconnects++; f.mu.Unlock() }
 func (f *fakeRelay) CreateGroup(context.Context, string) error { return nil }
 func (f *fakeRelay) JoinPairing(context.Context, string) error { return nil }
@@ -92,6 +108,66 @@ func (f *fakeRelay) Forget() error {
 	f.inGroup = false
 	f.entries = nil
 	return nil
+}
+
+func (f *fakeRelay) ActiveRef() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.inGroup {
+		return ""
+	}
+	return f.active
+}
+
+func (f *fakeRelay) ParkedGroups() []tppclient.ParkedGroup {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]tppclient.ParkedGroup(nil), f.parked...)
+}
+
+func (f *fakeRelay) ParkActive() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.parkErr != nil {
+		return f.parkErr
+	}
+	if f.inGroup {
+		f.parked = append(f.parked, tppclient.ParkedGroup{Ref: f.active, GroupName: "parked " + f.active})
+	}
+	f.inGroup, f.active, f.entries = false, "", nil
+	return nil
+}
+
+func (f *fakeRelay) SwitchGroup(ref string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.parkErr != nil {
+		return f.parkErr
+	}
+	for i, g := range f.parked {
+		if g.Ref != ref {
+			continue
+		}
+		f.parked = append(f.parked[:i:i], f.parked[i+1:]...)
+		if f.inGroup {
+			f.parked = append(f.parked, tppclient.ParkedGroup{Ref: f.active, GroupName: "parked " + f.active})
+		}
+		f.inGroup, f.active, f.entries = true, ref, nil
+		return nil
+	}
+	return tppclient.ErrUnknownGroup
+}
+
+func (f *fakeRelay) RemoveParked(ref string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, g := range f.parked {
+		if g.Ref == ref {
+			f.parked = append(f.parked[:i:i], f.parked[i+1:]...)
+			return nil
+		}
+	}
+	return tppclient.ErrUnknownGroup
 }
 
 func (f *fakeRelay) StartPairing(context.Context) (*tppclient.Invitation, error) {

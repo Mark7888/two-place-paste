@@ -414,9 +414,11 @@ func (s *Service) Status(ctx context.Context) localui.Status {
 		note = &v
 	}
 	pause := s.pauseViewLocked()
+	multiGroup := s.settings.MultiGroup
 	s.mu.Unlock()
 
 	st := localui.Status{
+		MultiGroup:    multiGroup,
 		Skipped:       skipped,
 		SensitiveNote: note,
 		Pause:         pause,
@@ -1188,7 +1190,22 @@ func (s *Service) Forget(context.Context) error {
 		return localui.Errorf(http.StatusInternalServerError, err,
 			"this device's keys could not be deleted")
 	}
+	s.resetGroupState()
 
+	s.activityChanged()
+	s.logger.Info("this device left its group at the user's request")
+	s.hub.publish(localui.Event{
+		Kind:    localui.EventDisconnected,
+		Message: "this device left the group; its keys have been deleted",
+	})
+	return nil
+}
+
+// resetGroupState drops what this service holds about the group it was in:
+// the connection state the UI renders, plans prepared for that group, and
+// the store it listed. The clipboard and the settings are the device's and
+// stay.
+func (s *Service) resetGroupState() {
 	s.mu.Lock()
 	s.connected = false
 	s.revoked = false
@@ -1201,14 +1218,6 @@ func (s *Service) Forget(context.Context) error {
 	s.offerPlans = map[string]*offerPlan{}
 	s.mu.Unlock()
 	s.store.clear()
-
-	s.activityChanged()
-	s.logger.Info("this device left its group at the user's request")
-	s.hub.publish(localui.Event{
-		Kind:    localui.EventDisconnected,
-		Message: "this device left the group; its keys have been deleted",
-	})
-	return nil
 }
 
 // Settings implements localui.API.
@@ -1246,6 +1255,7 @@ func (s *Service) settingsView(set config.Settings) localui.SettingsView {
 		AutoUpdate:           set.AutoUpdate,
 		NightlyCommit:        set.NightlyCommit,
 		SetupDone:            set.SetupDone,
+		MultiGroup:           set.MultiGroup,
 		RestartRequired:      set.ListenPort() != s.listenPort(),
 		DetectSensitive:      set.SensitiveDetection(),
 		Detectors:            detectorViews(set.EnabledDetectors()),
@@ -1308,6 +1318,9 @@ func (s *Service) UpdateSettings(ctx context.Context, p localui.SettingsPatch) (
 	}
 	if p.SetupDone != nil {
 		next.SetupDone = *p.SetupDone
+	}
+	if p.MultiGroup != nil {
+		next.MultiGroup = *p.MultiGroup
 	}
 	if p.NightlyCommit != nil {
 		commit := strings.ToLower(strings.TrimSpace(*p.NightlyCommit))
@@ -1383,7 +1396,7 @@ func (s *Service) UpdateSettings(ctx context.Context, p localui.SettingsPatch) (
 		"auto_upload_max_bytes", next.AutoUploadLimit(), "auto_download_max_bytes", next.AutoDownloadLimit(),
 		"update_channel", next.Channel(), "auto_update", next.AutoUpdate,
 		"detect_sensitive", next.SensitiveDetection(), "detectors", len(next.EnabledDetectors()),
-		"filters", len(next.Filters))
+		"filters", len(next.Filters), "multi_group", next.MultiGroup)
 	s.hub.publish(localui.Event{Kind: localui.EventSettings})
 	return s.settingsView(next), nil
 }
