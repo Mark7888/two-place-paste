@@ -33,6 +33,7 @@ type fakeRelay struct {
 	offer   *fakeOffer
 	accept  *fakeAcceptance
 	forgot  bool
+	name    string
 
 	reconnects int
 
@@ -68,6 +69,12 @@ func newFakeRelay(now func() time.Time) *fakeRelay {
 
 func (f *fakeRelay) State() tppclient.State {
 	return tppclient.State{DeviceID: "d1", DeviceName: "laptop", GroupID: "g1", ServerURL: "https://relay.example"}
+}
+func (f *fakeRelay) SetDeviceName(name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.name = name
+	return nil
 }
 func (f *fakeRelay) InGroup() bool                             { return f.inGroup }
 func (f *fakeRelay) Epoch() uint64                             { return 3 }

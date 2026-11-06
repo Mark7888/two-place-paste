@@ -269,6 +269,21 @@ func (c *Client) State() State {
 	return c.state
 }
 
+// SetDeviceName changes what this device calls itself in the group-creation
+// and pairing flows started from now on (SPEC §3.3 step 2), and saves it. An
+// empty name is ignored. A device already in a group keeps the name the relay
+// listed it under: nothing on the wire renames a device.
+func (c *Client) SetDeviceName(name string) error {
+	c.mu.Lock()
+	if name == "" || name == c.state.DeviceName {
+		c.mu.Unlock()
+		return nil
+	}
+	c.state.DeviceName = name
+	c.mu.Unlock()
+	return c.persist()
+}
+
 // Epoch is the group key generation this client currently holds.
 func (c *Client) Epoch() uint64 {
 	c.mu.Lock()

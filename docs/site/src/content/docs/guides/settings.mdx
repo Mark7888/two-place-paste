@@ -6,8 +6,31 @@ description: Every option in the desktop app's Settings tab.
 import { Aside } from '@astrojs/starlight/components';
 import { Image } from 'astro:assets';
 import settings from '../../../assets/screenshots/desktop-settings.webp';
+import setup from '../../../assets/screenshots/desktop-setup.webp';
 
 <Image src={settings} alt="The Settings tab" class="screenshot" />
+
+## First-run setup
+
+The first time the app opens on a computer that is not in a group yet, a short setup asks for the
+settings that matter most, one page each:
+
+1. **Start at login** — *On* is recommended. Choosing *Off* asks you to confirm, because the app
+   only syncs while it is running.
+2. **Install updates automatically** — *On* is recommended. It installs Stable releases on its
+   own; the channel stays Stable and can be changed under [Updates](/two-place-paste/install/updates/).
+3. **What should sync on its own** — *Send what I copy* (**Watch the clipboard**) and *Take what
+   other devices send* (**Take what other devices upload**). Both start on *Off*.
+4. **Device name** — filled in with the computer's name.
+5. **All set up** — **Pair this device** saves your answers and opens the **Pairing** tab.
+
+The first two have no answer picked: choose one to continue. **Back** goes to the previous page,
+and nothing is saved until the last one. A question this build cannot act on (no login item or no
+clipboard) is left out.
+
+<Image src={setup} alt="The first-run setup asking which clipboard directions sync on their own, both set to Off" class="screenshot" />
+
+**Run setup again…**, under Behaviour, asks the same questions again at any time.
 
 ## Behaviour
 
@@ -43,7 +66,7 @@ filter kind matches.
 
 | Setting | Default | What it does |
 |---|---|---|
-| **Name** | The computer's name | What your other devices show for this one, for example in the revoke dialog. Applies at the next launch. |
+| **Name** | The computer's name | What your other devices show for this one, for example in the revoke dialog. Used the next time this device creates a group or pairs; a device already in a group keeps the name it joined with. |
 | **Localhost port** | 47821 | The port of the app's own page, on `127.0.0.1`. Change it if another program uses 47821. Applies at the next launch. |
 
 This section also shows where the keys are kept: the macOS keychain or a DPAPI-sealed file on

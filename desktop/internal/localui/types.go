@@ -357,6 +357,10 @@ type SettingsView struct {
 	AutoUpdate    bool   `json:"auto_update"`
 	NightlyCommit string `json:"nightly_commit"`
 
+	// SetupDone is whether the first-run setup was finished; the UI shows its
+	// wizard until it is.
+	SetupDone bool `json:"setup_done"`
+
 	// RestartRequired is true when a saved port differs from the one this
 	// process is listening on: the service binds once, at startup.
 	RestartRequired bool `json:"restart_required"`
@@ -543,6 +547,10 @@ type SettingsPatch struct {
 	NightlyCommit *string `json:"nightly_commit"`
 
 	DetectSensitive *bool `json:"detect_sensitive"`
+
+	// SetupDone marks the first-run setup finished, or (false) asks for it
+	// again.
+	SetupDone *bool `json:"setup_done"`
 
 	// Detectors replaces the list of built-in detectors that are on.
 	Detectors *[]string `json:"detectors"`

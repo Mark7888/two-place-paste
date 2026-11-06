@@ -18,10 +18,13 @@ export function SettingsPanel({
   status,
   onChanged,
   lastEvent,
+  onRunSetup,
 }: {
   status: Status | null;
   onChanged: () => void;
   lastEvent: ServiceEvent | null;
+  /** onRunSetup opens the first-run setup again. */
+  onRunSetup: () => void;
 }) {
   const [settings, setSettings] = useState<SettingsView | null>(null);
   const [port, setPort] = useState("");
@@ -177,6 +180,14 @@ export function SettingsPanel({
             </span>
           </label>
         </div>
+        <div className="row section-foot">
+          <button type="button" className="action" onClick={onRunSetup}>
+            Run setup again…
+          </button>
+          <span className="muted small">
+            The first-run questions: login, updates, syncing and this device&rsquo;s name.
+          </span>
+        </div>
       </section>
 
       <section className="group">
@@ -252,7 +263,7 @@ export function SettingsPanel({
             </button>
           </div>
           <p className="muted small">
-            Shown in the revocation dialog on your other devices. Applies at the next launch.
+            Shown on your other devices. Used the next time this device creates a group or pairs.
           </p>
 
           <div className="inline-form">
