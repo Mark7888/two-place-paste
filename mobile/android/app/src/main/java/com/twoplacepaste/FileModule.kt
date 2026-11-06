@@ -2,6 +2,7 @@ package com.twoplacepaste
 
 import android.app.Activity
 import android.content.ActivityNotFoundException
+import android.content.ClipData
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -25,15 +26,17 @@ import java.io.File
 
 /**
  * What happens to a received entry the Android clipboard cannot hold — a file
- * from a desktop, a PDF, an archive. The user picks one of two things:
+ * from a desktop, a PDF, an archive — or an image the user chose not to
+ * paste. The user picks one of three things:
  *
  *  - [saveToDownloads] keeps a copy in Downloads/TwoPlacePaste;
- *  - [open] hands it to whichever app opens that type, and keeps nothing.
+ *  - [open] hands it to whichever app opens that type, and keeps nothing;
+ *  - [share] hands it to the share sheet, and keeps nothing.
  *
- * Opening does not go through Downloads. The bytes are staged in this app's
+ * Opening and sharing do not go through Downloads. The bytes are staged in this app's
  * cache and handed over as a FileProvider `content://` URI with a one-off read
- * grant, the same way a received image goes onto the clipboard. Each open
- * replaces the last one, so the cache never holds more than one file.
+ * grant, the same way a received image goes onto the clipboard. Each open or
+ * share replaces the last one, so the cache never holds more than one file.
  *
  * It also goes the other way: [pickFile] lets the user choose a file to save
  * to the group's store, through the system's own picker.
@@ -276,27 +279,14 @@ class FileModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun open(base64: String, filename: String, contentType: String, promise: Promise) {
         try {
-            val context = reactApplicationContext
             val mime = mimeOf(contentType, filename)
-            val directory = File(context.cacheDir, OPEN_DIRECTORY)
-            // One staged file at a time: the previous one is dropped first.
-            directory.listFiles()?.forEach { it.delete() }
-            if (!directory.exists() && !directory.mkdirs()) {
-                promise.reject(ERROR_CODE, "the file staging directory could not be created")
-                return
-            }
-            // The real name is kept, because the opening app shows it — and
-            // some pick how to read the file from its extension.
-            val file = File(directory, safeName(filename, mime))
-            file.outputStream().use { it.write(Base64.decode(base64, Base64.DEFAULT)) }
-
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.clips", file)
+            val (file, uri) = stage(base64, filename, mime)
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, mime)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             try {
-                context.startActivity(intent)
+                reactApplicationContext.startActivity(intent)
             } catch (e: ActivityNotFoundException) {
                 file.delete()
                 promise.reject(ERROR_CODE, "no app on this device can open $mime files", e)
@@ -306,6 +296,63 @@ class FileModule(reactContext: ReactApplicationContext) :
         } catch (e: Exception) {
             promise.reject(ERROR_CODE, "the file could not be opened", e)
         }
+    }
+
+    /**
+     * share hands the file to Android's share sheet, so the user can send it
+     * on to another app — a mail, a chat, a cloud drive. Like [open], nothing
+     * is saved to Downloads: it is staged in the cache under the same rule.
+     *
+     * The chooser is always shown, even when one app is the default for the
+     * type, because where a file goes next is a choice made each time.
+     */
+    @ReactMethod
+    fun share(base64: String, filename: String, contentType: String, promise: Promise) {
+        try {
+            val mime = mimeOf(contentType, filename)
+            val (file, uri) = stage(base64, filename, mime)
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = mime
+                putExtra(Intent.EXTRA_STREAM, uri)
+                // The grant travels with the ClipData: EXTRA_STREAM alone is
+                // not covered by FLAG_GRANT_READ_URI_PERMISSION through a chooser.
+                clipData = ClipData.newRawUri(file.name, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val chooser = Intent.createChooser(send, null).apply {
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                reactApplicationContext.startActivity(chooser)
+            } catch (e: ActivityNotFoundException) {
+                file.delete()
+                promise.reject(ERROR_CODE, "no app on this device can receive $mime files", e)
+                return
+            }
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject(ERROR_CODE, "the file could not be shared", e)
+        }
+    }
+
+    /**
+     * stage writes the file to this app's cache, replacing whatever was staged
+     * before, and returns it with the FileProvider URI another app reads it by.
+     * One staged file at a time keeps the cache from growing with every open.
+     */
+    private fun stage(base64: String, filename: String, mime: String): Pair<File, Uri> {
+        val context = reactApplicationContext
+        val directory = File(context.cacheDir, OPEN_DIRECTORY)
+        directory.listFiles()?.forEach { it.delete() }
+        if (!directory.exists() && !directory.mkdirs()) {
+            throw IllegalStateException("the file staging directory could not be created")
+        }
+        // The real name is kept, because the receiving app shows it — and
+        // some pick how to read the file from its extension.
+        val file = File(directory, safeName(filename, mime))
+        file.outputStream().use { it.write(Base64.decode(base64, Base64.DEFAULT)) }
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.clips", file)
+        return file to uri
     }
 
     /**

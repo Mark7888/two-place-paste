@@ -60,8 +60,8 @@ export interface SavedFile {
 }
 
 /**
- * FilesPort is what happens to a received item the clipboard cannot hold: the
- * user either keeps it in Downloads or opens it in another app.
+ * FilesPort is what happens to a received item the user does not paste: they
+ * keep it in Downloads, open it in another app, or share it with one.
  */
 export interface FilesPort {
   /** available reports whether this platform can save or open a file at all. */
@@ -78,6 +78,12 @@ export interface FilesPort {
    * Downloads: it is staged in this app's cache, and the next open replaces it.
    */
   open(item: ClipboardItem): Promise<void>;
+
+  /**
+   * share hands the item to the system's share sheet, staged the same way
+   * `open` stages it: nothing is saved to Downloads.
+   */
+  share(item: ClipboardItem): Promise<void>;
 
   /**
    * pick lets the user choose a file with the system's picker, for the store.
