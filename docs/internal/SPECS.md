@@ -260,7 +260,8 @@ storage rules are in `/spec/crypto.md` §10.1.
 - **Turning the setting off** hides the feature and keeps every group; the group in use
   stays in use. A build without the feature opens the group last in use.
 
-Desktop implements this (`docs/internal/plans/multi-group-desktop.md`).
+Desktop and Android implement this (`docs/internal/plans/multi-group-desktop.md`,
+`docs/internal/plans/multi-group-mobile.md`).
 
 ---
 

@@ -7,6 +7,7 @@ export * from './client';
 export * from './connection';
 export * from './entryCache';
 export * from './errors';
+export * from './groups';
 export * from './pairing';
 export * from './state';
 export * from './store';

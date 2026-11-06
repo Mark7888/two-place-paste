@@ -39,6 +39,7 @@ import { fingerprint, pairingLink } from '../../core';
 import { useSession } from '../SessionContext';
 import { enterGroup, failureMessage } from '../session';
 import { Button, Card, CopyButton, LinkButton, Notice, Screen } from '../ui';
+import { ParkedGroupList } from './GroupsScreen';
 import { useExpiry } from '../expiry';
 import { colors, styles } from '../theme';
 
@@ -189,6 +190,24 @@ export function SetupScreen(): React.JSX.Element {
       <Text style={styles.muted}>
         This device is not in a group yet. Its keypair has been generated and stays on this phone.
       </Text>
+
+      {/*
+        After "Add a group", or after leaving the group in use, this screen is
+        the whole app: no tab bar, so no Groups tab. The groups set aside are
+        offered here, so the user is never stuck with groups they cannot reach.
+      */}
+      {session.multiGroup && session.parkedGroups.length > 0 && (
+        <Card title="Your other groups">
+          <ParkedGroupList
+            groups={session.parkedGroups}
+            busy={busy}
+            onError={(text) => {
+              setOk(text === '');
+              setMessage(text);
+            }}
+          />
+        </Card>
+      )}
 
       <Card title="Join a group">
         <Text style={styles.muted}>

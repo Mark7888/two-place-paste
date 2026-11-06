@@ -26,7 +26,7 @@
 
 import { AppState, Linking, type AppStateStatus } from 'react-native';
 
-import type { Client, Handlers, Progress } from '../core';
+import type { Client, Handlers, ParkedGroup, Progress } from '../core';
 import { secureStore, tile } from '../platform';
 import { stripCodeEnvelope } from '../core';
 import {
@@ -115,7 +115,20 @@ export interface Snapshot {
   demo: boolean;
   /** demoAvailable is true while the setup screen may offer the demo: until this device first joins a real group. */
   demoAvailable: boolean;
+  /** multiGroup is the "Keep several groups" setting (docs/internal/plans/multi-group-mobile.md). */
+  multiGroup: boolean;
+  /** activeRef names the group in use, or is "" in none. */
+  activeRef: string;
+  /** parkedGroups are the groups set aside on this device. Empty in the demo. */
+  parkedGroups: readonly ParkedGroup[];
 }
+
+/**
+ * MULTI_GROUP_NAME is the secure-store entry that holds the "Keep several
+ * groups" setting: "1", or nothing. The app has no other settings store, and
+ * the demo gate keeps its flag the same way.
+ */
+export const MULTI_GROUP_NAME = 'multiGroup';
 
 type Listener = () => void;
 
@@ -136,6 +149,8 @@ const demoMode = new DemoMode();
 /** gate is read once the secure store is open; until then the demo is not offered. */
 let gate: DemoGate | null = null;
 let nextQuestionId = 1;
+/** multiGroup is the "Keep several groups" setting, read once the secure store is open. */
+let multiGroup = false;
 
 let started = false;
 const listeners = new Set<Listener>();
@@ -161,6 +176,9 @@ let snapshot: Snapshot = {
   evicted: null,
   demo: false,
   demoAvailable: false,
+  multiGroup: false,
+  activeRef: '',
+  parkedGroups: [],
 };
 
 function emit(): void {
@@ -185,6 +203,9 @@ function emit(): void {
     evicted,
     demo: demoMode.active,
     demoAvailable: !demoMode.active && (gate?.available ?? false),
+    multiGroup,
+    activeRef: demoMode.active ? '' : (client?.activeRef ?? ''),
+    parkedGroups: demoMode.active ? [] : (client?.parkedGroups() ?? []),
   };
   for (const listener of listeners) {
     listener();
@@ -256,6 +277,74 @@ export async function forget(): Promise<void> {
   clearStore();
   probablyRevoked = false;
   notice = '';
+  emit();
+}
+
+/**
+ * setMultiGroup turns "Keep several groups" on or off. Off hides the Groups
+ * tab and nothing else: the group in use stays in use and the others keep
+ * their keys.
+ */
+export async function setMultiGroup(on: boolean): Promise<void> {
+  if (on) {
+    await secureStore.save(MULTI_GROUP_NAME, '1');
+  } else {
+    await secureStore.clear(MULTI_GROUP_NAME);
+  }
+  multiGroup = on;
+  emit();
+}
+
+/** groupClient is the client the group operations act on, when they may run at all. */
+function groupClient(): Client {
+  if (!multiGroup) {
+    throw new Error('Turn on “Keep several groups” in Settings to use more than one group.');
+  }
+  if (demoMode.active) {
+    throw new Error('Close the demo first.');
+  }
+  if (client === null) {
+    throw new Error('TwoPlacePaste is still starting.');
+  }
+  if (syncing) {
+    throw new Error('Wait for the sync to finish first.');
+  }
+  return client;
+}
+
+/**
+ * switchGroup makes a group set aside the one in use. The client stops the
+ * group in use as the app closing would, and is connected again as a launch
+ * with the other group would be — if the app is on screen.
+ */
+export async function switchGroup(ref: string): Promise<void> {
+  const c = groupClient();
+  await c.switchGroup(ref);
+  resetScreens();
+  notice = `Switched to ${c.groupName !== '' ? c.groupName : 'the other group'}.`;
+  emit();
+  if (AppState.currentState === 'active') {
+    await c.connect().catch((err: unknown) => setNotice(failureMessage(err)));
+    emit();
+  }
+}
+
+/**
+ * addGroup sets the group in use aside. With no group key the shell shows the
+ * setup screen, where the new group is created or joined — and where the
+ * groups set aside are offered too, so the user is never stuck there.
+ */
+export async function addGroup(): Promise<void> {
+  const c = groupClient();
+  await c.parkActive();
+  resetScreens();
+  emit();
+}
+
+/** removeGroup deletes the keys of a group set aside. It is local, like leaving. */
+export async function removeGroup(ref: string): Promise<void> {
+  const c = groupClient();
+  await c.removeParked(ref);
   emit();
 }
 
@@ -407,6 +496,11 @@ export function init(): void {
       client = opened;
       gate = new DemoGate(secureStore);
       await gate.load();
+      multiGroup = await secureStore.load(MULTI_GROUP_NAME).then(
+        (v) => v === '1',
+        // A setting that cannot be read is the default: off.
+        () => false,
+      );
       ready = true;
       emit();
       if (opened.inGroup) {

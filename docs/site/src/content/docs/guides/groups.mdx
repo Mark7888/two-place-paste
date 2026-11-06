@@ -8,11 +8,13 @@ import { Image } from 'astro:assets';
 import groups from '../../../assets/screenshots/desktop-groups.webp';
 
 A device syncs with one group at a time. If you share a clipboard with two circles — work and
-home, say — the desktop app can keep both groups and let you switch between them, so you don't
-have to leave one and pair again to reach the other.
+home, say — the desktop and Android apps can keep both groups and let you switch between them, so
+you don't have to leave one and pair again to reach the other.
 
-Only one group is **in use** at a time. The others are **set aside**: their keys stay on this
-computer, but nothing syncs with them, and to their other devices this computer looks offline.
+Only one group is **in use** at a time. The others are **set aside**: their keys stay on the
+device, but nothing syncs with them, and to their other devices it looks offline.
+
+The steps below are for the desktop app; [On Android](#on-android) says what differs on a phone.
 
 ## Turn it on
 
@@ -72,3 +74,17 @@ Turning **Keep several groups** off hides the Groups tab and nothing else. The g
 use, and the others keep their keys on this computer: turn the setting back on to see them again.
 
 An older version of the app that doesn't have this setting opens the group that was last in use.
+
+## On Android
+
+Turn on **Keep several groups** in **Settings**, under Group. A **Groups** tab appears between
+Devices and Pairing, with the same **Switch**, **Remove** and **Add a group**.
+
+- **Add a group** sets the group in use aside and takes the app back to its setup screen, where you
+  join or create the new group as on a fresh install.
+- While the phone is in no group — after adding one, or after leaving the group in use — the setup
+  screen lists **Your other groups** with **Switch**, so you can always go back.
+- The quick-settings tile syncs with the group in use.
+- A group the server admin deleted is deleted from the phone when you move on from it. A group
+  that only seems to have removed this phone is set aside like any other; remove it yourself if it
+  can't be used any more.

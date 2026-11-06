@@ -140,6 +140,15 @@ import { Connection, REQUEST_TIMEOUT_MS, SocketFactory, webSocketFactory } from 
 import { DEFAULT_TTL_MS, type EntryCache } from './entryCache';
 import { ProtocolError, TppError, isCode } from './errors';
 import {
+  PARKED_STATE_NAME,
+  decodeParked,
+  encodeParked,
+  groupRef,
+  withGroup,
+  withoutGroup,
+  type ParkedGroup,
+} from './groups';
+import {
   decodePairingOffer,
   decodePairingPayload,
   encodePairingOffer,
@@ -558,6 +567,22 @@ export class Client {
   private storeKeys: { groupKeyHex: string; keys: Map<bigint, Uint8Array>; links: Map<bigint, Uint8Array> | null } | null =
     null;
 
+  /**
+   * parked are the groups set aside (groups.ts). parkedLocked is set when the
+   * stored record could not be read, so it is never overwritten with a list
+   * that lost its groups.
+   */
+  private parked: ClientState[] = [];
+  private parkedLocked = false;
+  /**
+   * writes orders every write of this client's records. A write started for
+   * one group — a rekey's, say — always lands before a switch replaces it, so
+   * the active entry can never end up holding the group switched away from.
+   */
+  private writes: Promise<void> = Promise.resolve();
+  /** identityOps serialises the operations that replace the identity: forget and the group switches. */
+  private identityOps: Promise<void> = Promise.resolve();
+
   private constructor(state: ClientState, options: ClientOptions) {
     this.state = state;
     this.store = options.store;
@@ -579,7 +604,9 @@ export class Client {
       state.deviceName = options.deviceName;
       await saveState(options.store, state);
     }
-    return new Client(state, options);
+    const client = new Client(state, options);
+    await client.loadParked();
+    return client;
   }
 
   /** snapshot returns the current state. It carries both secrets: for persistence and tests, never for display or a log. */
@@ -801,7 +828,7 @@ export class Client {
       return;
     }
     this.state = { ...this.state, groupName: name };
-    await saveState(this.store, this.state);
+    await this.persist();
     this.handlers.onGroupName?.(name);
   }
 
@@ -953,7 +980,7 @@ export class Client {
 
   private async setGroupKey(epoch: bigint, groupKey: Uint8Array): Promise<void> {
     this.state = { ...this.state, epoch, groupKey };
-    await saveState(this.store, this.state);
+    await this.persist();
     this.handlers.onEpoch?.(epoch);
   }
 
@@ -1017,7 +1044,7 @@ export class Client {
       groupName: '',
     };
     this.deleted = false;
-    await saveState(this.store, this.state);
+    await this.persist();
     await this.connect();
   }
 
@@ -1317,7 +1344,7 @@ export class Client {
       groupName: '',
     };
     this.deleted = false;
-    await saveState(this.store, this.state);
+    await this.persist();
     await this.connect();
   }
 
@@ -1336,15 +1363,198 @@ export class Client {
    * device that left.
    */
   async forget(): Promise<void> {
+    await this.exclusive(async () => {
+      await this.resetTo(newState(this.state.deviceName));
+      await this.persist();
+    });
+  }
+
+  /**
+   * resetTo installs `state` as this client's identity, offline, and drops
+   * everything that belonged to the one before: the socket, invitations, the
+   * entry cache, store keys. It does not write `state`.
+   */
+  private async resetTo(state: ClientState): Promise<void> {
     this.disconnect();
     this.invitations.clear();
-    // Entries of a group this device has left are no business of its cache.
+    // Entries of a group this device is no longer using are no business of its cache.
     this.recent = null;
     await this.cache?.clear().catch(() => undefined);
     this.refusals = 0;
     this.deleted = false;
-    this.state = newState(this.state.deviceName);
-    await saveState(this.store, this.state);
+    this.storeKeys = null;
+    this.limitsCache = null;
+    this.backoffMs = MIN_BACKOFF_MS;
+    this.state = state;
+  }
+
+  /** persist queues a write of `state` (by default the current one) behind every earlier write. */
+  private persist(state: ClientState = this.state): Promise<void> {
+    const run = this.writes.then(() => saveState(this.store, state));
+    this.writes = run.catch(() => undefined);
+    return run;
+  }
+
+  /** exclusive runs one identity operation after the ones before it have finished. */
+  private exclusive<T>(op: () => Promise<T>): Promise<T> {
+    const run = this.identityOps.then(op);
+    this.identityOps = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  // -------------------------------------------------------------------------
+  // Several groups (spec/crypto.md §10.1)
+  // -------------------------------------------------------------------------
+
+  /** activeRef names the group in use, or is "" when this device is in none. */
+  get activeRef(): string {
+    return this.inGroup ? groupRef(this.state.groupId) : '';
+  }
+
+  /**
+   * parkedGroups lists the groups set aside, oldest first. A copy of the group
+   * in use, left by an interrupted switch, is not listed.
+   */
+  parkedGroups(): ParkedGroup[] {
+    return this.parked
+      .filter((g) => g.groupId !== this.state.groupId)
+      .map((g) => ({ ref: groupRef(g.groupId), groupName: g.groupName, serverUrl: g.serverUrl }));
+  }
+
+  /**
+   * parkActive sets the group in use aside and leaves this client in no
+   * group, with a new keypair, ready to create a group or pair into one:
+   * adding a group is leaving one without deleting its keys. A group the
+   * relay said was deleted is discarded instead. With no group it does
+   * nothing.
+   */
+  async parkActive(): Promise<void> {
+    await this.exclusive(async () => {
+      if (!this.inGroup) {
+        return;
+      }
+      this.requireParkedReadable();
+      this.disconnect();
+      const outgoing = this.state;
+      if (!this.deleted) {
+        const next = withGroup(this.parked, outgoing);
+        await this.writeParked(next);
+        this.parked = next;
+      }
+      await this.resetTo(newState(outgoing.deviceName));
+      await this.persist();
+    });
+  }
+
+  /**
+   * switchGroup makes the group set aside under `ref` the one in use, and
+   * sets the one in use aside in its place (or discards it, if the relay said
+   * it was deleted). It leaves the client offline: the caller connects, as a
+   * launch with that group would.
+   *
+   * The writes are ordered so that an interruption leaves a group stored
+   * twice, never lost (spec/crypto.md §10.1). The device name is the
+   * installation's, so the incoming group takes the one in use now.
+   */
+  async switchGroup(ref: string): Promise<void> {
+    await this.exclusive(async () => {
+      this.requireParkedReadable();
+      const incoming = this.parked.find((g) => groupRef(g.groupId) === ref);
+      if (ref === '' || incoming === undefined || incoming.groupId === this.state.groupId) {
+        throw new TppError('unknown-group', 'That group is no longer on this device.');
+      }
+      this.disconnect();
+      const outgoing = this.state;
+      const next: ClientState = { ...incoming, deviceName: outgoing.deviceName };
+
+      // 1. The group in use joins the list; the incoming one is still in it.
+      let both = this.parked;
+      if (inGroup(outgoing) && !this.deleted) {
+        both = withGroup(both, outgoing);
+        await this.writeParked(both);
+        this.parked = both;
+      }
+      // 2. The incoming group becomes the one in use.
+      await this.persist(next);
+      // 3. And leaves the list. A failure here only leaves a duplicate,
+      // which the next open removes.
+      const rest = withoutGroup(both, next.groupId);
+      await this.writeParked(rest).catch(() => undefined);
+      this.parked = rest;
+      await this.resetTo(next);
+    });
+  }
+
+  /**
+   * removeParked deletes the keys of a group set aside. Like `forget` it is
+   * local: the relay still lists this device until another member revokes it.
+   * The group in use cannot be removed this way.
+   */
+  async removeParked(ref: string): Promise<void> {
+    await this.exclusive(async () => {
+      this.requireParkedReadable();
+      const target = this.parked.find((g) => groupRef(g.groupId) === ref);
+      if (ref === '' || target === undefined || target.groupId === this.state.groupId) {
+        throw new TppError('unknown-group', 'That group is no longer on this device.');
+      }
+      const next = withoutGroup(this.parked, target.groupId);
+      await this.writeParked(next);
+      this.parked = next;
+    });
+  }
+
+  /**
+   * loadParked reads the groups set aside when the client opens, and drops a
+   * copy of the group in use that an interrupted switch left behind. It never
+   * fails the open: an unreadable record is left alone.
+   */
+  private async loadParked(): Promise<void> {
+    let raw: string | null;
+    try {
+      raw = await this.store.load(PARKED_STATE_NAME);
+    } catch {
+      this.parkedLocked = true;
+      return;
+    }
+    if (raw === null) {
+      return;
+    }
+    let groups: ClientState[];
+    try {
+      groups = decodeParked(raw);
+    } catch {
+      this.parkedLocked = true;
+      return;
+    }
+    const active = this.state.groupId;
+    if (active !== '' && groups.some((g) => g.groupId === active)) {
+      groups = withoutGroup(groups, active);
+      await this.writeParked(groups).catch(() => undefined);
+    }
+    this.parked = groups;
+  }
+
+  /** writeParked queues a write of the list; an empty list removes the entry. */
+  private writeParked(groups: readonly ClientState[]): Promise<void> {
+    const run = this.writes.then(() =>
+      groups.length === 0
+        ? this.store.clear(PARKED_STATE_NAME)
+        : this.store.save(PARKED_STATE_NAME, encodeParked(groups)),
+    );
+    this.writes = run.catch(() => undefined);
+    return run;
+  }
+
+  private requireParkedReadable(): void {
+    if (this.parkedLocked) {
+      throw new TppError(
+        'parked-unreadable',
+        'The other groups were saved by a newer version of TwoPlacePaste; update it to use them.',
+      );
+    }
   }
 
   // -------------------------------------------------------------------------
