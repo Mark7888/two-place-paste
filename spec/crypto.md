@@ -1,7 +1,7 @@
 # TwoPlacePaste — Cryptography Specification
 
 **Profile:** `tpp-crypto-v1`
-**Version:** 1.3
+**Version:** 1.4
 **Status:** normative for MVP
 **Companion to:** [`docs/internal/SPECS.md`](../docs/internal/SPECS.md) §2, §3
 **Vectors:** [`spec/vectors/`](vectors/) — 105 vectors, 10 suites
@@ -481,7 +481,9 @@ The epoch is a `u64` that identifies the group key generation (SPEC §1.3). It
 starts at **1** on group creation and increments by 1 on every rekey. It is
 carried in `u64be` form everywhere it is bound (§4.2, §5.1, §5.3).
 
-A client holds exactly one `(epoch, group_key)` pair at a time.
+A client holds exactly one `(epoch, group_key)` pair at a time for a group.
+An installation that keeps several groups (§10.1) holds one pair for each,
+and uses only the active group's.
 
 | Situation | Required behaviour |
 |---|---|
@@ -819,6 +821,50 @@ two rules are normative because they are cryptographic:
 - Neither key, nor a wrapped key, nor a plaintext frame may be written to a log
   or embedded in an error (`docs/internal/conventions.md` §1, §2).
 
+### 10.1 Several groups on one installation
+
+A client MAY let its user keep several groups and switch between them, with
+one group **active** at a time and the others **parked**. A parked group is
+not a second connection: nothing of it is loaded, it has no socket open, and to
+its group it is a device that is offline. The rules:
+
+- **The active group is stored where a single-group client keeps its state**,
+  under the same name and in the same format. A build that knows nothing of
+  parked groups therefore opens the last active group and carries on, which is
+  what makes a downgrade safe.
+- **A parked group is stored under the same rules as the active one** (§10
+  above). Its record holds a device private key and a group key, and its
+  identifiers are bearer credentials on the wire, so the whole record is
+  secret at rest. Parked groups SHOULD be kept together under one more name
+  rather than one name each, so the client knows what it holds without
+  listing the store, which not every OS store can do, and so that an OS
+  prompt for access to stored secrets, where there is one, is asked once and
+  not once per group.
+- **Every group has its own device keypair** (§3). A key generated for one
+  group MUST NOT be reused in another: the relay, and anyone who can read its
+  rosters, could then tell that two memberships belong to one installation.
+  Adding a group starts from a fresh keypair, as leaving does.
+- **Nothing is shared between groups.** Each record carries its own relay URL,
+  epoch and group key. A parked group's key is never used to open anything,
+  and store keys (§7a) are derived from the active group's key alone.
+- **A switch is ordered so that an interruption cannot lose a group.** The
+  outgoing active record is written to the parked records first, then the
+  incoming one replaces the active record, and only then is the incoming one
+  removed from the parked records. An interruption leaves a group in both
+  places; on start a client drops a parked record whose group id is the
+  active one's.
+- **Coming back is coming back online.** A parked group missed whatever
+  happened in it meanwhile. A rekey is caught up the way any offline device
+  catches up, from the wrapped key the relay holds for it (SPEC §3.3); a
+  revocation or a deleted group is found on connecting, as it would be after
+  a restart.
+- **Removing a parked group deletes its keys from the device** and, like
+  leaving the active group, changes nothing on the relay, which still lists
+  the device until another member revokes it.
+
+The format of the parked records is the client's own, like the active
+record's: nothing else reads them.
+
 ---
 
 ## 11. Design notes
@@ -906,3 +952,4 @@ cannot be confused on the wire.
 | 1.1 | §5.3: the entry id bound into the AAD is chosen by the writing client, not assigned by the server, with the form and uniqueness rules a server enforces. No byte layout, derivation or primitive changed, so the profile is still `tpp-crypto-v1`, the version byte is still `0x01` and every vector in `spec/vectors/` is byte-identical — this states who supplies a value the format always had. It lands with the `EntryPutRequest.entry_id` field that makes it constructible. |
 | 1.2 | §8: two rows for joiner-emitted pairing, where the code travels from the device without a group key to a member, and a note that the wrap target may be learned from either side's out-of-band code. The wrap is §4.2 exactly as it stands: no byte layout, domain-separation string, derivation or primitive changed, the profile is still `tpp-crypto-v1`, the version byte is still `0x01`, and every vector in `spec/vectors/` is byte-identical. It lands with the `PairingOffer` message types that make the other direction expressible. |
 | 1.3 | Additions only, for the store (SPEC §6b): §5.5.1 header version 2, §7a store keys, links, item keys and the metadata record, a note in §7, rows in §1, §2.3, §8 and §11.4, and three vector suites. No existing byte layout, domain-separation string, derivation or primitive changed, so the profile is still `tpp-crypto-v1` and the version byte is still `0x01`: the header has carried its own version byte since §5.5 so that it could grow this way, and the new strings name new purposes. Every existing vector is byte-identical except two failure vectors: `header-decode-unknown-version` now uses `0xff`, because `0x02` is a version now, and `header-wrong-length` says "neither 297 nor 553 bytes". A v1.2 reader rejects a v2 header and shows the entry's type as unknown, the behaviour §5.5 already specified. |
+| 1.4 | §10.1: how an installation keeps several groups, one active and the others parked, and a note in §7 that the one `(epoch, group_key)` pair is per group. No byte layout, domain-separation string, derivation or primitive changed, so the profile is still `tpp-crypto-v1`, the version byte is still `0x01` and every vector in `spec/vectors/` is byte-identical. It states storage rules for a client feature and has nothing on the wire. |
