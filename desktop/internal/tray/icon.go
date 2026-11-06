@@ -196,23 +196,30 @@ func strike(img *image.NRGBA, ink color.NRGBA) {
 	}
 }
 
+// The marks are cut three or four pixels wide and mostly on even pixels:
+// Windows shows the tray icon at 16×16, where a two-pixel cut, or one that
+// straddles a pixel pair, halves into a blur.
+
 // exclamationMark is the skipped badge's mark: a bar and a dot.
 func exclamationMark(x, y int) bool {
-	return x >= 23 && x < 25 && ((y >= 20 && y < 25) || (y >= 26 && y < 28))
+	return x >= 22 && x < 26 && ((y >= 18 && y < 24) || (y >= 26 && y < 30))
 }
 
 // pauseMark is the paused badge's mark: two upright bars.
 func pauseMark(x, y int) bool {
-	return y >= 21 && y < 28 && ((x >= 21 && x < 23) || (x >= 25 && x < 27))
+	return y >= 20 && y < 28 && ((x >= 19 && x < 22) || (x >= 26 && x < 29))
 }
 
 // badge draws a filled disc with a mark cut out of it over the board's bottom
 // right corner, with a cleared ring round it so it reads as a badge and not
 // as part of the board. Like strike, its edges are anti-aliased.
+//
+// The disc is half the canvas across and runs to its edge: smaller, it is a
+// speck at the 16×16 Windows draws the tray at.
 func badge(img *image.NRGBA, ink color.NRGBA, mark func(x, y int) bool) {
 	const (
 		cx, cy = 24.0, 24.0 // the disc's centre
-		disc   = 6.2        // its radius
+		disc   = 8.0        // its radius
 		ring   = 1.6        // the cleared gap round it
 	)
 	clamp := func(v float64) float64 { return math.Max(0, math.Min(1, v)) }
