@@ -153,6 +153,8 @@ export interface FakeRelayOptions {
   now?: () => number;
   /** groupName is what the admin has called the group. */
   groupName?: string;
+  /** groupId is the id the group is created with; two relays in one test need two. */
+  groupId?: string;
   /** limits are what EntryLimitsRequest is answered with; null answers as a relay that predates it. */
   limits?: EntryLimitsResponse | null;
   /** store is the group's store; null answers every store request as a relay that predates it. */
@@ -181,6 +183,7 @@ export class FakeRelay {
   private readonly storeConfig: StoreConfig | null;
   private readonly maxEntries: number;
   private readonly maxEntryBytes: number;
+  private readonly createdGroupId: string;
 
   private devices = new Map<string, StoredDevice>();
   private sockets = new Map<string, RelaySocket>();
@@ -196,6 +199,7 @@ export class FakeRelay {
     this.endpoint = websocketURL(this.baseUrl, '');
     this.now = options.now ?? Date.now;
     this.groupName = options.groupName ?? 'Family';
+    this.createdGroupId = options.groupId ?? 'group-1';
     this.limits = options.limits ?? null;
     this.storeConfig = options.store ?? null;
     this.maxEntries = options.maxEntries ?? Number.POSITIVE_INFINITY;
@@ -273,7 +277,7 @@ export class FakeRelay {
           fail(ErrorCode.ERROR_CODE_TOKEN_CONSUMED, 'one token, one group');
           return;
         }
-        this.groupId = 'group-1';
+        this.groupId = this.createdGroupId;
         const deviceId = this.addDevice(request.deviceName, request.devicePublicKey);
         reply(
           MessageType.MESSAGE_TYPE_CREATE_GROUP_RESPONSE,

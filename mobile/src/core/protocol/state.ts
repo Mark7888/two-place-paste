@@ -87,7 +87,7 @@ export function devicePublicKey(state: ClientState): Uint8Array {
  * string: JSON.parse would round a u64 epoch, and this file is the one that
  * has to survive a rekey at any epoch.
  */
-interface StoredState {
+export interface StoredState {
   server_url: string;
   group_id: string;
   device_id: string;
@@ -98,9 +98,9 @@ interface StoredState {
   group_name?: string;
 }
 
-/** encodeState serializes state for the secure store. */
-export function encodeState(state: ClientState): string {
-  const stored: StoredState = {
+/** toStored is state in its stored shape; the parked groups (groups.ts) are a list of these. */
+export function toStored(state: ClientState): StoredState {
+  return {
     server_url: state.serverUrl,
     group_id: state.groupId,
     device_id: state.deviceId,
@@ -110,7 +110,11 @@ export function encodeState(state: ClientState): string {
     group_key: toBase64URL(state.groupKey),
     group_name: state.groupName,
   };
-  return JSON.stringify(stored);
+}
+
+/** encodeState serializes state for the secure store. */
+export function encodeState(state: ClientState): string {
+  return JSON.stringify(toStored(state));
 }
 
 /** decodeState parses what encodeState wrote. */
@@ -121,6 +125,11 @@ export function decodeState(raw: string): ClientState {
   } catch (cause) {
     throw new TppError('invalid', 'stored state could not be decoded', { cause });
   }
+  return fromStored(stored);
+}
+
+/** fromStored reads state from its stored shape, tolerating fields an older build did not write. */
+export function fromStored(stored: StoredState): ClientState {
   return {
     serverUrl: stored.server_url ?? '',
     groupId: stored.group_id ?? '',

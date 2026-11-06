@@ -37,7 +37,14 @@ export type TppErrorKind =
    * A store item's keys, metadata or blob did not open: a missing link,
    * tampering or corruption. It is reported, never silently dropped.
    */
-  | 'store-unreadable';
+  | 'store-unreadable'
+  /** A ref names no group set aside: it was removed, or switched to, a moment ago. */
+  | 'unknown-group'
+  /**
+   * The groups set aside could not be read — a newer build's record, or a
+   * damaged one. They are left as they are, so nothing that changes them runs.
+   */
+  | 'parked-unreadable';
 
 /** TppError is a local failure with a kind a caller can switch on. */
 export class TppError extends Error {
