@@ -26,6 +26,8 @@ export type IconName =
   | 'alert'
   | 'close'
   | 'open'
+  | 'share'
+  | 'copy'
   | 'store'
   | 'plus'
   | 'tag'
@@ -49,6 +51,9 @@ const paths: Record<IconName, string> = {
   alert: 'M12 8v5M12 17h.01M10.3 3.9 2.4 17.5A2 2 0 0 0 4.1 20.5h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z',
   close: 'M6 6l12 12M18 6 6 18',
   open: 'M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5',
+  share:
+    'M18 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 22a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM8.6 13.5l6.8 4M15.4 6.5l-6.8 4',
+  copy: 'M9 9h11v11H9zM5 15H4V4h11v1',
   store: 'M3 4h18v4H3zM5 8v12h14V8M10 12h4',
   plus: 'M12 5v14M5 12h14',
   tag: 'M3 12V3h9l9 9-9 9zM7.5 7.5h.01',

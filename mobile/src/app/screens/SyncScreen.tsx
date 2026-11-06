@@ -25,6 +25,7 @@ import {
 import {
   Button,
   Choice,
+  FILE_CHOICES_TITLE,
   FileChoices,
   Notice,
   OutcomeNotice,
@@ -232,10 +233,11 @@ export function SyncScreen(): React.JSX.Element {
         </Text>
       </Sheet>
 
-      <Sheet visible={file !== null} title="Save or open?" onClose={() => setFile(null)}>
+      <Sheet visible={file !== null} title={FILE_CHOICES_TITLE} onClose={() => setFile(null)}>
         <FileChoices
           name={file?.name ?? ''}
           detail={file?.detail ?? ''}
+          canCopy={file?.canCopy ?? false}
           disabled={busy}
           onChoose={choose}
         />

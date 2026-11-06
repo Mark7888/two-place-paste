@@ -25,7 +25,9 @@ import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
 import type { EntryMeta, Progress } from '../../core';
 import type { SavedFile } from '../../platform';
 import { useSession } from '../SessionContext';
+import { receiveLabel } from '../choices';
 import {
+  choiceFor,
   deliver,
   failureMessage,
   handleFile,
@@ -36,7 +38,7 @@ import {
   type PendingFile,
 } from '../session';
 import { describeHeader, formatSize, headerPreviewable, previewOf, storeRoom, type Preview } from '../preview';
-import { Button, FileChoices, Notice, OutcomeNotice, Sheet, Shimmer, TransferList } from '../ui';
+import { Button, FILE_CHOICES_TITLE, FileChoices, Notice, OutcomeNotice, Sheet, Shimmer, TransferList } from '../ui';
 import { colors, styles } from '../theme';
 import { PreviewBody } from '../PreviewBody';
 import { StoreSheet } from '../StoreSheet';
@@ -88,7 +90,7 @@ export function HistoryScreen(): React.JSX.Element {
       return next;
     });
   }, []);
-  // A file waiting for save-or-open: asked before its download, from its header.
+  // A file or image waiting for the user's choice: asked before its download, from its header.
   const [file, setFile] = useState<PendingFile | null>(null);
   // The entry being saved to the store, while its sheet is open.
   const [saving, setSaving] = useState<EntryMeta | null>(null);
@@ -170,10 +172,11 @@ export function HistoryScreen(): React.JSX.Element {
     if (client === null) {
       return;
     }
-    if (needsFileChoice(meta.header)) {
-      // A file: ask first, from what its header says — the question appears
-      // at once and names the file, and the download runs after the answer.
-      setFile(pendingFromEntry(meta));
+    if (needsFileChoice(meta.header, true)) {
+      // A file or an image: ask first, from what its header says — the
+      // question appears at once and names the entry, and the download runs
+      // after the answer.
+      setFile(pendingFromEntry(meta, true));
       return;
     }
     if (busy) {
@@ -187,7 +190,7 @@ export function HistoryScreen(): React.JSX.Element {
         const item = await client.getEntry(meta.id, meta);
         // The download is over; what follows is local.
         fetchingEntry(meta.id, false);
-        const result = await deliver(toClipboardItem(item));
+        const result = await deliver(toClipboardItem(item), true);
         if (result.direction === 'file' && result.file !== undefined) {
           // Only when the header could not be read: the download came first.
           setFile(result.file);
@@ -295,6 +298,12 @@ export function HistoryScreen(): React.JSX.Element {
           const expanded = open === item.id;
           const loaded = previews[item.id];
           const previewable = headerPreviewable(item.header);
+          // Whether tapping Copy asks first (a file, or an image) and whether
+          // Copy is among the answers. With no readable header, it copies.
+          const rule =
+            item.header === null
+              ? { ask: false, canCopy: true }
+              : choiceFor(item.header.contentType, item.header.filename, true);
           return (
             <View style={[styles.card, { overflow: 'hidden' }, !canOpen && { opacity: 0.6 }]}>
               <Shimmer
@@ -324,9 +333,11 @@ export function HistoryScreen(): React.JSX.Element {
                       ? 'Hide'
                       : previewable
                         ? 'Tap to preview'
-                        : needsFileChoice(item.header)
-                          ? 'No preview — tap to save or open'
-                          : 'No preview — tap to copy'}
+                        : !rule.ask
+                          ? 'No preview — tap to copy'
+                          : rule.canCopy
+                            ? 'No preview — tap to copy, save or share'
+                            : 'No preview — tap to save or open'}
                 </Text>
               </Pressable>
 
@@ -341,15 +352,11 @@ export function HistoryScreen(): React.JSX.Element {
                   )}
                   <Button
                     label={
-                      jobs.has(item.id)
-                        ? 'Downloading…'
-                        : needsFileChoice(item.header)
-                          ? 'Save or open on this device'
-                          : 'Copy to this device'
+                      jobs.has(item.id) ? 'Downloading…' : receiveLabel(rule)
                     }
                     variant="secondary"
                     onPress={() => copy(item)}
-                    disabled={jobs.has(item.id) || (busy && !needsFileChoice(item.header))}
+                    disabled={jobs.has(item.id) || (busy && !rule.ask)}
                   />
                   {store.status === 'ready' && (
                     <Button
@@ -396,10 +403,11 @@ export function HistoryScreen(): React.JSX.Element {
         }}
       />
 
-      <Sheet visible={file !== null} title="Save or open?" onClose={() => setFile(null)}>
+      <Sheet visible={file !== null} title={FILE_CHOICES_TITLE} onClose={() => setFile(null)}>
         <FileChoices
           name={file?.name ?? ''}
           detail={file?.detail ?? ''}
+          canCopy={file?.canCopy ?? false}
           disabled={busy}
           onChoose={choose}
         />

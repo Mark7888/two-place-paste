@@ -1,12 +1,14 @@
 /**
- * Received files on Android: saved to Downloads, or opened in another app.
+ * Received files on Android: saved to Downloads, opened in another app, or
+ * shared through the share sheet.
  *
  * The Android clipboard has no way to carry a file, so an entry with a filename
  * (or a type the clipboard cannot hold) ends up here, after the user has
- * picked which of the two they want.
+ * picked what they want. An image can too, when the user chose not to paste it.
  *
- * Opening does not save anything to Downloads: the native module stages the
- * bytes in this app's cache and hands the opening app a read-only content URI.
+ * Opening and sharing do not save anything to Downloads: the native module
+ * stages the bytes in this app's cache and hands the receiving app a
+ * read-only content URI.
  */
 
 import { PermissionsAndroid, Platform } from 'react-native';
@@ -61,6 +63,13 @@ export const files: FilesPort = {
       throw new Error('this build cannot open files');
     }
     await TppFiles.open(await toStandardBase64(item.body), item.filename, item.contentType);
+  },
+
+  async share(item: ClipboardItem): Promise<void> {
+    if (TppFiles === null) {
+      throw new Error('this build cannot share files');
+    }
+    await TppFiles.share(await toStandardBase64(item.body), item.filename, item.contentType);
   },
 
   async pick(maxBytes: number): Promise<PickedFile | null> {

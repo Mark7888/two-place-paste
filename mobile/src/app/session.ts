@@ -17,7 +17,8 @@ import {
   type EntryHeaderView,
   type EntryMeta,
 } from '../core';
-import { formatSize } from './preview';
+import { choiceRule, type ChoiceRule } from './choices';
+import { formatSize, kindOf } from './preview';
 import {
   clipboard,
   clipboardTimestamp,
@@ -37,9 +38,11 @@ import {
  * not be made, so the caller must ask which way to go rather than report a
  * dead end — which is what the screen and the quick-settings tile both now do.
  *
- * `file` needs the user too: the entry is one the clipboard cannot hold, so the
- * caller asks whether to save it to Downloads or open it. When the entry's
- * sealed header says so, that is asked *before* anything is downloaded.
+ * `file` needs the user too: the entry is one the clipboard cannot hold — or an
+ * image, where the caller asked for images to be asked about — so the caller
+ * asks what to do with it: copy it (images only), save it to Downloads, open it
+ * or share it. When the entry's sealed header says so, that is asked *before*
+ * anything is downloaded.
  */
 export type Direction = 'uploaded' | 'downloaded' | 'nothing' | 'ambiguous' | 'file';
 
@@ -47,17 +50,25 @@ export type Direction = 'uploaded' | 'downloaded' | 'nothing' | 'ambiguous' | 'f
 export interface SyncResult {
   direction: Direction;
   message: string;
-  /** file is the entry waiting for the user's save-or-open choice, when `direction` is `file`. */
+  /** file is the entry waiting for the user's choice, when `direction` is `file`. */
   file?: PendingFile;
   /** saved is the file just saved to Downloads, so the notice can offer to open it. */
   saved?: SavedFile;
 }
 
-/** FileChoice is what the user does with a received file the clipboard cannot hold. */
-export type FileChoice = 'save' | 'open';
+/**
+ * FileChoice is what the user does with a received entry they were asked
+ * about. `copy` is only offered when the entry's `canCopy` says so.
+ */
+export type FileChoice = 'copy' | 'save' | 'open' | 'share';
+
+/** isFileChoice narrows an answer that came through an untyped path, such as the tile panel. */
+export function isFileChoice(value: unknown): value is FileChoice {
+  return value === 'copy' || value === 'save' || value === 'open' || value === 'share';
+}
 
 /**
- * PendingFile is a file entry waiting for the user to pick save or open. It is
+ * PendingFile is an entry waiting for the user to pick what happens to it. It is
  * either not downloaded yet (`entry`: its sealed header said what it is) or
  * already downloaded (`item`: the header could not be read, so the download
  * came first). Either way it carries what the question shows, so the user
@@ -68,43 +79,57 @@ export interface PendingFile {
   name: string;
   /** detail is "type · size · time", the line under the name. */
   detail: string;
+  /** canCopy is true when Copy is one of the answers: an image the clipboard can take. */
+  canCopy: boolean;
   entry?: EntryMeta;
   item?: ClipboardItem;
 }
 
 /**
- * needsFileChoice says, from an entry's sealed header and without fetching
- * it, whether it is something the clipboard cannot hold — and so whether the
- * save-or-open question comes before the download.
+ * choiceFor applies the rule in `choices.ts` on this device: whether an entry
+ * of this type asks what to do with it, and whether Copy is among the answers.
+ * `askForImages` is true where the user is browsing — the history and the
+ * store — and false on the one-tap paths, Sync down and the tile.
  */
-export function needsFileChoice(header: EntryHeaderView | null): boolean {
-  if (header === null || !files.available) {
-    return false;
-  }
-  return !clipboard.canWrite({
-    contentType: header.contentType,
-    filename: header.filename,
-    body: new Uint8Array(0),
+export function choiceFor(contentType: string, filename: string, askForImages = false): ChoiceRule {
+  return choiceRule(kindOf(contentType, filename), {
+    clipboardCanHold: clipboard.canWrite({ contentType, filename, body: new Uint8Array(0) }),
+    filesAvailable: files.available,
+    askForImages,
   });
 }
 
+/**
+ * needsFileChoice says, from an entry's sealed header and without fetching
+ * it, whether the question comes before the download: always for something
+ * the clipboard cannot hold, and for an image when `askForImages` is set.
+ */
+export function needsFileChoice(header: EntryHeaderView | null, askForImages = false): boolean {
+  if (header === null) {
+    return false;
+  }
+  return choiceFor(header.contentType, header.filename, askForImages).ask;
+}
+
 /** pendingFromEntry is the question for an entry that has not been downloaded. */
-export function pendingFromEntry(meta: EntryMeta): PendingFile {
+export function pendingFromEntry(meta: EntryMeta, askForImages = false): PendingFile {
   const h = meta.header;
   const type = h === null ? 'type unknown' : h.contentType.split(';')[0].trim();
   return {
     name: h !== null && h.filename !== '' ? h.filename : type,
     detail: `${type} · ${formatSize(h?.size ?? meta.size)} · ${meta.createdAt.toLocaleString()}`,
+    canCopy: h !== null && choiceFor(h.contentType, h.filename, askForImages).canCopy,
     entry: meta,
   };
 }
 
 /** pendingFromItem is the question for an entry already downloaded. */
-function pendingFromItem(item: ClipboardItem): PendingFile {
+function pendingFromItem(item: ClipboardItem, canCopy: boolean): PendingFile {
   const type = item.contentType.split(';')[0].trim();
   return {
     name: item.filename !== '' ? item.filename : type,
     detail: `${type} · ${formatSize(item.body.length)}`,
+    canCopy,
     item,
   };
 }
@@ -128,8 +153,8 @@ export function toClipboardItem(item: Item): ClipboardItem {
  * download copies the group's latest entry onto this device's clipboard.
  *
  * A file the clipboard cannot hold is not downloaded here: its header says what
- * it is, so the save-or-open question is returned first and the download
- * happens once it is answered (`handleFile`). `latest` is the newest entry's
+ * it is, so the question of what to do with it is returned first and the
+ * download happens once it is answered (`handleFile`). `latest` is the newest entry's
  * metadata when the caller already has it.
  *
  * An entry from an older epoch is not an error: it predates a rekey, this
@@ -168,24 +193,34 @@ export async function download(client: Client, latest?: EntryMeta): Promise<Sync
 
 /**
  * deliver puts a received item on the clipboard — or, when the clipboard
- * cannot hold it, hands it back as `file` so the caller can ask whether to save
- * it or open it. Nothing is written to storage until the user has chosen.
+ * cannot hold it, or it is an image and `askForImages` is set, hands it back as
+ * `file` so the caller can ask what to do with it. Nothing is written to the
+ * clipboard or to storage until the user has chosen.
  */
-export async function deliver(item: ClipboardItem): Promise<SyncResult> {
-  if (!clipboard.canWrite(item) && files.available) {
+export async function deliver(item: ClipboardItem, askForImages = false): Promise<SyncResult> {
+  const rule = choiceFor(item.contentType, item.filename, askForImages);
+  if (rule.ask) {
     return {
       direction: 'file',
-      message: `${describeItem(item)} cannot go on the clipboard.`,
-      file: pendingFromItem(item),
+      message: rule.canCopy
+        ? `${describeItem(item)} is waiting for a choice.`
+        : `${describeItem(item)} cannot go on the clipboard.`,
+      file: pendingFromItem(item, rule.canCopy),
     };
   }
+  return copyToClipboard(item);
+}
+
+/** copyToClipboard writes an item to this device's clipboard and says so. */
+async function copyToClipboard(item: ClipboardItem): Promise<SyncResult> {
   await clipboard.write(item);
   return { direction: 'downloaded', message: `Copied ${describeItem(item)} to this device.` };
 }
 
 /**
- * handleFile carries out the user's choice for a file: downloading it first if
- * the question came before the download, then saving or opening it.
+ * handleFile carries out the user's choice for an entry they were asked about:
+ * downloading it first if the question came before the download, then copying,
+ * saving, opening or sharing it.
  */
 export async function handleFile(
   client: Client,
@@ -199,16 +234,26 @@ export async function handleFile(
     }
     item = toClipboardItem(await client.getEntry(file.entry.id, file.entry));
   }
-  if (choice === 'save') {
-    const saved = await files.save(item);
-    return {
-      direction: 'downloaded',
-      message: `Saved ${saved.name} to Downloads/TwoPlacePaste.`,
-      saved,
-    };
+  switch (choice) {
+    case 'copy':
+      return copyToClipboard(item);
+    case 'save': {
+      const saved = await files.save(item);
+      return {
+        direction: 'downloaded',
+        message: `Saved ${saved.name} to Downloads/TwoPlacePaste.`,
+        saved,
+      };
+    }
+    case 'open':
+      await files.open(item);
+      return { direction: 'downloaded', message: `Opened ${describeItem(item)}.` };
+    case 'share':
+      // The share sheet is up; whether the user then picks an app is theirs
+      // to finish, and Android does not report it back.
+      await files.share(item);
+      return { direction: 'downloaded', message: `Opened the share sheet for ${describeItem(item)}.` };
   }
-  await files.open(item);
-  return { direction: 'downloaded', message: `Opened ${describeItem(item)}.` };
 }
 
 /** upload writes this device's clipboard to the group as the latest entry. */

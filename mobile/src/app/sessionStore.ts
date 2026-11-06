@@ -33,6 +33,7 @@ import {
   download,
   failureMessage,
   handleFile,
+  isFileChoice,
   openSession,
   sync,
   upload,
@@ -52,15 +53,19 @@ export type Answer = DirectionChoice | FileChoice;
  * a late answer to one that has already been resolved is ignored rather than
  * applied to the next one.
  *
- * `direction` asks which way to sync; `file` asks whether a received file the
- * clipboard cannot hold should be saved to Downloads or opened, and `name` is
- * how the file is described to the user.
+ * `direction` asks which way to sync; `file` asks what happens to a received
+ * entry the clipboard cannot hold — saved to Downloads, opened or shared, or
+ * copied when `canCopy` says it can be — and `name` is how it is described to
+ * the user.
  */
 export type Question = {
   id: number;
   /** fromTile is true when the panel that asked it was opened by the tile. */
   fromTile: boolean;
-} & ({ kind: 'direction' } | { kind: 'file'; name: string; detail: string });
+} & ({ kind: 'direction' } | FileQuestion);
+
+/** FileQuestion is the `file` kind of question: which entry it is, and whether Copy is offered. */
+type FileQuestion = { kind: 'file'; name: string; detail: string; canCopy: boolean };
 
 /** Snapshot is what a screen renders from. */
 export interface Snapshot {
@@ -322,7 +327,7 @@ export function answerQuestion(id: number, choice: Answer | null): void {
 /** ask puts a question and waits for whichever surface is on screen to answer it. */
 function ask(
   fromTile: boolean,
-  what: { kind: 'direction' } | { kind: 'file'; name: string; detail: string },
+  what: { kind: 'direction' } | FileQuestion,
 ): Promise<Answer | null> {
   return new Promise((resolve) => {
     question = { id: nextQuestionId++, fromTile, ...what };
@@ -586,12 +591,18 @@ function runTileSync(): void {
         result = choice === 'up' ? await upload(c) : await download(c);
       }
       if (result.direction === 'file' && result.file !== undefined) {
-        // A file the clipboard cannot hold: keep it, or look at it now. It is
-        // asked before the download, so the panel shows which file it is.
+        // A file the clipboard cannot hold: keep it, look at it now, or send
+        // it on. It is asked before the download, so the panel shows which
+        // file it is.
         const file = result.file;
-        const choice = await ask(true, { kind: 'file', name: file.name, detail: file.detail });
-        if (choice !== 'save' && choice !== 'open') {
-          cancel('The file was neither saved nor opened.');
+        const choice = await ask(true, {
+          kind: 'file',
+          name: file.name,
+          detail: file.detail,
+          canCopy: file.canCopy,
+        });
+        if (!isFileChoice(choice) || (choice === 'copy' && !file.canCopy)) {
+          cancel('The file was not saved, opened or shared.');
           return;
         }
         result = await handleFile(c, file, choice);

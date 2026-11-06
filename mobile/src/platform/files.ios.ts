@@ -16,6 +16,9 @@ export const files: FilesPort = {
   open: async () => {
     throw new Error('opening files is not supported on iOS yet');
   },
+  share: async () => {
+    throw new Error('sharing files is not supported on iOS yet');
+  },
   pick: async () => {
     throw new Error('picking files is not supported on iOS yet');
   },

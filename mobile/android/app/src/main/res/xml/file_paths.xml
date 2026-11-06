@@ -2,7 +2,7 @@
 <!--
   The directories the FileProvider may hand out: where a received image is
   staged before it goes on the clipboard, where a received file is staged
-  while another app opens it, and the Downloads subfolder files are saved to.
+  while another app opens or receives it, and the Downloads subfolder files are saved to.
   Nothing else is reachable through the provider.
 -->
 <paths>

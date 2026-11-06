@@ -77,8 +77,12 @@ export const clipboard: ClipboardPort = {
     if (item.filename !== '') {
       return false;
     }
+    if (item.contentType.startsWith('image/')) {
+      // Only through the native module (see `write`): without it an image
+      // cannot be pasted here, so Copy is not offered for it.
+      return TppClipboard !== null;
+    }
     return (
-      item.contentType.startsWith('image/') ||
       item.contentType.startsWith('text/') ||
       item.contentType.startsWith('application/json')
     );

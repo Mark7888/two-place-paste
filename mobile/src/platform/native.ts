@@ -65,6 +65,13 @@ export interface TppFilesModule {
   open(base64: string, filename: string, contentType: string): Promise<void>;
 
   /**
+   * share hands the file to Android's share sheet, staged in this app's cache
+   * the same way `open` stages it. It resolves once the sheet is up, not once
+   * the user has picked an app.
+   */
+  share(base64: string, filename: string, contentType: string): Promise<void>;
+
+  /**
    * pickFile shows the system's file picker. It resolves with the file, with
    * `tooLarge` and no bytes when it is over `maxBytes`, or with null when the
    * user backed out.
