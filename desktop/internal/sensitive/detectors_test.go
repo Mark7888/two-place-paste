@@ -82,7 +82,7 @@ func TestDetectorCatalogue(t *testing.T) {
 		}
 		seen[d.Name] = true
 	}
-	if got, want := strings.Join(DefaultDetectors(), ","), "private_keys"; got != want {
+	if got, want := strings.Join(DefaultDetectors(), ","), "private_keys,api_tokens"; got != want {
 		t.Errorf("DefaultDetectors = %q, want %q", got, want)
 	}
 }

@@ -142,6 +142,7 @@ var detectors = []Detector{
 		Name:        "api_tokens",
 		Title:       "Cloud and API tokens",
 		Description: "AWS, GitHub, GitLab, Slack, Stripe, Anthropic, OpenAI, Google, npm and SendGrid keys, by their prefixes.",
+		DefaultOn:   true,
 		match:       matchAny(apiTokens),
 	},
 	{
