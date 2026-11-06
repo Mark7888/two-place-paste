@@ -1,8 +1,9 @@
 # Plan — Several groups on the desktop app
 
-**Status:** in progress. The storage rules are in `/spec/crypto.md` §10.1;
-this plan is how the client core and the desktop app follow them. The Android
-app has its own plan, `multi-group-mobile.md`.
+**Status:** done. The core is `pkg/tppclient/groups.go`, the service's half
+`desktop/internal/service/groups.go`, the tab `desktop/ui/src/panels/GroupsPanel.tsx`.
+The storage rules are in `/spec/crypto.md` §10.1, the behaviour in SPECS §3.5.
+The Android app has its own plan, `multi-group-mobile.md`.
 
 ---
 
@@ -170,8 +171,8 @@ A new event kind, `groups`, tells an open page that the list changed.
 - **Groups** tab, between Devices and Pairing, shown only with the setting on:
   - the active group first, marked active, with its relay;
   - each parked group with **Switch** and **Remove…**;
-  - **Add a group**, which explains that the current group is kept, then parks
-    it and opens Pairing to create or join one.
+  - **Add a group…**, under the list, which explains that the current group is
+    kept, then parks it and opens Pairing to create or join one.
   - Removing asks first and says what the leave dialog says: the keys go from
     this machine and the relay still lists the device.
 - A switch reloads every panel through the usual event-driven refresh; History
