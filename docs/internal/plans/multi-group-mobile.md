@@ -1,7 +1,10 @@
 # Plan — Several groups on the Android app
 
-**Status:** in progress. The storage rules are in `/spec/crypto.md` §10.1 and
-the behaviour in SPECS §3.5; the desktop app does the same thing
+**Status:** done, apart from a run on a device (§5). The core is
+`mobile/src/core/protocol/groups.ts` and the methods on `Client`; the app's
+half is `sessionStore.ts`, `screens/GroupsScreen.tsx` and the setup and
+settings screens. The storage rules are in `/spec/crypto.md` §10.1 and the
+behaviour in SPECS §3.5; the desktop app does the same thing
 (`multi-group-desktop.md`), and this plan only says where Android differs.
 
 ---
@@ -93,6 +96,9 @@ Non-goals, beyond the desktop's:
   left alone; a deleted group is discarded; `forget` keeps the parked groups;
   `groupRef` matches the Go values.
 - Lint, typecheck, Jest.
+- On a device, still to do: turn the setting on, add a group, switch both
+  ways with the app in the foreground and with a tile tap after the switch,
+  and check the seven-tab bar on a narrow screen.
 
 ## 6. Steps
 
