@@ -71,6 +71,18 @@ export function SettingsPanel({
     }
   };
 
+  // Turning it off hides the Groups tab and nothing else: the group in use
+  // stays in use, and the ones set aside keep their keys.
+  const toggleMultiGroup = async (on: boolean) => {
+    if (await patch({ multi_group: on })) {
+      setNotice(
+        on
+          ? "Saved. Groups is now in the sidebar."
+          : "Saved. The group in use stays; the others are kept for when you turn this back on.",
+      );
+    }
+  };
+
   // Leaving is two steps, not one, and the second spells out what does and does
   // not happen: the keys go from this machine, and nothing at all is removed
   // from the relay, which still lists this device until another one revokes it
@@ -160,6 +172,20 @@ export function SettingsPanel({
                 {settings.clipboard_supported
                   ? "A new entry from another device replaces this clipboard as soon as it arrives. Off by default."
                   : "This build cannot reach a clipboard."}
+              </span>
+            </span>
+          </label>
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={settings.multi_group}
+              onChange={(e) => void toggleMultiGroup(e.target.checked)}
+            />
+            <span className="text">
+              <strong>Keep several groups</strong>
+              <span className="why">
+                Adds a Groups tab to keep other groups next to this one and switch between them. Off
+                by default.
               </span>
             </span>
           </label>
@@ -401,10 +427,16 @@ export function SettingsPanel({
           held is still the group&apos;s key — to change that, revoke this device from another one,
           which re-keys the group. Your clipboard is not touched.
         </p>
-        <p className="muted">
-          This is also how the device is moved to another group: it can hold only one group key at a
-          time.
-        </p>
+        {settings.multi_group ? (
+          <p className="muted">
+            Only the group in use is left. The groups set aside in Groups keep their keys.
+          </p>
+        ) : (
+          <p className="muted">
+            This is also how the device is moved to another group: it can hold only one group key at
+            a time, unless Keep several groups is on.
+          </p>
+        )}
       </Modal>
     </>
   );

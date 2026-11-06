@@ -18,6 +18,7 @@ import { SyncPanel } from "./panels/SyncPanel";
 import { HistoryPanel } from "./panels/HistoryPanel";
 import { StorePanel } from "./panels/StorePanel";
 import { DevicesPanel } from "./panels/DevicesPanel";
+import { GroupsPanel } from "./panels/GroupsPanel";
 import { PairingPanel } from "./panels/PairingPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
 
@@ -26,11 +27,15 @@ const tabs = [
   { id: "history", label: "History", icon: "history" },
   { id: "store", label: "Store", icon: "store" },
   { id: "devices", label: "Devices", icon: "devices" },
+  { id: "groups", label: "Groups", icon: "groups" },
   { id: "pairing", label: "Pairing", icon: "link" },
   { id: "settings", label: "Settings", icon: "settings" },
 ] as const satisfies readonly { id: string; label: string; icon: IconName }[];
 
 type Tab = (typeof tabs)[number]["id"];
+
+/** Tabs that only exist while a setting is on. */
+const optionalTabs: ReadonlySet<Tab> = new Set<Tab>(["groups"]);
 
 /**
  * What the build that opened this page did just before: an update or a
@@ -149,6 +154,17 @@ export function App() {
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   }, [status, setupChecked]);
 
+  // The Groups tab exists only while "Keep several groups" is on. Turning it
+  // off from Settings while the tab is open moves the page back to Settings.
+  const multiGroup = status?.multi_group ?? false;
+  const shownTabs = useMemo(
+    () => tabs.filter((t) => !optionalTabs.has(t.id) || multiGroup),
+    [multiGroup],
+  );
+  useEffect(() => {
+    if (status && tab === "groups" && !multiGroup) setTab("settings");
+  }, [status, tab, multiGroup]);
+
   const connection = useMemo(() => {
     if (!status) return { cls: "", text: "connecting…" };
     if (status.group_deleted) return { cls: "off", text: "group deleted" };
@@ -199,7 +215,7 @@ export function App() {
         row, and `aria-current` is set from the same state that renders it.
       */}
       <nav className="rail" aria-label="Sections">
-        {tabs.map((t) => (
+        {shownTabs.map((t) => (
           <button
             key={t.id}
             type="button"
@@ -309,6 +325,13 @@ export function App() {
           ) : null}
           {tab === "devices" ? (
             <DevicesPanel inGroup={status?.in_group ?? false} onChanged={refresh} />
+          ) : null}
+          {tab === "groups" && multiGroup ? (
+            <GroupsPanel
+              lastEvent={lastEvent}
+              onChanged={() => void refresh()}
+              onAdded={() => setTab("pairing")}
+            />
           ) : null}
           {tab === "pairing" ? <PairingPanel status={status} onChanged={refresh} /> : null}
           {tab === "settings" ? (
