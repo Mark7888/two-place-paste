@@ -154,18 +154,7 @@ export function GroupsPanel({
           </section>
 
           <section className="group">
-            <div className="group-head">
-              <h2>Set aside</h2>
-              <button
-                type="button"
-                className="action small"
-                disabled={busy !== ""}
-                onClick={() => setAdding(true)}
-              >
-                <Icon name="plus" size={15} />
-                Add a group…
-              </button>
-            </div>
+            <h2>Set aside</h2>
             {groups.parked.length === 0 ? (
               <div className="empty">
                 No other groups. Add one to keep this group and set up another next to it.
@@ -202,6 +191,17 @@ export function GroupsPanel({
                 ))}
               </div>
             )}
+            <div className="row" style={{ marginTop: "0.9rem" }}>
+              <button
+                type="button"
+                className="action"
+                disabled={busy !== ""}
+                onClick={() => setAdding(true)}
+              >
+                <Icon name="plus" size={15} />
+                Add a group…
+              </button>
+            </div>
           </section>
         </>
       )}
