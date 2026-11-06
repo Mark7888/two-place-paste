@@ -263,7 +263,7 @@ func TestBuiltInDetectorsDefaultAndToggle(t *testing.T) {
 		t.Fatalf("default view = %+v, want detection on and five detectors", view)
 	}
 	for _, d := range view.Detectors {
-		if d.Enabled != (d.Name == "private_keys") {
+		if d.Enabled != (d.Name == "private_keys" || d.Name == "api_tokens") {
 			t.Errorf("detector %s enabled = %v by default", d.Name, d.Enabled)
 		}
 	}

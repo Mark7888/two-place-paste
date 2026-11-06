@@ -1245,6 +1245,7 @@ func (s *Service) settingsView(set config.Settings) localui.SettingsView {
 		UpdateChannel:        set.Channel(),
 		AutoUpdate:           set.AutoUpdate,
 		NightlyCommit:        set.NightlyCommit,
+		SetupDone:            set.SetupDone,
 		RestartRequired:      set.ListenPort() != s.listenPort(),
 		DetectSensitive:      set.SensitiveDetection(),
 		Detectors:            detectorViews(set.EnabledDetectors()),
@@ -1305,6 +1306,9 @@ func (s *Service) UpdateSettings(ctx context.Context, p localui.SettingsPatch) (
 	if p.AutoUpdate != nil {
 		next.AutoUpdate = *p.AutoUpdate
 	}
+	if p.SetupDone != nil {
+		next.SetupDone = *p.SetupDone
+	}
 	if p.NightlyCommit != nil {
 		commit := strings.ToLower(strings.TrimSpace(*p.NightlyCommit))
 		if commit != "" && !config.IsFullSHA(commit) {
@@ -1357,7 +1361,16 @@ func (s *Service) UpdateSettings(ctx context.Context, p localui.SettingsPatch) (
 	s.mu.Lock()
 	s.settings = next
 	s.classifier = classifier
+	relay := s.relay
 	s.mu.Unlock()
+	// The client read the name once at launch. Handing it the new one now
+	// means a group created or a pairing started right after the first-run
+	// setup uses the name the user just typed, not the hostname.
+	if p.DeviceName != nil && relay != nil {
+		if err := relay.SetDeviceName(next.DeviceName); err != nil {
+			s.logger.WarnContext(ctx, "the new device name applies at the next launch", "error", err)
+		}
+	}
 	s.watcher.SetEnabled(next.AutoWatch && s.clip.Available())
 	// Whether pausing means anything depends on the two auto toggles.
 	s.activityChanged()

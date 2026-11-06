@@ -30,6 +30,10 @@ type Relay interface {
 	// InGroup reports whether this device can talk to a group.
 	InGroup() bool
 
+	// SetDeviceName changes the name the next group creation or pairing
+	// announces, and saves it.
+	SetDeviceName(name string) error
+
 	// Epoch is the group key generation this device holds.
 	Epoch() uint64
 

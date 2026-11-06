@@ -6,11 +6,13 @@ import {
   isSessionLost,
   onSessionLost,
   type ServiceEvent,
+  type SettingsView,
   type Status,
 } from "./api";
 import { Icon, type IconName } from "./components/Icon";
 import { PauseNotice } from "./components/PauseNotice";
 import { SessionLostDialog } from "./components/SessionLostDialog";
+import { SetupWizard } from "./components/SetupWizard";
 import { bytes } from "./format";
 import { SyncPanel } from "./panels/SyncPanel";
 import { HistoryPanel } from "./panels/HistoryPanel";
@@ -85,6 +87,21 @@ export function App() {
   const [lost, setLost] = useState(isSessionLost);
   useEffect(() => onSessionLost(() => setLost(true)), []);
 
+  // The first-run setup: the settings it starts from while it is open, and
+  // a count that gives each opening a fresh wizard.
+  const [setup, setSetup] = useState<SettingsView | null>(null);
+  const [setupRun, setSetupRun] = useState(0);
+  const [setupChecked, setSetupChecked] = useState(false);
+
+  const openSetup = useCallback(async () => {
+    try {
+      setSetup(await api.settings());
+      setSetupRun((n) => n + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
   const refresh = useCallback(async () => {
     try {
       setStatus(await api.status());
@@ -113,6 +130,24 @@ export function App() {
       }),
     [refresh],
   );
+
+  // An install that is in no group and never finished setup gets the wizard,
+  // once per page load. A paired install never does: it was set up before the
+  // wizard existed, or on another device's terms, and has its Settings tab.
+  useEffect(() => {
+    if (!status || setupChecked) return;
+    setSetupChecked(true);
+    if (status.in_group) return;
+    void api
+      .settings()
+      .then((s) => {
+        if (!s.setup_done) {
+          setSetup(s);
+          setSetupRun((n) => n + 1);
+        }
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+  }, [status, setupChecked]);
 
   const connection = useMemo(() => {
     if (!status) return { cls: "", text: "connecting…" };
@@ -277,11 +312,28 @@ export function App() {
           ) : null}
           {tab === "pairing" ? <PairingPanel status={status} onChanged={refresh} /> : null}
           {tab === "settings" ? (
-            <SettingsPanel status={status} onChanged={refresh} lastEvent={lastEvent} />
+            <SettingsPanel
+              status={status}
+              onChanged={refresh}
+              lastEvent={lastEvent}
+              onRunSetup={() => void openSetup()}
+            />
           ) : null}
         </div>
       </main>
 
+      {setup ? (
+        <SetupWizard
+          key={setupRun}
+          open={!lost}
+          settings={setup}
+          onDone={() => {
+            setSetup(null);
+            setTab("pairing");
+            void refresh();
+          }}
+        />
+      ) : null}
       <SessionLostDialog open={lost} />
     </div>
   );

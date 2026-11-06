@@ -103,6 +103,10 @@ type Settings struct {
 	// Filters are the user's own sensitive-content rules.
 	Filters []sensitive.Filter `json:"filters,omitempty"`
 
+	// SetupDone records that the first-run setup in the UI was finished. Until
+	// it is, an unpaired install opens the setup wizard over the app.
+	SetupDone bool `json:"setup_done"`
+
 	// FilterSalt is the install-wide salt exact-match filters are hashed
 	// with, base64. Created the first time one is saved.
 	FilterSalt string `json:"filter_salt,omitempty"`

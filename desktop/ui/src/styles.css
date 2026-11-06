@@ -998,3 +998,59 @@ label.toggle.imported { box-shadow: inset 3px 0 0 var(--accent); }
 /* A preview's caption line with an action at its right (Import filters…). */
 .preview-caption { margin-top: 0.4rem; }
 .preview-caption > p { margin: 0; }
+
+/* --- choice buttons and the first-run setup ------------------------------ */
+
+/* ChoiceButtons: a question answered by picking one of a few buttons. The
+   picked one is filled with the accent, so the answer reads at a glance. */
+.choices { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+button.choice {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.1rem;
+  min-width: 6.5rem;
+  min-height: 2.6rem;
+  padding: 0.35rem 1rem;
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+button.choice:hover:not(:disabled) { background: var(--surface-sunken); }
+button.choice[aria-checked="true"],
+button.choice[aria-checked="true"]:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+button.choice:disabled { opacity: 0.45; cursor: not-allowed; }
+button.choice .choice-tag { font-size: 0.72rem; font-weight: 500; color: var(--muted); }
+button.choice[aria-checked="true"] .choice-tag { color: inherit; }
+
+.setup { display: flex; flex-direction: column; gap: 0.75rem; }
+.setup h3 { font-size: 1rem; }
+.setup > p { margin: 0; }
+.setup .notice { margin-bottom: 0; }
+.setup-confirm .stack { gap: 0.55rem; }
+
+/* A labelled question with its own On / Off, two to a page. */
+.setup-row {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--line-soft);
+}
+.setup-row .text { display: flex; flex-direction: column; min-width: 12rem; flex: 1 1 12rem; }
+.setup-row .text .why { color: var(--muted); font-size: 0.85rem; }
+.setup-row button.choice { min-width: 4.5rem; }

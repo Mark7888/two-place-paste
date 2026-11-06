@@ -218,6 +218,8 @@ export interface SettingsView {
   update_channel: UpdateChannel;
   auto_update: boolean;
   nightly_commit: string;
+  /** setup_done is whether the first-run setup was finished. */
+  setup_done: boolean;
   restart_required: boolean;
   detect_sensitive: boolean;
   detectors: DetectorView[];
@@ -327,6 +329,7 @@ export interface SettingsPatch {
   auto_update?: boolean;
   nightly_commit?: string;
   detect_sensitive?: boolean;
+  setup_done?: boolean;
   detectors?: string[];
   filters?: FilterView[];
 }
