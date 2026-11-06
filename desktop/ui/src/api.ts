@@ -120,6 +120,26 @@ export interface Status {
   latest?: EntryView;
   direction_known: boolean;
   suggested_direction: Direction;
+  /** multi_group mirrors the "Keep several groups" setting: it shows the Groups tab. */
+  multi_group: boolean;
+}
+
+/**
+ * GroupView is one group this device keeps. `ref` names it to the service; a
+ * group id is a credential on the wire and never reaches this page.
+ */
+export interface GroupView {
+  ref: string;
+  name: string;
+  server_url: string;
+  /** dead is set on the active group when this device was revoked from it or it was deleted. */
+  dead?: boolean;
+}
+
+/** GroupsView is the Groups tab's model: the group in use and the parked ones. */
+export interface GroupsView {
+  active: GroupView | null;
+  parked: GroupView[];
 }
 
 export interface SyncResult {
@@ -220,6 +240,8 @@ export interface SettingsView {
   nightly_commit: string;
   /** setup_done is whether the first-run setup was finished. */
   setup_done: boolean;
+  /** multi_group is whether this device keeps several groups. Off by default. */
+  multi_group: boolean;
   restart_required: boolean;
   detect_sensitive: boolean;
   detectors: DetectorView[];
@@ -330,6 +352,7 @@ export interface SettingsPatch {
   nightly_commit?: string;
   detect_sensitive?: boolean;
   setup_done?: boolean;
+  multi_group?: boolean;
   detectors?: string[];
   filters?: FilterView[];
 }
@@ -682,6 +705,12 @@ export const api = {
   // there is nothing to name. It is destructive and is never called without
   // the confirmation the Settings panel puts in front of it.
   forgetGroup: () => request<{ ok: boolean }>("POST", "/api/group/forget", {}),
+  // The groups this device keeps (only while "Keep several groups" is on). A
+  // switch or an add changes which group every other panel shows.
+  groups: () => request<GroupsView>("GET", "/api/groups"),
+  switchGroup: (ref: string) => request<GroupsView>("POST", "/api/groups/switch", { ref }),
+  addGroup: () => request<GroupsView>("POST", "/api/groups/add", {}),
+  removeGroup: (ref: string) => request<GroupsView>("POST", "/api/groups/remove", { ref }),
   settings: () => request<SettingsView>("GET", "/api/settings"),
   updateSettings: (patch: SettingsPatch) => request<SettingsView>("POST", "/api/settings", patch),
   updateStatus: () => request<UpdateView>("GET", "/api/update"),

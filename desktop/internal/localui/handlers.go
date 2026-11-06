@@ -412,6 +412,65 @@ func (s *Server) handleForget(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
+	view, err := s.api.Groups(r.Context())
+	if err != nil {
+		s.fail(w, r, "list the groups", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// groupRef is the body of the switch and remove routes. A group is named by
+// its ref, never by its id (GroupsView).
+type groupRef struct {
+	Ref string `json:"ref"`
+}
+
+func (s *Server) handleSwitchGroup(w http.ResponseWriter, r *http.Request) {
+	var body groupRef
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.Ref == "" {
+		writeError(w, http.StatusBadRequest, "ref is required")
+		return
+	}
+	view, err := s.api.SwitchGroup(r.Context(), body.Ref)
+	if err != nil {
+		s.fail(w, r, "switch groups", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// handleAddGroup takes no body: it sets aside whichever group is active.
+func (s *Server) handleAddGroup(w http.ResponseWriter, r *http.Request) {
+	view, err := s.api.AddGroup(r.Context())
+	if err != nil {
+		s.fail(w, r, "set the group aside", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+func (s *Server) handleRemoveGroup(w http.ResponseWriter, r *http.Request) {
+	var body groupRef
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.Ref == "" {
+		writeError(w, http.StatusBadRequest, "ref is required")
+		return
+	}
+	view, err := s.api.RemoveGroup(r.Context(), body.Ref)
+	if err != nil {
+		s.fail(w, r, "remove the group", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.api.Settings(r.Context()))
 }

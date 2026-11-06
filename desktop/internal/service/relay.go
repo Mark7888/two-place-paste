@@ -52,6 +52,24 @@ type Relay interface {
 	// device until another one revokes it.
 	Forget() error
 
+	// ActiveRef names the active group, or is "" in none (/spec/crypto.md
+	// §10.1).
+	ActiveRef() string
+
+	// ParkedGroups lists the groups kept on this device and not in use.
+	ParkedGroups() []tppclient.ParkedGroup
+
+	// ParkActive sets the active group aside and leaves the device in no
+	// group, with a fresh identity, ready to create or pair.
+	ParkActive() error
+
+	// SwitchGroup makes a parked group the active one and leaves the client
+	// offline, for the caller to connect.
+	SwitchGroup(ref string) error
+
+	// RemoveParked deletes a parked group's keys from this device.
+	RemoveParked(ref string) error
+
 	// StartPairing mints a pairing token (SPEC §3.2 step 1).
 	StartPairing(ctx context.Context) (*tppclient.Invitation, error)
 

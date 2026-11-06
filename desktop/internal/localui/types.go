@@ -67,6 +67,34 @@ type Status struct {
 
 	// Pause says whether auto-sync is paused, and until when.
 	Pause PauseView `json:"pause"`
+
+	// MultiGroup mirrors the setting, so the shell can show or hide the
+	// Groups tab without asking for the settings.
+	MultiGroup bool `json:"multi_group"`
+}
+
+// GroupsView is the Groups tab's model: the active group and the parked
+// ones (/spec/crypto.md §10.1). It never carries a group id: those are
+// bearer credentials on the wire, and the tab names a group by its ref.
+type GroupsView struct {
+	// Active is the group this device is using, or nil when it is in none.
+	Active *GroupView `json:"active"`
+
+	// Parked are the groups kept on this device and not in use, oldest
+	// parked first.
+	Parked []GroupView `json:"parked"`
+}
+
+// GroupView is one group in the Groups tab.
+type GroupView struct {
+	Ref       string `json:"ref"`
+	Name      string `json:"name"`
+	ServerURL string `json:"server_url"`
+
+	// Dead is set on the active group when this device was revoked from it
+	// or the admin deleted it. Moving on from a dead group discards it
+	// rather than keeping it.
+	Dead bool `json:"dead,omitempty"`
 }
 
 // PauseView is the pause of auto-sync: both directions held for a few
@@ -361,6 +389,10 @@ type SettingsView struct {
 	// wizard until it is.
 	SetupDone bool `json:"setup_done"`
 
+	// MultiGroup is whether this device keeps several groups, which shows
+	// the Groups tab.
+	MultiGroup bool `json:"multi_group"`
+
 	// RestartRequired is true when a saved port differs from the one this
 	// process is listening on: the service binds once, at startup.
 	RestartRequired bool `json:"restart_required"`
@@ -552,6 +584,10 @@ type SettingsPatch struct {
 	// again.
 	SetupDone *bool `json:"setup_done"`
 
+	// MultiGroup turns keeping several groups on or off. Off keeps every
+	// group; it only hides the tab.
+	MultiGroup *bool `json:"multi_group"`
+
 	// Detectors replaces the list of built-in detectors that are on.
 	Detectors *[]string `json:"detectors"`
 
@@ -629,6 +665,11 @@ const (
 	// or off. A Store tab lists it again; a history view refreshes its
 	// "saved" marks.
 	EventStore = "store"
+
+	// EventGroups says the groups this device keeps changed: one was
+	// switched to, added or removed. The Groups tab lists them again, and
+	// every other panel reloads, because the group it showed may be gone.
+	EventGroups = "groups"
 )
 
 // DownloadProgress is how far an update download has got, in bytes. Total is

@@ -98,6 +98,23 @@ type API interface {
 	// this device until another one revokes it (SPEC §3.3).
 	Forget(ctx context.Context) error
 
+	// Groups lists the groups this device keeps: the active one and the
+	// parked ones (/spec/crypto.md §10.1). It and the three below refuse
+	// while "Keep several groups" is off.
+	Groups(ctx context.Context) (GroupsView, error)
+
+	// SwitchGroup makes a parked group the active one, parking the one in
+	// use, and connects it.
+	SwitchGroup(ctx context.Context, ref string) (GroupsView, error)
+
+	// AddGroup parks the active group and leaves the device ready to create
+	// a group or pair into one.
+	AddGroup(ctx context.Context) (GroupsView, error)
+
+	// RemoveGroup deletes a parked group's keys from this device. It is
+	// local, like Forget, and never applies to the active group.
+	RemoveGroup(ctx context.Context, ref string) (GroupsView, error)
+
 	// Settings returns the settings screen's model.
 	Settings(ctx context.Context) SettingsView
 

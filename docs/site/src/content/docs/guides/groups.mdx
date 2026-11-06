@@ -1,0 +1,74 @@
+---
+title: Several groups
+description: Keep more than one group on a computer and switch between them.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+import { Image } from 'astro:assets';
+import groups from '../../../assets/screenshots/desktop-groups.webp';
+
+A device syncs with one group at a time. If you share a clipboard with two circles — work and
+home, say — the desktop app can keep both groups and let you switch between them, so you don't
+have to leave one and pair again to reach the other.
+
+Only one group is **in use** at a time. The others are **set aside**: their keys stay on this
+computer, but nothing syncs with them, and to their other devices this computer looks offline.
+
+## Turn it on
+
+Open **Settings** and turn on **Keep several groups**, under Behaviour. A **Groups** tab appears in
+the sidebar.
+
+<Image src={groups} alt="The Groups tab: Office in use, Home and Family set aside, each with Switch and Remove" class="screenshot" />
+
+## Add a group
+
+<Steps>
+
+1. In **Groups**, press **Add a group…** and then **Continue to Pairing**.
+
+   The group in use is set aside with its keys.
+
+2. In **Pairing**, [create a group](/two-place-paste/guides/create-a-group/) with a link from your
+   server admin, or [pair with a device](/two-place-paste/guides/add-a-device/) that is in the
+   group you want.
+
+</Steps>
+
+This computer joins the new group as a new device, with its own keys. The groups it is in can't
+tell that they share a computer.
+
+## Switch groups
+
+In **Groups**, press **Switch** next to a group that is set aside. The app disconnects from the
+group in use, sets it aside, and connects to the other one as it would on a fresh start. History,
+Store and Devices then show the new group.
+
+A group that changed while it was set aside catches up when you switch back: new entries are
+there, and if a device was revoked in the meantime, this computer picks up the new key.
+
+## Remove a group
+
+Press **Remove…** next to a group that is set aside. Its keys are deleted from this computer. To
+use that group again, pair with a device that is still in it.
+
+The group in use is left from **Settings → Leave the group**, as before. With several groups,
+leaving only affects the group in use; the ones set aside keep their keys.
+
+<Aside type="caution">
+	Removing a group is local only, like leaving one. The relay still lists this computer in that
+	group. To shut it out for good, [revoke it](/two-place-paste/guides/devices/) from another device.
+</Aside>
+
+## A group you can no longer use
+
+If this computer was revoked from the group in use, or the server admin deleted the group, the
+Groups tab marks it as **can't be used**. Switching or adding a group then deletes its keys instead
+of setting it aside, and the app asks first.
+
+## Turn it off
+
+Turning **Keep several groups** off hides the Groups tab and nothing else. The group in use stays in
+use, and the others keep their keys on this computer: turn the setting back on to see them again.
+
+An older version of the app that doesn't have this setting opens the group that was last in use.

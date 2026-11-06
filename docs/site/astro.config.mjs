@@ -49,6 +49,7 @@ export default defineConfig({
 						'guides/history',
 						'guides/store',
 						'guides/devices',
+						'guides/groups',
 						'guides/settings',
 						'guides/troubleshooting',
 					],

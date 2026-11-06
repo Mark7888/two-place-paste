@@ -103,6 +103,12 @@ type Settings struct {
 	// Filters are the user's own sensitive-content rules.
 	Filters []sensitive.Filter `json:"filters,omitempty"`
 
+	// MultiGroup lets this installation keep several groups and switch
+	// between them from a Groups tab (docs/internal/plans/multi-group-desktop.md).
+	// Off by default. Turning it off hides the tab and keeps every group: the
+	// active one stays active and the parked ones stay in the keystore.
+	MultiGroup bool `json:"multi_group"`
+
 	// SetupDone records that the first-run setup in the UI was finished. Until
 	// it is, an unpaired install opens the setup wizard over the app.
 	SetupDone bool `json:"setup_done"`

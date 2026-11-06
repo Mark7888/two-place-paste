@@ -240,6 +240,28 @@ revoked device: leave the group, then create or join another.
 The admin cannot remove a single device: that would leave the removed device holding the
 current group key, which only a rekey by a member (§3.3) takes away.
 
+### 3.5 Several groups on one device
+
+A client may keep several groups and let its user switch between them. It is a client
+feature, off by default behind a setting; the relay and the wire are unchanged, and the
+storage rules are in `/spec/crypto.md` §10.1.
+
+- One group is **in use** at a time; the others are **set aside**. A group set aside has
+  no socket open, and to its group it is a device that is offline.
+- **Switching** stops the group in use as closing the app would, sets it aside, and starts
+  the other as a launch would. Nothing about one group reaches the other: history, store,
+  roster and pending notices are the new group's from the first moment.
+- **Adding** a group sets the one in use aside and leaves the device ready to create or
+  pair, with a new device keypair: every group has its own.
+- **Removing** a group set aside deletes its keys from the device. Like leaving (§3.3), it
+  changes nothing on the relay.
+- A group the device was revoked from, or that was deleted (§3.4), is discarded rather
+  than set aside when the user moves on from it.
+- **Turning the setting off** hides the feature and keeps every group; the group in use
+  stays in use. A build without the feature opens the group last in use.
+
+Desktop implements this (`docs/internal/plans/multi-group-desktop.md`).
+
 ---
 
 ## 4. Server

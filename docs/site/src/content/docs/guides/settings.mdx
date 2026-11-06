@@ -38,6 +38,7 @@ clipboard) is left out.
 |---|---|---|
 | **Watch the clipboard** | Off | Anything you copy is encrypted and uploaded as the group's newest entry. |
 | **Take what other devices upload** | Off | A new entry from another device replaces this clipboard as soon as it arrives. |
+| **Keep several groups** | Off | Adds a **Groups** tab to keep other groups next to this one and switch between them. Turning it off keeps every group and hides the tab. See [Several groups](/two-place-paste/guides/groups/). |
 | **Start at login** | Off | Starts the app when you log in. A launchd agent on macOS, a `Run` registry entry for your user on Windows. |
 
 ## Automatic size limits
@@ -80,7 +81,8 @@ Channel, automatic updates and rollback — see [Updates](/two-place-paste/insta
 
 Disconnects this device and **deletes its keys** — both its own private key and the group key —
 and returns the app to its setup screen with a new identity. Use it to move a computer to a
-different group.
+different group. With **Keep several groups** on, it leaves only the group in use; the groups set
+aside keep their keys.
 
 <Aside type="caution">
 	Leaving is local only. The relay still lists this device in the group. To make sure it cannot

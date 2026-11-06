@@ -204,6 +204,33 @@ func (s *stubAPI) Forget(context.Context) error {
 	return s.nextErr
 }
 
+func (s *stubAPI) groups() (GroupsView, error) {
+	if s.nextErr != nil {
+		return GroupsView{}, s.nextErr
+	}
+	return GroupsView{Active: &GroupView{Ref: "ref-home", Name: "Home"}, Parked: []GroupView{}}, nil
+}
+
+func (s *stubAPI) Groups(context.Context) (GroupsView, error) {
+	s.record("groups")
+	return s.groups()
+}
+
+func (s *stubAPI) SwitchGroup(_ context.Context, ref string) (GroupsView, error) {
+	s.record("groups-switch:" + ref)
+	return s.groups()
+}
+
+func (s *stubAPI) AddGroup(context.Context) (GroupsView, error) {
+	s.record("groups-add")
+	return s.groups()
+}
+
+func (s *stubAPI) RemoveGroup(_ context.Context, ref string) (GroupsView, error) {
+	s.record("groups-remove:" + ref)
+	return s.groups()
+}
+
 func (s *stubAPI) Settings(context.Context) SettingsView {
 	s.record("settings")
 	return SettingsView{Port: 0, ListenPort: 47821}
@@ -266,6 +293,10 @@ func TestOriginIsValidatedOnEveryRequest(t *testing.T) {
 		{"POST", "/api/pairing/offer/accept/confirm", `{"plan_id":"offer-plan-1"}`},
 		{"POST", "/api/group/create", `{"creation_url":"https://relay.example/t"}`},
 		{"POST", "/api/group/forget", `{}`},
+		{"GET", "/api/groups", ""},
+		{"POST", "/api/groups/switch", `{"ref":"ref-work"}`},
+		{"POST", "/api/groups/add", `{}`},
+		{"POST", "/api/groups/remove", `{"ref":"ref-work"}`},
 		{"GET", "/api/settings", ""},
 		{"POST", "/api/settings", `{"auto_watch":true}`},
 		{"GET", "/api/update", ""},
@@ -772,6 +803,49 @@ func TestForgetIsReachableAndDestructive(t *testing.T) {
 	api.nextErr = errors.New("the keystore is unwritable")
 	if rec := do(t, srv, "POST", "/api/group/forget", `{}`, headers); rec.Code != http.StatusInternalServerError {
 		t.Errorf("a failing forget answered %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+// TestGroupRoutes: the group routes reach the API with the ref they were
+// sent, refuse a body without one, and pass a refusal through as it was
+// given — the 409 that says the setting is off is something the page shows.
+func TestGroupRoutes(t *testing.T) {
+	t.Parallel()
+
+	srv, api := newTestServer(t)
+	headers := map[string]string{
+		"Origin":    fmt.Sprintf("http://127.0.0.1:%d", srv.Port()),
+		tokenHeader: "test-token",
+	}
+
+	tests := []struct {
+		method, path, body string
+		wantCode           int
+		wantCall           string
+	}{
+		{"GET", "/api/groups", "", http.StatusOK, "groups"},
+		{"POST", "/api/groups/switch", `{"ref":"ref-work"}`, http.StatusOK, "groups-switch:ref-work"},
+		{"POST", "/api/groups/add", `{}`, http.StatusOK, "groups-add"},
+		{"POST", "/api/groups/remove", `{"ref":"ref-work"}`, http.StatusOK, "groups-remove:ref-work"},
+		{"POST", "/api/groups/switch", `{}`, http.StatusBadRequest, ""},
+		{"POST", "/api/groups/remove", `{"ref":""}`, http.StatusBadRequest, ""},
+		{"POST", "/api/groups/switch", `{"group_id":"g1"}`, http.StatusBadRequest, ""},
+	}
+	for _, tt := range tests {
+		api.reset()
+		rec := do(t, srv, tt.method, tt.path, tt.body, headers)
+		if rec.Code != tt.wantCode {
+			t.Errorf("%s %s %s = %d, want %d (%s)", tt.method, tt.path, tt.body, rec.Code, tt.wantCode, rec.Body)
+		}
+		if tt.wantCall != "" && !api.called(tt.wantCall) {
+			t.Errorf("%s %s did not reach the API as %q", tt.method, tt.path, tt.wantCall)
+		}
+	}
+
+	api.nextErr = Errorf(http.StatusConflict, nil, "turn it on first")
+	rec := do(t, srv, "POST", "/api/groups/add", `{}`, headers)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "turn it on first") {
+		t.Errorf("a refused add answered %d %s, want the 409 and its message", rec.Code, rec.Body)
 	}
 }
 
