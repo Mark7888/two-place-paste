@@ -120,6 +120,10 @@ type Options struct {
 	// StateName is the keystore entry to use. Defaults to DefaultStateName.
 	StateName string
 
+	// ParkedName is the keystore entry parked groups are kept under.
+	// Defaults to DefaultParkedName.
+	ParkedName string
+
 	// HTTPClient dials the relay. Defaults to a client with no timeout: a
 	// WebSocket is long-lived and a client timeout would sever it.
 	HTTPClient *http.Client
@@ -148,13 +152,25 @@ type Client struct {
 	httpClient *http.Client
 	stateStore keystore.Store
 	stateName  string
+	parkedName string
 	minBackoff time.Duration
 	maxBackoff time.Duration
 	now        func() time.Time
 
+	// groupsMu serialises the operations that replace the identity —
+	// Forget, ParkActive, SwitchGroup, RemoveParked — so two of them cannot
+	// interleave their keystore writes (/spec/crypto.md §10.1).
+	groupsMu sync.Mutex
+
 	mu    sync.Mutex
 	state State
 	conn  *conn
+
+	// parked are the groups this installation keeps but is not using
+	// (groups.go). parkedLocked is set when the stored record could not be
+	// read, so it is never overwritten with a list that lost its groups.
+	parked       []State
+	parkedLocked bool
 
 	// limits are the relay's entry limits, as stated on limitsConn. A new
 	// connection asks again: the relay it reaches may have been reconfigured.
@@ -201,6 +217,7 @@ func New(opts Options) (*Client, error) {
 		httpClient: opts.HTTPClient,
 		stateStore: opts.Keystore,
 		stateName:  opts.StateName,
+		parkedName: opts.ParkedName,
 		minBackoff: opts.MinBackoff,
 		maxBackoff: opts.MaxBackoff,
 		now:        opts.Now,
@@ -216,6 +233,9 @@ func New(opts Options) (*Client, error) {
 	}
 	if c.stateName == "" {
 		c.stateName = DefaultStateName
+	}
+	if c.parkedName == "" {
+		c.parkedName = DefaultParkedName
 	}
 	if c.minBackoff <= 0 {
 		c.minBackoff = defaultMinBackoff
@@ -257,6 +277,7 @@ func New(opts Options) (*Client, error) {
 	if err := c.persist(); err != nil {
 		return nil, err
 	}
+	c.loadParked()
 	return c, nil
 }
 
@@ -331,44 +352,74 @@ func (c *Client) Close() error {
 // left. The client stays usable — with no group it is a first launch, ready to
 // create a group, join a pairing or show an offer.
 func (c *Client) Forget() error {
-	c.mu.Lock()
-	cancel, conn, started, closed := c.runCancel, c.conn, c.started, c.closed
-	c.conn = nil
-	c.mu.Unlock()
+	c.groupsMu.Lock()
+	defer c.groupsMu.Unlock()
 
 	// The supervisor is stopped before the state goes, not after: a reconnect
 	// racing this would re-dial with the credential being discarded.
+	c.halt("this device is leaving the group")
+
+	fresh, err := c.freshState()
+	if err != nil {
+		c.restart(c.State())
+		return err
+	}
+	c.restart(fresh)
+
+	c.logger.Info("this device left its group; its keys have been replaced")
+	return c.persist()
+}
+
+// halt stops the supervisor serving the current identity and waits until
+// nothing of it is running: no dial, no read loop, no handler. Until restart
+// is called the client is offline and Connect refuses to start.
+func (c *Client) halt(reason string) {
+	c.mu.Lock()
+	cancel, conn, started := c.runCancel, c.conn, c.started
+	c.conn = nil
+	c.mu.Unlock()
+
 	if started {
 		cancel()
 		if conn != nil {
-			conn.close("this device is leaving the group")
+			conn.close(reason)
 		}
 		c.wg.Wait()
 	}
+}
 
-	priv, err := tppcrypto.GenerateKey()
-	if err != nil {
-		return fmt.Errorf("tppclient: generate this device's keypair: %w", err)
-	}
-
+// restart installs s as this client's identity after a halt, and resets
+// everything that belonged to the previous one, so the next Connect starts
+// as a first launch with s would. It does not persist s.
+func (c *Client) restart(s State) {
 	c.mu.Lock()
-	c.state = State{DeviceName: c.state.DeviceName, DevicePrivateKey: priv}
+	defer c.mu.Unlock()
+	c.state = s
 	c.invitations = nil
+	c.storeKeys = nil
 	c.conn = nil
 	c.ready = make(chan struct{})
 	c.revoked = false
 	c.revokedErr = nil
 	c.started = false
-	if !closed {
+	if !c.closed {
 		// A fresh generation for the next Connect. A closed client stays
-		// closed: Forget clears the secrets, it does not resurrect anything.
+		// closed: this replaces the secrets, it does not resurrect anything.
 		c.stopped = make(chan struct{})
 		c.runCtx, c.runCancel = context.WithCancel(context.Background())
 	}
-	c.mu.Unlock()
+}
 
-	c.logger.Info("this device left its group; its keys have been replaced")
-	return c.persist()
+// freshState is the state of a first launch that keeps this device's name: a
+// new keypair and no group.
+func (c *Client) freshState() (State, error) {
+	priv, err := tppcrypto.GenerateKey()
+	if err != nil {
+		return State{}, fmt.Errorf("tppclient: generate this device's keypair: %w", err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return State{DeviceName: c.state.DeviceName, DevicePrivateKey: priv}, nil
 }
 
 // runContext is the current supervisor generation's context. Forget replaces
