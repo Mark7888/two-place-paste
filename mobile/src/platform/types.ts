@@ -64,7 +64,7 @@ export interface SavedFile {
  * keep it in Downloads, open it in another app, or share it with one.
  */
 export interface FilesPort {
-  /** available reports whether this platform can save or open a file at all. */
+  /** available reports whether this platform can save, open or share a file at all. */
   readonly available: boolean;
 
   /** save keeps a copy in Downloads/TwoPlacePaste and says where it went. */

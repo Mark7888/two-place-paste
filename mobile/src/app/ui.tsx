@@ -18,7 +18,7 @@ import { clipboard, files, type SavedFile } from '../platform';
 
 import { Icon, type IconName } from './icons';
 import { transferText } from './preview';
-import { failureMessage } from './session';
+import { failureMessage, type FileChoice } from './session';
 import { colors, styles, touchTarget } from './theme';
 
 export function Button({
@@ -437,20 +437,28 @@ export function CopyButton({
   );
 }
 
+/** FILE_CHOICES_TITLE heads the sheet `FileChoices` sits in, on every screen that asks. */
+export const FILE_CHOICES_TITLE = 'What should happen to it?';
+
 /**
- * FileChoices is the question put when a received file cannot go on the
- * clipboard: keep it in Downloads, or look at it now without keeping it.
+ * FileChoices is the question put when a received entry is not simply copied:
+ * a file the clipboard cannot hold, or an image opened from the history or the
+ * store. Copy comes first when it is offered — for an image it is still the
+ * likeliest answer — then keep it in Downloads, look at it now, or send it on.
  */
 export function FileChoices({
   name,
   detail,
+  canCopy,
   onChoose,
   disabled,
 }: {
   name: string;
   /** detail is "type · size · time": what tells two files with similar names apart. */
   detail: string;
-  onChoose: (choice: 'save' | 'open') => void;
+  /** canCopy offers Copy as the first answer: an image this device's clipboard can take. */
+  canCopy: boolean;
+  onChoose: (choice: FileChoice) => void;
   disabled?: boolean;
 }): React.JSX.Element {
   return (
@@ -463,7 +471,17 @@ export function FileChoices({
         </Text>
         <Text style={styles.small}>{detail}</Text>
       </View>
-      <Text style={styles.muted}>Android’s clipboard cannot hold files.</Text>
+      {canCopy ? (
+        <Choice
+          icon="copy"
+          title="Copy"
+          why="Put it on this device’s clipboard, ready to paste."
+          disabled={disabled}
+          onPress={() => onChoose('copy')}
+        />
+      ) : (
+        <Text style={styles.muted}>Android’s clipboard cannot hold files.</Text>
+      )}
       <Choice
         icon="download"
         title="Save to Downloads"
@@ -477,6 +495,13 @@ export function FileChoices({
         why="Show it in an app that opens this type. Nothing is saved to Downloads."
         disabled={disabled}
         onPress={() => onChoose('open')}
+      />
+      <Choice
+        icon="share"
+        title="Share"
+        why="Send it to another app, such as mail or chat. Nothing is saved to Downloads."
+        disabled={disabled}
+        onPress={() => onChoose('share')}
       />
     </>
   );

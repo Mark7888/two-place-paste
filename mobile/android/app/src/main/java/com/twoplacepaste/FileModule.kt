@@ -326,7 +326,7 @@ class FileModule(reactContext: ReactApplicationContext) :
                 reactApplicationContext.startActivity(chooser)
             } catch (e: ActivityNotFoundException) {
                 file.delete()
-                promise.reject(ERROR_CODE, "no app on this device can receive $mime files", e)
+                promise.reject(ERROR_CODE, "no app on this device can receive this file", e)
                 return
             }
             promise.resolve(null)

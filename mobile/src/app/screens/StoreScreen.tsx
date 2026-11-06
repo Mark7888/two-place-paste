@@ -20,7 +20,17 @@ import { useSession } from '../SessionContext';
 import { Icon, type IconName } from '../icons';
 import { PreviewBody } from '../PreviewBody';
 import { formatSize, headerPreviewable, MAX_FILE_PREVIEW_BYTES, previewOf, storeRoom, type Preview } from '../preview';
-import { deliver, describeItem, failureMessage, handleFile, toClipboardItem, type FileChoice, type PendingFile } from '../session';
+import { receiveLabel } from '../choices';
+import {
+  choiceFor,
+  deliver,
+  describeItem,
+  failureMessage,
+  handleFile,
+  toClipboardItem,
+  type FileChoice,
+  type PendingFile,
+} from '../session';
 import { chip, chipOn, chipOnText, chipRow, chipText, StoreSheet } from '../StoreSheet';
 import {
   deleteItem,
@@ -32,7 +42,7 @@ import {
   subscribeStore,
 } from '../storeState';
 import { colors, styles } from '../theme';
-import { Button, FileChoices, Notice, OutcomeNotice, Sheet, TransferList } from '../ui';
+import { Button, FILE_CHOICES_TITLE, FileChoices, Notice, OutcomeNotice, Sheet, TransferList } from '../ui';
 
 const SORTS: { id: StoreSort; label: string }[] = [
   { id: 'newest', label: 'Newest' },
@@ -73,7 +83,7 @@ export function StoreScreen(): React.JSX.Element {
   const [file, setFile] = useState<PendingFile | null>(null);
 
   // Previews live for as long as this screen does, as in the History. The
-  // last item opened is kept whole too, so Copy or Save or open right after
+  // last item opened is kept whole too, so Copy, Save, Open or Share right after
   // its preview does not download it again.
   const [previews, setPreviews] = useState<Record<string, Loaded>>({});
   const fetching = useRef<Set<string>>(new Set());
@@ -191,7 +201,7 @@ export function StoreScreen(): React.JSX.Element {
         return;
       }
       const item = toClipboardItem(await fetchItem(it));
-      const result = await deliver(item);
+      const result = await deliver(item, true);
       if (result.direction === 'file' && result.file !== undefined) {
         setFile(result.file);
         return;
@@ -347,7 +357,8 @@ export function StoreScreen(): React.JSX.Element {
         renderItem={({ item: it }) => {
           const expanded = open === it.id;
           const loaded = previews[it.id];
-          const fileOnly = !clipboard.canWrite({ contentType: it.contentType, filename: it.filename, body: new Uint8Array(0) });
+          // Whether Copy asks first (a file, or an image), and whether Copy is among the answers.
+          const rule = choiceFor(it.contentType, it.filename, true);
           return (
             <View style={styles.card}>
               <Pressable
@@ -387,8 +398,8 @@ export function StoreScreen(): React.JSX.Element {
                     <PreviewBody preview={loaded.preview} />
                   )}
                   <Button
-                    label={busy === it.id ? 'Downloading…' : fileOnly ? 'Save or open on this device' : 'Copy to this device'}
-                    icon={fileOnly ? 'download' : 'check'}
+                    label={busy === it.id ? 'Downloading…' : receiveLabel(rule)}
+                    icon={rule.ask ? 'download' : 'check'}
                     onPress={() => copy(it)}
                     disabled={busy !== null}
                   />
@@ -472,8 +483,14 @@ export function StoreScreen(): React.JSX.Element {
         }}
       />
 
-      <Sheet visible={file !== null} title="Save or open?" onClose={() => setFile(null)}>
-        <FileChoices name={file?.name ?? ''} detail={file?.detail ?? ''} disabled={busy !== null} onChoose={choose} />
+      <Sheet visible={file !== null} title={FILE_CHOICES_TITLE} onClose={() => setFile(null)}>
+        <FileChoices
+          name={file?.name ?? ''}
+          detail={file?.detail ?? ''}
+          canCopy={file?.canCopy ?? false}
+          disabled={busy !== null}
+          onChoose={choose}
+        />
       </Sheet>
     </View>
   );
