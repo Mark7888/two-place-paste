@@ -249,6 +249,26 @@ const SLICED_OPEN_MIN_BYTES = 1 << 20;
  */
 const SLICED_SEAL_MIN_BYTES = 1 << 20;
 
+/**
+ * bodyHash is a body's SHA-256: the one the caller passed, or worked out here.
+ *
+ * Hashing is the slowest step of a large upload on the phone — slower than
+ * the encryption, in pure JavaScript with no JIT — and a file shared to the
+ * app has already been hashed by the platform while it was copied, at native
+ * speed. That hash is taken as given: it is of the same bytes, which the app
+ * copied itself, and a wrong one only makes the entry fail its check on the
+ * devices that read it, as a corrupted body would.
+ */
+async function bodyHash(item: { body: Uint8Array; sha256?: Uint8Array }): Promise<Uint8Array> {
+  if (item.sha256 === undefined) {
+    return sha256Sliced(item.body);
+  }
+  if (item.sha256.length !== 32) {
+    throw new TppError('invalid', `a body hash is 32 bytes, not ${item.sha256.length}`);
+  }
+  return item.sha256;
+}
+
 /** RANGE_RETRIES is how many times a download asks again for a range a dropped socket lost. */
 const RANGE_RETRIES = 3;
 
@@ -1678,12 +1698,20 @@ export class Client {
   // Entries (SPEC §6)
   // -------------------------------------------------------------------------
 
-  /** putEntry encrypts an item and stores it as the group's latest entry. Last write to reach the relay wins. */
+  /**
+   * putEntry encrypts an item and stores it as the group's latest entry. Last
+   * write to reach the relay wins.
+   *
+   * `sha256` is the body's hash when the caller already has it — a file
+   * shared to the app is hashed while it is copied — which saves hashing a
+   * large body again here (see `bodyHash`).
+   */
   async putEntry(item: {
     contentType: string;
     filename?: string;
     body: Uint8Array;
     createdAt?: Date;
+    sha256?: Uint8Array;
   }): Promise<EntryMeta> {
     this.requireGroup();
     if (item.contentType === '') {
@@ -1714,7 +1742,7 @@ export class Client {
     // The key read with the epoch, not the current one: a rekey during the
     // awaits above must not seal the header under another epoch's key.
     const header = limits.headerV2
-      ? sealEntryHeaderV2(groupKey, epoch, entryId, { ...summary, sha256: await sha256Sliced(item.body) })
+      ? sealEntryHeaderV2(groupKey, epoch, entryId, { ...summary, sha256: await bodyHash(item) })
       : sealEntryHeader(groupKey, epoch, entryId, summary);
 
     let response: EntryPutResponse;
@@ -2254,14 +2282,14 @@ export class Client {
    * screen checks the item's hash against its StoreIndex first, and asks.
    */
   async saveToStore(
-    item: { contentType: string; filename?: string; body: Uint8Array; createdAt?: Date },
+    item: { contentType: string; filename?: string; body: Uint8Array; createdAt?: Date; sha256?: Uint8Array },
     details: StoreDetails,
   ): Promise<StoreItem> {
     this.requireGroup();
     if (item.contentType === '') {
       throw new TppError('invalid', 'a store item needs a content type');
     }
-    const sum = await sha256Sliced(item.body);
+    const sum = await bodyHash(item);
     let meta: Uint8Array;
     try {
       meta = encodeStoreMeta({

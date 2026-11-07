@@ -13,8 +13,8 @@
 import { AppState } from 'react-native';
 
 import type { StoreDetails } from '../core';
-import { background, share, type ClipboardItem } from '../platform';
-import { JobQueue, runJob, type Job } from './jobs';
+import { background, share } from '../platform';
+import { JobQueue, runJob, type Job, type UploadItem } from './jobs';
 import { failureMessage } from './session';
 import { getSnapshot, onTransferProgress, refresh, setNotice } from './sessionStore';
 import type { Payload } from './share';
@@ -63,7 +63,7 @@ const queue = new JobQueue(
         client: () => getSnapshot().client,
         readStaged: (file, onProgress) => share.readStaged(file, onProgress),
         discard: (token) => share.discard(token),
-        saveToStore: async (item: ClipboardItem, details: StoreDetails) => {
+        saveToStore: async (item: UploadItem, details: StoreDetails) => {
           const client = getSnapshot().client;
           if (client === null) {
             throw new Error('TwoPlacePaste is not paired.');

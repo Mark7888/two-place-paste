@@ -164,17 +164,18 @@ export class DuplicateError extends Error {
 
 /**
  * saveItem saves something to the store, refusing a body it already holds
- * unless the user said "Save anyway".
+ * unless the user said "Save anyway". `item.sha256`, when given, is the
+ * body's hash, and is not worked out again.
  */
 export async function saveItem(
   client: Client,
-  item: ClipboardItem,
+  item: ClipboardItem & { sha256?: Uint8Array },
   details: StoreDetails,
   allowDuplicate: boolean,
 ): Promise<StoreItem> {
   await loadStore(client);
   if (!allowDuplicate) {
-    const dups = index.duplicates(hashHex(await sha256Sliced(item.body)));
+    const dups = index.duplicates(hashHex(item.sha256 ?? (await sha256Sliced(item.body))));
     if (dups.length > 0) {
       throw new DuplicateError(dups);
     }

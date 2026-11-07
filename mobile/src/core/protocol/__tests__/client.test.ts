@@ -4,7 +4,9 @@
  * the two places this client is required to refuse.
  */
 
-import { fromUTF8, utf8 } from '../../bytes';
+import { sha256 } from '@noble/hashes/sha2.js';
+
+import { fromUTF8, toHex, utf8 } from '../../bytes';
 import { HEADER_CONTAINER_SIZE, HEADER_V2_CONTAINER_SIZE, openStoreLink, storeKey } from '../../crypto';
 import { Client } from '../client';
 import { TppError, describe as describeError } from '../errors';
@@ -338,6 +340,49 @@ describe('entries (SPEC §6)', () => {
     expect(relay.lastHeader()).toHaveLength(size);
     const page = await laptop.getHistory({ limit: 10 });
     expect(page.entries[0].header?.filename).toBe(filename.slice(0, kept));
+  });
+});
+
+describe('a body hash the caller already has', () => {
+  const v2 = {
+    maxEntryBytes: '10485760',
+    singleFrameMaxBytes: '10485760',
+    chunkBytes: '0',
+    inlineMaxBytes: '0',
+    headerV2: true,
+  };
+
+  test('goes into the header as given, instead of being worked out again', async () => {
+    const relay = new FakeRelay();
+    relay.limits = v2;
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const given = new Uint8Array(32).fill(0xab);
+    await laptop.putEntry({ contentType: 'application/pdf', filename: 'a.pdf', body: utf8('%PDF-'), sha256: given });
+    const page = await laptop.getHistory({ limit: 10 });
+    expect(page.entries[0].header?.sha256Hex).toBe('ab'.repeat(32));
+  });
+
+  test('is worked out when none is given', async () => {
+    const relay = new FakeRelay();
+    relay.limits = v2;
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const body = utf8('%PDF-');
+    await laptop.putEntry({ contentType: 'application/pdf', filename: 'a.pdf', body });
+    const page = await laptop.getHistory({ limit: 10 });
+    expect(page.entries[0].header?.sha256Hex).toBe(toHex(sha256(body)));
+  });
+
+  test('of the wrong length is refused before anything is sent', async () => {
+    const relay = new FakeRelay();
+    relay.limits = v2;
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    await expect(
+      laptop.putEntry({ contentType: 'text/plain', body: utf8('x'), sha256: new Uint8Array(16) }),
+    ).rejects.toThrow('a body hash is 32 bytes, not 16');
+    expect((await laptop.getHistory({ limit: 10 })).entries).toHaveLength(0);
   });
 });
 

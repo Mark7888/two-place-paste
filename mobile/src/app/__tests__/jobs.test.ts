@@ -1,6 +1,6 @@
 import { utf8, type StoreDetails } from '../../core';
 import type { ClipboardItem, StagedFile } from '../../platform/types';
-import { JobQueue, runJob, type Job, type JobDeps } from '../jobs';
+import { JobQueue, knownHash, runJob, type Job, type JobDeps } from '../jobs';
 import { SENT, STORED, TEXT_CONTENT_TYPE, type ShareClient } from '../share';
 
 const file: StagedFile = { token: 'tok', name: 'x', contentType: 'application/pdf', size: 3, sha256: '' };
@@ -66,6 +66,13 @@ describe('runJob', () => {
       'put',
       'release',
     ]);
+  });
+
+  it('passes the hash the copy was made with, so it is not worked out again', async () => {
+    const { d, put } = deps();
+    const hashed = { ...file, sha256: 'ab'.repeat(32) };
+    await runJob({ id: 1, target: 'send', payload: { kind: 'file', file: hashed, contentType: 'application/pdf', filename: 'r.pdf' } }, d);
+    expect((put[0] as { sha256?: Uint8Array }).sha256).toEqual(new Uint8Array(32).fill(0xab));
   });
 
   it('saves to the store with the details the user gave', async () => {
@@ -198,5 +205,17 @@ describe('JobQueue.position', () => {
     q.add(job(4));
     await q.drain();
     expect(seen[3]).toBe('1 of 1');
+  });
+});
+
+describe('knownHash', () => {
+  const cases: { name: string; hex: string; want: Uint8Array | undefined }[] = [
+    { name: 'a SHA-256 in lowercase hex', hex: '01'.repeat(32), want: new Uint8Array(32).fill(1) },
+    { name: 'nothing for an empty one', hex: '', want: undefined },
+    { name: 'nothing for one of the wrong length', hex: '01'.repeat(16), want: undefined },
+    { name: 'nothing for one that is not hex', hex: 'zz'.repeat(32), want: undefined },
+  ];
+  it.each(cases)('gives $name', ({ hex, want }) => {
+    expect(knownHash(hex)).toEqual(want);
   });
 });

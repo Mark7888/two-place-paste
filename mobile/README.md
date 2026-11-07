@@ -259,6 +259,12 @@ it. Entries over 1 MB are sealed with `sealEntrySliced`, the encrypting half of
 slices with the event loop let run in between. Sealed in one call, an 80 MB
 upload froze the app and left a window opened meanwhile blank until it was done.
 
+Hashing is the other slow step — in pure JavaScript with no JIT it is slower
+than the encryption — so a shared file is hashed once, natively, while it is
+copied, and `putEntry` / `saveToStore` take that hash (`sha256`) instead of
+hashing the body again. A wrong hash would only make the entry fail its check
+where it is read, as a corrupted body would.
+
 The notification counts the run — "45% · 2 of 3" — when more than one upload is
 queued, and each upload's outcome gets a notification of its own.
 

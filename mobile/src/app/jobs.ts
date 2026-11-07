@@ -10,7 +10,7 @@
  * directly.
  */
 
-import type { StoreDetails } from '../core';
+import { fromHex, type StoreDetails } from '../core';
 import type { ClipboardItem, StagedFile } from '../platform/types';
 import { SENT, STORED, type Payload, type ShareClient } from './share';
 
@@ -20,6 +20,18 @@ export type Job = { id: number; payload: Payload } & (
   | { target: 'store'; details: StoreDetails }
 );
 
+/**
+ * UploadItem is an item to upload, with its body's SHA-256 when it is already
+ * known: a staged file is hashed natively while it is copied, far faster than
+ * JavaScript hashes it again.
+ */
+export type UploadItem = ClipboardItem & { sha256?: Uint8Array };
+
+/** knownHash turns a staged file's hex hash into bytes, or undefined when it is not one. */
+export function knownHash(hex: string): Uint8Array | undefined {
+  return /^[0-9a-f]{64}$/.test(hex) ? fromHex(hex) : undefined;
+}
+
 /** JobDeps is what running a job needs from the app and the platform. */
 export interface JobDeps {
   /** client is the client in use when the job runs, or null when there is none. */
@@ -28,7 +40,7 @@ export interface JobDeps {
   readStaged(file: StagedFile, onProgress: (done: number, total: number) => void): Promise<Uint8Array>;
   discard(token: string): void;
   /** saveToStore saves an item to the store with the details the user gave. */
-  saveToStore(item: ClipboardItem, details: StoreDetails): Promise<void>;
+  saveToStore(item: UploadItem, details: StoreDetails): Promise<void>;
   /** progress moves the notification along: a status, never content. */
   progress(title: string, done: number, total: number): void;
 }
@@ -52,12 +64,12 @@ export async function runJob(job: Job, deps: JobDeps): Promise<string> {
     throw new Error('TwoPlacePaste is not paired.');
   }
   return client.hold(async () => {
-    let item: ClipboardItem;
+    let item: UploadItem;
     if (p.kind === 'file') {
       try {
         deps.progress('Preparing…', 0, p.file.size);
         const body = await deps.readStaged(p.file, (done, total) => deps.progress('Preparing…', done, total));
-        item = { contentType: p.contentType, filename: p.filename, body };
+        item = { contentType: p.contentType, filename: p.filename, body, sha256: knownHash(p.file.sha256) };
       } finally {
         deps.discard(p.file.token);
       }
