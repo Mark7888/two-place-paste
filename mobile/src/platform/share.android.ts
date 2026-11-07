@@ -13,6 +13,9 @@ import { decodeBase64StdAsync } from '../core/bytes';
 import { SHARE_EVENT, TppShare, shareEvents } from './native';
 import type { PickedFile, SharePort, Shared } from './types';
 
+/** READ_CHUNK_BYTES is how much of a shared file crosses to JavaScript at once. */
+const READ_CHUNK_BYTES = 4 << 20;
+
 /** parse checks what the native side sent, so a malformed share is refused rather than half-shown. */
 function parse(raw: unknown): Shared | null {
   if (raw === null || typeof raw !== 'object') {
@@ -60,16 +63,32 @@ export const share: SharePort = {
     if (TppShare === null) {
       throw new Error('this build cannot take shared files');
     }
-    const read = await TppShare.read(id, maxBytes);
-    if (read.tooLarge === true || read.base64 === undefined) {
-      return { tooLarge: true, name: read.name, size: read.size };
+    // The file comes over in chunks into one buffer: as a single base64
+    // string it cost the native side several times its size at once, and a
+    // large file crashed the app.
+    const staged = await TppShare.stage(id, maxBytes);
+    if (staged.tooLarge === true) {
+      return { tooLarge: true, name: staged.name, size: staged.size };
     }
-    return {
-      tooLarge: false,
-      name: read.name,
-      contentType: read.contentType ?? 'application/octet-stream',
-      body: await decodeBase64StdAsync(read.base64),
-    };
+    try {
+      const body = new Uint8Array(staged.size);
+      for (let offset = 0; offset < staged.size; offset += READ_CHUNK_BYTES) {
+        const length = Math.min(READ_CHUNK_BYTES, staged.size - offset);
+        const chunk = await decodeBase64StdAsync(await TppShare.readChunk(id, offset, length));
+        if (chunk.length !== length) {
+          throw new Error('the shared file could not be read');
+        }
+        body.set(chunk, offset);
+      }
+      return {
+        tooLarge: false,
+        name: staged.name,
+        contentType: staged.contentType ?? 'application/octet-stream',
+        body,
+      };
+    } finally {
+      TppShare.discard(id);
+    }
   },
 
   finish(id: number, message: string): void {

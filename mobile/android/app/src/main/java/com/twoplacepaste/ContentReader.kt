@@ -7,6 +7,8 @@ import android.util.Base64
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.RandomAccessFile
 
 /**
  * Reads a `content://` URI another app handed this one: a file the user
@@ -14,6 +16,12 @@ import java.io.ByteArrayOutputStream
  * to this app ([ShareModule]). Both reach the bytes through the one-off read
  * grant that came with the URI, and both go through here so that the size
  * limit is enforced the same way on either path.
+ *
+ * A file can be tens of megabytes, and the Java heap this app gets is a few
+ * hundred. Reading one whole and handing it to JavaScript as one base64
+ * string costs several times its size at once, which is what made a large
+ * share crash the app. So a share is [stage]d — copied, streaming, into the
+ * app's cache — and handed over in [chunk]s instead.
  */
 internal object ContentReader {
 
@@ -70,7 +78,7 @@ internal object ContentReader {
             }
             // The size a provider reports can be missing or wrong, so the read
             // is bounded too.
-            val out = ByteArrayOutputStream()
+            val out = ByteArrayOutputStream(if (meta.size in 1..maxBytes) meta.size.toInt() else 64 * 1024)
             val input = resolver.openInputStream(uri)
                 ?: throw IllegalStateException("the file could not be opened")
             input.use {
@@ -99,10 +107,64 @@ internal object ContentReader {
                     putString("base64", Base64.encodeToString(bytes, Base64.NO_WRAP))
                 },
             )
+        } catch (e: OutOfMemoryError) {
+            // Rejected rather than left to crash the app.
+            promise.reject(ERROR_CODE, "the file is too large to read on this device", e)
         } catch (e: Exception) {
             // The message names the operation, never the bytes or the name.
             promise.reject(ERROR_CODE, "the file could not be read", e)
         }
+    }
+
+    /**
+     * stage copies [uri] into [dest], streaming, and returns the number of
+     * bytes copied — or null when the file is over [maxBytes], in which case
+     * nothing is left behind. It blocks, so it is called off the main thread.
+     * Only a buffer's worth of the file is in memory at any time.
+     */
+    fun stage(context: Context, uri: Uri, maxBytes: Long, dest: File): Long? {
+        val input = context.contentResolver.openInputStream(uri)
+            ?: throw IllegalStateException("the file could not be opened")
+        dest.parentFile?.mkdirs()
+        var total = 0L
+        var fits = true
+        try {
+            input.use { inp ->
+                dest.outputStream().use { out ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = inp.read(buffer)
+                        if (n < 0) {
+                            break
+                        }
+                        total += n
+                        if (total > maxBytes) {
+                            fits = false
+                            break
+                        }
+                        out.write(buffer, 0, n)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            dest.delete()
+            throw e
+        }
+        if (!fits) {
+            dest.delete()
+            return null
+        }
+        return total
+    }
+
+    /** chunk returns [length] bytes of [file] from [offset], as base64. */
+    fun chunk(file: File, offset: Long, length: Int): String {
+        val bytes = ByteArray(length)
+        RandomAccessFile(file, "r").use {
+            it.seek(offset)
+            it.readFully(bytes)
+        }
+        return Base64.encodeToString(bytes, Base64.NO_WRAP)
     }
 
     private fun tooLarge(name: String, size: Long) =

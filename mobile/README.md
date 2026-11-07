@@ -222,8 +222,10 @@ stays native. JavaScript sees its name, type and size, and asks for the bytes
 only after the user has picked a destination, with that destination's limit —
 the relay's entry cap or the store's room — so a file over it is refused
 before it is read when the sender gives a size, and at the limit otherwise.
-`ContentReader` does the bounded read for both this and the Store's file
-picker. The read grant lasts as long as the activity, which is why the panel is
+The file is copied, streaming, into the app's cache (`ContentReader.stage`)
+and crosses to JavaScript in 4 MB base64 chunks into one buffer. Handing it
+over as one base64 string cost the Java heap several times the file's size
+at once and crashed the app on large files. The read grant lasts as long as the activity, which is why the panel is
 not `noHistory` and the bytes are read while it is up.
 
 Only `content://` URIs from another app are read. A `file://` URI, or a

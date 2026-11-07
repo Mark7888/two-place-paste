@@ -28,11 +28,18 @@ export interface TppTileModule {
 export interface TppShareModule {
   /** consumePending resolves once with the share waiting, as untyped native data, or null. */
   consumePending(): Promise<unknown>;
-  /** read resolves with the shared file in the same shape as `TppFilesModule.pickFile`. */
-  read(
+  /**
+   * stage copies the shared file into the app's cache, within `maxBytes`, and
+   * resolves with its name, type and size, or with `tooLarge` and no copy.
+   */
+  stage(
     id: number,
     maxBytes: number,
-  ): Promise<{ name: string; size: number; contentType?: string; base64?: string; tooLarge?: boolean }>;
+  ): Promise<{ name: string; size: number; contentType?: string; tooLarge?: boolean }>;
+  /** readChunk resolves with `length` bytes of the staged copy from `offset`, as base64. */
+  readChunk(id: number, offset: number, length: number): Promise<string>;
+  /** discard deletes the staged copy. */
+  discard(id: number): void;
   /** finish closes the share panel and forgets the share, with an optional toast. */
   finish(id: number, message: string): void;
   /** openApp brings the app forward and closes the share panel. */
