@@ -2,6 +2,8 @@ package com.twoplacepaste
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.View
+import android.view.ViewGroup
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
@@ -26,6 +28,14 @@ import com.facebook.react.defaults.DefaultReactActivityDelegate
  * Its own task and `excludeFromRecents`, like the tile's panel: a one-shot
  * panel has no place in the recents list and must never become what the
  * launcher returns to instead of the app.
+ *
+ * It holds itself to the full screen ([fillScreen]). The share sheet starts
+ * the chosen app with an animation that grows out of the tapped target, and a
+ * translucent window opened during it could keep a size from part-way
+ * through: the panel then sat in the left part of the screen, dimming only
+ * that part. So the window is set to fill the screen when it opens, when a
+ * share reuses it and when it gains focus, and the React surface is measured
+ * again whenever the window's size changes.
  */
 class ShareActivity : ReactActivity() {
 
@@ -43,6 +53,14 @@ class ShareActivity : ReactActivity() {
             ShareModule.receive(applicationContext, intent)
         }
         super.onCreate(savedInstanceState)
+        fillScreen()
+        window.decorView.addOnLayoutChangeListener { view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+            if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
+                // Posted, because a layout pass must not request another
+                // from inside itself.
+                view.post { fillScreen() }
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -50,6 +68,24 @@ class ShareActivity : ReactActivity() {
         setIntent(intent)
         // A second share while the panel is up replaces the first.
         ShareModule.receive(applicationContext, intent)
+        fillScreen()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            fillScreen()
+        }
+    }
+
+    /**
+     * fillScreen makes the window cover the whole screen and has the React
+     * surface measured again for it. Setting the same size again is a no-op
+     * for the window, so this is safe to call as often as it is.
+     */
+    private fun fillScreen() {
+        window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        findViewById<View>(android.R.id.content)?.requestLayout()
     }
 
     override fun onDestroy() {
