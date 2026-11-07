@@ -14,12 +14,14 @@ import 'react-native-get-random-values';
 import { AppRegistry } from 'react-native';
 
 import App from './src/app/App';
+import ShareOverlay from './src/app/ShareOverlay';
 import SyncOverlay from './src/app/SyncOverlay';
 import { init } from './src/app/sessionStore';
-import { name as appName, syncComponentName } from './app.json';
+import { initShare } from './src/app/shareState';
+import { name as appName, shareComponentName, syncComponentName } from './app.json';
 
 /*
- * Two components, one session.
+ * Three components, one session.
  *
  * `App` is the app; `SyncOverlay` is the small panel a quick-settings tap puts
  * over whatever the user is doing. They are separate Android activities and
@@ -28,8 +30,14 @@ import { name as appName, syncComponentName } from './app.json';
  * happens to mount. That is what lets a tile tap be answered without the whole
  * app coming to the front, and it is why the tile handler is no longer an
  * effect inside a screen.
+ *
+ * `ShareOverlay` is the third: the panel "Share → TwoPlacePaste" opens. The
+ * share it asks about is listened for here too, for the same reason — the
+ * share may be what started this process.
  */
 init();
+initShare();
 
 AppRegistry.registerComponent(appName, () => App);
 AppRegistry.registerComponent(syncComponentName, () => SyncOverlay);
+AppRegistry.registerComponent(shareComponentName, () => ShareOverlay);

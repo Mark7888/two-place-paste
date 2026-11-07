@@ -24,6 +24,21 @@ export interface TppTileModule {
   closeOverlay(): void;
 }
 
+/** TppShareModule is implemented by `android/app/src/main/java/.../ShareModule.kt`. */
+export interface TppShareModule {
+  /** consumePending resolves once with the share waiting, as untyped native data, or null. */
+  consumePending(): Promise<unknown>;
+  /** read resolves with the shared file in the same shape as `TppFilesModule.pickFile`. */
+  read(
+    id: number,
+    maxBytes: number,
+  ): Promise<{ name: string; size: number; contentType?: string; base64?: string; tooLarge?: boolean }>;
+  /** finish closes the share panel and forgets the share, with an optional toast. */
+  finish(id: number, message: string): void;
+  /** openApp brings the app forward and closes the share panel. */
+  openApp(): void;
+}
+
 /** TppClipboardModule is implemented by `android/app/src/main/java/.../ClipboardModule.kt`. */
 export interface TppClipboardModule {
   /**
@@ -109,11 +124,13 @@ const modules = NativeModules as {
   TppTile?: TppTileModule;
   TppClipboard?: TppClipboardModule;
   TppFiles?: TppFilesModule;
+  TppShare?: TppShareModule;
 };
 
 export const TppTile: TppTileModule | null = modules.TppTile ?? null;
 export const TppClipboard: TppClipboardModule | null = modules.TppClipboard ?? null;
 export const TppFiles: TppFilesModule | null = modules.TppFiles ?? null;
+export const TppShare: TppShareModule | null = modules.TppShare ?? null;
 export const TppCache: TppCacheModule | null = modules.TppCache ?? null;
 export const TppNotices: TppNoticesModule | null = modules.TppNotices ?? null;
 export const TppAppInfo: TppAppInfoModule | null = modules.TppAppInfo ?? null;
@@ -134,3 +151,10 @@ type EmitterModule = {
 
 export const tileEvents: NativeEventEmitter | null =
   TppTile === null ? null : new NativeEventEmitter(TppTile as unknown as EmitterModule);
+
+/** SHARE_EVENT is emitted by the native share bridge when a share reaches a running app. */
+export const SHARE_EVENT = 'TppShareReceived';
+
+/** shareEvents is the emitter shares arrive on, or null where nothing can be shared to the app. */
+export const shareEvents: NativeEventEmitter | null =
+  TppShare === null ? null : new NativeEventEmitter(TppShare as unknown as EmitterModule);

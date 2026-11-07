@@ -1,5 +1,6 @@
 {
   "name": "TwoPlacePaste",
   "displayName": "TwoPlacePaste",
-  "syncComponentName": "TwoPlacePasteSync"
+  "syncComponentName": "TwoPlacePasteSync",
+  "shareComponentName": "TwoPlacePasteShare"
 }

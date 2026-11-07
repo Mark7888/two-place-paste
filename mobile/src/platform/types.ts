@@ -165,3 +165,58 @@ export interface TilePort {
    */
   closeOverlay(): void;
 }
+
+/**
+ * Shared is what another app shared to this one through the system's share
+ * sheet: one file, one piece of text, or something this app will not read.
+ * `id` names the share for `SharePort.read` and `SharePort.finish`; a newer
+ * share replaces an older one.
+ */
+export type Shared =
+  | {
+      id: number;
+      kind: 'file';
+      /** name is the file's display name, made safe; one is made up when the sender gave none. */
+      name: string;
+      contentType: string;
+      /** size is in bytes, or -1 when the sending app does not say. */
+      size: number;
+      /** previewUri can be shown as an image, or is "" for anything but an image. */
+      previewUri: string;
+    }
+  | { id: number; kind: 'text'; text: string; subject: string }
+  | { id: number; kind: 'unsupported' };
+
+/**
+ * SharePort is the receiving end of the system's share sheet. It exists on
+ * Android; elsewhere it reports that nothing can be shared to the app.
+ */
+export interface SharePort {
+  /** available reports whether this platform can share to the app at all. */
+  readonly available: boolean;
+
+  /**
+   * requests subscribes to shares that reached the running app; the handler
+   * then claims them with `pending`. The returned function unsubscribes.
+   */
+  requests(handler: () => void): () => void;
+
+  /** pending claims the share waiting, once, or resolves with null. */
+  pending(): Promise<Shared | null>;
+
+  /**
+   * read reads a shared file's bytes, with `tooLarge` and no bytes when it is
+   * over `maxBytes`. It rejects when share `id` is no longer the one waiting.
+   */
+  read(id: number, maxBytes: number): Promise<PickedFile>;
+
+  /**
+   * finish closes the share panel for share `id`, with `message` as a toast
+   * when it is not empty. It is a status, never what was shared: a toast is
+   * visible over other apps.
+   */
+  finish(id: number, message: string): void;
+
+  /** openApp brings the app forward and closes the share panel. */
+  openApp(): void;
+}

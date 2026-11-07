@@ -200,6 +200,37 @@ to **save it to Downloads** or **open it**. Both go through `FileModule`
   one-off read grant. Each open replaces the last staged file. If no installed
   app opens the type, the user is told and can save it instead.
 
+## Sharing to the app
+
+The app is a share target: **Share → TwoPlacePaste** from any app takes one
+file, one image or a piece of text. `ShareActivity` registers for
+`ACTION_SEND` with `*/*` (which covers `text/plain`); `ACTION_SEND_MULTIPLE` is
+deliberately not registered, so a multi-item share does not list the app.
+
+It is the tile's panel again: a transparent activity with its own task, out of
+recents, mounting a third React surface — `TwoPlacePasteShare`, registered in
+`index.js` — on the same JavaScript context. Nothing is uploaded on arrival.
+The panel (`src/app/ShareOverlay.tsx`) asks whether to **send it to the group**
+(it becomes the latest entry, as a sync up would) or **save it to the store**
+(through the Store's own sheet), and dismissing it sends nothing. It always
+goes to the group in use.
+
+The share reaches JavaScript the way a tile tap does: `ShareModule` (`TppShare`)
+records it before the React surface mounts, a running app gets an event, and a
+cold start claims it once at startup (`src/app/shareState.ts`). The file's URI
+stays native. JavaScript sees its name, type and size, and asks for the bytes
+only after the user has picked a destination, with that destination's limit —
+the relay's entry cap or the store's room — so a file over it is refused
+before it is read when the sender gives a size, and at the limit otherwise.
+`ContentReader` does the bounded read for both this and the Store's file
+picker. The read grant lasts as long as the activity, which is why the panel is
+not `noHistory` and the bytes are read while it is up.
+
+Only `content://` URIs from another app are read. A `file://` URI, or a
+`content://` URI served by this app's own providers (including a
+`<user>@authority` form), is refused, because either would let the sending app
+make this one read — and upload — its own private files.
+
 ## Sync direction
 
 SPEC §6 says upload if the local clipboard is newer, otherwise download.

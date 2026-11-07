@@ -1,0 +1,18 @@
+/**
+ * Sharing to the app is Android-only for now: iOS would need a share
+ * extension, a separate target with its own process. The port exists so the
+ * app's startup path is one path on both platforms.
+ */
+
+import type { SharePort } from './types';
+
+export const share: SharePort = {
+  available: false,
+  requests: () => () => {},
+  pending: async () => null,
+  read: async () => {
+    throw new Error('this platform cannot take shared files');
+  },
+  finish: () => {},
+  openApp: () => {},
+};
