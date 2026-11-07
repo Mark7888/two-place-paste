@@ -19,11 +19,22 @@
         android:maxSdkVersion="28" />
 
     <!--
-      There is no FOREGROUND_SERVICE, no accessibility service and no
-      BIND_ACCESSIBILITY_SERVICE. Background clipboard access is not attempted
-      at all (SPEC §7.1): the quick-settings tile foregrounds the app, which is
-      the only legal moment to read the clipboard on Android 10+.
+      There is no accessibility service and no BIND_ACCESSIBILITY_SERVICE.
+      Background clipboard access is not attempted at all (SPEC §7.1): the
+      quick-settings tile foregrounds the app, which is the only legal moment
+      to read the clipboard on Android 10+.
+
+      The one foreground service, TransferService, has nothing to do with the
+      clipboard. It carries an upload the user started from the share panel
+      after the panel closes, with a notification showing its progress
+      (POST_NOTIFICATIONS, asked for when the user first sends something from
+      the panel). WAKE_LOCK is what React Native's headless task service holds
+      while the upload runs.
     -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
         android:name=".MainApplication"
@@ -123,6 +134,16 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
+
+        <!--
+          Background uploads from the share panel (TransferService): a
+          foreground service running React Native's headless JS task. Not
+          exported — only this app starts it.
+        -->
+        <service
+            android:name=".TransferService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
 
         <!--
           The quick-settings tile (SPEC §7.1). android:exported is required for

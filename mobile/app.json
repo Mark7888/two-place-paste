@@ -2,5 +2,6 @@
   "name": "TwoPlacePaste",
   "displayName": "TwoPlacePaste",
   "syncComponentName": "TwoPlacePasteSync",
-  "shareComponentName": "TwoPlacePasteShare"
+  "shareComponentName": "TwoPlacePasteShare",
+  "transferTaskName": "TppBackgroundTransfers"
 }

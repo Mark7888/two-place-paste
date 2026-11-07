@@ -30,20 +30,29 @@ export interface TppShareModule {
   consumePending(): Promise<unknown>;
   /**
    * stage copies the shared file into the app's cache, within `maxBytes`, and
-   * resolves with its name, type and size, or with `tooLarge` and no copy.
+   * resolves with its token, name, type, size and SHA-256, or with `tooLarge`
+   * and no copy.
    */
   stage(
     id: number,
     maxBytes: number,
-  ): Promise<{ name: string; size: number; contentType?: string; tooLarge?: boolean }>;
-  /** readChunk resolves with `length` bytes of the staged copy from `offset`, as base64. */
-  readChunk(id: number, offset: number, length: number): Promise<string>;
-  /** discard deletes the staged copy. */
-  discard(id: number): void;
+  ): Promise<{ token?: string; name: string; size: number; contentType?: string; sha256?: string; tooLarge?: boolean }>;
+  /** readChunk resolves with `length` bytes of staged copy `token` from `offset`, as base64. */
+  readChunk(token: string, offset: number, length: number): Promise<string>;
+  /** discard deletes staged copy `token`. */
+  discard(token: string): void;
   /** finish closes the share panel and forgets the share, with an optional toast. */
   finish(id: number, message: string): void;
   /** openApp brings the app forward and closes the share panel. */
   openApp(): void;
+}
+
+/** TppTransferModule is implemented by `android/app/src/main/java/.../TransferModule.kt`. */
+export interface TppTransferModule {
+  /** start starts the foreground service that runs background uploads. */
+  start(): Promise<void>;
+  progress(title: string, done: number, total: number): void;
+  result(ok: boolean, message: string): void;
 }
 
 /** TppClipboardModule is implemented by `android/app/src/main/java/.../ClipboardModule.kt`. */
@@ -132,12 +141,14 @@ const modules = NativeModules as {
   TppClipboard?: TppClipboardModule;
   TppFiles?: TppFilesModule;
   TppShare?: TppShareModule;
+  TppTransfer?: TppTransferModule;
 };
 
 export const TppTile: TppTileModule | null = modules.TppTile ?? null;
 export const TppClipboard: TppClipboardModule | null = modules.TppClipboard ?? null;
 export const TppFiles: TppFilesModule | null = modules.TppFiles ?? null;
 export const TppShare: TppShareModule | null = modules.TppShare ?? null;
+export const TppTransfer: TppTransferModule | null = modules.TppTransfer ?? null;
 export const TppCache: TppCacheModule | null = modules.TppCache ?? null;
 export const TppNotices: TppNoticesModule | null = modules.TppNotices ?? null;
 export const TppAppInfo: TppAppInfoModule | null = modules.TppAppInfo ?? null;

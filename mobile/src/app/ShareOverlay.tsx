@@ -8,6 +8,11 @@
  * the user answers. Dismissing it is an answer too: nothing is read and nothing
  * is sent.
  *
+ * Once the user has answered, the panel only gets the upload ready — checks
+ * the limit, copies a shared file into the app's own storage — and closes. The
+ * upload itself runs in the background with a progress notification
+ * (`backgroundJobs.ts`), so a large file does not keep the user waiting here.
+ *
  * It always goes to the group in use. With "Keep several groups" on, the user
  * switches group in the app first.
  */
@@ -15,20 +20,40 @@
 import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { ActivityIndicator, BackHandler, Pressable, ScrollView, Text, View } from 'react-native';
 
-import { share, type ClipboardItem, type Shared } from '../platform';
+import { background, share, type Shared } from '../platform';
+import { enqueue } from './backgroundJobs';
 import { ImagePreview } from './PreviewBody';
 import { SessionProvider, useSession } from './SessionContext';
-import { describeItem, failureMessage } from './session';
-import { describeShared, sendShared, storeItemFor, suggestedName, STORED, UNSUPPORTED } from './share';
+import { failureMessage } from './session';
+import {
+  describePayload,
+  describeShared,
+  payloadHash,
+  prepareSend,
+  prepareStore,
+  SENDING,
+  STORING,
+  suggestedName,
+  UNSUPPORTED,
+  type Payload,
+} from './share';
 import { finishShare, getShared, openAppFromShare, subscribeShare } from './shareState';
 import { StoreSheet } from './StoreSheet';
-import { getStoreSnapshot, index as storeIndex, loadStore, saveItem, subscribeStore } from './storeState';
+import { DuplicateError, getStoreSnapshot, index as storeIndex, loadStore, subscribeStore } from './storeState';
 import { colors, styles } from './theme';
-import { Button, Choice, Notice, TransferList } from './ui';
+import { Button, Choice, Notice } from './ui';
 import { storeRoom } from './preview';
 
-/** readShared is the platform's reader, as the function `share.ts` takes. */
-const readShared = (id: number, maxBytes: number) => share.read(id, maxBytes);
+/** stage and discard are the platform's, as the functions `share.ts` takes. */
+const stage = (id: number, maxBytes: number) => share.stage(id, maxBytes);
+const discard = (token: string) => share.discard(token);
+
+/** dropPayload deletes the staged copy of a payload that will not be uploaded. */
+function dropPayload(p: Payload | null): void {
+  if (p !== null && p.kind === 'file') {
+    discard(p.file.token);
+  }
+}
 
 /** Busy is what the panel is doing while it is not waiting on the user. */
 type Busy = 'send' | 'store' | null;
@@ -39,7 +64,7 @@ function Panel(): React.JSX.Element {
   const store = useSyncExternalStore(subscribeStore, getStoreSnapshot);
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState('');
-  const [storing, setStoring] = useState<ClipboardItem | null>(null);
+  const [storing, setStoring] = useState<Payload | null>(null);
 
   const id = shared?.id ?? 0;
 
@@ -51,6 +76,8 @@ function Panel(): React.JSX.Element {
   }, [id]);
 
   const cancel = () => {
+    dropPayload(storing);
+    setStoring(null);
     if (shared === null) {
       share.finish(0, '');
       return;
@@ -58,8 +85,8 @@ function Panel(): React.JSX.Element {
     finishShare(shared.id, '');
   };
 
-  // Back is Cancel. While an upload runs it is ignored rather than leaving the
-  // upload to finish behind a panel that is gone.
+  // Back is Cancel. While a file is being copied it is ignored: the copy needs
+  // the permission that goes with this panel.
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (busy === null) {
@@ -80,8 +107,10 @@ function Panel(): React.JSX.Element {
     setError('');
     void (async () => {
       try {
-        const message = await sendShared(client, s, readShared);
-        finishShare(s.id, message);
+        await background.askToNotify();
+        const payload = await prepareSend(client, s, stage, discard);
+        await enqueue(payload, 'send');
+        finishShare(s.id, SENDING);
       } catch (err) {
         setError(failureMessage(err));
       } finally {
@@ -98,10 +127,10 @@ function Panel(): React.JSX.Element {
     setError('');
     void (async () => {
       try {
-        // Listed in the background for the duplicate check and the tag
-        // suggestions; the save waits for it either way.
+        // Listed meanwhile, for the duplicate check and the tag suggestions.
         void loadStore(client);
-        setStoring(await storeItemFor(client, s, readShared));
+        await background.askToNotify();
+        setStoring(await prepareStore(client, s, stage, discard));
       } catch (err) {
         setError(failureMessage(err));
       } finally {
@@ -158,14 +187,11 @@ function Panel(): React.JSX.Element {
         {session.groupName !== '' && <Text style={styles.small}>Group: {session.groupName}</Text>}
         {error !== '' && <Notice message={error} tone="error" />}
         {busy !== null ? (
-          session.transfers.length > 0 ? (
-            <TransferList transfers={session.transfers} />
-          ) : (
-            <View style={[styles.rowInline, { paddingVertical: 4 }]}>
-              <ActivityIndicator color={colors.accent} />
-              <Text style={[styles.text, { flex: 1 }]}>{busy === 'send' ? 'Sending…' : 'Reading…'}</Text>
-            </View>
-          )
+          // Only the copy happens here; the upload runs after the panel closes.
+          <View style={[styles.rowInline, { paddingVertical: 4 }]}>
+            <ActivityIndicator color={colors.accent} />
+            <Text style={[styles.text, { flex: 1 }]}>Preparing…</Text>
+          </View>
         ) : (
           <>
             <Choice
@@ -206,17 +232,29 @@ function Panel(): React.JSX.Element {
         <StoreSheet
           visible={storing !== null}
           title="Save to store"
-          what={storing === null ? undefined : describeItem(storing)}
+          what={storing === null ? undefined : describePayload(storing)}
           available={storeRoom(store.limits)}
           initial={{ name: suggestedName(shared), description: '', tags: [] }}
           knownTags={storeIndex.tags().map((t) => t.tag)}
-          onClose={() => setStoring(null)}
+          onClose={() => {
+            dropPayload(storing);
+            setStoring(null);
+          }}
           onSubmit={async (details, allowDuplicate) => {
             if (client === null || storing === null) {
               return '';
             }
-            await saveItem(client, storing, details, allowDuplicate);
-            return STORED;
+            // The duplicate check is made here, while the user can still
+            // answer "Save anyway"; the save itself runs in the background.
+            if (!allowDuplicate) {
+              await loadStore(client);
+              const dups = storeIndex.duplicates(await payloadHash(storing));
+              if (dups.length > 0) {
+                throw new DuplicateError(dups);
+              }
+            }
+            await enqueue(storing, 'store', details);
+            return STORING;
           }}
           onDone={(message) => finishShare(shared.id, message)}
         />

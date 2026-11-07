@@ -218,15 +218,38 @@ goes to the group in use.
 The share reaches JavaScript the way a tile tap does: `ShareModule` (`TppShare`)
 records it before the React surface mounts, a running app gets an event, and a
 cold start claims it once at startup (`src/app/shareState.ts`). The file's URI
-stays native. JavaScript sees its name, type and size, and asks for the bytes
-only after the user has picked a destination, with that destination's limit —
-the relay's entry cap or the store's room — so a file over it is refused
-before it is read when the sender gives a size, and at the limit otherwise.
-The file is copied, streaming, into the app's cache (`ContentReader.stage`)
-and crosses to JavaScript in 4 MB base64 chunks into one buffer. Handing it
-over as one base64 string cost the Java heap several times the file's size
-at once and crashed the app on large files. The read grant lasts as long as the activity, which is why the panel is
-not `noHistory` and the bytes are read while it is up.
+stays native; JavaScript sees its name, type and size.
+
+**The upload runs in the background.** Once the user picks a destination, the
+panel only gets the upload ready and closes:
+
+1. it checks the destination's limit — the relay's entry cap or the store's
+   room — refusing a file over it before it is read when the sender gives a
+   size, and at the limit otherwise;
+2. it copies the file, streaming, into the app's cache (`ShareModule.stage`,
+   `ContentReader.stage`), hashing it on the way for the store's duplicate
+   check. The copy is needed because the read grant ends with the panel; it
+   is named by a random token and deleted once read (or at the next start);
+3. for the store, it asks for the name, description and tags, and checks for a
+   duplicate while "Save anyway" can still be answered;
+4. it queues the upload (`src/app/backgroundJobs.ts`, `jobs.ts`) and starts
+   `TransferService`.
+
+`TransferService` is a `dataSync` foreground service running React Native's
+headless JS task, which drains the queue one upload at a time. Both halves are
+needed: without the service Android freezes or kills the process once no
+window is up, and without the headless task React Native pauses JavaScript
+timers, which the hashing and the chunked reads yield through. Its notification
+moves through Preparing (reading the copy back), Encrypting and Uploading
+(the relay's chunk progress), then a separate notification says how it ended.
+Notification text is a status, never the file's name: it shows on the lock
+screen. `POST_NOTIFICATIONS` is asked for when the user first sends from the
+panel; an upload runs without it, just without the notification. The copy
+crosses to JavaScript in 4 MB base64 chunks into one buffer: as one string it
+cost the Java heap several times the file's size and crashed the app.
+
+A socket the background upload dialled is closed when the queue is empty if
+the app is still not on screen, as SPEC §5.2 would have it.
 
 Only `content://` URIs from another app are read. A `file://` URI, or a
 `content://` URI served by this app's own providers (including a

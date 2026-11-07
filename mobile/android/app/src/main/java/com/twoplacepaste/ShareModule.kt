@@ -15,6 +15,8 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import java.io.File
+import java.security.MessageDigest
+import java.util.UUID
 
 /**
  * The bridge between [ShareActivity] and the JavaScript that asks the user
@@ -37,6 +39,10 @@ import java.io.File
  */
 class ShareModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
+
+    init {
+        clearStaged(reactContext)
+    }
 
     override fun getName(): String = NAME
 
@@ -105,13 +111,19 @@ class ShareModule(reactContext: ReactApplicationContext) :
 
     /**
      * stage copies the shared file into this app's cache, within [maxBytes],
-     * and resolves with `{ name, contentType, size }`, or with `{ name, size,
-     * tooLarge: true }` when it is over the limit. The bytes are then read
-     * with [readChunk], a few megabytes at a time, and [discard]ed.
+     * and resolves with `{ token, name, contentType, size, sha256 }`, or with
+     * `{ name, size, tooLarge: true }` and no copy when it is over the limit.
      *
-     * It rejects when the share [id] names is no longer the one waiting — the
-     * panel was closed, or another share replaced it — and when the file
-     * cannot be read, with a message that names neither the file nor the URI.
+     * The copy is what lets the upload outlive the panel: the read grant ends
+     * with [ShareActivity], the copy does not. It is read back with
+     * [readChunk] and deleted with [discard], by its token; whatever is left
+     * when the process starts again is deleted then. `sha256` is the
+     * file's hash in hex, worked out during the copy, for the store's
+     * duplicate check.
+     *
+     * It rejects when the share [id] names is no longer the one waiting, and
+     * when the file cannot be read — with a message that names neither the
+     * file nor the URI.
      */
     @ReactMethod
     fun stage(id: Double, maxBytes: Double, promise: Promise) {
@@ -127,14 +139,14 @@ class ShareModule(reactContext: ReactApplicationContext) :
         // Off the main thread, and off the module thread: copying a large file
         // takes a while, and nothing else should wait on it.
         Thread {
-            val dest = stagedFile(context)
+            val token = newToken()
+            val dest = stagedFile(context, token)
             try {
-                synchronized(Companion) { stagedId = 0 }
-                dest.delete()
                 val meta = ContentReader.meta(context, uri)
                 val limit = maxBytes.toLong()
+                val digest = MessageDigest.getInstance("SHA-256")
                 // Refused before the copy when the provider says it will not fit.
-                val size = if (meta.size > limit) null else ContentReader.stage(context, uri, limit, dest)
+                val size = if (meta.size > limit) null else ContentReader.stage(context, uri, limit, dest, digest)
                 if (size == null) {
                     promise.resolve(
                         Arguments.createMap().apply {
@@ -145,24 +157,13 @@ class ShareModule(reactContext: ReactApplicationContext) :
                     )
                     return@Thread
                 }
-                val stillCurrent = synchronized(Companion) {
-                    if (current?.id == wanted) {
-                        stagedId = wanted
-                        true
-                    } else {
-                        false
-                    }
-                }
-                if (!stillCurrent) {
-                    dest.delete()
-                    promise.reject(ERROR_CODE, "the shared file is no longer available")
-                    return@Thread
-                }
                 promise.resolve(
                     Arguments.createMap().apply {
+                        putString("token", token)
                         putString("name", name)
                         putString("contentType", shared.type.ifEmpty { FileModule.mimeOf("", name) })
                         putDouble("size", size.toDouble())
+                        putString("sha256", digest.digest().joinToString("") { "%02x".format(it) })
                     },
                 )
             } catch (e: Throwable) {
@@ -174,39 +175,25 @@ class ShareModule(reactContext: ReactApplicationContext) :
         }.start()
     }
 
-    /**
-     * readChunk resolves with [length] bytes of the staged file from
-     * [offset], as base64. It rejects when share [id] is not the one staged.
-     */
+    /** readChunk resolves with [length] bytes of staged copy [token] from [offset], as base64. */
     @ReactMethod
-    fun readChunk(id: Double, offset: Double, length: Double, promise: Promise) {
-        val staged = synchronized(Companion) { stagedId == id.toInt() && stagedId != 0 }
-        if (!staged) {
+    fun readChunk(token: String, offset: Double, length: Double, promise: Promise) {
+        val file = stagedFileOrNull(reactApplicationContext, token)
+        if (file == null || !file.exists()) {
             promise.reject(ERROR_CODE, "the shared file is no longer available")
             return
         }
         try {
-            promise.resolve(ContentReader.chunk(stagedFile(reactApplicationContext), offset.toLong(), length.toInt()))
+            promise.resolve(ContentReader.chunk(file, offset.toLong(), length.toInt()))
         } catch (e: Throwable) {
             promise.reject(ERROR_CODE, "the shared file could not be read", e)
         }
     }
 
-    /** discard deletes the staged copy of share [id], once it has been read. */
+    /** discard deletes staged copy [token]. Deleting one already gone is fine. */
     @ReactMethod
-    fun discard(id: Double) {
-        val wanted = id.toInt()
-        val was = synchronized(Companion) {
-            if (stagedId == wanted) {
-                stagedId = 0
-                true
-            } else {
-                false
-            }
-        }
-        if (was) {
-            stagedFile(reactApplicationContext).delete()
-        }
+    fun discard(token: String) {
+        stagedFileOrNull(reactApplicationContext, token)?.delete()
     }
 
     /**
@@ -227,7 +214,6 @@ class ShareModule(reactContext: ReactApplicationContext) :
             if (wanted == 0 || current?.id == wanted) {
                 current = null
                 delivered = true
-                stagedId = 0
                 true
             } else {
                 false
@@ -236,7 +222,6 @@ class ShareModule(reactContext: ReactApplicationContext) :
         if (!matched) {
             return
         }
-        stagedFile(reactApplicationContext).delete()
         if (message.isNotEmpty()) {
             val context = reactApplicationContext
             Handler(Looper.getMainLooper()).post {
@@ -255,7 +240,7 @@ class ShareModule(reactContext: ReactApplicationContext) :
             launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(launch)
         }
-        drop(context)
+        drop()
         ShareActivity.close()
     }
 
@@ -300,18 +285,31 @@ class ShareModule(reactContext: ReactApplicationContext) :
         /** delivered is whether JavaScript has claimed [current] yet. */
         private var delivered = true
 
-        /** stagedId is the share whose copy is in [stagedFile], or 0 for none. */
-        private var stagedId = 0
+        /**
+         * stagedFile is where a shared file is copied for the upload that takes
+         * it, one file per upload, in the cache. No provider of this app serves
+         * that directory.
+         */
+        private fun stagedFile(context: Context, token: String) =
+            File(File(context.cacheDir, STAGE_DIRECTORY), token)
+
+        /** stagedFileOrNull is [stagedFile] for a token JavaScript sent back, which must be one [newToken] made. */
+        private fun stagedFileOrNull(context: Context, token: String) =
+            if (TOKEN.matches(token)) stagedFile(context, token) else null
+
+        private fun newToken(): String = UUID.randomUUID().toString()
+
+        private val TOKEN = Regex("^[0-9a-f-]{36}$")
+        private const val STAGE_DIRECTORY = "shared"
 
         /**
-         * stagedFile is where a shared file is copied while it is read: one
-         * file, in the cache, which no provider of this app serves. Each new
-         * share, finish and drop deletes it.
+         * clearStaged deletes every staged copy. Called when the module is
+         * created, which is when the process starts: no upload outlives its
+         * process, so whatever is there is left over.
          */
-        private fun stagedFile(context: Context) = File(File(context.cacheDir, STAGE_DIRECTORY), STAGE_NAME)
-
-        private const val STAGE_DIRECTORY = "shared"
-        private const val STAGE_NAME = "current"
+        fun clearStaged(context: Context) {
+            File(context.cacheDir, STAGE_DIRECTORY).listFiles()?.forEach { it.delete() }
+        }
 
         /**
          * receive records what an `ACTION_SEND` intent carries and tells a
@@ -325,9 +323,7 @@ class ShareModule(reactContext: ReactApplicationContext) :
             val stream = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
             val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
             val subject = intent.getCharSequenceExtra(Intent.EXTRA_SUBJECT)?.toString() ?: ""
-            stagedFile(context).delete()
             synchronized(this) {
-                stagedId = 0
                 val id = nextId++
                 current = when {
                     stream != null && readable(context, stream) ->
@@ -346,13 +342,10 @@ class ShareModule(reactContext: ReactApplicationContext) :
         }
 
         /** drop forgets the share, if there is one: the panel is gone, and its grant with it. */
-        fun drop(context: Context) {
-            synchronized(this) {
-                current = null
-                delivered = true
-                stagedId = 0
-            }
-            stagedFile(context).delete()
+        @Synchronized
+        fun drop() {
+            current = null
+            delivered = true
         }
 
         /** claim hands a waiting share to exactly one caller. */

@@ -15,6 +15,7 @@ export { secureStore } from './secureStore';
 export { deviceInfo } from './deviceInfo';
 export { tile } from './tile';
 export { share } from './share';
+export { background } from './background';
 export { notices } from './notices';
 export { appInfo } from './appInfo';
 export { clipboardTimestamp } from './clipboardTimestamp';

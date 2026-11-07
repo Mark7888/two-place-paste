@@ -1,17 +1,18 @@
-import { ProtocolError, STORE_LIMITS, utf8, type Limits, type StoreLimits } from '../../core';
+import { hashHex, ProtocolError, sha256Sliced, STORE_LIMITS, utf8, type Limits, type StoreLimits } from '../../core';
 import { ErrorCode } from '../../protocol/gen/tpp/v1/error';
-import type { ClipboardItem, PickedFile, Shared } from '../../platform/types';
+import type { ClipboardItem, Shared, StageResult } from '../../platform/types';
 import {
+  describePayload,
   describeShared,
-  itemFor,
-  sendShared,
-  SENT,
+  payloadFor,
+  payloadHash,
+  prepareSend,
+  prepareStore,
   STORE_OFF,
-  storeItemFor,
   suggestedName,
   TEXT_CONTENT_TYPE,
   UNSUPPORTED,
-  type ReadShared,
+  type Payload,
   type ShareClient,
 } from '../share';
 
@@ -25,20 +26,24 @@ function textShare(text: string, subject = ''): Shared {
   return { id: 8, kind: 'text', text, subject };
 }
 
-/** reader is a fake `share.read` that hands out `body`, honouring the limit, and counts its calls. */
-function reader(body: Uint8Array): ReadShared & { calls: { id: number; maxBytes: number }[] } {
+/**
+ * stager is a fake `share.stage` for a file of `size` bytes: it stages it
+ * when it fits, and records its calls and the copies discarded.
+ */
+function stager(size: number) {
   const calls: { id: number; maxBytes: number }[] = [];
-  const read = async (id: number, maxBytes: number): Promise<PickedFile> => {
+  const discarded: string[] = [];
+  const stage = async (id: number, maxBytes: number): Promise<StageResult> => {
     calls.push({ id, maxBytes });
-    if (body.length > maxBytes) {
-      return { tooLarge: true, name: 'x', size: body.length };
+    if (size > maxBytes) {
+      return { tooLarge: true, name: 'x', size };
     }
-    return { tooLarge: false, name: 'x', contentType: 'application/pdf', body };
+    return { tooLarge: false, token: 'tok', name: 'x', contentType: 'application/pdf', size, sha256: 'ab12' };
   };
-  return Object.assign(read, { calls });
+  return { stage, discard: (t: string) => discarded.push(t), calls, discarded };
 }
 
-/** fakeClient records what a share puts and answers with the limits it is given. */
+/** fakeClient answers with the limits it is given and records what is put. */
 function fakeClient(opts: { maxEntryBytes?: number; store?: Partial<StoreLimits> | Error } = {}) {
   const put: ClipboardItem[] = [];
   const client: ShareClient = {
@@ -73,124 +78,141 @@ function fakeClient(opts: { maxEntryBytes?: number; store?: Partial<StoreLimits>
   return { client, put };
 }
 
-describe('itemFor', () => {
-  it('turns shared text into a text entry, the same as copied text', async () => {
-    const read = reader(new Uint8Array(0));
-    const got = await itemFor(textShare('héllo'), 100, 'limit', read);
-    expect(got.contentType).toBe(TEXT_CONTENT_TYPE);
-    expect(got.filename).toBe('');
-    expect(got.body).toEqual(utf8('héllo'));
-    // Text is carried in the share itself: nothing is read.
-    expect(read.calls).toHaveLength(0);
+describe('payloadFor', () => {
+  it('carries shared text whole, as a text entry like copied text', async () => {
+    const f = stager(0);
+    const got = await payloadFor(textShare('héllo'), 100, 'limit', f.stage, f.discard);
+    expect(got).toEqual({ kind: 'text', item: { contentType: TEXT_CONTENT_TYPE, filename: '', body: utf8('héllo') } });
+    // Text is in the share itself: nothing is staged.
+    expect(f.calls).toHaveLength(0);
   });
 
-  it('keeps a file’s name and type as the panel showed them', async () => {
-    const read = reader(utf8('pdf'));
-    const got = await itemFor(fileShare(), 100, 'limit', read);
-    expect(got).toEqual({ contentType: 'application/pdf', filename: 'report.pdf', body: utf8('pdf') });
-    expect(read.calls).toEqual([{ id: 7, maxBytes: 100 }]);
+  it('stages a file within the limit, keeping the name and type the panel showed', async () => {
+    const f = stager(3);
+    const got = await payloadFor(fileShare(), 100, 'limit', f.stage, f.discard);
+    expect(got).toEqual({
+      kind: 'file',
+      file: { token: 'tok', name: 'x', contentType: 'application/pdf', size: 3, sha256: 'ab12' },
+      contentType: 'application/pdf',
+      filename: 'report.pdf',
+    });
+    expect(f.calls).toEqual([{ id: 7, maxBytes: 100 }]);
   });
 
-  const refusals: { name: string; shared: Shared; body: Uint8Array; max: number; want: string; reads: number }[] = [
+  const refusals: { name: string; shared: Shared; size: number; max: number; want: string; stages: number }[] = [
     {
-      name: 'a file the sender says is too large, before reading it',
+      name: 'a file the sender says is too large, before copying it',
       shared: fileShare({ size: 2 * MB }),
-      body: new Uint8Array(0),
+      size: 2 * MB,
       max: MB,
       want: 'This file is 2.0 MB; limit 1.0 MB.',
-      reads: 0,
+      stages: 0,
     },
     {
       name: 'a file of unknown size that turns out too large',
       shared: fileShare({ size: -1 }),
-      body: new Uint8Array(2 * MB),
+      size: 2 * MB,
       max: MB,
       want: 'This file is 2.0 MB; limit 1.0 MB.',
-      reads: 1,
+      stages: 1,
     },
-    {
-      name: 'an empty file',
-      shared: fileShare({ size: -1 }),
-      body: new Uint8Array(0),
-      max: MB,
-      want: 'That file is empty.',
-      reads: 1,
-    },
-    {
-      name: 'text over the limit',
-      shared: textShare('abcdef'),
-      body: new Uint8Array(0),
-      max: 3,
-      want: 'This text is 6 B; limit 3 B.',
-      reads: 0,
-    },
-    {
-      name: 'something this app will not read',
-      shared: { id: 9, kind: 'unsupported' },
-      body: new Uint8Array(0),
-      max: MB,
-      want: UNSUPPORTED,
-      reads: 0,
-    },
+    { name: 'text over the limit', shared: textShare('abcdef'), size: 0, max: 3, want: 'This text is 6 B; limit 3 B.', stages: 0 },
+    { name: 'something this app will not read', shared: { id: 9, kind: 'unsupported' }, size: 0, max: MB, want: UNSUPPORTED, stages: 0 },
   ];
-  it.each(refusals)('refuses $name', async ({ shared, body, max, want, reads }) => {
-    const read = reader(body);
-    await expect(itemFor(shared, max, 'limit', read)).rejects.toThrow(want);
-    expect(read.calls).toHaveLength(reads);
+  it.each(refusals)('refuses $name', async ({ shared, size, max, want, stages }) => {
+    const f = stager(size);
+    await expect(payloadFor(shared, max, 'limit', f.stage, f.discard)).rejects.toThrow(want);
+    expect(f.calls).toHaveLength(stages);
+  });
+
+  it('refuses an empty file and deletes its copy', async () => {
+    const f = stager(0);
+    await expect(payloadFor(fileShare({ size: -1 }), MB, 'limit', f.stage, f.discard)).rejects.toThrow('That file is empty.');
+    expect(f.discarded).toEqual(['tok']);
   });
 
   it('never names the file in a refusal', async () => {
-    const read = reader(new Uint8Array(0));
-    await expect(itemFor(fileShare({ name: 'secret-plans.pdf', size: 2 * MB }), MB, 'limit', read)).rejects.toThrow(
-      /^(?!.*secret-plans).*$/,
+    const f = stager(2 * MB);
+    await expect(
+      payloadFor(fileShare({ name: 'secret-plans.pdf', size: 2 * MB }), MB, 'limit', f.stage, f.discard),
+    ).rejects.toThrow(/^(?!.*secret-plans).*$/);
+  });
+});
+
+describe('prepareSend', () => {
+  it('stages within the relay’s entry limit and uploads nothing itself', async () => {
+    const { client, put } = fakeClient({ maxEntryBytes: MB });
+    const f = stager(3);
+    await prepareSend(client, fileShare(), f.stage, f.discard);
+    expect(f.calls).toEqual([{ id: 7, maxBytes: MB }]);
+    expect(put).toHaveLength(0);
+  });
+
+  it('says what the relay takes when the file is over it', async () => {
+    const { client } = fakeClient({ maxEntryBytes: MB });
+    const f = stager(2 * MB);
+    await expect(prepareSend(client, fileShare({ size: -1 }), f.stage, f.discard)).rejects.toThrow(
+      'the relay takes at most 1.0 MB',
     );
   });
 });
 
-describe('sendShared', () => {
-  it('puts the share up as the group’s latest entry', async () => {
-    const { client, put } = fakeClient();
-    const got = await sendShared(client, fileShare(), reader(utf8('pdf')));
-    expect(got).toBe(SENT);
-    expect(put).toEqual([{ contentType: 'application/pdf', filename: 'report.pdf', body: utf8('pdf') }]);
-  });
-
-  it('reads within the relay’s entry limit and sends nothing over it', async () => {
-    const { client, put } = fakeClient({ maxEntryBytes: MB });
-    const read = reader(new Uint8Array(2 * MB));
-    await expect(sendShared(client, fileShare({ size: -1 }), read)).rejects.toThrow('the relay takes at most 1.0 MB');
-    expect(read.calls).toEqual([{ id: 7, maxBytes: MB }]);
-    expect(put).toHaveLength(0);
-  });
-});
-
-describe('storeItemFor', () => {
-  it('reads within the room the store has left, and saves nothing itself', async () => {
-    const { client, put } = fakeClient({ store: { availableBytes: 4 } });
-    const read = reader(utf8('pdf'));
-    const got = await storeItemFor(client, fileShare(), read);
-    expect(got.body).toEqual(utf8('pdf'));
-    expect(read.calls).toEqual([{ id: 7, maxBytes: 4 }]);
-    expect(put).toHaveLength(0);
+describe('prepareStore', () => {
+  it('stages within the room the store has left', async () => {
+    const { client } = fakeClient({ store: { availableBytes: 4 } });
+    const f = stager(3);
+    await prepareStore(client, fileShare(), f.stage, f.discard);
+    expect(f.calls).toEqual([{ id: 7, maxBytes: 4 }]);
   });
 
   it('says how much room there is when the file does not fit', async () => {
     const { client } = fakeClient({ store: { availableBytes: 2 } });
-    await expect(storeItemFor(client, fileShare({ size: 3 }), reader(utf8('pdf')))).rejects.toThrow(
+    const f = stager(3);
+    await expect(prepareStore(client, fileShare({ size: 3 }), f.stage, f.discard)).rejects.toThrow(
       'This file is 3 B; the store has room for 2 B.',
     );
   });
 
   const off: { name: string; store: Partial<StoreLimits> | Error }[] = [
     { name: 'reports it disabled', store: { enabled: false } },
-    {
-      name: 'refuses with STORE_DISABLED',
-      store: new ProtocolError(ErrorCode.ERROR_CODE_STORE_DISABLED, 'store disabled'),
-    },
+    { name: 'refuses with STORE_DISABLED', store: new ProtocolError(ErrorCode.ERROR_CODE_STORE_DISABLED, 'store disabled') },
   ];
   it.each(off)('says the store is off when the relay $name', async ({ store }) => {
     const { client } = fakeClient({ store });
-    await expect(storeItemFor(client, fileShare(), reader(utf8('pdf')))).rejects.toThrow(STORE_OFF);
+    const f = stager(3);
+    await expect(prepareStore(client, fileShare(), f.stage, f.discard)).rejects.toThrow(STORE_OFF);
+    expect(f.calls).toHaveLength(0);
+  });
+});
+
+describe('payloadHash', () => {
+  it('takes a staged file’s hash from the copy, and hashes text itself', async () => {
+    const file: Payload = {
+      kind: 'file',
+      file: { token: 't', name: 'x', contentType: 'a/b', size: 1, sha256: 'ab12' },
+      contentType: 'a/b',
+      filename: 'x',
+    };
+    expect(await payloadHash(file)).toBe('ab12');
+    const body = utf8('hello');
+    const text: Payload = { kind: 'text', item: { contentType: TEXT_CONTENT_TYPE, filename: '', body } };
+    expect(await payloadHash(text)).toBe(hashHex(await sha256Sliced(body)));
+  });
+});
+
+describe('describePayload', () => {
+  it('names a file with its bare type and size, and text by its size', () => {
+    expect(
+      describePayload({
+        kind: 'file',
+        file: { token: 't', name: 'x', contentType: 'a/b', size: 2048, sha256: '' },
+        contentType: 'text/csv; charset=utf-8',
+        filename: 'a.csv',
+      }),
+    ).toBe('a.csv (text/csv, 2.0 KB)');
+    expect(describePayload({ kind: 'text', item: { contentType: TEXT_CONTENT_TYPE, filename: '', body: utf8('abc') } })).toBe(
+      'text, 3 B',
+    );
   });
 });
 

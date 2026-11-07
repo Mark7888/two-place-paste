@@ -95,7 +95,7 @@ class ShareActivity : ReactActivity() {
         if (isFinishing) {
             // Backed out of, or closed: the grant goes with this activity, so
             // the share goes too.
-            ShareModule.drop(applicationContext)
+            ShareModule.drop()
         }
         super.onDestroy()
     }

@@ -9,6 +9,7 @@ import com.facebook.react.bridge.Promise
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.RandomAccessFile
+import java.security.MessageDigest
 
 /**
  * Reads a `content://` URI another app handed this one: a file the user
@@ -119,10 +120,11 @@ internal object ContentReader {
     /**
      * stage copies [uri] into [dest], streaming, and returns the number of
      * bytes copied — or null when the file is over [maxBytes], in which case
-     * nothing is left behind. It blocks, so it is called off the main thread.
+     * nothing is left behind. [digest], when given, is fed every byte copied.
+     * It blocks, so it is called off the main thread.
      * Only a buffer's worth of the file is in memory at any time.
      */
-    fun stage(context: Context, uri: Uri, maxBytes: Long, dest: File): Long? {
+    fun stage(context: Context, uri: Uri, maxBytes: Long, dest: File, digest: MessageDigest? = null): Long? {
         val input = context.contentResolver.openInputStream(uri)
             ?: throw IllegalStateException("the file could not be opened")
         dest.parentFile?.mkdirs()
@@ -143,6 +145,7 @@ internal object ContentReader {
                             break
                         }
                         out.write(buffer, 0, n)
+                        digest?.update(buffer, 0, n)
                     }
                 }
             }

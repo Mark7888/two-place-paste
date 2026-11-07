@@ -205,10 +205,17 @@ export interface SharePort {
   pending(): Promise<Shared | null>;
 
   /**
-   * read reads a shared file's bytes, with `tooLarge` and no bytes when it is
-   * over `maxBytes`. It rejects when share `id` is no longer the one waiting.
+   * stage copies a shared file into the app's own storage, within
+   * `maxBytes`, so it can be uploaded after the share panel has closed. It
+   * rejects when share `id` is no longer the one waiting.
    */
-  read(id: number, maxBytes: number): Promise<PickedFile>;
+  stage(id: number, maxBytes: number): Promise<StageResult>;
+
+  /** readStaged reads a staged copy whole, reporting how far it has got. */
+  readStaged(file: StagedFile, onProgress?: (done: number, total: number) => void): Promise<Uint8Array>;
+
+  /** discard deletes a staged copy. Deleting one already gone is fine. */
+  discard(token: string): void;
 
   /**
    * finish closes the share panel for share `id`, with `message` as a toast
@@ -219,4 +226,46 @@ export interface SharePort {
 
   /** openApp brings the app forward and closes the share panel. */
   openApp(): void;
+}
+
+/** StagedFile is a shared file copied into the app's own storage, waiting to be uploaded. */
+export interface StagedFile {
+  /** token names the copy for `readStaged` and `discard`. */
+  token: string;
+  name: string;
+  contentType: string;
+  size: number;
+  /** sha256 is the file's SHA-256 in lowercase hex, for the store's duplicate check. */
+  sha256: string;
+}
+
+/** StageResult is a staged copy, or the size of a file that was over the limit. */
+export type StageResult = ({ tooLarge: false } & StagedFile) | { tooLarge: true; name: string; size: number };
+
+/**
+ * BackgroundPort runs uploads after the window that started them has closed,
+ * with a notification showing their progress. On Android that is a
+ * foreground service; elsewhere `available` is false and an upload runs only
+ * while the app does.
+ */
+export interface BackgroundPort {
+  readonly available: boolean;
+
+  /**
+   * askToNotify asks for permission to show notifications, where the OS asks
+   * for that, and resolves whatever the answer: an upload runs either way.
+   */
+  askToNotify(): Promise<void>;
+
+  /**
+   * start starts the background runner, which calls the registered task. It
+   * must be called while a window of the app is in the foreground.
+   */
+  start(): Promise<void>;
+
+  /** progress shows `title` with a bar at `done`/`total`; `total` 0 is a moving bar. A status, never content. */
+  progress(title: string, done: number, total: number): void;
+
+  /** result says how one upload ended. A status, never content. */
+  result(ok: boolean, message: string): void;
 }

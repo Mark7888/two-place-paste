@@ -10,9 +10,13 @@ export const share: SharePort = {
   available: false,
   requests: () => () => {},
   pending: async () => null,
-  read: async () => {
+  stage: async () => {
     throw new Error('this platform cannot take shared files');
   },
+  readStaged: async () => {
+    throw new Error('this platform cannot take shared files');
+  },
+  discard: () => {},
   finish: () => {},
   openApp: () => {},
 };

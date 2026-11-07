@@ -14,11 +14,12 @@ import 'react-native-get-random-values';
 import { AppRegistry } from 'react-native';
 
 import App from './src/app/App';
+import { backgroundTask } from './src/app/backgroundJobs';
 import ShareOverlay from './src/app/ShareOverlay';
 import SyncOverlay from './src/app/SyncOverlay';
 import { init } from './src/app/sessionStore';
 import { initShare } from './src/app/shareState';
-import { name as appName, shareComponentName, syncComponentName } from './app.json';
+import { name as appName, shareComponentName, syncComponentName, transferTaskName } from './app.json';
 
 /*
  * Three components, one session.
@@ -34,6 +35,10 @@ import { name as appName, shareComponentName, syncComponentName } from './app.js
  * `ShareOverlay` is the third: the panel "Share → TwoPlacePaste" opens. The
  * share it asks about is listened for here too, for the same reason — the
  * share may be what started this process.
+ *
+ * The headless task is what runs the uploads the share panel hands off, after
+ * it has closed (`src/app/backgroundJobs.ts`). It runs on this same context
+ * too, so it uses the same client.
  */
 init();
 initShare();
@@ -41,3 +46,4 @@ initShare();
 AppRegistry.registerComponent(appName, () => App);
 AppRegistry.registerComponent(syncComponentName, () => SyncOverlay);
 AppRegistry.registerComponent(shareComponentName, () => ShareOverlay);
+AppRegistry.registerHeadlessTask(transferTaskName, () => backgroundTask);

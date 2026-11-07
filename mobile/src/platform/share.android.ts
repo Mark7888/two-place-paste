@@ -11,7 +11,7 @@
 
 import { decodeBase64StdAsync } from '../core/bytes';
 import { SHARE_EVENT, TppShare, shareEvents } from './native';
-import type { PickedFile, SharePort, Shared } from './types';
+import type { SharePort, Shared, StageResult, StagedFile } from './types';
 
 /** READ_CHUNK_BYTES is how much of a shared file crosses to JavaScript at once. */
 const READ_CHUNK_BYTES = 4 << 20;
@@ -59,36 +59,46 @@ export const share: SharePort = {
     return parse(await TppShare.consumePending());
   },
 
-  async read(id: number, maxBytes: number): Promise<PickedFile> {
+  async stage(id: number, maxBytes: number): Promise<StageResult> {
+    if (TppShare === null) {
+      throw new Error('this build cannot take shared files');
+    }
+    const staged = await TppShare.stage(id, maxBytes);
+    if (staged.tooLarge === true || staged.token === undefined) {
+      return { tooLarge: true, name: staged.name, size: staged.size };
+    }
+    return {
+      tooLarge: false,
+      token: staged.token,
+      name: staged.name,
+      contentType: staged.contentType ?? 'application/octet-stream',
+      size: staged.size,
+      sha256: staged.sha256 ?? '',
+    };
+  },
+
+  async readStaged(file: StagedFile, onProgress?: (done: number, total: number) => void): Promise<Uint8Array> {
     if (TppShare === null) {
       throw new Error('this build cannot take shared files');
     }
     // The file comes over in chunks into one buffer: as a single base64
     // string it cost the native side several times its size at once, and a
     // large file crashed the app.
-    const staged = await TppShare.stage(id, maxBytes);
-    if (staged.tooLarge === true) {
-      return { tooLarge: true, name: staged.name, size: staged.size };
-    }
-    try {
-      const body = new Uint8Array(staged.size);
-      for (let offset = 0; offset < staged.size; offset += READ_CHUNK_BYTES) {
-        const length = Math.min(READ_CHUNK_BYTES, staged.size - offset);
-        const chunk = await decodeBase64StdAsync(await TppShare.readChunk(id, offset, length));
-        if (chunk.length !== length) {
-          throw new Error('the shared file could not be read');
-        }
-        body.set(chunk, offset);
+    const body = new Uint8Array(file.size);
+    for (let offset = 0; offset < file.size; offset += READ_CHUNK_BYTES) {
+      const length = Math.min(READ_CHUNK_BYTES, file.size - offset);
+      const chunk = await decodeBase64StdAsync(await TppShare.readChunk(file.token, offset, length));
+      if (chunk.length !== length) {
+        throw new Error('the shared file could not be read');
       }
-      return {
-        tooLarge: false,
-        name: staged.name,
-        contentType: staged.contentType ?? 'application/octet-stream',
-        body,
-      };
-    } finally {
-      TppShare.discard(id);
+      body.set(chunk, offset);
+      onProgress?.(offset + length, file.size);
     }
+    return body;
+  },
+
+  discard(token: string): void {
+    TppShare?.discard(token);
   },
 
   finish(id: number, message: string): void {
