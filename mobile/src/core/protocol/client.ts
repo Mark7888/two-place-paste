@@ -119,6 +119,7 @@ import {
   openEntry,
   openEntrySliced,
   openEntrySlicedWithKey,
+  sealEntrySliced,
   openEntryWithKey,
   openStoreLink,
   openStoreMeta,
@@ -241,6 +242,12 @@ const MAX_BACKOFF_MS = 30_000;
 
 /** SLICED_OPEN_MIN_BYTES is the size above which an entry is decrypted in slices. */
 const SLICED_OPEN_MIN_BYTES = 1 << 20;
+
+/**
+ * SLICED_SEAL_MIN_BYTES is the size above which an entry is sealed in slices,
+ * so the app keeps answering taps while a large upload is encrypted.
+ */
+const SLICED_SEAL_MIN_BYTES = 1 << 20;
 
 /** RANGE_RETRIES is how many times a download asks again for a range a dropped socket lost. */
 const RANGE_RETRIES = 3;
@@ -714,6 +721,18 @@ export class Client {
     this.conn = null;
     this.dialling = null;
     conn?.close('the app is no longer in the foreground');
+  }
+
+  /**
+   * hold runs work the user started that has to outlive the app leaving the
+   * screen — an upload handed to the background — and keeps the socket for it
+   * the way a chunked transfer does: `disconnect` meanwhile lets it finish
+   * and closes the socket after. Without it, the socket closed under a
+   * background upload still encrypting, and the upload failed with the
+   * connection lost.
+   */
+  async hold<T>(run: () => Promise<T>): Promise<T> {
+    return this.transfer(run);
   }
 
   /**
@@ -1679,7 +1698,11 @@ export class Client {
     });
     const entryId = newEntryID();
     const epoch = this.state.epoch;
-    const container = sealEntry(this.state.groupKey, generateNonce(), epoch, entryId, frame);
+    const groupKey = this.state.groupKey;
+    const container =
+      frame.length > SLICED_SEAL_MIN_BYTES
+        ? await sealEntrySliced(groupKey, generateNonce(), epoch, entryId, frame)
+        : sealEntry(groupKey, generateNonce(), epoch, entryId, frame);
     // The limits say which header version the relay takes, and whether a
     // large entry can be chunked. They are asked once per connection.
     const limits = await this.limits();
@@ -1688,9 +1711,11 @@ export class Client {
       filename: item.filename ?? '',
       bodyLen: BigInt(item.body.length),
     };
+    // The key read with the epoch, not the current one: a rekey during the
+    // awaits above must not seal the header under another epoch's key.
     const header = limits.headerV2
-      ? sealEntryHeaderV2(this.state.groupKey, epoch, entryId, { ...summary, sha256: await sha256Sliced(item.body) })
-      : sealEntryHeader(this.state.groupKey, epoch, entryId, summary);
+      ? sealEntryHeaderV2(groupKey, epoch, entryId, { ...summary, sha256: await sha256Sliced(item.body) })
+      : sealEntryHeader(groupKey, epoch, entryId, summary);
 
     let response: EntryPutResponse;
     if (container.length > SINGLE_FRAME_MAX_BYTES) {
@@ -2266,7 +2291,10 @@ export class Client {
     // its content key is the one wrapped below (§7a.4).
     const nonce = generateNonce();
     const contentKey = deriveContentKey(groupKey, nonce, epoch);
-    const container = sealEntry(groupKey, nonce, epoch, itemId, frame);
+    const container =
+      frame.length > SLICED_SEAL_MIN_BYTES
+        ? await sealEntrySliced(groupKey, nonce, epoch, itemId, frame)
+        : sealEntry(groupKey, nonce, epoch, itemId, frame);
     const metaKey = randomBytes(META_KEY_SIZE);
     const key = storeKey(groupKey, epoch);
     const wrapped = wrapItemKeys(key, generateNonce(), epoch, itemId, { contentKey, metaKey });

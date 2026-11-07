@@ -200,6 +200,73 @@ to **save it to Downloads** or **open it**. Both go through `FileModule`
   one-off read grant. Each open replaces the last staged file. If no installed
   app opens the type, the user is told and can save it instead.
 
+## Sharing to the app
+
+The app is a share target: **Share → TwoPlacePaste** from any app takes one
+file, one image or a piece of text. `ShareActivity` registers for
+`ACTION_SEND` with `*/*` (which covers `text/plain`); `ACTION_SEND_MULTIPLE` is
+deliberately not registered, so a multi-item share does not list the app.
+
+It is the tile's panel again: a transparent activity with its own task, out of
+recents, mounting a third React surface — `TwoPlacePasteShare`, registered in
+`index.js` — on the same JavaScript context. Nothing is uploaded on arrival.
+The panel (`src/app/ShareOverlay.tsx`) asks whether to **send it to the group**
+(it becomes the latest entry, as a sync up would) or **save it to the store**
+(through the Store's own sheet), and dismissing it sends nothing. It always
+goes to the group in use.
+
+The share reaches JavaScript the way a tile tap does: `ShareModule` (`TppShare`)
+records it before the React surface mounts, a running app gets an event, and a
+cold start claims it once at startup (`src/app/shareState.ts`). The file's URI
+stays native; JavaScript sees its name, type and size.
+
+**The upload runs in the background.** Once the user picks a destination, the
+panel only gets the upload ready and closes:
+
+1. it checks the destination's limit — the relay's entry cap or the store's
+   room — refusing a file over it before it is read when the sender gives a
+   size, and at the limit otherwise;
+2. it copies the file, streaming, into the app's cache (`ShareModule.stage`,
+   `ContentReader.stage`), hashing it on the way for the store's duplicate
+   check. The copy is needed because the read grant ends with the panel; it
+   is named by a random token and deleted once read (or at the next start);
+3. for the store, it asks for the name, description and tags, and checks for a
+   duplicate while "Save anyway" can still be answered;
+4. it queues the upload (`src/app/backgroundJobs.ts`, `jobs.ts`) and starts
+   `TransferService`.
+
+`TransferService` is a `dataSync` foreground service running React Native's
+headless JS task, which drains the queue one upload at a time. Both halves are
+needed: without the service Android freezes or kills the process once no
+window is up, and without the headless task React Native pauses JavaScript
+timers, which the hashing and the chunked reads yield through. Its notification
+moves through Preparing (reading the copy back), Encrypting and Uploading
+(the relay's chunk progress), then a separate notification says how it ended.
+Notification text is a status, never the file's name: it shows on the lock
+screen. `POST_NOTIFICATIONS` is asked for when the user first sends from the
+panel; an upload runs without it, just without the notification. The copy
+crosses to JavaScript in 4 MB base64 chunks into one buffer: as one string it
+cost the Java heap several times the file's size and crashed the app.
+
+A background job runs under `Client.hold`, which keeps the socket the way a
+chunked transfer does: leaving the app no longer closes it under an upload
+that is still encrypting. It is closed when the job ends if the app is still
+not on screen, as SPEC §5.2 would have it.
+
+Every window of the app shares one JavaScript thread, so the job must not hold
+it. Entries over 1 MB are sealed with `sealEntrySliced`, the encrypting half of
+`openEntrySliced`: the same XChaCha20-Poly1305, byte for byte, done in 256 KB
+slices with the event loop let run in between. Sealed in one call, an 80 MB
+upload froze the app and left a window opened meanwhile blank until it was done.
+
+The notification counts the run — "45% · 2 of 3" — when more than one upload is
+queued, and each upload's outcome gets a notification of its own.
+
+Only `content://` URIs from another app are read. A `file://` URI, or a
+`content://` URI served by this app's own providers (including a
+`<user>@authority` form), is refused, because either would let the sending app
+make this one read — and upload — its own private files.
+
 ## Sync direction
 
 SPEC §6 says upload if the local clipboard is newer, otherwise download.

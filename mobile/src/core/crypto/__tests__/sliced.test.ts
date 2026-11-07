@@ -1,4 +1,4 @@
-import { openEntry, openEntrySliced, sealEntry } from '../entry';
+import { openEntry, openEntrySliced, sealEntry, sealEntrySliced } from '../entry';
 
 const now = () => Promise.resolve();
 
@@ -35,5 +35,35 @@ describe('openEntrySliced', () => {
     });
     // 2 MiB in 256 KiB slices, once to authenticate and once to decrypt.
     expect(pauses).toBe(16);
+  });
+});
+
+describe('sealEntrySliced', () => {
+  const key = Uint8Array.from({ length: 32 }, (_, i) => i * 11);
+  const nonce = Uint8Array.from({ length: 24 }, (_, i) => 90 + i);
+
+  it('seals exactly what sealEntry seals, at every size around a slice and block edge', async () => {
+    for (const n of [0, 1, 15, 16, 17, 63, 64, 65, 262143, 262144, 262145, 1_000_003]) {
+      const frame = Uint8Array.from({ length: n }, (_, i) => (i * 31 + 7) & 0xff);
+      const sliced = await sealEntrySliced(key, nonce, 9n, 'entry-z', frame, now);
+      const whole = sealEntry(key, nonce, 9n, 'entry-z', frame);
+      expect(Buffer.from(sliced).equals(Buffer.from(whole))).toBe(true);
+      expect(Buffer.from(openEntry(key, sliced, 9n, 'entry-z')).equals(Buffer.from(frame))).toBe(true);
+    }
+  });
+
+  it('refuses a nonce of the wrong length', async () => {
+    await expect(sealEntrySliced(key, new Uint8Array(12), 9n, 'entry-z', new Uint8Array(1), now)).rejects.toThrow(
+      'entry nonce is 12 bytes',
+    );
+  });
+
+  it('hands control back between slices, so the app can answer a tap', async () => {
+    let pauses = 0;
+    await sealEntrySliced(key, nonce, 9n, 'entry-z', new Uint8Array(2 << 20), async () => {
+      pauses++;
+    });
+    // 2 MiB in 256 KiB slices, encrypted and authenticated together.
+    expect(pauses).toBe(8);
   });
 });

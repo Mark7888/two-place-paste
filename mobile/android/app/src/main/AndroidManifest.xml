@@ -19,11 +19,22 @@
         android:maxSdkVersion="28" />
 
     <!--
-      There is no FOREGROUND_SERVICE, no accessibility service and no
-      BIND_ACCESSIBILITY_SERVICE. Background clipboard access is not attempted
-      at all (SPEC §7.1): the quick-settings tile foregrounds the app, which is
-      the only legal moment to read the clipboard on Android 10+.
+      There is no accessibility service and no BIND_ACCESSIBILITY_SERVICE.
+      Background clipboard access is not attempted at all (SPEC §7.1): the
+      quick-settings tile foregrounds the app, which is the only legal moment
+      to read the clipboard on Android 10+.
+
+      The one foreground service, TransferService, has nothing to do with the
+      clipboard. It carries an upload the user started from the share panel
+      after the panel closes, with a notification showing its progress
+      (POST_NOTIFICATIONS, asked for when the user first sends something from
+      the panel). WAKE_LOCK is what React Native's headless task service holds
+      while the upload runs.
     -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
         android:name=".MainApplication"
@@ -89,6 +100,49 @@
             android:taskAffinity=".SyncOverlay"
             android:excludeFromRecents="true"
             android:noHistory="true"
+            android:exported="false" />
+
+        <!--
+          The panel "Share → TwoPlacePaste" opens: one file, one image or a
+          piece of text, which the user then chooses to send to the group or
+          save to the store. Nothing is uploaded until they do.
+
+          ACTION_SEND only: sharing several items at once is not offered, so a
+          multi-item share does not list this app. `*/*` covers text/plain
+          too. Exported, because the share sheet is another app; what it is
+          handed is checked in ShareModule, which reads only content:// URIs
+          that this app does not serve itself.
+
+          The same panel setup as the tile's: its own task, out of recents,
+          `singleTask` so a second share reuses the panel that is up. Not
+          `noHistory`, unlike the tile's panel: a file is read with the grant
+          that came with the share, which lasts only as long as this activity.
+        -->
+        <activity
+            android:name=".ShareActivity"
+            android:theme="@style/AppTheme.Overlay"
+            android:label="@string/app_name"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:launchMode="singleTask"
+            android:taskAffinity=".Share"
+            android:excludeFromRecents="true"
+            android:windowSoftInputMode="adjustResize"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          Background uploads from the share panel (TransferService): a
+          foreground service running React Native's headless JS task. Not
+          exported — only this app starts it.
+        -->
+        <service
+            android:name=".TransferService"
+            android:foregroundServiceType="dataSync"
             android:exported="false" />
 
         <!--

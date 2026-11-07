@@ -11,7 +11,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import android.provider.OpenableColumns
 import android.util.Base64
 import android.webkit.MimeTypeMap
 import androidx.annotation.RequiresApi
@@ -65,7 +64,7 @@ class FileModule(reactContext: ReactApplicationContext) :
             }
             val max = pickMaxBytes
             // Off the main thread: a file can be tens of megabytes.
-            Thread { readPicked(uri, max, promise) }.start()
+            Thread { ContentReader.read(reactApplicationContext, uri, max, promise) }.start()
         }
     }
 
@@ -102,70 +101,6 @@ class FileModule(reactContext: ReactApplicationContext) :
         } catch (e: ActivityNotFoundException) {
             pickPromise = null
             promise.reject(ERROR_CODE, "this device has no file picker", e)
-        }
-    }
-
-    private fun readPicked(uri: Uri, maxBytes: Long, promise: Promise) {
-        try {
-            val resolver = reactApplicationContext.contentResolver
-            var name = ""
-            var size = -1L
-            resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use {
-                if (it.moveToFirst()) {
-                    name = it.getString(0) ?: ""
-                    if (!it.isNull(1)) {
-                        size = it.getLong(1)
-                    }
-                }
-            }
-            if (size > maxBytes) {
-                promise.resolve(
-                    Arguments.createMap().apply {
-                        putString("name", name)
-                        putDouble("size", size.toDouble())
-                        putBoolean("tooLarge", true)
-                    },
-                )
-                return
-            }
-            // The size a provider reports can be missing or wrong, so the read
-            // is bounded too.
-            val bytes = resolver.openInputStream(uri)?.use { input ->
-                val out = java.io.ByteArrayOutputStream()
-                val buffer = ByteArray(64 * 1024)
-                var total = 0L
-                while (true) {
-                    val n = input.read(buffer)
-                    if (n < 0) {
-                        break
-                    }
-                    total += n
-                    if (total > maxBytes) {
-                        promise.resolve(
-                            Arguments.createMap().apply {
-                                putString("name", name)
-                                putDouble("size", total.toDouble())
-                                putBoolean("tooLarge", true)
-                            },
-                        )
-                        return
-                    }
-                    out.write(buffer, 0, n)
-                }
-                out.toByteArray()
-            } ?: throw IllegalStateException("the picked file could not be opened")
-            val mime = resolver.getType(uri) ?: mimeOf("", name)
-            promise.resolve(
-                Arguments.createMap().apply {
-                    putString("name", name)
-                    putString("contentType", mime)
-                    putDouble("size", bytes.size.toDouble())
-                    putString("base64", Base64.encodeToString(bytes, Base64.NO_WRAP))
-                },
-            )
-        } catch (e: Exception) {
-            // The message names the operation, never the bytes or the name.
-            promise.reject(ERROR_CODE, "the picked file could not be read", e)
         }
     }
 

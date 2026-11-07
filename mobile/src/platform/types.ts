@@ -165,3 +165,111 @@ export interface TilePort {
    */
   closeOverlay(): void;
 }
+
+/**
+ * Shared is what another app shared to this one through the system's share
+ * sheet: one file, one piece of text, or something this app will not read.
+ * `id` names the share for `SharePort.read` and `SharePort.finish`; a newer
+ * share replaces an older one.
+ */
+export type Shared =
+  | {
+      id: number;
+      kind: 'file';
+      /** name is the file's display name, made safe; one is made up when the sender gave none. */
+      name: string;
+      contentType: string;
+      /** size is in bytes, or -1 when the sending app does not say. */
+      size: number;
+      /** previewUri can be shown as an image, or is "" for anything but an image. */
+      previewUri: string;
+    }
+  | { id: number; kind: 'text'; text: string; subject: string }
+  | { id: number; kind: 'unsupported' };
+
+/**
+ * SharePort is the receiving end of the system's share sheet. It exists on
+ * Android; elsewhere it reports that nothing can be shared to the app.
+ */
+export interface SharePort {
+  /** available reports whether this platform can share to the app at all. */
+  readonly available: boolean;
+
+  /**
+   * requests subscribes to shares that reached the running app; the handler
+   * then claims them with `pending`. The returned function unsubscribes.
+   */
+  requests(handler: () => void): () => void;
+
+  /** pending claims the share waiting, once, or resolves with null. */
+  pending(): Promise<Shared | null>;
+
+  /**
+   * stage copies a shared file into the app's own storage, within
+   * `maxBytes`, so it can be uploaded after the share panel has closed. It
+   * rejects when share `id` is no longer the one waiting.
+   */
+  stage(id: number, maxBytes: number): Promise<StageResult>;
+
+  /** readStaged reads a staged copy whole, reporting how far it has got. */
+  readStaged(file: StagedFile, onProgress?: (done: number, total: number) => void): Promise<Uint8Array>;
+
+  /** discard deletes a staged copy. Deleting one already gone is fine. */
+  discard(token: string): void;
+
+  /**
+   * finish closes the share panel for share `id`, with `message` as a toast
+   * when it is not empty. It is a status, never what was shared: a toast is
+   * visible over other apps.
+   */
+  finish(id: number, message: string): void;
+
+  /** openApp brings the app forward and closes the share panel. */
+  openApp(): void;
+}
+
+/** StagedFile is a shared file copied into the app's own storage, waiting to be uploaded. */
+export interface StagedFile {
+  /** token names the copy for `readStaged` and `discard`. */
+  token: string;
+  name: string;
+  contentType: string;
+  size: number;
+  /** sha256 is the file's SHA-256 in lowercase hex, for the store's duplicate check. */
+  sha256: string;
+}
+
+/** StageResult is a staged copy, or the size of a file that was over the limit. */
+export type StageResult = ({ tooLarge: false } & StagedFile) | { tooLarge: true; name: string; size: number };
+
+/**
+ * BackgroundPort runs uploads after the window that started them has closed,
+ * with a notification showing their progress. On Android that is a
+ * foreground service; elsewhere `available` is false and an upload runs only
+ * while the app does.
+ */
+export interface BackgroundPort {
+  readonly available: boolean;
+
+  /**
+   * askToNotify asks for permission to show notifications, where the OS asks
+   * for that, and resolves whatever the answer: an upload runs either way.
+   */
+  askToNotify(): Promise<void>;
+
+  /**
+   * start starts the background runner, which calls the registered task. It
+   * must be called while a window of the app is in the foreground.
+   */
+  start(): Promise<void>;
+
+  /**
+   * progress shows `title` with a bar at `done`/`total` (`total` 0 is a moving
+   * bar), and `detail` — "2 of 3" — beside it when it is not empty. A status,
+   * never content.
+   */
+  progress(title: string, detail: string, done: number, total: number): void;
+
+  /** result says how upload `id` ended, in a notification of its own. A status, never content. */
+  result(id: number, ok: boolean, message: string): void;
+}
