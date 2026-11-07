@@ -15,6 +15,7 @@ import { AppState } from 'react-native';
 import type { StoreDetails } from '../core';
 import { background, share } from '../platform';
 import { JobQueue, runJob, type Job, type UploadItem } from './jobs';
+import { externalBody, verifyNativeSeal } from './nativeSeal';
 import { failureMessage } from './session';
 import { getSnapshot, onTransferProgress, refresh, setNotice } from './sessionStore';
 import type { Payload } from './share';
@@ -62,6 +63,18 @@ const queue = new JobQueue(
       return await runJob(job, {
         client: () => getSnapshot().client,
         readStaged: (file, onProgress) => share.readStaged(file, onProgress),
+        external: async (file) => {
+          const port = share.nativeSeal;
+          if (port === null || !(await verifyNativeSeal(port))) {
+            return null;
+          }
+          return externalBody(file, {
+            port,
+            readStaged: (f, onProgress) => share.readStaged(f, onProgress),
+            discard: (token) => share.discard(token),
+            progress: showProgress,
+          });
+        },
         discard: (token) => share.discard(token),
         saveToStore: async (item: UploadItem, details: StoreDetails) => {
           const client = getSnapshot().client;

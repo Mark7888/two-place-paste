@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.util.Base64
 import android.widget.Toast
 import androidx.core.content.IntentCompat
 import com.facebook.react.bridge.Arguments
@@ -190,6 +191,105 @@ class ShareModule(reactContext: ReactApplicationContext) :
         }
     }
 
+    /**
+     * sealStaged seals staged copy [token] into a new staged copy holding the
+     * entry container: [head], then the XChaCha20-Poly1305 sealing under
+     * [key], [nonce] and [aad] of [frameHead] followed by the file
+     * (spec/crypto.md §5.2). It resolves with `{ token, size }` for the
+     * container, and leaves the file's copy for the caller to discard.
+     *
+     * The JavaScript client decides everything — key, nonce, associated data,
+     * the frame's head — and checks the container's shape; this only does the
+     * bulk work, at native speed, streaming through a 64 KB buffer. JavaScript
+     * uses it only after [sealBytes] has matched `@noble/ciphers` byte for byte.
+     * The key is never logged or put in an error.
+     */
+    @ReactMethod
+    fun sealStaged(
+        token: String,
+        key: String,
+        nonce: String,
+        aad: String,
+        head: String,
+        frameHead: String,
+        promise: Promise,
+    ) {
+        val context = reactApplicationContext
+        val input = stagedFileOrNull(context, token)
+        if (input == null || !input.exists()) {
+            promise.reject(ERROR_CODE, "the shared file is no longer available")
+            return
+        }
+        Thread {
+            val outToken = newToken()
+            val output = stagedFile(context, outToken)
+            try {
+                val sealer = XChaCha20Poly1305Sealer(decode(key), decode(nonce), decode(aad))
+                val headBytes = decode(head)
+                val frameHeadBytes = decode(frameHead)
+                var size = 0L
+                output.parentFile?.mkdirs()
+                output.outputStream().buffered(SEAL_BUFFER).use { out ->
+                    out.write(headBytes)
+                    sealer.update(frameHeadBytes, 0, frameHeadBytes.size, frameHeadBytes, 0)
+                    out.write(frameHeadBytes)
+                    size += headBytes.size + frameHeadBytes.size
+                    input.inputStream().use { inp ->
+                        val buffer = ByteArray(SEAL_BUFFER)
+                        while (true) {
+                            val n = inp.read(buffer)
+                            if (n < 0) {
+                                break
+                            }
+                            sealer.update(buffer, 0, n, buffer, 0)
+                            out.write(buffer, 0, n)
+                            size += n
+                        }
+                    }
+                    val tag = sealer.finish()
+                    out.write(tag)
+                    size += tag.size
+                }
+                promise.resolve(
+                    Arguments.createMap().apply {
+                        putString("token", outToken)
+                        putDouble("size", size.toDouble())
+                    },
+                )
+            } catch (e: Throwable) {
+                output.delete()
+                promise.reject(ERROR_CODE, "the shared file could not be sealed", e)
+            }
+        }.start()
+    }
+
+    /**
+     * sealBytes seals [plain] in memory the way [sealStaged] seals a file,
+     * feeding it to the sealer in uneven pieces, and resolves with the
+     * ciphertext and tag as base64. JavaScript compares it with
+     * `@noble/ciphers` before it trusts [sealStaged].
+     */
+    @ReactMethod
+    fun sealBytes(key: String, nonce: String, aad: String, plain: String, promise: Promise) {
+        try {
+            val sealer = XChaCha20Poly1305Sealer(decode(key), decode(nonce), decode(aad))
+            val data = decode(plain)
+            // Uneven pieces, so the buffering across blocks is what is tested.
+            var off = 0
+            var piece = 1
+            while (off < data.size) {
+                val n = minOf(piece, data.size - off)
+                sealer.update(data, off, n, data, off)
+                off += n
+                piece = piece * 3 + 1
+            }
+            val tag = sealer.finish()
+            promise.resolve(Base64.encodeToString(data + tag, Base64.NO_WRAP))
+        } catch (e: Throwable) {
+            promise.reject(ERROR_CODE, "the self-test could not be sealed", e)
+        }
+    }
+
     /** discard deletes staged copy [token]. Deleting one already gone is fine. */
     @ReactMethod
     fun discard(token: String) {
@@ -301,6 +401,9 @@ class ShareModule(reactContext: ReactApplicationContext) :
 
         private val TOKEN = Regex("^[0-9a-f-]{36}$")
         private const val STAGE_DIRECTORY = "shared"
+        private const val SEAL_BUFFER = 64 * 1024
+
+        private fun decode(base64: String): ByteArray = Base64.decode(base64, Base64.NO_WRAP)
 
         /**
          * clearStaged deletes every staged copy. Called when the module is

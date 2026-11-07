@@ -9,9 +9,9 @@
  * event and claims it, and a cold start claims it once during startup.
  */
 
-import { decodeBase64StdAsync } from '../core/bytes';
+import { decodeBase64Std, decodeBase64StdAsync, encodeBase64Std } from '../core/bytes';
 import { SHARE_EVENT, TppShare, shareEvents } from './native';
-import type { SharePort, Shared, StageResult, StagedFile } from './types';
+import type { NativeSealPort, SharePort, Shared, StageResult, StagedFile } from './types';
 
 /** READ_CHUNK_BYTES is how much of a shared file crosses to JavaScript at once. */
 const READ_CHUNK_BYTES = 4 << 20;
@@ -44,8 +44,43 @@ function parse(raw: unknown): Shared | null {
   }
 }
 
+/**
+ * nativeSeal is the native XChaCha20-Poly1305 (`XChaCha20Poly1305Sealer.java`).
+ * Only small values cross as base64: the key, nonce, associated data and the
+ * frame's head. The file itself never enters JavaScript to be sealed.
+ */
+const nativeSeal: NativeSealPort | null =
+  TppShare === null
+    ? null
+    : {
+        async sealStaged(token, p) {
+          const native = TppShare;
+          if (native === null) {
+            throw new Error('this build cannot seal files natively');
+          }
+          return native.sealStaged(
+            token,
+            encodeBase64Std(p.key),
+            encodeBase64Std(p.nonce),
+            encodeBase64Std(p.aad),
+            encodeBase64Std(p.head),
+            encodeBase64Std(p.frameHead),
+          );
+        },
+        async sealBytes(key, nonce, aad, plain) {
+          const native = TppShare;
+          if (native === null) {
+            throw new Error('this build cannot seal natively');
+          }
+          return decodeBase64Std(
+            await native.sealBytes(encodeBase64Std(key), encodeBase64Std(nonce), encodeBase64Std(aad), encodeBase64Std(plain)),
+          );
+        },
+      };
+
 export const share: SharePort = {
   available: TppShare !== null,
+  nativeSeal,
 
   requests(handler: () => void): () => void {
     const subscription = shareEvents?.addListener(SHARE_EVENT, handler);

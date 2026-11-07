@@ -32,6 +32,16 @@ export interface Frame {
 
 /** encodeFrame serializes a frame (§6). */
 export function encodeFrame(frame: Frame): Uint8Array {
+  return concat(encodeFrameHead(frame, frame.body.length), frame.body);
+}
+
+/**
+ * encodeFrameHead is everything of an encoded frame before the body, for a
+ * body of `bodyLength` bytes: `encodeFrame` is this followed by the body. It
+ * is what lets a body the app does not hold in memory — a staged file — be
+ * sealed elsewhere, as this head and then the file.
+ */
+export function encodeFrameHead(frame: Omit<Frame, 'body'>, bodyLength: number): Uint8Array {
   const contentType = utf8(frame.contentType);
   if (contentType.length === 0) {
     throw new Error('content_type is mandatory');
@@ -42,6 +52,9 @@ export function encodeFrame(frame: Frame): Uint8Array {
   const filename = utf8(frame.filename);
   if (filename.length > 0xffff) {
     throw new Error('filename is longer than its length prefix can express');
+  }
+  if (!Number.isInteger(bodyLength) || bodyLength < 0 || bodyLength > 0xffffffff) {
+    throw new Error('body is longer than its length prefix can express');
   }
   return concat(
     u8(FRAME_VERSION),
@@ -54,12 +67,10 @@ export function encodeFrame(frame: Frame): Uint8Array {
     // an encoder writes 0 and a decoder rejects anything else, so padding can
     // arrive as tpp-crypto-v2 without ambiguity.
     u32be(0),
-    u32be(frame.body.length),
-    frame.body,
+    u32be(bodyLength),
   );
 }
 
-/** decodeFrame parses a frame, rejecting anything that is not its one canonical encoding (§6). */
 export function decodeFrame(encoded: Uint8Array): Frame {
   let offset = 0;
   const take = (n: number): Uint8Array => {

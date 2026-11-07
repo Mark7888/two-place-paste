@@ -8,6 +8,7 @@ import type { SharePort } from './types';
 
 export const share: SharePort = {
   available: false,
+  nativeSeal: null,
   requests: () => () => {},
   pending: async () => null,
   stage: async () => {

@@ -265,6 +265,32 @@ copied, and `putEntry` / `saveToStore` take that hash (`sha256`) instead of
 hashing the body again. A wrong hash would only make the entry fail its check
 where it is read, as a corrupted body would.
 
+**A shared file is sealed natively.** The core's crypto is `@noble/*`
+(docs/internal/conventions.md), and in pure JavaScript with no JIT it ran at a
+few MB/s: most of an upload's time. A staged file is sealed by
+`XChaCha20Poly1305Sealer.java` instead (`ShareModule.sealStaged`), streaming
+into a second staged copy, and never enters JavaScript to be encrypted. The
+core still draws the nonce, derives the key, builds the associated data and the
+frame's head, and checks the container's length and head (`ExternalBody` in
+`src/core/protocol/client.ts`).
+
+It is a deliberate exception to the `@noble` rule, fenced three ways:
+
+- before the first native seal in a run, `src/app/nativeSeal.ts` seals random
+  inputs of many sizes both natively and with `@noble/ciphers`, and uses the
+  native one only when every byte agrees; otherwise the upload is sealed in
+  JavaScript as before;
+- `npm run sealer-check` (needs a JDK) holds the Java sealer to
+  `spec/vectors/entry.json` and to hundreds of `@noble` cases, each fed in
+  uneven pieces;
+- only sealing is native. Opening, and everything else, stays in `@noble`.
+
+The platform's own ChaCha20-Poly1305 is not used: it exists only on Android 9+
+and buffers the whole input on the Java heap before it encrypts.
+
+What is left in JavaScript is moving bytes: the sealed copy crosses in base64
+chunks, and React Native's WebSocket sends binary as base64 too.
+
 The notification counts the run — "45% · 2 of 3" — when more than one upload is
 queued, and each upload's outcome gets a notification of its own.
 

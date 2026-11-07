@@ -107,6 +107,8 @@ import {
 import { Error as ErrorFrame, ErrorCode } from '../../protocol/gen/tpp/v1/error';
 import {
   encodeFrame,
+  encodeFrameHead,
+  entryAAD,
   decodeFrame,
   generateDeviceKey,
   generateGroupKey,
@@ -136,6 +138,8 @@ import {
   storeKey,
   unwrap,
   wrap,
+  TAG_SIZE,
+  VERSION,
 } from '../crypto';
 import { Connection, REQUEST_TIMEOUT_MS, SocketFactory, webSocketFactory } from './connection';
 import { DEFAULT_TTL_MS, type EntryCache } from './entryCache';
@@ -168,7 +172,7 @@ import {
 import { deviceStatusURL, splitCreationURL, normalizeServerURL, websocketURL } from './urls';
 import { hashHex, type StoreDetails, type StoreItem, type StoreLimits, type StoreListing } from './store';
 import { randomBytes } from '../random';
-import { toHex } from '../bytes';
+import { concat, toHex, u8 } from '../bytes';
 
 /**
  * SINGLE_FRAME_MAX_BYTES is the most ciphertext one frame carries, in either
@@ -250,7 +254,53 @@ const SLICED_OPEN_MIN_BYTES = 1 << 20;
 const SLICED_SEAL_MIN_BYTES = 1 << 20;
 
 /**
- * bodyHash is a body's SHA-256: the one the caller passed, or worked out here.
+ * ExternalBody is a body the app holds outside JavaScript — a file shared to
+ * it, staged by the platform — together with a way to seal it there.
+ *
+ * Sealing an 80 MB file in JavaScript took most of an upload's time on the
+ * phone, whose engine has no JIT. The client still makes every decision that
+ * matters: it draws the nonce, derives the content key, builds the associated
+ * data and the frame's head, and checks the container that comes back. Only
+ * the bulk XChaCha20-Poly1305 over the frame is done by `seal`, which must
+ * produce exactly what `sealEntry` would (spec/crypto.md §5.2).
+ */
+export interface ExternalBody {
+  /** size is the body's length in bytes. */
+  size: number;
+  /** sha256 is the body's SHA-256, worked out by whoever staged it (see `uploadHash`). */
+  sha256: Uint8Array;
+  /**
+   * seal returns the entry container: `head`, then the XChaCha20-Poly1305
+   * sealing under `key`, `nonce` and `aad` of `frameHead` followed by the body.
+   */
+  seal(params: ExternalSeal): Promise<Uint8Array>;
+}
+
+/** ExternalSeal is what `ExternalBody.seal` seals with. */
+export interface ExternalSeal {
+  key: Uint8Array;
+  nonce: Uint8Array;
+  aad: Uint8Array;
+  /** head is the container's version byte and nonce, which come before the ciphertext. */
+  head: Uint8Array;
+  /** frameHead is the encoded frame up to the body (`encodeFrameHead`). */
+  frameHead: Uint8Array;
+}
+
+/**
+ * UploadBody is the body of an entry or store item being written: bytes in
+ * memory, with their hash when the caller already has it, or an
+ * `ExternalBody`.
+ */
+export type UploadBody = { body: Uint8Array; sha256?: Uint8Array } | { external: ExternalBody };
+
+/** uploadSize is an upload's body length. */
+function uploadSize(item: UploadBody): number {
+  return 'external' in item ? item.external.size : item.body.length;
+}
+
+/**
+ * uploadHash is a body's SHA-256: the one the caller passed, or worked out here.
  *
  * Hashing is the slowest step of a large upload on the phone — slower than
  * the encryption, in pure JavaScript with no JIT — and a file shared to the
@@ -259,14 +309,54 @@ const SLICED_SEAL_MIN_BYTES = 1 << 20;
  * copied itself, and a wrong one only makes the entry fail its check on the
  * devices that read it, as a corrupted body would.
  */
-async function bodyHash(item: { body: Uint8Array; sha256?: Uint8Array }): Promise<Uint8Array> {
-  if (item.sha256 === undefined) {
-    return sha256Sliced(item.body);
+async function uploadHash(item: UploadBody): Promise<Uint8Array> {
+  const given = 'external' in item ? item.external.sha256 : item.sha256;
+  if (given === undefined) {
+    return sha256Sliced((item as { body: Uint8Array }).body);
   }
-  if (item.sha256.length !== 32) {
-    throw new TppError('invalid', `a body hash is 32 bytes, not ${item.sha256.length}`);
+  if (given.length !== 32) {
+    throw new TppError('invalid', `a body hash is 32 bytes, not ${given.length}`);
   }
-  return item.sha256;
+  return given;
+}
+
+/**
+ * sealUpload seals an upload's frame into the container the relay stores
+ * (spec/crypto.md §5.2): in slices when it is large and in memory, so the app
+ * keeps answering taps, and by the platform when it is an `ExternalBody`.
+ */
+async function sealUpload(
+  item: UploadBody & { contentType: string; filename?: string },
+  createdAt: Date,
+  groupKey: Uint8Array,
+  nonce: Uint8Array,
+  epoch: bigint,
+  id: string,
+): Promise<Uint8Array> {
+  const info = { contentType: item.contentType, filename: item.filename ?? '', createdAt: BigInt(createdAt.getTime()) };
+  if (!('external' in item)) {
+    const frame = encodeFrame({ ...info, body: item.body });
+    return frame.length > SLICED_SEAL_MIN_BYTES
+      ? sealEntrySliced(groupKey, nonce, epoch, id, frame)
+      : sealEntry(groupKey, nonce, epoch, id, frame);
+  }
+  const ext = item.external;
+  const frameHead = encodeFrameHead(info, ext.size);
+  const head = concat(u8(VERSION), nonce);
+  const container = await ext.seal({
+    key: deriveContentKey(groupKey, nonce, epoch),
+    nonce,
+    aad: entryAAD(epoch, id),
+    head,
+    frameHead,
+  });
+  // The tag cannot be checked without opening it, but the shape can: a
+  // container of any other length, or under another head, is not this frame.
+  const want = head.length + frameHead.length + ext.size + TAG_SIZE;
+  if (container.length !== want || !head.every((b, i) => container[i] === b)) {
+    throw new TppError('invalid', `the sealed body is ${container.length} bytes, want ${want}`);
+  }
+  return container;
 }
 
 /** RANGE_RETRIES is how many times a download asks again for a range a dropped socket lost. */
@@ -1702,47 +1792,34 @@ export class Client {
    * putEntry encrypts an item and stores it as the group's latest entry. Last
    * write to reach the relay wins.
    *
-   * `sha256` is the body's hash when the caller already has it — a file
-   * shared to the app is hashed while it is copied — which saves hashing a
-   * large body again here (see `bodyHash`).
+   * The body is bytes in memory — with `sha256`, its hash, when the caller
+   * already has it, which saves hashing a large body again — or an
+   * `ExternalBody` the platform seals (see `uploadHash`, `sealUpload`).
    */
-  async putEntry(item: {
-    contentType: string;
-    filename?: string;
-    body: Uint8Array;
-    createdAt?: Date;
-    sha256?: Uint8Array;
-  }): Promise<EntryMeta> {
+  async putEntry(
+    item: { contentType: string; filename?: string; createdAt?: Date } & UploadBody,
+  ): Promise<EntryMeta> {
     this.requireGroup();
     if (item.contentType === '') {
       throw new TppError('invalid', 'an entry needs a content type');
     }
     const createdAt = item.createdAt ?? this.now();
-    const frame = encodeFrame({
-      contentType: item.contentType,
-      filename: item.filename ?? '',
-      createdAt: BigInt(createdAt.getTime()),
-      body: item.body,
-    });
     const entryId = newEntryID();
     const epoch = this.state.epoch;
     const groupKey = this.state.groupKey;
-    const container =
-      frame.length > SLICED_SEAL_MIN_BYTES
-        ? await sealEntrySliced(groupKey, generateNonce(), epoch, entryId, frame)
-        : sealEntry(groupKey, generateNonce(), epoch, entryId, frame);
+    const container = await sealUpload(item, createdAt, groupKey, generateNonce(), epoch, entryId);
     // The limits say which header version the relay takes, and whether a
     // large entry can be chunked. They are asked once per connection.
     const limits = await this.limits();
     const summary = {
       contentType: item.contentType,
       filename: item.filename ?? '',
-      bodyLen: BigInt(item.body.length),
+      bodyLen: BigInt(uploadSize(item)),
     };
     // The key read with the epoch, not the current one: a rekey during the
     // awaits above must not seal the header under another epoch's key.
     const header = limits.headerV2
-      ? sealEntryHeaderV2(groupKey, epoch, entryId, { ...summary, sha256: await bodyHash(item) })
+      ? sealEntryHeaderV2(groupKey, epoch, entryId, { ...summary, sha256: await uploadHash(item) })
       : sealEntryHeader(groupKey, epoch, entryId, summary);
 
     let response: EntryPutResponse;
@@ -2282,14 +2359,14 @@ export class Client {
    * screen checks the item's hash against its StoreIndex first, and asks.
    */
   async saveToStore(
-    item: { contentType: string; filename?: string; body: Uint8Array; createdAt?: Date; sha256?: Uint8Array },
+    item: { contentType: string; filename?: string; createdAt?: Date } & UploadBody,
     details: StoreDetails,
   ): Promise<StoreItem> {
     this.requireGroup();
     if (item.contentType === '') {
       throw new TppError('invalid', 'a store item needs a content type');
     }
-    const sum = await bodyHash(item);
+    const sum = await uploadHash(item);
     let meta: Uint8Array;
     try {
       meta = encodeStoreMeta({
@@ -2298,19 +2375,13 @@ export class Client {
         tags: details.tags,
         contentType: item.contentType,
         filename: item.filename ?? '',
-        bodyLen: BigInt(item.body.length),
+        bodyLen: BigInt(uploadSize(item)),
         sha256: sum,
       });
     } catch (err) {
       throw new TppError('invalid', `the item's details: ${(err as Error).message}`, { cause: err });
     }
     const createdAt = item.createdAt ?? this.now();
-    const frame = encodeFrame({
-      contentType: item.contentType,
-      filename: item.filename ?? '',
-      createdAt: BigInt(createdAt.getTime()),
-      body: item.body,
-    });
     const itemId = newEntryID();
     const epoch = this.state.epoch;
     const groupKey = this.state.groupKey;
@@ -2319,10 +2390,7 @@ export class Client {
     // its content key is the one wrapped below (§7a.4).
     const nonce = generateNonce();
     const contentKey = deriveContentKey(groupKey, nonce, epoch);
-    const container =
-      frame.length > SLICED_SEAL_MIN_BYTES
-        ? await sealEntrySliced(groupKey, nonce, epoch, itemId, frame)
-        : sealEntry(groupKey, nonce, epoch, itemId, frame);
+    const container = await sealUpload(item, createdAt, groupKey, nonce, epoch, itemId);
     const metaKey = randomBytes(META_KEY_SIZE);
     const key = storeKey(groupKey, epoch);
     const wrapped = wrapItemKeys(key, generateNonce(), epoch, itemId, { contentKey, metaKey });

@@ -4,11 +4,12 @@
  * the two places this client is required to refuse.
  */
 
+import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 
-import { fromUTF8, toHex, utf8 } from '../../bytes';
+import { concat, fromUTF8, toHex, u8, utf8 } from '../../bytes';
 import { HEADER_CONTAINER_SIZE, HEADER_V2_CONTAINER_SIZE, openStoreLink, storeKey } from '../../crypto';
-import { Client } from '../client';
+import { Client, type ExternalBody } from '../client';
 import { TppError, describe as describeError } from '../errors';
 import { classifyCode, decodePairingPayload, fingerprint } from '../pairing';
 import { FakeRelay, MemoryStore } from '../../demo';
@@ -382,6 +383,57 @@ describe('a body hash the caller already has', () => {
     await expect(
       laptop.putEntry({ contentType: 'text/plain', body: utf8('x'), sha256: new Uint8Array(16) }),
     ).rejects.toThrow('a body hash is 32 bytes, not 16');
+    expect((await laptop.getHistory({ limit: 10 })).entries).toHaveLength(0);
+  });
+});
+
+describe('a body sealed outside JavaScript (ExternalBody)', () => {
+  /** external seals as the platform should: the head, then the frame head and body under the AEAD. */
+  const external = (body: Uint8Array, tamper?: (c: Uint8Array) => Uint8Array): ExternalBody => ({
+    size: body.length,
+    sha256: sha256(body),
+    seal: async ({ key, nonce, aad, head, frameHead }) => {
+      const sealed = xchacha20poly1305(key, nonce, aad).encrypt(concat(frameHead, body));
+      const container = concat(head, sealed);
+      return tamper ? tamper(container) : container;
+    },
+  });
+
+  test('writes an entry another device opens to the same body', async () => {
+    const relay = new FakeRelay();
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const phone = await open(relay, new MemoryStore(), 'phone');
+    await pair(laptop, phone);
+    const body = utf8('a file the platform staged');
+    await phone.putEntry({ contentType: 'text/plain', filename: 'f.txt', external: external(body) });
+    const got = await laptop.getLatest();
+    expect(fromUTF8(got.body)).toBe('a file the platform staged');
+    expect(got.filename).toBe('f.txt');
+  });
+
+  test('saves a store item another device opens to the same body', async () => {
+    const relay = new FakeRelay({ store: { maxBytes: 1 << 20, maxItems: 10, maxItemBytes: 1 << 20 } });
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const body = utf8('kept');
+    const saved = await laptop.saveToStore(
+      { contentType: 'text/plain', filename: 'k.txt', external: external(body) },
+      { name: 'K', description: '', tags: [] },
+    );
+    expect(fromUTF8((await laptop.fetchStoreItem(saved)).body)).toBe('kept');
+  });
+
+  test.each([
+    ['a byte short', (c: Uint8Array) => c.subarray(0, c.length - 1)],
+    ['under another head', (c: Uint8Array) => concat(u8(c[0] ^ 1), c.subarray(1))],
+  ])('refuses a container %s, before anything is sent', async (_name, tamper) => {
+    const relay = new FakeRelay();
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    await expect(
+      laptop.putEntry({ contentType: 'text/plain', external: external(utf8('x'), tamper) }),
+    ).rejects.toThrow('the sealed body is');
     expect((await laptop.getHistory({ limit: 10 })).entries).toHaveLength(0);
   });
 });

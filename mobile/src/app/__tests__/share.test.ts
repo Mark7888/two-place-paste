@@ -57,7 +57,7 @@ function fakeClient(opts: { maxEntryBytes?: number; store?: Partial<StoreLimits>
       headerV2: true,
     }),
     putEntry: async (item) => {
-      put.push({ contentType: item.contentType, filename: item.filename ?? '', body: item.body });
+      put.push({ contentType: item.contentType, filename: item.filename ?? '', body: 'body' in item ? item.body : new Uint8Array(0) });
       return {} as Awaited<ReturnType<ShareClient['putEntry']>>;
     },
     storeLimits: async (): Promise<StoreLimits> => {

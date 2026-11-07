@@ -21,9 +21,9 @@ import {
   type StoreItem,
   type StoreLimits,
   type Unreadable,
+  type UploadBody,
 } from '../core';
 import { ErrorCode } from '../protocol/gen/tpp/v1/error';
-import type { ClipboardItem } from '../platform';
 import { failureMessage } from './session';
 
 /** StoreStatus is where the store is: not asked yet, being listed, off, listed, or failed. */
@@ -164,18 +164,19 @@ export class DuplicateError extends Error {
 
 /**
  * saveItem saves something to the store, refusing a body it already holds
- * unless the user said "Save anyway". `item.sha256`, when given, is the
- * body's hash, and is not worked out again.
+ * unless the user said "Save anyway". A body's hash that is already known —
+ * `sha256`, or an external body's — is not worked out again.
  */
 export async function saveItem(
   client: Client,
-  item: ClipboardItem & { sha256?: Uint8Array },
+  item: { contentType: string; filename: string } & UploadBody,
   details: StoreDetails,
   allowDuplicate: boolean,
 ): Promise<StoreItem> {
   await loadStore(client);
   if (!allowDuplicate) {
-    const dups = index.duplicates(hashHex(item.sha256 ?? (await sha256Sliced(item.body))));
+    const sum = 'external' in item ? item.external.sha256 : (item.sha256 ?? (await sha256Sliced(item.body)));
+    const dups = index.duplicates(hashHex(sum));
     if (dups.length > 0) {
       throw new DuplicateError(dups);
     }

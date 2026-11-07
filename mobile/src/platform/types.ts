@@ -218,6 +218,13 @@ export interface SharePort {
   discard(token: string): void;
 
   /**
+   * nativeSeal is the platform's XChaCha20-Poly1305 for staged files, or null
+   * where there is none. The app uses it only after `sealBytes` has matched
+   * `@noble/ciphers` byte for byte (`src/app/nativeSeal.ts`).
+   */
+  readonly nativeSeal: NativeSealPort | null;
+
+  /**
    * finish closes the share panel for share `id`, with `message` as a toast
    * when it is not empty. It is a status, never what was shared: a toast is
    * visible over other apps.
@@ -272,4 +279,20 @@ export interface BackgroundPort {
 
   /** result says how upload `id` ended, in a notification of its own. A status, never content. */
   result(id: number, ok: boolean, message: string): void;
+}
+
+/** NativeSealPort seals a staged file without it entering JavaScript. */
+export interface NativeSealPort {
+  /**
+   * sealStaged seals staged copy `token` into a new staged copy: `head`, then
+   * the sealing under `key`, `nonce` and `aad` of `frameHead` followed by the
+   * file. The file's copy is left for the caller to discard.
+   */
+  sealStaged(
+    token: string,
+    params: { key: Uint8Array; nonce: Uint8Array; aad: Uint8Array; head: Uint8Array; frameHead: Uint8Array },
+  ): Promise<{ token: string; size: number }>;
+
+  /** sealBytes seals `plain` in memory the same way, for the self-test: ciphertext and tag. */
+  sealBytes(key: Uint8Array, nonce: Uint8Array, aad: Uint8Array, plain: Uint8Array): Promise<Uint8Array>;
 }

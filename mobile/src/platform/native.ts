@@ -41,6 +41,17 @@ export interface TppShareModule {
   readChunk(token: string, offset: number, length: number): Promise<string>;
   /** discard deletes staged copy `token`. */
   discard(token: string): void;
+  /** sealStaged seals a staged copy into a new one, as base64 arguments; see `NativeSealPort`. */
+  sealStaged(
+    token: string,
+    key: string,
+    nonce: string,
+    aad: string,
+    head: string,
+    frameHead: string,
+  ): Promise<{ token: string; size: number }>;
+  /** sealBytes seals base64 `plain` in memory and resolves with ciphertext and tag as base64. */
+  sealBytes(key: string, nonce: string, aad: string, plain: string): Promise<string>;
   /** finish closes the share panel and forgets the share, with an optional toast. */
   finish(id: number, message: string): void;
   /** openApp brings the app forward and closes the share panel. */
