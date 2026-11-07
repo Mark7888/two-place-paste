@@ -47,7 +47,7 @@ class TransferService : HeadlessJsTaskService() {
         ServiceCompat.startForeground(
             this,
             NOTIFICATION_ID,
-            TransferNotifications.progress(this, "Preparing…", 0, 0),
+            TransferNotifications.progress(this, "Preparing…", "", 0, 0),
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
             } else {
@@ -95,7 +95,9 @@ class TransferService : HeadlessJsTaskService() {
 internal object TransferNotifications {
 
     private const val CHANNEL_ID = "transfers"
-    private const val RESULT_ID = 7402
+
+    /** RESULT_TAG with the upload's id names its outcome notification, so each one gets its own. */
+    private const val RESULT_TAG = "transfer-result"
 
     private fun channel(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
@@ -120,9 +122,10 @@ internal object TransferNotifications {
 
     /**
      * progress is the ongoing notification: [title] with a bar at
-     * [done]/[total], or a moving bar when [total] is 0.
+     * [done]/[total], or a moving bar when [total] is 0, and [detail] — "2 of
+     * 3" — beside the percentage when there is more than one upload.
      */
-    fun progress(context: Context, title: String, done: Long, total: Long): Notification {
+    fun progress(context: Context, title: String, detail: String, done: Long, total: Long): Notification {
         channel(context)
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_tile)
@@ -133,27 +136,38 @@ internal object TransferNotifications {
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setContentIntent(openApp(context))
+        val parts = mutableListOf<String>()
         if (total > 0) {
             val percent = (done * 100 / total).toInt().coerceIn(0, 100)
-            builder.setProgress(100, percent, false).setContentText("$percent%")
+            builder.setProgress(100, percent, false)
+            parts.add("$percent%")
         } else {
             builder.setProgress(0, 0, true)
+        }
+        if (detail.isNotEmpty()) {
+            parts.add(detail)
+        }
+        if (parts.isNotEmpty()) {
+            builder.setContentText(parts.joinToString(" · "))
         }
         return builder.build()
     }
 
     /** update replaces the ongoing notification, if notifications may be shown. */
     @android.annotation.SuppressLint("MissingPermission")
-    fun update(context: Context, title: String, done: Long, total: Long) {
+    fun update(context: Context, title: String, detail: String, done: Long, total: Long) {
         val manager = NotificationManagerCompat.from(context)
         if (manager.areNotificationsEnabled()) {
-            manager.notify(TransferService.NOTIFICATION_ID, progress(context, title, done, total))
+            manager.notify(TransferService.NOTIFICATION_ID, progress(context, title, detail, done, total))
         }
     }
 
-    /** result posts how an upload ended, as a notification the user can swipe away. */
+    /**
+     * result posts how upload [id] ended, as a notification of its own that
+     * the user can swipe away, so two uploads in a row leave two outcomes.
+     */
     @android.annotation.SuppressLint("MissingPermission")
-    fun result(context: Context, ok: Boolean, message: String) {
+    fun result(context: Context, id: Int, ok: Boolean, message: String) {
         channel(context)
         val manager = NotificationManagerCompat.from(context)
         if (!manager.areNotificationsEnabled()) {
@@ -168,6 +182,6 @@ internal object TransferNotifications {
             .setCategory(if (ok) NotificationCompat.CATEGORY_STATUS else NotificationCompat.CATEGORY_ERROR)
             .setContentIntent(openApp(context))
             .build()
-        manager.notify(RESULT_ID, notification)
+        manager.notify(RESULT_TAG, id, notification)
     }
 }

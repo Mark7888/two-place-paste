@@ -36,11 +36,11 @@ export const background: BackgroundPort = {
     await TppTransfer.start();
   },
 
-  progress(title: string, done: number, total: number): void {
-    TppTransfer?.progress(title, done, total);
+  progress(title: string, detail: string, done: number, total: number): void {
+    TppTransfer?.progress(title, detail, done, total);
   },
 
-  result(ok: boolean, message: string): void {
-    TppTransfer?.result(ok, message);
+  result(id: number, ok: boolean, message: string): void {
+    TppTransfer?.result(id, ok, message);
   },
 };

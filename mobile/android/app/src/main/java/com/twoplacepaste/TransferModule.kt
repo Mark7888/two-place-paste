@@ -33,16 +33,20 @@ class TransferModule(reactContext: ReactApplicationContext) :
         }
     }
 
-    /** progress updates the ongoing notification; [total] 0 is a moving bar. */
+    /**
+     * progress updates the ongoing notification: [title], a bar at
+     * [done]/[total] (0 is a moving bar), and [detail] — "2 of 3" — when the
+     * run holds more than one upload.
+     */
     @ReactMethod
-    fun progress(title: String, done: Double, total: Double) {
-        TransferNotifications.update(reactApplicationContext, title, done.toLong(), total.toLong())
+    fun progress(title: String, detail: String, done: Double, total: Double) {
+        TransferNotifications.update(reactApplicationContext, title, detail, done.toLong(), total.toLong())
     }
 
-    /** result posts how one upload ended. */
+    /** result posts how upload [id] ended, in a notification of its own. */
     @ReactMethod
-    fun result(ok: Boolean, message: String) {
-        TransferNotifications.result(reactApplicationContext, ok, message)
+    fun result(id: Double, ok: Boolean, message: String) {
+        TransferNotifications.result(reactApplicationContext, id.toInt(), ok, message)
     }
 
     companion object {

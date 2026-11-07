@@ -248,8 +248,19 @@ panel; an upload runs without it, just without the notification. The copy
 crosses to JavaScript in 4 MB base64 chunks into one buffer: as one string it
 cost the Java heap several times the file's size and crashed the app.
 
-A socket the background upload dialled is closed when the queue is empty if
-the app is still not on screen, as SPEC §5.2 would have it.
+A background job runs under `Client.hold`, which keeps the socket the way a
+chunked transfer does: leaving the app no longer closes it under an upload
+that is still encrypting. It is closed when the job ends if the app is still
+not on screen, as SPEC §5.2 would have it.
+
+Every window of the app shares one JavaScript thread, so the job must not hold
+it. Entries over 1 MB are sealed with `sealEntrySliced`, the encrypting half of
+`openEntrySliced`: the same XChaCha20-Poly1305, byte for byte, done in 256 KB
+slices with the event loop let run in between. Sealed in one call, an 80 MB
+upload froze the app and left a window opened meanwhile blank until it was done.
+
+The notification counts the run — "45% · 2 of 3" — when more than one upload is
+queued, and each upload's outcome gets a notification of its own.
 
 Only `content://` URIs from another app are read. A `file://` URI, or a
 `content://` URI served by this app's own providers (including a

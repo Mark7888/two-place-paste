@@ -29,7 +29,7 @@ import { formatSize } from './preview';
 export const TEXT_CONTENT_TYPE = 'text/plain; charset=utf-8';
 
 /** ShareClient is the part of the client a share uses. */
-export type ShareClient = Pick<Client, 'connect' | 'limits' | 'putEntry' | 'storeLimits'>;
+export type ShareClient = Pick<Client, 'connect' | 'hold' | 'limits' | 'putEntry' | 'storeLimits'>;
 
 /** StageShared copies a shared file within `maxBytes`: the platform's `share.stage`. */
 export type StageShared = (id: number, maxBytes: number) => Promise<StageResult>;

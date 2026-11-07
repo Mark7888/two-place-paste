@@ -37,35 +37,43 @@ export interface JobDeps {
  * runJob carries out one upload and resolves with how it ended, in the words
  * its notification uses. A staged file is deleted once it has been read,
  * whatever happens after.
+ *
+ * The whole job runs under `client.hold`, so the socket stays up while the
+ * app is off screen — through the encryption, before the upload itself has
+ * started — and closes once the job is done.
  */
 export async function runJob(job: Job, deps: JobDeps): Promise<string> {
-  let item: ClipboardItem;
   const p = job.payload;
-  if (p.kind === 'file') {
-    try {
-      deps.progress('Preparing…', 0, p.file.size);
-      const body = await deps.readStaged(p.file, (done, total) => deps.progress('Preparing…', done, total));
-      item = { contentType: p.contentType, filename: p.filename, body };
-    } finally {
-      deps.discard(p.file.token);
-    }
-  } else {
-    item = p.item;
-  }
-
   const client = deps.client();
   if (client === null) {
+    if (p.kind === 'file') {
+      deps.discard(p.file.token);
+    }
     throw new Error('TwoPlacePaste is not paired.');
   }
-  // A moving bar until the upload reports its own progress: encrypting a
-  // large file takes a while and has nothing to count.
-  deps.progress('Encrypting…', 0, 0);
-  if (job.target === 'send') {
-    await client.putEntry(item);
-    return SENT;
-  }
-  await deps.saveToStore(item, job.details);
-  return STORED;
+  return client.hold(async () => {
+    let item: ClipboardItem;
+    if (p.kind === 'file') {
+      try {
+        deps.progress('Preparing…', 0, p.file.size);
+        const body = await deps.readStaged(p.file, (done, total) => deps.progress('Preparing…', done, total));
+        item = { contentType: p.contentType, filename: p.filename, body };
+      } finally {
+        deps.discard(p.file.token);
+      }
+    } else {
+      item = p.item;
+    }
+    // A bar of its own until the upload reports progress: the encryption
+    // moves in slices too, but has nothing to count that the user cares about.
+    deps.progress('Encrypting…', 0, 0);
+    if (job.target === 'send') {
+      await client.putEntry(item);
+      return SENT;
+    }
+    await deps.saveToStore(item, job.details);
+    return STORED;
+  });
 }
 
 /**
@@ -76,10 +84,14 @@ export async function runJob(job: Job, deps: JobDeps): Promise<string> {
 export class JobQueue {
   private readonly jobs: Job[] = [];
   private draining: Promise<void> | null = null;
+  /** finished counts the jobs this drain has done, for "2 of 3". */
+  private finished = 0;
+  /** current is true while a job runs. */
+  private current = false;
 
   constructor(
     private readonly run: (job: Job) => Promise<string>,
-    private readonly report: (ok: boolean, message: string) => void,
+    private readonly report: (job: Job, ok: boolean, message: string) => void,
     private readonly describeError: (err: unknown) => string,
   ) {}
 
@@ -91,6 +103,15 @@ export class JobQueue {
   /** running reports whether a drain is under way. */
   get running(): boolean {
     return this.draining !== null;
+  }
+
+  /**
+   * position is where the running job stands among this drain's jobs: the
+   * second of three, say. Before a drain it counts what is waiting.
+   */
+  get position(): { index: number; total: number } {
+    const running = this.draining !== null && this.current ? 1 : 0;
+    return { index: this.finished + running, total: this.finished + running + this.jobs.length };
   }
 
   add(job: Job): void {
@@ -116,12 +137,19 @@ export class JobQueue {
         // Cleared in the same turn the queue is found empty, so a job added
         // after this point starts a new drain rather than waiting on this one.
         this.draining = null;
+        this.finished = 0;
         return;
       }
+      this.current = true;
       try {
-        this.report(true, await this.run(job));
+        const message = await this.run(job);
+        this.current = false;
+        this.finished++;
+        this.report(job, true, message);
       } catch (err) {
-        this.report(false, this.describeError(err));
+        this.current = false;
+        this.finished++;
+        this.report(job, false, this.describeError(err));
       }
     }
   }

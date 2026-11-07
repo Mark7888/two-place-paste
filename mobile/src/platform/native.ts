@@ -51,8 +51,8 @@ export interface TppShareModule {
 export interface TppTransferModule {
   /** start starts the foreground service that runs background uploads. */
   start(): Promise<void>;
-  progress(title: string, done: number, total: number): void;
-  result(ok: boolean, message: string): void;
+  progress(title: string, detail: string, done: number, total: number): void;
+  result(id: number, ok: boolean, message: string): void;
 }
 
 /** TppClipboardModule is implemented by `android/app/src/main/java/.../ClipboardModule.kt`. */

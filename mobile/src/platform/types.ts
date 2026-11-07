@@ -263,9 +263,13 @@ export interface BackgroundPort {
    */
   start(): Promise<void>;
 
-  /** progress shows `title` with a bar at `done`/`total`; `total` 0 is a moving bar. A status, never content. */
-  progress(title: string, done: number, total: number): void;
+  /**
+   * progress shows `title` with a bar at `done`/`total` (`total` 0 is a moving
+   * bar), and `detail` — "2 of 3" — beside it when it is not empty. A status,
+   * never content.
+   */
+  progress(title: string, detail: string, done: number, total: number): void;
 
-  /** result says how one upload ended. A status, never content. */
-  result(ok: boolean, message: string): void;
+  /** result says how upload `id` ended, in a notification of its own. A status, never content. */
+  result(id: number, ok: boolean, message: string): void;
 }

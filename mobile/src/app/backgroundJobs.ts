@@ -29,24 +29,30 @@ let nextJobId = 1;
  * shown at once.
  */
 const PROGRESS_INTERVAL_MS = 500;
-let lastTitle = '';
-let lastShownAt = 0;
 
-function showProgress(title: string, done: number, total: number): void {
+/** last is what the notification shows now, so a change in the queue can redraw it. */
+let last = { title: '', done: 0, total: 0, at: 0 };
+
+/** queueDetail is "2 of 3" while more than one upload is in this run, else "". */
+function queueDetail(): string {
+  const { index, total } = queue.position;
+  return total > 1 ? `${Math.max(index, 1)} of ${total}` : '';
+}
+
+function showProgress(title: string, done: number, total: number, force = false): void {
   const now = Date.now();
   const end = total > 0 && done >= total;
-  if (title === lastTitle && !end && now - lastShownAt < PROGRESS_INTERVAL_MS) {
+  if (!force && title === last.title && !end && now - last.at < PROGRESS_INTERVAL_MS) {
     return;
   }
-  lastTitle = title;
-  lastShownAt = now;
-  background.progress(title, done, total);
+  last = { title, done, total, at: now };
+  background.progress(title, queueDetail(), done, total);
 }
 
 const queue = new JobQueue(
   async (job) => {
     // The relay's chunk progress moves the bar once the upload starts.
-    lastTitle = '';
+    last = { title: '', done: 0, total: 0, at: 0 };
     const stop = onTransferProgress((p) => {
       if (p.direction === 'upload' && p.total > 0) {
         showProgress('Uploading…', p.done, p.total);
@@ -71,8 +77,8 @@ const queue = new JobQueue(
       stop();
     }
   },
-  (ok, message) => {
-    background.result(ok, message);
+  (job, ok, message) => {
+    background.result(job.id, ok, message);
     // The app shows the last outcome too, for whoever opens it next.
     setNotice(message);
   },
@@ -93,6 +99,10 @@ export async function enqueue(payload: Payload, target: Job['target'], details?:
     queue.add({ id, payload, target, details });
   } else {
     queue.add({ id, payload, target });
+  }
+  if (queue.running && last.title !== '') {
+    // Already uploading: the notification now says how many are in the run.
+    showProgress(last.title, last.done, last.total, true);
   }
   if (background.available) {
     try {

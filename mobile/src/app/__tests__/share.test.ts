@@ -48,6 +48,7 @@ function fakeClient(opts: { maxEntryBytes?: number; store?: Partial<StoreLimits>
   const put: ClipboardItem[] = [];
   const client: ShareClient = {
     connect: async () => {},
+    hold: <T>(run: () => Promise<T>) => run(),
     limits: async (): Promise<Limits> => ({
       maxEntryBytes: opts.maxEntryBytes ?? 32 * MB,
       singleFrameMaxBytes: 10 * MB,
