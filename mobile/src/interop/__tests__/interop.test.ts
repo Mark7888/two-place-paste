@@ -13,6 +13,7 @@
  * machine cannot host it (docs/internal/conventions.md §5).
  */
 
+import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 
 import {
@@ -20,11 +21,15 @@ import {
   EntryCache,
   type CacheStore,
   TppError,
+  concat,
   fromUTF8,
   toHex,
   utf8,
+  webSocketFactory,
+  type ExternalBody,
   type Progress,
   type SecureStore,
+  type SocketFactory,
 } from '../../core';
 import { GoPeer, Relay, missingTool } from '../relay';
 
@@ -69,6 +74,28 @@ function matchesPattern(body: Uint8Array): boolean {
   return true;
 }
 
+/**
+ * staged stands in for the files Android stages, and splicing for the
+ * native `sendSpliced`: it sends a frame head with a slice of a staged file
+ * appended, so the real relay is shown the frames the phone writes that way.
+ */
+const staged = new Map<string, Uint8Array>();
+let spliced = 0;
+const splicing: SocketFactory = (url) => {
+  const socket = webSocketFactory(url);
+  return {
+    ...socket,
+    sendSpliced: async (head, slice) => {
+      spliced++;
+      const file = staged.get(slice.token);
+      if (file === undefined) {
+        throw new Error('no such staged file');
+      }
+      socket.send(concat(head, file.subarray(slice.offset, slice.offset + slice.length)));
+    },
+  };
+};
+
 const skip = missingTool();
 const describeInterop = skip === null ? describe : describe.skip;
 
@@ -95,6 +122,7 @@ describeInterop('the phone and the Go client are one implementation of one contr
       store: new InMemoryStore(),
       deviceName: 'Anna — phone',
       cache: new EntryCache(cacheStore),
+      socketFactory: splicing,
       handlers: {
         onProgress: (p) => {
           progress.push(p);
@@ -370,6 +398,41 @@ describeInterop('the phone and the Go client are one implementation of one contr
     expect(uploads.length).toBeGreaterThanOrEqual(4);
     expect(uploads[uploads.length - 1].done).toBe(meta.size);
     expect(uploads.every((p) => p.filename === 'from-the-phone.bin')).toBe(true);
+  });
+
+  test('a large file sealed outside JavaScript goes in spliced chunks and reads in Go', async () => {
+    const body = new Uint8Array((20 << 20) + 999);
+    for (let i = 0; i < body.length; i++) {
+      body[i] = (i * 13 + 5) & 0xff;
+    }
+    // Sealed as the native sealer does it, into a staged copy the chunks are
+    // spliced from: the bytes never go through the client's own encoding.
+    const external: ExternalBody = {
+      size: body.length,
+      sha256: sha256(body),
+      seal: async ({ key, nonce, aad, head, frameHead }) => {
+        const container = concat(head, xchacha20poly1305(key, nonce, aad).encrypt(concat(frameHead, body)));
+        staged.set('sealed', container);
+        return {
+          token: 'sealed',
+          size: container.length,
+          head: container.slice(0, head.length),
+          read: async () => container,
+          readSlice: async (offset, length) => container.slice(offset, offset + length),
+          release: () => staged.delete('sealed'),
+        };
+      },
+    };
+    spliced = 0;
+    const meta = await phone.putEntry({ contentType: 'application/octet-stream', filename: 'spliced.bin', external });
+    const read = await go.send('latest-digest');
+
+    expect(read.entry_id).toBe(meta.id);
+    expect(read.length).toBe(body.length);
+    expect(read.sha256).toBe(toHex(sha256(body)));
+    expect(read.filename).toBe('spliced.bin');
+    expect(spliced).toBeGreaterThanOrEqual(3);
+    expect(staged.has('sealed')).toBe(false);
   });
 
   test('a second phone pairs the other way round: it shows, the Go client accepts', async () => {

@@ -13,7 +13,7 @@
 // decode a single field without it.
 import './textEncoding';
 
-import { toBase64URL } from '../bytes';
+import { concat, toBase64URL } from '../bytes';
 import { randomBytes } from '../random';
 import { Envelope, MessageType } from '../../protocol/gen/tpp/v1/envelope';
 import { Error as ErrorFrame } from '../../protocol/gen/tpp/v1/error';
@@ -26,12 +26,51 @@ import { ProtocolError, TppError } from './errors';
  */
 export interface Socket {
   send(frame: Uint8Array): void;
+  /**
+   * sendSpliced, where the platform has it, sends one frame made of `head`
+   * followed by a slice of a file the platform staged, without the slice
+   * passing through JavaScript. It resolves once the frame is queued.
+   *
+   * On the phone every byte JavaScript sends crosses to the native socket as
+   * base64, encoded and decoded in an engine with no JIT: for a large upload
+   * that took longer than the network. A staged, sealed file is sent this
+   * way instead, a chunk at a time (`Connection.callSpliced`).
+   */
+  sendSpliced?(head: Uint8Array, slice: StagedSlice): Promise<void>;
   close(): void;
   onOpen(handler: () => void): void;
   onMessage(handler: (frame: Uint8Array) => void): void;
   /** onClose reports why the socket closed and, when the peer sent one, its close code. */
   onClose(handler: (reason: string, code?: number) => void): void;
   onError(handler: (reason: string) => void): void;
+}
+
+/** StagedSlice names bytes of a file the platform staged: its token, and where in it. */
+export interface StagedSlice {
+  token: string;
+  offset: number;
+  length: number;
+}
+
+/**
+ * fieldHead is the protobuf key and length of a length-delimited field
+ * (`bytes`, a message): what precedes its `length` bytes. It is what lets a
+ * frame end with bytes JavaScript never holds — the field is the last one
+ * written, and its contents are appended by the platform.
+ */
+export function fieldHead(field: number, length: number): Uint8Array {
+  const out: number[] = [];
+  const varint = (n: number) => {
+    // Lengths stay well under 2^53, so division keeps it exact.
+    while (n >= 0x80) {
+      out.push((n % 0x80) | 0x80);
+      n = Math.floor(n / 0x80);
+    }
+    out.push(n);
+  };
+  varint(field * 8 + 2);
+  varint(length);
+  return Uint8Array.from(out);
 }
 
 /** SocketFactory opens a socket to a URL. */
@@ -146,6 +185,40 @@ export class Connection {
     this.fail(reason);
   }
 
+  /** canSplice reports whether this socket can send part of a frame from a staged file. */
+  get canSplice(): boolean {
+    return this.socket.sendSpliced !== undefined;
+  }
+
+  /**
+   * callSpliced is `call` for a request whose last field is a slice of a
+   * staged file: `payloadHead` is the request encoded up to and including
+   * that field's key and length (see `fieldHead`), and the slice follows it
+   * on the wire without passing through JavaScript. The envelope is written
+   * around it the same way — its payload is its last field.
+   */
+  async callSpliced<Resp>(
+    type: MessageType,
+    payloadHead: Uint8Array,
+    slice: StagedSlice,
+    response: Codec<Resp> | null,
+    timeoutMs = REQUEST_TIMEOUT_MS,
+  ): Promise<Resp> {
+    const sendSpliced = this.socket.sendSpliced?.bind(this.socket);
+    if (sendSpliced === undefined) {
+      throw new TppError('invalid', 'this socket cannot send from a staged file');
+    }
+    const id = newEnvelopeID();
+    const env = await this.exchangeWith(id, type, timeoutMs, () => {
+      // An empty payload is left out of the encoding, so the envelope's
+      // payload field can be written by hand, last, around the slice.
+      const envelope = Envelope.encode({ id, type, payload: new Uint8Array(0) }).finish();
+      const head = concat(envelope, fieldHead(3, payloadHead.length + slice.length), payloadHead);
+      return sendSpliced(head, slice);
+    });
+    return decodeResponse(env, response);
+  }
+
   /** call sends a request and resolves with the decoded response, or rejects with a ProtocolError. */
   async call<Req, Resp>(
     type: MessageType,
@@ -195,11 +268,20 @@ export class Connection {
     this.write(newEnvelopeID(), type, codec.encode(message).finish());
   }
 
-  private exchange(
+  private exchange(id: string, type: MessageType, payload: Uint8Array, timeoutMs: number): Promise<Envelope> {
+    return this.exchangeWith(id, type, timeoutMs, () => this.write(id, type, payload));
+  }
+
+  /**
+   * exchangeWith registers a request and then writes it with `send`, which
+   * may be asynchronous: a spliced frame is queued by the platform. A write
+   * that fails rejects the request instead of leaving it to time out.
+   */
+  private exchangeWith(
     id: string,
     type: MessageType,
-    payload: Uint8Array,
     timeoutMs: number,
+    send: () => void | Promise<void>,
   ): Promise<Envelope> {
     return new Promise<Envelope>((resolve, reject) => {
       if (this.closedReason !== null) {
@@ -220,12 +302,18 @@ export class Connection {
           reject(err);
         },
       });
-      try {
-        this.write(id, type, payload);
-      } catch (cause) {
+      const failed = (cause: unknown) => {
         clearTimeout(timer);
         this.pending.delete(id);
         reject(new TppError('disconnected', `sending ${MessageType[type]} failed`, { cause }));
+      };
+      try {
+        const sent = send();
+        if (sent instanceof Promise) {
+          sent.catch(failed);
+        }
+      } catch (cause) {
+        failed(cause);
       }
     });
   }
@@ -319,8 +407,13 @@ export function newEnvelopeID(): string {
  * React Native and Node provide. Binary frames only: the read limit the relay
  * enforces is on ciphertext, and a text frame is a protocol error either way.
  */
-export const webSocketFactory: SocketFactory = (url: string): Socket => {
-  const ws = new WebSocket(url);
+export const webSocketFactory: SocketFactory = (url: string): Socket => wrapWebSocket(new WebSocket(url));
+
+/**
+ * wrapWebSocket makes a platform WebSocket a `Socket`. It is exported so a
+ * platform can add what only it can do — `sendSpliced` — to the same socket.
+ */
+export function wrapWebSocket(ws: WebSocket): Socket {
   ws.binaryType = 'arraybuffer';
   return {
     send: (frame) => ws.send(frame),
@@ -346,4 +439,4 @@ export const webSocketFactory: SocketFactory = (url: string): Socket => {
       ws.onerror = () => handler('socket error');
     },
   };
-};
+}

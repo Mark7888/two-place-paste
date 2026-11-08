@@ -15,9 +15,12 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.modules.core.DeviceEventManagerModule
+import com.facebook.react.modules.websocket.WebSocketModule
 import java.io.File
+import java.io.RandomAccessFile
 import java.security.MessageDigest
 import java.util.UUID
+import okio.ByteString.Companion.toByteString
 
 /**
  * The bridge between [ShareActivity] and the JavaScript that asks the user
@@ -195,8 +198,9 @@ class ShareModule(reactContext: ReactApplicationContext) :
      * sealStaged seals staged copy [token] into a new staged copy holding the
      * entry container: [head], then the XChaCha20-Poly1305 sealing under
      * [key], [nonce] and [aad] of [frameHead] followed by the file
-     * (spec/crypto.md §5.2). It resolves with `{ token, size }` for the
-     * container, and leaves the file's copy for the caller to discard.
+     * (spec/crypto.md §5.2). It resolves with `{ token, size, head }` for the
+     * container — `head` being its first bytes as written — and leaves the
+     * file's copy for the caller to discard.
      *
      * The JavaScript client decides everything — key, nonce, associated data,
      * the frame's head — and checks the container's shape; this only does the
@@ -250,10 +254,15 @@ class ShareModule(reactContext: ReactApplicationContext) :
                     out.write(tag)
                     size += tag.size
                 }
+                // The head as it is in the file, read back, so JavaScript checks
+                // what will be sent rather than what it asked for.
+                val written = ByteArray(headBytes.size)
+                RandomAccessFile(output, "r").use { it.readFully(written) }
                 promise.resolve(
                     Arguments.createMap().apply {
                         putString("token", outToken)
                         putDouble("size", size.toDouble())
+                        putString("head", Base64.encodeToString(written, Base64.NO_WRAP))
                     },
                 )
             } catch (e: Throwable) {
@@ -288,6 +297,54 @@ class ShareModule(reactContext: ReactApplicationContext) :
         } catch (e: Throwable) {
             promise.reject(ERROR_CODE, "the self-test could not be sealed", e)
         }
+    }
+
+    /**
+     * sendSpliced sends one binary frame on React Native WebSocket [socketId]:
+     * [head], then [length] bytes of staged copy [token] from [offset]. It
+     * resolves once the frame is queued.
+     *
+     * This is how a large upload leaves the phone without its bytes crossing
+     * into JavaScript: React Native's WebSocket only takes binary from
+     * JavaScript as base64, which the engine there encodes slowly, while its
+     * native module sends okio bytes directly. JavaScript writes the frame's
+     * head — the envelope and the chunk request up to its data field — and the
+     * slice is appended here (`Connection.callSpliced`). The reply comes back
+     * through the socket as usual.
+     */
+    @ReactMethod
+    fun sendSpliced(socketId: Double, head: String, token: String, offset: Double, length: Double, promise: Promise) {
+        val context = reactApplicationContext
+        val file = stagedFileOrNull(context, token)
+        if (file == null || !file.exists()) {
+            promise.reject(ERROR_CODE, "the shared file is no longer available")
+            return
+        }
+        val socket = context.getNativeModule(WebSocketModule::class.java)
+        if (socket == null) {
+            promise.reject(ERROR_CODE, "the WebSocket module is not available")
+            return
+        }
+        Thread {
+            try {
+                val headBytes = decode(head)
+                val start = offset.toLong()
+                val count = length.toLong()
+                // Within the file, and within what OkHttp queues for one frame.
+                require(start >= 0 && count >= 0 && start + count <= file.length()) { "the slice is outside the file" }
+                require(headBytes.size + count <= MAX_SPLICED_FRAME) { "the frame is too large to send" }
+                val frame = ByteArray(headBytes.size + count.toInt())
+                System.arraycopy(headBytes, 0, frame, 0, headBytes.size)
+                RandomAccessFile(file, "r").use {
+                    it.seek(start)
+                    it.readFully(frame, headBytes.size, count.toInt())
+                }
+                socket.sendBinary(frame.toByteString(), socketId.toInt())
+                promise.resolve(null)
+            } catch (e: Throwable) {
+                promise.reject(ERROR_CODE, "the upload chunk could not be sent", e)
+            }
+        }.start()
     }
 
     /** discard deletes staged copy [token]. Deleting one already gone is fine. */
@@ -402,6 +459,9 @@ class ShareModule(reactContext: ReactApplicationContext) :
         private val TOKEN = Regex("^[0-9a-f-]{36}$")
         private const val STAGE_DIRECTORY = "shared"
         private const val SEAL_BUFFER = 64 * 1024
+
+        /** MAX_SPLICED_FRAME stays under OkHttp's 16 MiB send queue, which a larger frame would overflow. */
+        private const val MAX_SPLICED_FRAME = 15L * 1024 * 1024
 
         private fun decode(base64: String): ByteArray = Base64.decode(base64, Base64.NO_WRAP)
 

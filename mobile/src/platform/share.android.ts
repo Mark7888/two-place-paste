@@ -58,7 +58,7 @@ const nativeSeal: NativeSealPort | null =
           if (native === null) {
             throw new Error('this build cannot seal files natively');
           }
-          return native.sealStaged(
+          const sealed = await native.sealStaged(
             token,
             encodeBase64Std(p.key),
             encodeBase64Std(p.nonce),
@@ -66,6 +66,7 @@ const nativeSeal: NativeSealPort | null =
             encodeBase64Std(p.head),
             encodeBase64Std(p.frameHead),
           );
+          return { token: sealed.token, size: sealed.size, head: decodeBase64Std(sealed.head) };
         },
         async sealBytes(key, nonce, aad, plain) {
           const native = TppShare;
@@ -130,6 +131,13 @@ export const share: SharePort = {
       onProgress?.(offset + length, file.size);
     }
     return body;
+  },
+
+  async readSlice(token: string, offset: number, length: number): Promise<Uint8Array> {
+    if (TppShare === null) {
+      throw new Error('this build cannot take shared files');
+    }
+    return decodeBase64StdAsync(await TppShare.readChunk(token, offset, length));
   },
 
   discard(token: string): void {

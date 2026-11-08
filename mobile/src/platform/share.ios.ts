@@ -17,6 +17,9 @@ export const share: SharePort = {
   readStaged: async () => {
     throw new Error('this platform cannot take shared files');
   },
+  readSlice: async () => {
+    throw new Error('this platform cannot take shared files');
+  },
   discard: () => {},
   finish: () => {},
   openApp: () => {},

@@ -26,6 +26,7 @@ import {
   entryCache,
   files,
   secureStore,
+  socketFactory,
   type ClipboardItem,
   type SavedFile,
 } from '../platform';
@@ -141,6 +142,7 @@ export async function openSession(handlers: Handlers): Promise<Client> {
     deviceName: deviceInfo.defaultName(),
     handlers,
     cache: entryCache ?? undefined,
+    socketFactory,
   });
 }
 

@@ -65,16 +65,20 @@ export function verifyNativeSeal(port: NativeSealPort): Promise<boolean> {
 export interface NativeSealDeps {
   port: NativeSealPort;
   readStaged(file: StagedFile, onProgress: (done: number, total: number) => void): Promise<Uint8Array>;
+  readSlice(token: string, offset: number, length: number): Promise<Uint8Array>;
   discard(token: string): void;
   progress(title: string, done: number, total: number): void;
 }
 
 /**
  * externalBody makes a staged file an `ExternalBody` the client seals
- * natively: the platform seals it into a second staged copy, which is read
- * back as the container and then deleted. It is null when the file's hash is
- * not known, which the client needs for the header: the caller then reads
- * the file and seals it in JavaScript.
+ * natively: the platform seals it into a second staged copy, handed to the
+ * client as a `StagedContainer`. A large one is then sent a chunk at a time
+ * straight from that copy (`Socket.sendSpliced`), never entering JavaScript;
+ * one that fits in a frame is read in. The client deletes the copy when the
+ * upload is over. It is null when the file's hash is not known, which the
+ * client needs for the header: the caller then reads the file and seals it
+ * in JavaScript.
  */
 export function externalBody(file: StagedFile, deps: NativeSealDeps): ExternalBody | null {
   const sha256 = knownHash(file.sha256);
@@ -87,13 +91,24 @@ export function externalBody(file: StagedFile, deps: NativeSealDeps): ExternalBo
     seal: async (params) => {
       deps.progress('Encrypting…', 0, 0);
       const sealed = await deps.port.sealStaged(file.token, params);
-      try {
-        const container: StagedFile = { token: sealed.token, name: '', contentType: '', size: sealed.size, sha256: '' };
-        deps.progress('Preparing upload…', 0, sealed.size);
-        return await deps.readStaged(container, (done, total) => deps.progress('Preparing upload…', done, total));
-      } finally {
-        deps.discard(sealed.token);
-      }
+      const container: StagedFile = { token: sealed.token, name: '', contentType: '', size: sealed.size, sha256: '' };
+      let released = false;
+      return {
+        token: sealed.token,
+        size: sealed.size,
+        head: sealed.head,
+        read: () => {
+          deps.progress('Preparing upload…', 0, sealed.size);
+          return deps.readStaged(container, (done, total) => deps.progress('Preparing upload…', done, total));
+        },
+        readSlice: (offset, length) => deps.readSlice(sealed.token, offset, length),
+        release: () => {
+          if (!released) {
+            released = true;
+            deps.discard(sealed.token);
+          }
+        },
+      };
     },
   };
 }

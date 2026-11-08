@@ -49,7 +49,12 @@ export interface TppShareModule {
     aad: string,
     head: string,
     frameHead: string,
-  ): Promise<{ token: string; size: number }>;
+  ): Promise<{ token: string; size: number; head: string }>;
+  /**
+   * sendSpliced sends one binary frame on React Native WebSocket `socketId`:
+   * base64 `head`, then `length` bytes of staged copy `token` from `offset`.
+   */
+  sendSpliced(socketId: number, head: string, token: string, offset: number, length: number): Promise<void>;
   /** sealBytes seals base64 `plain` in memory and resolves with ciphertext and tag as base64. */
   sealBytes(key: string, nonce: string, aad: string, plain: string): Promise<string>;
   /** finish closes the share panel and forgets the share, with an optional toast. */

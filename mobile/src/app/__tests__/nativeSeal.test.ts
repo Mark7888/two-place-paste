@@ -1,7 +1,7 @@
 import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 
-import { Client, concat, FakeRelay, fromUTF8, MemoryStore, toHex, utf8 } from '../../core';
+import { Client, concat, FakeRelay, fromUTF8, MemoryStore, toHex, utf8, type SocketFactory } from '../../core';
 import type { NativeSealPort, StagedFile } from '../../platform/types';
 import { externalBody, selfTest, SELF_TEST_SIZES } from '../nativeSeal';
 
@@ -32,7 +32,7 @@ function fakePlatform(broken?: 'flip' | 'throw') {
       const sealed = concat(p.head, seal(p.key, p.nonce, p.aad, concat(p.frameHead, file)));
       const t = `sealed-${next++}`;
       files.set(t, sealed);
-      return { token: t, size: sealed.length };
+      return { token: t, size: sealed.length, head: sealed.slice(0, p.head.length) };
     },
     sealBytes: async (key, nonce, aad, plain) => seal(key, nonce, aad, plain),
   };
@@ -41,9 +41,19 @@ function fakePlatform(broken?: 'flip' | 'throw') {
     files.set(token, body);
     return { token, name: 'f.bin', contentType: 'application/octet-stream', size: body.length, sha256: toHex(sha256(body)) };
   };
+  const calls = { readStaged: 0, readSlice: 0, spliced: 0 };
   const deps = {
     port,
+    readSlice: async (token: string, offset: number, length: number) => {
+      calls.readSlice++;
+      const b = files.get(token);
+      if (b === undefined) {
+        throw new Error('no such copy');
+      }
+      return b.slice(offset, offset + length);
+    },
     readStaged: async (f: StagedFile, onProgress: (done: number, total: number) => void) => {
+      calls.readStaged++;
       const b = files.get(f.token);
       if (b === undefined) {
         throw new Error('no such copy');
@@ -57,7 +67,40 @@ function fakePlatform(broken?: 'flip' | 'throw') {
     },
     progress: () => {},
   };
-  return { port, stage, deps, files, discarded };
+  /** splicing wraps a socket factory with `sendSpliced`, reading the slice from the staged copies as the native side does. */
+  const splicing =
+    (inner: SocketFactory): SocketFactory =>
+    (url) => {
+      const socket = inner(url);
+      return {
+        ...socket,
+        sendSpliced: async (head, slice) => {
+          calls.spliced++;
+          const b = files.get(slice.token);
+          if (b === undefined || slice.offset + slice.length > b.length) {
+            throw new Error('no such slice');
+          }
+          socket.send(concat(head, b.subarray(slice.offset, slice.offset + slice.length)));
+        },
+      };
+    };
+  return { port, stage, deps, files, discarded, calls, splicing };
+}
+
+const MiB = 1 << 20;
+
+/** chunkingRelay takes large entries in 1 MiB chunks, as a real relay does. */
+function chunkingRelay(): FakeRelay {
+  return new FakeRelay({
+    limits: {
+      maxEntryBytes: (32 * MiB).toString(),
+      singleFrameMaxBytes: (10 * MiB).toString(),
+      chunkBytes: MiB.toString(),
+      inlineMaxBytes: (64 * 1024).toString(),
+      headerV2: true,
+    },
+    store: { maxBytes: 32 * MiB, maxItems: 10, maxItemBytes: 32 * MiB },
+  });
 }
 
 describe('selfTest', () => {
@@ -109,7 +152,9 @@ describe('externalBody', () => {
       const got = await laptop.getLatest();
       expect(fromUTF8(got.body)).toBe('sealed natively, opened anywhere');
       expect(got.filename).toBe('n.txt');
-      // The sealed copy is gone; the file's own copy is the job's to delete.
+      // A small entry is read in whole and sent in one frame. The sealed copy
+      // is gone; the file's own copy is the job's to delete.
+      expect(p.calls.readStaged).toBe(1);
       expect(p.discarded).toEqual(['sealed-2']);
       expect(p.files.has(file.token)).toBe(true);
     } finally {
@@ -117,5 +162,87 @@ describe('externalBody', () => {
         c.disconnect();
       }
     }
+  });
+});
+
+describe('a large staged upload', () => {
+  const opened: Client[] = [];
+  afterEach(() => {
+    while (opened.length > 0) {
+      opened.pop()?.disconnect();
+    }
+  });
+  const open = async (relay: FakeRelay, name: string, socketFactory: SocketFactory) => {
+    const c = await Client.open({
+      store: new MemoryStore(),
+      deviceName: name,
+      socketFactory,
+      healthCheck: async () => false,
+      deviceStatus: relay.deviceStatus,
+    });
+    opened.push(c);
+    return c;
+  };
+  /** body is larger than one frame, so it goes in chunks, and not a whole number of them. */
+  const body = Uint8Array.from({ length: 11 * MiB + 12345 }, (_, i) => (i * 7 + 3) & 0xff);
+
+  it.each([
+    ['an entry', 'send' as const],
+    ['a store item', 'store' as const],
+  ])('goes as %s chunk by chunk from the staged copy, never read into JavaScript', async (_name, target) => {
+    const relay = chunkingRelay();
+    const p = fakePlatform();
+    const laptop = await open(relay, 'laptop', p.splicing(relay.factory));
+    await laptop.createGroup(relay.creationURL);
+    const file = p.stage(body);
+    const external = externalBody(file, p.deps)!;
+
+    let got: Uint8Array;
+    if (target === 'send') {
+      await laptop.putEntry({ contentType: 'application/octet-stream', filename: 'big.bin', external });
+      got = (await laptop.getLatest()).body;
+    } else {
+      const saved = await laptop.saveToStore(
+        { contentType: 'application/octet-stream', filename: 'big.bin', external },
+        { name: 'Big', description: '', tags: [] },
+      );
+      got = (await laptop.fetchStoreItem(saved)).body;
+    }
+    expect(got.length).toBe(body.length);
+    expect(Buffer.from(got).equals(Buffer.from(body))).toBe(true);
+    // 11 MiB and a bit, in 1 MiB chunks: twelve, all spliced.
+    expect(p.calls.spliced).toBe(12);
+    expect(p.calls.readSlice).toBe(0);
+    expect(p.calls.readStaged).toBe(0);
+    expect(p.discarded).toEqual(['sealed-2']);
+  });
+
+  it('reads each chunk in instead when the socket cannot splice', async () => {
+    const relay = chunkingRelay();
+    const p = fakePlatform();
+    const laptop = await open(relay, 'laptop', relay.factory);
+    await laptop.createGroup(relay.creationURL);
+    const external = externalBody(p.stage(body), p.deps)!;
+    await laptop.putEntry({ contentType: 'application/octet-stream', filename: 'big.bin', external });
+    expect(Buffer.from((await laptop.getLatest()).body).equals(Buffer.from(body))).toBe(true);
+    expect(p.calls.readSlice).toBe(12);
+    expect(p.calls.spliced).toBe(0);
+    expect(p.calls.readStaged).toBe(0);
+  });
+
+  it('deletes the sealed copy when the upload fails', async () => {
+    const relay = chunkingRelay();
+    const p = fakePlatform();
+    const failing: SocketFactory = (url) => {
+      const socket = p.splicing(relay.factory)(url);
+      return { ...socket, sendSpliced: async () => Promise.reject(new Error('socket gone')) };
+    };
+    const laptop = await open(relay, 'laptop', failing);
+    await laptop.createGroup(relay.creationURL);
+    const external = externalBody(p.stage(body), p.deps)!;
+    await expect(
+      laptop.putEntry({ contentType: 'application/octet-stream', filename: 'big.bin', external }),
+    ).rejects.toThrow('sending');
+    expect(p.discarded).toEqual(['sealed-2']);
   });
 });

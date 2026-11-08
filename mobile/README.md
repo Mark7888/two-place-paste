@@ -288,8 +288,23 @@ It is a deliberate exception to the `@noble` rule, fenced three ways:
 The platform's own ChaCha20-Poly1305 is not used: it exists only on Android 9+
 and buffers the whole input on the Java heap before it encrypts.
 
-What is left in JavaScript is moving bytes: the sealed copy crosses in base64
-chunks, and React Native's WebSocket sends binary as base64 too.
+**A large sealed file is sent without entering JavaScript.** React Native's
+bridge carries bytes only as base64: reading the sealed copy into JavaScript,
+and React Native's WebSocket sending it back out, each meant a base64 pass in
+an engine with no JIT — slower than the network. The sealed copy is handed to
+the client as a `StagedContainer`, and each upload chunk is spliced:
+JavaScript encodes the frame up to the chunk request's last field, `data`
+(`fieldHead`, `Connection.callSpliced`), and `ShareModule.sendSpliced`
+appends that slice of the file and sends the frame on the same socket through
+React Native's WebSocket module, which takes okio bytes natively. The reply
+comes back through JavaScript as usual.
+
+That needs the socket's id in the native module, which React Native keeps on
+the WebSocket as the undocumented `_socketId` (`src/platform/socket.android.ts`).
+Without it, chunks are read in one at a time (`readSlice`) — slower, but never
+the whole file. An upload that fits in one frame (10 MB) is read in whole. The
+interop test sends a spliced 20 MB upload through the real relay to the Go
+client.
 
 The notification counts the run — "45% · 2 of 3" — when more than one upload is
 queued, and each upload's outcome gets a notification of its own.

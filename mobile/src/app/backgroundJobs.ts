@@ -71,6 +71,7 @@ const queue = new JobQueue(
           return externalBody(file, {
             port,
             readStaged: (f, onProgress) => share.readStaged(f, onProgress),
+            readSlice: (token, offset, length) => share.readSlice(token, offset, length),
             discard: (token) => share.discard(token),
             progress: showProgress,
           });

@@ -214,6 +214,9 @@ export interface SharePort {
   /** readStaged reads a staged copy whole, reporting how far it has got. */
   readStaged(file: StagedFile, onProgress?: (done: number, total: number) => void): Promise<Uint8Array>;
 
+  /** readSlice reads `length` bytes of a staged copy from `offset`. */
+  readSlice(token: string, offset: number, length: number): Promise<Uint8Array>;
+
   /** discard deletes a staged copy. Deleting one already gone is fine. */
   discard(token: string): void;
 
@@ -291,7 +294,7 @@ export interface NativeSealPort {
   sealStaged(
     token: string,
     params: { key: Uint8Array; nonce: Uint8Array; aad: Uint8Array; head: Uint8Array; frameHead: Uint8Array },
-  ): Promise<{ token: string; size: number }>;
+  ): Promise<{ token: string; size: number; head: Uint8Array }>;
 
   /** sealBytes seals `plain` in memory the same way, for the self-test: ciphertext and tag. */
   sealBytes(key: Uint8Array, nonce: Uint8Array, aad: Uint8Array, plain: Uint8Array): Promise<Uint8Array>;
