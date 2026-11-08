@@ -1,3 +1,5 @@
+import type { DownloadSink, StagedItem } from '../core';
+
 /**
  * The platform surface, as interfaces.
  *
@@ -99,6 +101,13 @@ export interface FilesPort {
    * the user backed out; it rejects where the platform cannot stage.
    */
   pickToStage(maxBytes: number): Promise<StageResult | null>;
+
+  /** saveStaged keeps a staged item's body in Downloads/TwoPlacePaste, as `save` does a body in memory. */
+  saveStaged(item: StagedItem): Promise<SavedFile>;
+  /** openStaged shows a staged item's body in an app that opens its type, as `open` does. */
+  openStaged(item: StagedItem): Promise<void>;
+  /** shareStaged hands a staged item's body to the share sheet, as `share` does. */
+  shareStaged(item: StagedItem): Promise<void>;
 }
 
 /** PickedFile is a file the user chose to save to the store. */
@@ -236,6 +245,13 @@ export interface SharePort {
   readonly nativeSeal: NativeSealPort | null;
 
   /**
+   * downloadSink is where a large download goes without entering JavaScript
+   * — staged files, opened natively — or null where there is none. Like
+   * `nativeSeal`, the app uses it only after the self-test.
+   */
+  readonly downloadSink: DownloadSink | null;
+
+  /**
    * finish closes the share panel for share `id`, with `message` as a toast
    * when it is not empty. It is a status, never what was shared: a toast is
    * visible over other apps.
@@ -306,4 +322,7 @@ export interface NativeSealPort {
 
   /** sealBytes seals `plain` in memory the same way, for the self-test: ciphertext and tag. */
   sealBytes(key: Uint8Array, nonce: Uint8Array, aad: Uint8Array, plain: Uint8Array): Promise<Uint8Array>;
+
+  /** openBytes opens ciphertext-with-tag in memory the way downloads are opened, for the self-test; it rejects what does not verify. */
+  openBytes(key: Uint8Array, nonce: Uint8Array, aad: Uint8Array, sealed: Uint8Array): Promise<Uint8Array>;
 }

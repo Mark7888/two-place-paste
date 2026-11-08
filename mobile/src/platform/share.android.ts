@@ -9,8 +9,9 @@
  * event and claims it, and a cold start claims it once during startup.
  */
 
-import { decodeBase64Std, decodeBase64StdAsync, encodeBase64Std } from '../core/bytes';
-import { SHARE_EVENT, TppShare, shareEvents } from './native';
+import type { DownloadSink } from '../core';
+import { decodeBase64Std, decodeBase64StdAsync, encodeBase64Std, encodeBase64StdAsync, fromHex } from '../core/bytes';
+import { SHARE_EVENT, TppShare, shareEvents, type TppShareModule } from './native';
 import type { NativeSealPort, SharePort, Shared, StageResult, StagedFile } from './types';
 
 /** READ_CHUNK_BYTES is how much of a shared file crosses to JavaScript at once. */
@@ -68,6 +69,15 @@ const nativeSeal: NativeSealPort | null =
           );
           return { token: sealed.token, size: sealed.size, head: decodeBase64Std(sealed.head) };
         },
+        async openBytes(key, nonce, aad, sealed) {
+          const native = TppShare;
+          if (native === null) {
+            throw new Error('this build cannot open natively');
+          }
+          return decodeBase64Std(
+            await native.openBytes(encodeBase64Std(key), encodeBase64Std(nonce), encodeBase64Std(aad), encodeBase64Std(sealed)),
+          );
+        },
         async sealBytes(key, nonce, aad, plain) {
           const native = TppShare;
           if (native === null) {
@@ -79,9 +89,38 @@ const nativeSeal: NativeSealPort | null =
         },
       };
 
+/**
+ * downloadSink keeps a large download on the native side: ranges captured or
+ * written into a staged file, opened there by `XChaCha20Poly1305Opener`, and
+ * hashed there. Only the container's first bytes and the frame's head come
+ * back to JavaScript.
+ */
+const downloadSink: DownloadSink | null =
+  TppShare === null
+    ? null
+    : {
+        create: () => (TppShare as TppShareModule).createStaged(),
+        write: async (token, offset, data) =>
+          (TppShare as TppShareModule).writeStaged(token, offset, await encodeBase64StdAsync(data)),
+        read: async (token, offset, length) =>
+          decodeBase64StdAsync(await (TppShare as TppShareModule).readChunk(token, offset, length)),
+        open: async (token, p) => {
+          const opened = await (TppShare as TppShareModule).openStaged(
+            token,
+            encodeBase64Std(p.key),
+            encodeBase64Std(p.nonce),
+            encodeBase64Std(p.aad),
+          );
+          return { token: opened.token, size: opened.size, head: decodeBase64Std(opened.head) };
+        },
+        digest: async (token, offset) => fromHex(await (TppShare as TppShareModule).digestStaged(token, offset)),
+        discard: (token) => TppShare?.discard(token),
+      };
+
 export const share: SharePort = {
   available: TppShare !== null,
   nativeSeal,
+  downloadSink,
 
   requests(handler: () => void): () => void {
     const subscription = shareEvents?.addListener(SHARE_EVENT, handler);

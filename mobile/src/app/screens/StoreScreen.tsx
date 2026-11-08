@@ -33,6 +33,7 @@ import {
   describeItem,
   failureMessage,
   handleFile,
+  pendingFromStore,
   toClipboardItem,
   type FileChoice,
   type PendingFile,
@@ -226,7 +227,18 @@ export function StoreScreen(): React.JSX.Element {
     })();
   };
 
-  const copy = (it: StoreItem) =>
+  const copy = (it: StoreItem) => {
+    const rule = choiceFor(it.contentType, it.filename, true);
+    if (rule.ask && lastFetched.current?.id !== it.id) {
+      // A file or an image: ask first, from its metadata, and download after
+      // the answer — natively, when it is to be saved, opened or shared.
+      setFile(pendingFromStore(it, rule.canCopy));
+      return;
+    }
+    fetchAndDeliver(it);
+  };
+
+  const fetchAndDeliver = (it: StoreItem) =>
     run(it.id, async () => {
       if (client === null) {
         return;

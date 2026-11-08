@@ -106,6 +106,7 @@ import {
 } from '../../protocol/gen/tpp/v1/pairing';
 import { Error as ErrorFrame, ErrorCode } from '../../protocol/gen/tpp/v1/error';
 import {
+  decodeFrameHead,
   encodeFrame,
   encodeFrameHead,
   entryAAD,
@@ -138,6 +139,7 @@ import {
   storeKey,
   unwrap,
   wrap,
+  NONCE_SIZE,
   TAG_SIZE,
   VERSION,
 } from '../crypto';
@@ -304,6 +306,81 @@ type Sealed = Uint8Array | StagedContainer;
 /** sealedSize is a sealed container's length. */
 function sealedSize(c: Sealed): number {
   return c instanceof Uint8Array ? c.length : c.size;
+}
+
+/**
+ * DownloadSink is where a download goes when it should not enter JavaScript:
+ * staged files on the platform, which receives the ranges into one
+ * (`Socket.capture`), opens it there, and hands back only the frame's head.
+ *
+ * As with `ExternalBody`, the client keeps every decision: it reads the
+ * nonce from the container, derives the key, builds the associated data,
+ * applies the epoch rules, decodes the frame's head, and checks the sizes —
+ * and a store item's hash. `open` must refuse what `openEntry` refuses, and
+ * write nothing of a container whose tag does not verify (spec/crypto.md §5.4).
+ */
+export interface DownloadSink {
+  /** create makes an empty staged file and returns its token. */
+  create(): Promise<string>;
+  /** write writes bytes at `offset`: a range the socket handed over whole. */
+  write(token: string, offset: number, data: Uint8Array): Promise<void>;
+  /** read reads `length` bytes from `offset`. */
+  read(token: string, offset: number, length: number): Promise<Uint8Array>;
+  /**
+   * open opens staged container `token` — version, nonce, sealed frame —
+   * into a new staged file holding the frame, and returns its token, length
+   * and first bytes (enough for the frame's head).
+   */
+  open(token: string, params: { key: Uint8Array; nonce: Uint8Array; aad: Uint8Array }): Promise<{ token: string; size: number; head: Uint8Array }>;
+  /** digest is the SHA-256 of a staged file from `offset` to its end. */
+  digest(token: string, offset: number): Promise<Uint8Array>;
+  discard(token: string): void;
+}
+
+/**
+ * StagedItem is a decrypted entry or store item whose body stayed on the
+ * platform: `staged` says where it is in which staged file. The caller saves,
+ * opens or shares it from there, and calls `release` when done.
+ */
+export interface StagedItem {
+  contentType: string;
+  filename: string;
+  createdAt: Date;
+  meta: EntryMeta | null;
+  staged: { token: string; offset: number; size: number; release(): void };
+}
+
+/** isStaged tells a staged item from one in memory. */
+export function isStaged(item: Item | StagedItem): item is StagedItem {
+  return 'staged' in item;
+}
+
+/**
+ * stagedFrame reads an opened frame's head and makes it a `StagedItem`,
+ * refusing a head that does not parse or a body whose length is not the one
+ * the head says.
+ */
+function stagedFrame(
+  opened: { token: string; size: number; head: Uint8Array },
+  sink: DownloadSink,
+  meta: EntryMeta | null,
+): StagedItem {
+  try {
+    const head = decodeFrameHead(opened.head);
+    if (head.headLength + head.bodyLength !== opened.size) {
+      throw new Error('trailing bytes after the frame');
+    }
+    return {
+      contentType: head.contentType,
+      filename: head.filename,
+      createdAt: new Date(Number(head.createdAt)),
+      meta,
+      staged: { token: opened.token, offset: head.headLength, size: head.bodyLength, release: () => sink.discard(opened.token) },
+    };
+  } catch (err) {
+    sink.discard(opened.token);
+    throw err;
+  }
 }
 
 /** release lets go of a staged container; one in memory needs nothing. */
@@ -1985,6 +2062,43 @@ export class Client {
   }
 
   /**
+   * getEntryStaged is `getEntry` for an entry whose body should not enter
+   * JavaScript — a large file to save, open or share. The ranges go to a
+   * staged file (captured by the socket where it can), the container is
+   * opened there, and the result is a `StagedItem`; only the frame's head is
+   * read here. A relay that cannot serve ranges gets the ordinary read, and
+   * an `Item`.
+   *
+   * It does not join a read already running, nor use the cache: both hold
+   * the container in memory, which is what this avoids.
+   */
+  async getEntryStaged(entryId: string, hint: EntryHint | undefined, sink: DownloadSink): Promise<Item | StagedItem> {
+    this.requireGroup();
+    const limits = await this.limits();
+    if (limits.chunkBytes === 0) {
+      return this.read(entryId, hint);
+    }
+    const rx = await sink.create();
+    try {
+      const { meta } = await this.transfer(() => this.readRanges(entryId, limits, hint, { sink, token: rx }));
+      this.checkEpoch(meta);
+      const head = await sink.read(rx, 0, 1 + NONCE_SIZE);
+      if (head.length !== 1 + NONCE_SIZE || head[0] !== VERSION) {
+        throw new TppError('invalid', `entry ${entryId} is not a version ${VERSION} container`);
+      }
+      const nonce = head.slice(1);
+      const opened = await sink.open(rx, {
+        key: deriveContentKey(this.state.groupKey, nonce, meta.epoch),
+        nonce,
+        aad: entryAAD(meta.epoch, meta.id),
+      });
+      return stagedFrame(opened, sink, meta);
+    } finally {
+      sink.discard(rx);
+    }
+  }
+
+  /**
    * read fetches and decrypts one entry. A copy from the cache that does not
    * open — damaged on disk, say — is dropped and the entry read again from
    * the relay, once. An epoch refusal is not retried: the relay's copy is the
@@ -2209,6 +2323,7 @@ export class Client {
     entryId: string,
     limits: Limits,
     hint?: EntryHint,
+    into?: { sink: DownloadSink; token: string },
   ): Promise<{ meta: EntryMeta; ciphertext: Uint8Array }> {
     let retries = 0;
     let meta: EntryMeta | null = null;
@@ -2240,16 +2355,33 @@ export class Client {
       }
       for (;;) {
         let resp: EntryFetchChunkResponse;
+        let captured: number | null = null;
         try {
-          resp = await (await this.connection()).call(
-            MessageType.MESSAGE_TYPE_ENTRY_FETCH_CHUNK_REQUEST,
-            {
-              codec: EntryFetchChunkRequest,
-              message: { entryId, offset: filled.toString(), length: limits.chunkBytes.toString() },
-            },
-            EntryFetchChunkResponse,
-            chunkTimeoutMs(limits.chunkBytes),
-          );
+          const conn = await this.connection();
+          const request = {
+            codec: EntryFetchChunkRequest,
+            message: { entryId, offset: filled.toString(), length: limits.chunkBytes.toString() },
+          };
+          if (into !== undefined && conn.canCapture) {
+            // Straight to the staged file: the range never enters JavaScript.
+            const got = await conn.callCapturing(
+              MessageType.MESSAGE_TYPE_ENTRY_FETCH_CHUNK_REQUEST,
+              request,
+              EntryFetchChunkResponse,
+              MessageType.MESSAGE_TYPE_ENTRY_FETCH_CHUNK_RESPONSE,
+              { token: into.token, offset: filled },
+              chunkTimeoutMs(limits.chunkBytes),
+            );
+            resp = got.reply;
+            captured = got.captured;
+          } else {
+            resp = await conn.call(
+              MessageType.MESSAGE_TYPE_ENTRY_FETCH_CHUNK_REQUEST,
+              request,
+              EntryFetchChunkResponse,
+              chunkTimeoutMs(limits.chunkBytes),
+            );
+          }
         } catch (err) {
           if (!(err instanceof TppError && err.kind === 'disconnected')) {
             throw err;
@@ -2277,16 +2409,22 @@ export class Client {
             throw new TppError('invalid', `entry ${entryId} reports ${size} bytes, outside the relay's limits`);
           }
           meta = m;
-          buf = new Uint8Array(size);
+          if (into === undefined) {
+            buf = new Uint8Array(size);
+          }
         } else if (m.id !== meta.id || m.size !== meta.size) {
           throw new TppError('invalid', `entry ${entryId} changed while it was being read`);
         }
-        const data = resp.data;
-        if (Number(resp.offset) !== filled || data.length === 0 || filled + data.length > size) {
+        const length = captured ?? resp.data.length;
+        if (Number(resp.offset) !== filled || length === 0 || filled + length > size) {
           throw new TppError('invalid', `entry ${entryId}: the relay returned a range that does not continue the entry`);
         }
-        buf.set(data, filled);
-        filled += data.length;
+        if (into === undefined) {
+          buf.set(resp.data, filled);
+        } else if (captured === null) {
+          await into.sink.write(into.token, filled, resp.data);
+        }
+        filled += length;
         if (filled === size) {
           if (chunked(size)) {
             report(filled, size, meta.header ?? hint?.header ?? null);
@@ -2375,12 +2513,8 @@ export class Client {
     return fetched;
   }
 
-  /**
-   * open applies the epoch rules and decrypts. A large container is decrypted
-   * a slice at a time (`openEntrySliced`), so the app keeps answering taps
-   * through the seconds a big entry takes on the phone.
-   */
-  private async open(meta: EntryMeta, ciphertext: Uint8Array): Promise<Item> {
+  /** checkEpoch applies the epoch rules of spec/crypto.md §7 to an entry about to be opened. */
+  private checkEpoch(meta: EntryMeta): void {
     if (meta.epoch < this.state.epoch) {
       throw new TppError(
         'stale-entry',
@@ -2393,6 +2527,15 @@ export class Client {
         `entry is at epoch ${meta.epoch}, this device is at ${this.state.epoch}`,
       );
     }
+  }
+
+  /**
+   * open applies the epoch rules and decrypts. A large container is decrypted
+   * a slice at a time (`openEntrySliced`), so the app keeps answering taps
+   * through the seconds a big entry takes on the phone.
+   */
+  private async open(meta: EntryMeta, ciphertext: Uint8Array): Promise<Item> {
+    this.checkEpoch(meta);
     // The epoch and the entry id used here are the ones the relay reports. A
     // client must never try other epochs, or other ids, to make an entry
     // decrypt: at its own epoch a failure is corruption or tampering.
@@ -2668,53 +2811,12 @@ export class Client {
    */
   async fetchStoreItem(it: StoreItem): Promise<Item> {
     this.requireGroup();
+    const buf = new Uint8Array(it.blobSize);
+    await this.readStoreBlob(it, (offset, data) => {
+      buf.set(data, offset);
+      return Promise.resolve();
+    });
     const size = it.blobSize;
-    const chunked = size > SINGLE_FRAME_MAX_BYTES;
-    const buf = new Uint8Array(size);
-    let filled = 0;
-    const progress = (done: number) =>
-      this.handlers.onProgress?.({
-        entryId: it.id,
-        direction: 'download',
-        done,
-        total: size,
-        waiting: false,
-        filename: it.filename,
-        contentType: it.contentType,
-      });
-    const read = async () => {
-      if (chunked) {
-        progress(0);
-      }
-      while (filled < size) {
-        const resp = await (await this.connection()).call(
-          MessageType.MESSAGE_TYPE_STORE_FETCH_CHUNK_REQUEST,
-          {
-            codec: StoreFetchChunkRequest,
-            message: { itemId: it.id, offset: filled.toString(), length: SINGLE_FRAME_MAX_BYTES.toString() },
-          },
-          StoreFetchChunkResponse,
-          chunkTimeoutMs(Math.min(SINGLE_FRAME_MAX_BYTES, size - filled)),
-        );
-        const data = resp.data;
-        if (
-          resp.item === undefined ||
-          resp.item.itemId !== it.id ||
-          Number(resp.item.size) !== size ||
-          Number(resp.offset) !== filled ||
-          data.length === 0 ||
-          filled + data.length > size
-        ) {
-          throw new TppError('invalid', `store item ${it.id}: the relay returned a range that does not continue the item`);
-        }
-        buf.set(data, filled);
-        filled += data.length;
-        if (chunked) {
-          progress(filled);
-        }
-      }
-    };
-    await (chunked ? this.transfer(read) : read());
 
     const { contentKey, contentId, contentEpoch } = it.secrets;
     let plain: Uint8Array;
@@ -2737,6 +2839,119 @@ export class Client {
       createdAt: new Date(Number(frame.createdAt)),
       meta: null,
     };
+  }
+
+  /**
+   * readStoreBlob reads a store item's sealed blob range by range, handing
+   * each range to `put` — or, when `capture` names a staged file and the
+   * socket can, capturing it straight into that file.
+   */
+  private async readStoreBlob(
+    it: StoreItem,
+    put: (offset: number, data: Uint8Array) => Promise<void>,
+    capture?: string,
+  ): Promise<void> {
+    const size = it.blobSize;
+    const chunked = size > SINGLE_FRAME_MAX_BYTES;
+    let filled = 0;
+    const progress = (done: number) =>
+      this.handlers.onProgress?.({
+        entryId: it.id,
+        direction: 'download',
+        done,
+        total: size,
+        waiting: false,
+        filename: it.filename,
+        contentType: it.contentType,
+      });
+    const read = async () => {
+      if (chunked) {
+        progress(0);
+      }
+      while (filled < size) {
+        const conn = await this.connection();
+        const request = {
+          codec: StoreFetchChunkRequest,
+          message: { itemId: it.id, offset: filled.toString(), length: SINGLE_FRAME_MAX_BYTES.toString() },
+        };
+        const timeout = chunkTimeoutMs(Math.min(SINGLE_FRAME_MAX_BYTES, size - filled));
+        let resp: StoreFetchChunkResponse;
+        let captured: number | null = null;
+        if (capture !== undefined && conn.canCapture) {
+          // Straight to the staged file: the range never enters JavaScript.
+          const got = await conn.callCapturing(
+            MessageType.MESSAGE_TYPE_STORE_FETCH_CHUNK_REQUEST,
+            request,
+            StoreFetchChunkResponse,
+            MessageType.MESSAGE_TYPE_STORE_FETCH_CHUNK_RESPONSE,
+            { token: capture, offset: filled },
+            timeout,
+          );
+          resp = got.reply;
+          captured = got.captured;
+        } else {
+          resp = await conn.call(MessageType.MESSAGE_TYPE_STORE_FETCH_CHUNK_REQUEST, request, StoreFetchChunkResponse, timeout);
+        }
+        const length = captured ?? resp.data.length;
+        if (
+          resp.item === undefined ||
+          resp.item.itemId !== it.id ||
+          Number(resp.item.size) !== size ||
+          Number(resp.offset) !== filled ||
+          length === 0 ||
+          filled + length > size
+        ) {
+          throw new TppError('invalid', `store item ${it.id}: the relay returned a range that does not continue the item`);
+        }
+        if (captured === null) {
+          await put(filled, resp.data);
+        }
+        filled += length;
+        if (chunked) {
+          progress(filled);
+        }
+      }
+    };
+    await (chunked ? this.transfer(read) : read());
+  }
+
+  /**
+   * fetchStoreItemStaged is `fetchStoreItem` for an item whose body should
+   * not enter JavaScript: read into a staged file, opened there, and checked
+   * against its metadata — size and hash — there too. It returns a
+   * `StagedItem`.
+   */
+  async fetchStoreItemStaged(it: StoreItem, sink: DownloadSink): Promise<StagedItem> {
+    this.requireGroup();
+    const rx = await sink.create();
+    try {
+      await this.readStoreBlob(it, (offset, data) => sink.write(rx, offset, data), rx);
+      const { contentKey, contentId, contentEpoch } = it.secrets;
+      const head = await sink.read(rx, 0, 1 + NONCE_SIZE);
+      if (head.length !== 1 + NONCE_SIZE || head[0] !== VERSION) {
+        throw new TppError('store-unreadable', `store item ${it.id} is not a version ${VERSION} container`);
+      }
+      const nonce = head.slice(1);
+      let opened: { token: string; size: number; head: Uint8Array };
+      try {
+        opened = await sink.open(rx, { key: contentKey, nonce, aad: entryAAD(contentEpoch, contentId) });
+      } catch (err) {
+        throw new TppError('store-unreadable', `store item ${it.id} did not decrypt`, { cause: err });
+      }
+      const item = stagedFrame(opened, sink, null);
+      try {
+        const sum = await sink.digest(item.staged.token, item.staged.offset);
+        if (item.staged.size !== it.bodySize || hashHex(sum) !== it.sha256Hex) {
+          throw new TppError('store-unreadable', `store item ${it.id} does not match its metadata`);
+        }
+      } catch (err) {
+        item.staged.release();
+        throw err;
+      }
+      return item;
+    } finally {
+      sink.discard(rx);
+    }
   }
 
   /**

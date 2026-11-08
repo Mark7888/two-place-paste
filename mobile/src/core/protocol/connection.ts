@@ -37,6 +37,21 @@ export interface Socket {
    * way instead, a chunk at a time (`Connection.callSpliced`).
    */
   sendSpliced?(head: Uint8Array, slice: StagedSlice): Promise<void>;
+  /**
+   * capture, where the platform has it, arms the capture of the reply to
+   * request `envelopeId`: if it comes as a `responseType` frame, its payload's
+   * `data` field is written to a staged file at `target` and the frame reaches
+   * `onMessage` without it. It resolves with the bytes captured, or with null
+   * when the reply was anything else — which then arrives whole. Called
+   * before the request is sent (`Connection.callCapturing`).
+   *
+   * The way in is the mirror of `sendSpliced`: React Native hands every
+   * binary frame to JavaScript as base64, decoded slowly by the engine there,
+   * and the ranges of a large download are most of what arrives.
+   */
+  capture?(envelopeId: string, responseType: number, target: { token: string; offset: number }): Promise<number | null>;
+  /** releaseCapture withdraws a capture whose reply will not come, resolving it with null. */
+  releaseCapture?(envelopeId: string): void;
   close(): void;
   onOpen(handler: () => void): void;
   onMessage(handler: (frame: Uint8Array) => void): void;
@@ -183,6 +198,51 @@ export class Connection {
   close(reason = 'closed by this client'): void {
     this.socket.close();
     this.fail(reason);
+  }
+
+  /** canCapture reports whether this socket can capture a reply's data to a staged file. */
+  get canCapture(): boolean {
+    return this.socket.capture !== undefined;
+  }
+
+  /**
+   * callCapturing is `call` for a range request whose reply's `data` should
+   * go straight to a staged file at `target` rather than into JavaScript. It
+   * resolves with the reply — its `data` empty when it was captured — and the
+   * bytes captured, or null when the socket handed the reply over whole, in
+   * which case its `data` is there as usual.
+   */
+  async callCapturing<Req, Resp>(
+    type: MessageType,
+    request: { codec: Codec<Req>; message: Req },
+    response: Codec<Resp>,
+    responseType: MessageType,
+    target: { token: string; offset: number },
+    timeoutMs = REQUEST_TIMEOUT_MS,
+  ): Promise<{ reply: Resp; captured: number | null }> {
+    const capture = this.socket.capture?.bind(this.socket);
+    if (capture === undefined) {
+      throw new TppError('invalid', 'this socket cannot capture a reply');
+    }
+    const id = newEnvelopeID();
+    const captured = capture(id, responseType, target);
+    let env: Envelope;
+    try {
+      env = await this.exchange(id, type, request.codec.encode(request.message).finish(), timeoutMs);
+    } catch (err) {
+      this.socket.releaseCapture?.(id);
+      captured.catch(() => undefined);
+      throw err;
+    }
+    let reply: Resp;
+    try {
+      reply = decodeResponse(env, response);
+    } catch (err) {
+      // An error frame is not the reply type, so nothing was captured.
+      captured.catch(() => undefined);
+      throw err;
+    }
+    return { reply, captured: await captured };
   }
 
   /** canSplice reports whether this socket can send part of a frame from a staged file. */

@@ -71,6 +71,39 @@ export function encodeFrameHead(frame: Omit<Frame, 'body'>, bodyLength: number):
   );
 }
 
+/**
+ * decodeFrameHead reads an encoded frame's head from the frame's first bytes
+ * — a frame opened outside JavaScript, whose body stays where it is. It
+ * returns the frame's fields, the body's length, and where the body starts.
+ * It throws when `prefix` is too short to hold the head, or the head is
+ * malformed, exactly as `decodeFrame` would.
+ */
+export function decodeFrameHead(prefix: Uint8Array): Omit<Frame, 'body'> & { bodyLength: number; headLength: number } {
+  let offset = 0;
+  const take = (n: number): Uint8Array => {
+    if (n < 0 || prefix.length - offset < n) {
+      throw new Error('length prefix exceeds the remaining input');
+    }
+    const slice = prefix.subarray(offset, offset + n);
+    offset += n;
+    return slice;
+  };
+  if (take(1)[0] !== FRAME_VERSION) {
+    throw new Error('unsupported frame version');
+  }
+  const contentType = fromUTF8(take(view(take(2)).getUint16(0)));
+  if (contentType.length === 0) {
+    throw new Error('content_type is mandatory');
+  }
+  const filename = fromUTF8(take(view(take(2)).getUint16(0)));
+  const createdAt = view(take(8)).getBigUint64(0);
+  if (view(take(4)).getUint32(0) !== 0) {
+    throw new Error('pad_len must be zero in v1');
+  }
+  const bodyLength = view(take(4)).getUint32(0);
+  return { contentType, filename, createdAt, bodyLength, headLength: offset };
+}
+
 export function decodeFrame(encoded: Uint8Array): Frame {
   let offset = 0;
   const take = (n: number): Uint8Array => {

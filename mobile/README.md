@@ -335,7 +335,34 @@ the decryption and the save are done, with "Downloading…" then
 the user is elsewhere when it ends. A small read never starts the service, and
 none is started from the background, which Android refuses.
 
-Downloads are still received and decrypted in JavaScript.
+**A large download never enters JavaScript either.** Saving, opening or
+sharing a received file or a store item downloads it with
+`Client.getEntryStaged` / `fetchStoreItemStaged` into a `DownloadSink`:
+
+1. each range reply is captured on the way in. Before the request is sent,
+   JavaScript arms a capture for its envelope id (`Connection.callCapturing`,
+   `ShareModule.armCapture`); `CaptureHandler.kt`, a content handler on the
+   socket — the hook React Native's own Blob support uses — writes the reply's
+   `data` field to a staged file and hands JavaScript the frame without it
+   (`RangeCapture.java`). Every frame not armed for goes through exactly as
+   React Native would hand it over, and anything unexpected arrives whole;
+2. the container is opened natively by `XChaCha20Poly1305Opener.java`: the
+   whole ciphertext is authenticated first, and nothing is decrypted unless
+   the tag verifies. The client reads the nonce, derives the key, builds the
+   associated data and applies the epoch rules; only the frame's head comes
+   back to it, and a store item's hash is checked natively too;
+3. `FileModule` saves, opens or shares the body straight from the staged file.
+
+Copying an entry, and a preview, still read it into JavaScript: the
+clipboard and the screen need it there. The staged download does not use
+the hour-long entry cache, which holds containers in memory.
+
+The opener is fenced like the sealer: the same self-test (round trips, and a
+refusal of a flipped ciphertext or tag byte, other associated data and
+another nonce) gates both, `npm run sealer-check` covers it and the frame
+splitting, and the interop test downloads a 20 MB entry from the real relay
+through the capture. `src/app/__tests__/reactNativeInternals.test.ts` fails
+if a React Native upgrade changes the content-handler hook or `_socketId`.
 
 ## Sync direction
 

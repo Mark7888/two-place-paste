@@ -9,13 +9,17 @@ import { externalBody, selfTest, SELF_TEST_SIZES } from '../nativeSeal';
  * fakePlatform stands in for the native side: staged copies by token, and a
  * sealer that is @noble/ciphers, optionally broken in a given way.
  */
-function fakePlatform(broken?: 'flip' | 'throw') {
+function fakePlatform(broken?: 'flip' | 'throw' | 'accept') {
   const files = new Map<string, Uint8Array>();
   const discarded: string[] = [];
   let next = 1;
   const seal = (key: Uint8Array, nonce: Uint8Array, aad: Uint8Array, plain: Uint8Array): Uint8Array => {
     if (broken === 'throw') {
       throw new Error('no sealer');
+    }
+    if (broken === 'accept') {
+      // Seals correctly; only its opener is broken.
+      return xchacha20poly1305(key, nonce, aad).encrypt(plain);
     }
     const out = xchacha20poly1305(key, nonce, aad).encrypt(plain);
     if (broken === 'flip' && out.length > 20) {
@@ -35,6 +39,16 @@ function fakePlatform(broken?: 'flip' | 'throw') {
       return { token: t, size: sealed.length, head: sealed.slice(0, p.head.length) };
     },
     sealBytes: async (key, nonce, aad, plain) => seal(key, nonce, aad, plain),
+    openBytes: async (key, nonce, aad, sealed) => {
+      if (broken === 'throw') {
+        throw new Error('no opener');
+      }
+      if (broken === 'accept') {
+        // Opens without checking the tag: exactly what must never pass.
+        return sealed.slice(0, sealed.length - 16);
+      }
+      return xchacha20poly1305(key, nonce, aad).decrypt(sealed);
+    },
   };
   const stage = (body: Uint8Array): StagedFile => {
     const token = `file-${next++}`;
@@ -112,6 +126,7 @@ describe('selfTest', () => {
   it.each([
     ['gets a byte wrong', 'flip' as const],
     ['cannot seal at all', 'throw' as const],
+    ['opens a container whose tag does not verify', 'accept' as const],
   ])('fails a sealer that %s, so JavaScript seals instead', async (_name, broken) => {
     expect(await selfTest(fakePlatform(broken).port)).toBe(false);
   });

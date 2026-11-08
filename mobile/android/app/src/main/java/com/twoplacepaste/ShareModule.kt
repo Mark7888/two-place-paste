@@ -315,6 +315,226 @@ class ShareModule(reactContext: ReactApplicationContext) :
         }.start()
     }
 
+    /** createStaged makes a new, empty staged file and resolves with its token: where a download is captured. */
+    @ReactMethod
+    fun createStaged(promise: Promise) {
+        try {
+            val token = newToken()
+            val file = stagedFile(reactApplicationContext, token)
+            file.parentFile?.mkdirs()
+            file.outputStream().close()
+            promise.resolve(token)
+        } catch (e: Throwable) {
+            promise.reject(ERROR_CODE, "a download file could not be made", e)
+        }
+    }
+
+    /**
+     * writeStaged writes base64 [data] into staged copy [token] at [offset]:
+     * how a range JavaScript did receive — over a socket that cannot capture —
+     * joins the ones captured natively.
+     */
+    @ReactMethod
+    fun writeStaged(token: String, offset: Double, data: String, promise: Promise) {
+        val file = stagedFileOrNull(reactApplicationContext, token)
+        if (file == null || !file.exists()) {
+            promise.reject(ERROR_CODE, "the download file is no longer available")
+            return
+        }
+        try {
+            RandomAccessFile(file, "rw").use {
+                it.seek(offset.toLong())
+                it.write(decode(data))
+            }
+            promise.resolve(null)
+        } catch (e: Throwable) {
+            promise.reject(ERROR_CODE, "the download could not be written", e)
+        }
+    }
+
+    /**
+     * openStaged opens staged container [token] — version byte, [nonce], then
+     * the sealed frame — under [key] and [aad] (spec/crypto.md §5.4), into a
+     * new staged copy of the frame. It resolves with `{ token, size, head }`:
+     * the plaintext's length and its first bytes, which hold the frame's head.
+     *
+     * The whole ciphertext is authenticated first, and nothing is decrypted
+     * unless the tag verifies ([XChaCha20Poly1305Opener]). A container that
+     * does not open is refused with "invalid tag", as `@noble/ciphers` refuses
+     * it, and leaves nothing behind. The container's own copy is the caller's
+     * to discard.
+     */
+    @ReactMethod
+    fun openStaged(token: String, key: String, nonce: String, aad: String, promise: Promise) {
+        val context = reactApplicationContext
+        val input = stagedFileOrNull(context, token)
+        if (input == null || !input.exists()) {
+            promise.reject(ERROR_CODE, "the download file is no longer available")
+            return
+        }
+        Thread {
+            val outToken = newToken()
+            val output = stagedFile(context, outToken)
+            try {
+                val nonceBytes = decode(nonce)
+                val head = 1 + XChaCha20Poly1305Sealer.NONCE_SIZE
+                val total = input.length()
+                require(total >= head + XChaCha20Poly1305Sealer.TAG_SIZE) { "the container is too short" }
+                val sealedLength = total - head - XChaCha20Poly1305Sealer.TAG_SIZE
+                val opener = XChaCha20Poly1305Opener(decode(key), nonceBytes, decode(aad))
+                val buffer = ByteArray(SEAL_BUFFER)
+                RandomAccessFile(input, "r").use { file ->
+                    // The nonce in the file must be the one the key was derived from.
+                    val fileNonce = ByteArray(nonceBytes.size)
+                    file.seek(1)
+                    file.readFully(fileNonce)
+                    require(fileNonce.contentEquals(nonceBytes)) { "the container's nonce is not the one given" }
+                    // Pass one: authenticate everything.
+                    file.seek(head.toLong())
+                    var left = sealedLength
+                    while (left > 0) {
+                        val n = minOf(buffer.size.toLong(), left).toInt()
+                        file.readFully(buffer, 0, n)
+                        opener.authenticate(buffer, 0, n)
+                        left -= n
+                    }
+                    val tag = ByteArray(XChaCha20Poly1305Sealer.TAG_SIZE)
+                    file.readFully(tag)
+                    if (!opener.verify(tag)) {
+                        promise.reject(ERROR_CODE, "invalid tag")
+                        return@Thread
+                    }
+                    // Pass two: decrypt what was verified.
+                    output.parentFile?.mkdirs()
+                    output.outputStream().buffered(SEAL_BUFFER).use { out ->
+                        file.seek(head.toLong())
+                        left = sealedLength
+                        while (left > 0) {
+                            val n = minOf(buffer.size.toLong(), left).toInt()
+                            file.readFully(buffer, 0, n)
+                            opener.decrypt(buffer, 0, n, buffer, 0)
+                            out.write(buffer, 0, n)
+                            left -= n
+                        }
+                    }
+                }
+                val first = ByteArray(minOf(sealedLength, OPEN_HEAD_BYTES).toInt())
+                RandomAccessFile(output, "r").use { it.readFully(first) }
+                promise.resolve(
+                    Arguments.createMap().apply {
+                        putString("token", outToken)
+                        putDouble("size", sealedLength.toDouble())
+                        putString("head", Base64.encodeToString(first, Base64.NO_WRAP))
+                    },
+                )
+            } catch (e: Throwable) {
+                output.delete()
+                promise.reject(ERROR_CODE, "the download could not be opened", e)
+            }
+        }.start()
+    }
+
+    /**
+     * openBytes opens ciphertext-with-tag [sealed] in memory the way
+     * [openStaged] opens a file, in uneven pieces, resolving with the
+     * plaintext as base64 or refusing with "invalid tag". JavaScript compares
+     * it with `@noble/ciphers`, tampered inputs included, before it trusts
+     * [openStaged].
+     */
+    @ReactMethod
+    fun openBytes(key: String, nonce: String, aad: String, sealed: String, promise: Promise) {
+        try {
+            val data = decode(sealed)
+            require(data.size >= XChaCha20Poly1305Sealer.TAG_SIZE) { "too short" }
+            val length = data.size - XChaCha20Poly1305Sealer.TAG_SIZE
+            val opener = XChaCha20Poly1305Opener(decode(key), decode(nonce), decode(aad))
+            var off = 0
+            var piece = 1
+            while (off < length) {
+                val n = minOf(piece, length - off)
+                opener.authenticate(data, off, n)
+                off += n
+                piece = piece * 3 + 1
+            }
+            if (!opener.verify(data.copyOfRange(length, data.size))) {
+                promise.reject(ERROR_CODE, "invalid tag")
+                return
+            }
+            off = 0
+            piece = 1
+            while (off < length) {
+                val n = minOf(piece, length - off)
+                opener.decrypt(data, off, n, data, off)
+                off += n
+                piece = piece * 3 + 1
+            }
+            promise.resolve(Base64.encodeToString(data, 0, length, Base64.NO_WRAP))
+        } catch (e: Throwable) {
+            promise.reject(ERROR_CODE, "the self-test could not be opened", e)
+        }
+    }
+
+    /** digestStaged resolves with the SHA-256, in hex, of staged copy [token] from [offset] to its end. */
+    @ReactMethod
+    fun digestStaged(token: String, offset: Double, promise: Promise) {
+        val file = stagedFileOrNull(reactApplicationContext, token)
+        if (file == null || !file.exists()) {
+            promise.reject(ERROR_CODE, "the download file is no longer available")
+            return
+        }
+        Thread {
+            try {
+                val digest = MessageDigest.getInstance("SHA-256")
+                RandomAccessFile(file, "r").use { input ->
+                    input.seek(offset.toLong())
+                    val buffer = ByteArray(SEAL_BUFFER)
+                    while (true) {
+                        val n = input.read(buffer)
+                        if (n < 0) {
+                            break
+                        }
+                        digest.update(buffer, 0, n)
+                    }
+                }
+                promise.resolve(digest.digest().joinToString("") { "%02x".format(it) })
+            } catch (e: Throwable) {
+                promise.reject(ERROR_CODE, "the download could not be hashed", e)
+            }
+        }.start()
+    }
+
+    /**
+     * armCapture asks for the reply to request [envelopeId] on React Native
+     * WebSocket [socketId] to be captured: if it comes as a [responseType]
+     * frame, its payload's `data` field is written to staged copy [token] at
+     * [offset] and JavaScript receives the frame without it ([RangeCapture]).
+     * It resolves, once the reply has come, with the bytes captured — or
+     * with null when the reply was anything else, which then reaches
+     * JavaScript whole. Armed before the request is sent, so the reply cannot
+     * arrive first.
+     */
+    @ReactMethod
+    fun armCapture(socketId: Double, envelopeId: String, responseType: Double, token: String, offset: Double, promise: Promise) {
+        val context = reactApplicationContext
+        val file = stagedFileOrNull(context, token)
+        if (file == null || !file.exists()) {
+            promise.reject(ERROR_CODE, "the download file is no longer available")
+            return
+        }
+        val socket = context.getNativeModule(WebSocketModule::class.java)
+        if (socket == null) {
+            promise.reject(ERROR_CODE, "the WebSocket module is not available")
+            return
+        }
+        captureHandler(socket, socketId.toInt()).arm(envelopeId, CaptureHandler.Arm(responseType.toLong(), file, offset.toLong(), promise))
+    }
+
+    /** releaseCapture withdraws a capture whose reply will not come — the request failed — resolving it with null. */
+    @ReactMethod
+    fun releaseCapture(socketId: Double, envelopeId: String) {
+        synchronized(Companion) { captureHandlers[socketId.toInt()] }?.release(envelopeId)
+    }
+
     /** discard deletes staged copy [token]. Deleting one already gone is fine. */
     @ReactMethod
     fun discard(token: String) {
@@ -419,7 +639,7 @@ class ShareModule(reactContext: ReactApplicationContext) :
             File(File(context.cacheDir, STAGE_DIRECTORY), token)
 
         /** stagedFileOrNull is [stagedFile] for a token JavaScript sent back, which must be one [newToken] made. */
-        private fun stagedFileOrNull(context: Context, token: String) =
+        internal fun stagedFileOrNull(context: Context, token: String) =
             if (TOKEN.matches(token)) stagedFile(context, token) else null
 
         private fun newToken(): String = UUID.randomUUID().toString()
@@ -427,6 +647,35 @@ class ShareModule(reactContext: ReactApplicationContext) :
         private val TOKEN = Regex("^[0-9a-f-]{36}$")
         private const val STAGE_DIRECTORY = "shared"
         private const val SEAL_BUFFER = 64 * 1024
+
+        /**
+         * OPEN_HEAD_BYTES is how much of an opened frame JavaScript is given:
+         * enough for the longest head a frame can have (two 64 KiB strings and
+         * their fields), so the body never has to cross.
+         */
+        private const val OPEN_HEAD_BYTES = 1L + 2 + 65535 + 2 + 65535 + 8 + 4 + 4
+
+        /**
+         * captureHandlers is the capture handler of each socket that has had a
+         * capture armed. Only the newest socket keeps one: the app talks to
+         * the relay over one socket at a time, and an older one is closed.
+         */
+        private val captureHandlers = HashMap<Int, CaptureHandler>()
+
+        private fun captureHandler(socket: WebSocketModule, socketId: Int): CaptureHandler {
+            synchronized(this) {
+                captureHandlers[socketId]?.let { return it }
+                for ((old, handler) in captureHandlers) {
+                    socket.setContentHandler(old, null)
+                    handler.releaseAll()
+                }
+                captureHandlers.clear()
+                val handler = CaptureHandler()
+                captureHandlers[socketId] = handler
+                socket.setContentHandler(socketId, handler)
+                return handler
+            }
+        }
 
         /** MAX_SPLICED_FRAME stays under OkHttp's 16 MiB send queue, which a larger frame would overflow. */
         private const val MAX_SPLICED_FRAME = 15L * 1024 * 1024

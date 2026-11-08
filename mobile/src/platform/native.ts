@@ -55,6 +55,27 @@ export interface TppShareModule {
    * base64 `head`, then `length` bytes of staged copy `token` from `offset`.
    */
   sendSpliced(socketId: number, head: string, token: string, offset: number, length: number): Promise<void>;
+  /** createStaged makes an empty staged file for a download and resolves with its token. */
+  createStaged(): Promise<string>;
+  /** writeStaged writes base64 `data` into staged file `token` at `offset`. */
+  writeStaged(token: string, offset: number, data: string): Promise<void>;
+  /**
+   * openStaged opens staged container `token` into a new staged file of the
+   * frame, refusing with "invalid tag" when it does not verify. All base64.
+   */
+  openStaged(token: string, key: string, nonce: string, aad: string): Promise<{ token: string; size: number; head: string }>;
+  /** openBytes opens ciphertext-with-tag in memory, for the self-test; base64 in and out. */
+  openBytes(key: string, nonce: string, aad: string, sealed: string): Promise<string>;
+  /** digestStaged resolves with the SHA-256, in hex, of staged file `token` from `offset`. */
+  digestStaged(token: string, offset: number): Promise<string>;
+  /**
+   * armCapture arms the capture of the reply to request `envelopeId` on React
+   * Native WebSocket `socketId` into staged file `token` at `offset`. It
+   * resolves with the bytes captured, or null when the reply was not captured.
+   */
+  armCapture(socketId: number, envelopeId: string, responseType: number, token: string, offset: number): Promise<number | null>;
+  /** releaseCapture withdraws a capture whose reply will not come. */
+  releaseCapture(socketId: number, envelopeId: string): void;
   /** sealBytes seals base64 `plain` in memory and resolves with ciphertext and tag as base64. */
   sealBytes(key: string, nonce: string, aad: string, plain: string): Promise<string>;
   /** finish closes the share panel and forgets the share, with an optional toast. */
@@ -126,6 +147,19 @@ export interface TppFilesModule {
   pickFile(
     maxBytes: number,
   ): Promise<{ name: string; size: number; contentType?: string; base64?: string; tooLarge?: boolean } | null>;
+
+  /** saveStagedToDownloads saves `length` bytes of staged file `token` from `offset` to Downloads/TwoPlacePaste. */
+  saveStagedToDownloads(
+    token: string,
+    offset: number,
+    length: number,
+    filename: string,
+    contentType: string,
+  ): Promise<{ name: string; uri: string }>;
+  /** openStaged opens `length` bytes of staged file `token` from `offset` in an app that opens its type. */
+  openStaged(token: string, offset: number, length: number, filename: string, contentType: string): Promise<void>;
+  /** shareStaged hands `length` bytes of staged file `token` from `offset` to the share sheet. */
+  shareStaged(token: string, offset: number, length: number, filename: string, contentType: string): Promise<void>;
 
   /**
    * pickToStage shows the system's file picker and stages the chosen file in

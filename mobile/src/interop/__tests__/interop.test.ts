@@ -26,11 +26,16 @@ import {
   toHex,
   utf8,
   webSocketFactory,
+  type DownloadSink,
   type ExternalBody,
+  type StagedItem,
+  isStaged,
   type Progress,
   type SecureStore,
   type SocketFactory,
 } from '../../core';
+import { EntryFetchChunkResponse } from '../../protocol/gen/tpp/v1/entry';
+import { Envelope } from '../../protocol/gen/tpp/v1/envelope';
 import { GoPeer, Relay, missingTool } from '../relay';
 
 /** InMemoryStore stands in for the Android Keystore, which does not exist under Node. */
@@ -81,10 +86,49 @@ function matchesPattern(body: Uint8Array): boolean {
  */
 const staged = new Map<string, Uint8Array>();
 let spliced = 0;
+let captured = 0;
+let nextStaged = 1;
+
+/** writeAt writes into a staged file, growing it, as RandomAccessFile does. */
+function writeAt(token: string, offset: number, data: Uint8Array): void {
+  const old = staged.get(token) ?? new Uint8Array(0);
+  const grown = new Uint8Array(Math.max(old.length, offset + data.length));
+  grown.set(old);
+  grown.set(data, offset);
+  staged.set(token, grown);
+}
+
+/**
+ * splicing also captures armed range replies the way CaptureHandler.kt does:
+ * the reply's data written to the staged file, the frame handed on without it.
+ */
 const splicing: SocketFactory = (url) => {
   const socket = webSocketFactory(url);
+  const arms = new Map<string, { type: number; token: string; offset: number; resolve: (n: number | null) => void }>();
+  let handler: (frame: Uint8Array) => void = () => {};
+  socket.onMessage((frame) => {
+    const env = Envelope.decode(frame);
+    const arm = arms.get(env.id);
+    if (arm !== undefined) {
+      arms.delete(env.id);
+      if (Number(env.type) === arm.type) {
+        const reply = EntryFetchChunkResponse.decode(env.payload);
+        writeAt(arm.token, arm.offset, reply.data);
+        captured++;
+        arm.resolve(reply.data.length);
+        const stripped = EntryFetchChunkResponse.encode({ ...reply, data: new Uint8Array(0) }).finish();
+        handler(Envelope.encode({ ...env, payload: stripped }).finish());
+        return;
+      }
+      arm.resolve(null);
+    }
+    handler(frame);
+  });
   return {
     ...socket,
+    onMessage: (h) => {
+      handler = h;
+    },
     sendSpliced: async (head, slice) => {
       spliced++;
       const file = staged.get(slice.token);
@@ -93,7 +137,37 @@ const splicing: SocketFactory = (url) => {
       }
       socket.send(concat(head, file.subarray(slice.offset, slice.offset + slice.length)));
     },
+    capture: (id, type, target) =>
+      new Promise<number | null>((resolve) => {
+        arms.set(id, { type, ...target, resolve });
+      }),
+    releaseCapture: (id) => {
+      arms.get(id)?.resolve(null);
+      arms.delete(id);
+    },
   };
+};
+
+/** sink keeps downloads in `staged` and opens them with @noble/ciphers, as the native opener must. */
+const sink: DownloadSink = {
+  create: async () => {
+    const token = `rx-${nextStaged++}`;
+    staged.set(token, new Uint8Array(0));
+    return token;
+  },
+  write: async (token, offset, data) => writeAt(token, offset, data),
+  read: async (token, offset, length) => (staged.get(token) ?? new Uint8Array(0)).slice(offset, offset + length),
+  open: async (token, { key, nonce, aad }) => {
+    const container = staged.get(token)!;
+    const plain = xchacha20poly1305(key, nonce, aad).decrypt(container.subarray(25));
+    const out = `plain-${nextStaged++}`;
+    staged.set(out, plain);
+    return { token: out, size: plain.length, head: plain.slice(0, 131091) };
+  },
+  digest: async (token, offset) => sha256((staged.get(token) ?? new Uint8Array(0)).subarray(offset)),
+  discard: (token) => {
+    staged.delete(token);
+  },
 };
 
 const skip = missingTool();
@@ -242,6 +316,23 @@ describeInterop('the phone and the Go client are one implementation of one contr
     // The bar can say what is downloading, from the sealed header.
     expect(downloads.every((p) => p.filename === 'large.bin')).toBe(true);
     expect(downloads[downloads.length - 1].done).toBe(downloads[downloads.length - 1].total);
+  });
+
+  test('a large entry written by Go downloads into a staged file, captured range by range', async () => {
+    const size = (20 << 20) + 77;
+    const written = await go.send(`put-large ${size}`);
+    captured = 0;
+    const got = await phone.getEntryStaged(written.entry_id as string, undefined, sink);
+    expect(isStaged(got)).toBe(true);
+    const item = got as StagedItem;
+    expect(item.filename).toBe('large.bin');
+    expect(item.staged.size).toBe(size);
+    const plain = staged.get(item.staged.token)!;
+    expect(matchesPattern(plain.subarray(item.staged.offset, item.staged.offset + size))).toBe(true);
+    // Every range came through the capture; the relay saw ordinary requests.
+    expect(captured).toBeGreaterThanOrEqual(3);
+    item.staged.release();
+    expect([...staged.keys()].filter((k) => k.startsWith('rx-') || k.startsWith('plain-'))).toEqual([]);
   });
 
   test('an entry under one frame but over one chunk still reports download progress', async () => {

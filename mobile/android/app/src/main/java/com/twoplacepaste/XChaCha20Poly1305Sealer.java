@@ -13,10 +13,12 @@ import java.util.Arrays;
  * encrypts, on a Java heap of a few hundred megabytes; this one streams, with
  * constant memory, on every Android version the app runs on.
  *
- * Only sealing is here, and it is never trusted blind: the JavaScript side
- * seals test inputs both here and with `@noble/ciphers` and uses this one only
- * when every byte agrees (`nativeSeal.ts`). It is also held to the RFC 8439
- * and XChaCha test vectors in `scripts/aead-test` beside this file's tests.
+ * Sealing is here; opening is {@link XChaCha20Poly1305Opener}, which shares
+ * the keystream and Poly1305 below. Neither is trusted blind: before the first
+ * use in a run, the JavaScript side runs both on test inputs beside
+ * `@noble/ciphers`, tampered ones included, and uses them only when every byte
+ * and every refusal agrees (`src/app/nativeSeal.ts`). `npm run sealer-check`
+ * also holds them to spec/vectors/entry.json and to hundreds of `@noble` cases.
  *
  * Usage: construct with the key, the 24-byte nonce and the associated data;
  * call {@link #update} with the plaintext in pieces of any size, in order;
@@ -28,39 +30,15 @@ final class XChaCha20Poly1305Sealer {
     static final int NONCE_SIZE = 24;
     static final int TAG_SIZE = 16;
 
-    private final int[] state = new int[16];
-    private final int[] working = new int[16];
-    private final byte[] keystream = new byte[64];
-    /** keystreamUsed is how much of the current keystream block has been used; 64 means none is left. */
-    private int keystreamUsed = 64;
-
+    private final Keystream keystream;
     private final Poly1305 mac;
     private final long aadLength;
     private long dataLength;
     private boolean finished;
 
     XChaCha20Poly1305Sealer(byte[] key, byte[] nonce, byte[] aad) {
-        if (key.length != KEY_SIZE) {
-            throw new IllegalArgumentException("key is " + key.length + " bytes, want " + KEY_SIZE);
-        }
-        if (nonce.length != NONCE_SIZE) {
-            throw new IllegalArgumentException("nonce is " + nonce.length + " bytes, want " + NONCE_SIZE);
-        }
-        // XChaCha20: HChaCha20 over the key and the first 16 nonce bytes gives
-        // the subkey; the last 8 nonce bytes, after four zero bytes, are the
-        // 96-bit ChaCha20 nonce.
-        byte[] subkey = hchacha20(key, nonce);
-        setState(subkey, nonce);
-        Arrays.fill(subkey, (byte) 0);
-
-        // The Poly1305 key is the first 32 bytes of keystream block 0; the
-        // ciphertext starts at block 1.
-        state[12] = 0;
-        block();
-        mac = new Poly1305(Arrays.copyOf(keystream, 32));
-        state[12] = 1;
-        keystreamUsed = 64;
-
+        keystream = new Keystream(key, nonce);
+        mac = new Poly1305(keystream.polyKey());
         mac.update(aad, 0, aad.length);
         mac.pad();
         aadLength = aad.length;
@@ -71,25 +49,8 @@ final class XChaCha20Poly1305Sealer {
         if (finished) {
             throw new IllegalStateException("the sealer has already finished");
         }
-        int done = 0;
-        while (done < len) {
-            if (keystreamUsed == 64) {
-                block();
-                state[12]++;
-                if (state[12] == 0) {
-                    // 2^32 blocks of 64 bytes is 256 GiB: never an entry.
-                    throw new IllegalStateException("the block counter ran out");
-                }
-                keystreamUsed = 0;
-            }
-            int n = Math.min(64 - keystreamUsed, len - done);
-            for (int i = 0; i < n; i++) {
-                out[outOff + done + i] = (byte) (in[inOff + done + i] ^ keystream[keystreamUsed + i]);
-            }
-            mac.update(out, outOff + done, n);
-            keystreamUsed += n;
-            done += n;
-        }
+        keystream.xor(in, inOff, len, out, outOff);
+        mac.update(out, outOff, len);
         dataLength += len;
     }
 
@@ -99,36 +60,102 @@ final class XChaCha20Poly1305Sealer {
             throw new IllegalStateException("the sealer has already finished");
         }
         finished = true;
+        keystream.wipe();
+        return finishMac(mac, aadLength, dataLength);
+    }
+
+    /** finishMac completes the AEAD's Poly1305: the padding, then both lengths (RFC 8439 §2.8). */
+    static byte[] finishMac(Poly1305 mac, long aadLength, long dataLength) {
         mac.pad();
         byte[] lengths = new byte[16];
         putLongLE(lengths, 0, aadLength);
         putLongLE(lengths, 8, dataLength);
         mac.update(lengths, 0, 16);
-        Arrays.fill(state, 0);
-        Arrays.fill(keystream, (byte) 0);
         return mac.finish();
     }
 
-    private void setState(byte[] subkey, byte[] nonce) {
-        state[0] = 0x61707865;
-        state[1] = 0x3320646e;
-        state[2] = 0x79622d32;
-        state[3] = 0x6b206574;
-        for (int i = 0; i < 8; i++) {
-            state[4 + i] = intLE(subkey, i * 4);
-        }
-        state[12] = 0;
-        state[13] = 0;
-        state[14] = intLE(nonce, 16);
-        state[15] = intLE(nonce, 20);
-    }
+    /**
+     * The XChaCha20 keystream for one key and nonce: block 0 for the Poly1305
+     * key ({@link #polyKey}), then blocks 1 onwards XORed over the data in
+     * pieces of any size ({@link #xor}). Shared by the sealer and the opener.
+     */
+    static final class Keystream {
+        private final int[] state = new int[16];
+        private final int[] working = new int[16];
+        private final byte[] block = new byte[64];
+        /** used is how much of the current block has been used; 64 means none is left. */
+        private int used = 64;
 
-    /** block writes the keystream block for the current counter into {@link #keystream}. */
-    private void block() {
-        System.arraycopy(state, 0, working, 0, 16);
-        rounds(working);
-        for (int i = 0; i < 16; i++) {
-            putIntLE(keystream, i * 4, working[i] + state[i]);
+        Keystream(byte[] key, byte[] nonce) {
+            if (key.length != KEY_SIZE) {
+                throw new IllegalArgumentException("key is " + key.length + " bytes, want " + KEY_SIZE);
+            }
+            if (nonce.length != NONCE_SIZE) {
+                throw new IllegalArgumentException("nonce is " + nonce.length + " bytes, want " + NONCE_SIZE);
+            }
+            // XChaCha20: HChaCha20 over the key and the first 16 nonce bytes
+            // gives the subkey; the last 8 nonce bytes, after four zero bytes,
+            // are the 96-bit ChaCha20 nonce.
+            byte[] subkey = hchacha20(key, nonce);
+            state[0] = 0x61707865;
+            state[1] = 0x3320646e;
+            state[2] = 0x79622d32;
+            state[3] = 0x6b206574;
+            for (int i = 0; i < 8; i++) {
+                state[4 + i] = intLE(subkey, i * 4);
+            }
+            state[12] = 0;
+            state[13] = 0;
+            state[14] = intLE(nonce, 16);
+            state[15] = intLE(nonce, 20);
+            Arrays.fill(subkey, (byte) 0);
+        }
+
+        /** polyKey is the first 32 bytes of block 0. The data starts at block 1 after it. */
+        byte[] polyKey() {
+            state[12] = 0;
+            next();
+            byte[] key = Arrays.copyOf(block, 32);
+            state[12] = 1;
+            used = 64;
+            return key;
+        }
+
+        /** xor applies the next {@code len} bytes of keystream from {@code in} to {@code out}, which may be the same array. */
+        void xor(byte[] in, int inOff, int len, byte[] out, int outOff) {
+            int done = 0;
+            while (done < len) {
+                if (used == 64) {
+                    next();
+                    state[12]++;
+                    if (state[12] == 0) {
+                        // 2^32 blocks of 64 bytes is 256 GiB: never an entry.
+                        throw new IllegalStateException("the block counter ran out");
+                    }
+                    used = 0;
+                }
+                int n = Math.min(64 - used, len - done);
+                for (int i = 0; i < n; i++) {
+                    out[outOff + done + i] = (byte) (in[inOff + done + i] ^ block[used + i]);
+                }
+                used += n;
+                done += n;
+            }
+        }
+
+        void wipe() {
+            Arrays.fill(state, 0);
+            Arrays.fill(working, 0);
+            Arrays.fill(block, (byte) 0);
+        }
+
+        /** next writes the keystream block for the current counter into {@link #block}. */
+        private void next() {
+            System.arraycopy(state, 0, working, 0, 16);
+            rounds(working);
+            for (int i = 0; i < 16; i++) {
+                putIntLE(block, i * 4, working[i] + state[i]);
+            }
         }
     }
 

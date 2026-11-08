@@ -9,18 +9,19 @@
  * associated data and the frame's head, and checks the container's shape
  * (`ExternalBody` in `src/core/protocol/client.ts`).
  *
- * The native sealer is not trusted blind. Before the first use in a run of
- * the app, [verifyNativeSeal] seals inputs of many sizes both natively and
- * with `@noble/ciphers` — the AEAD held to spec/vectors — and the native one
- * is used only when every byte agrees. Otherwise, or where there is none, the
- * upload falls back to sealing in JavaScript, which is slower but the same.
+ * The native sealer and opener are not trusted blind. Before the first use
+ * in a run of the app, [verifyNativeSeal] seals and opens inputs of many
+ * sizes both natively and with `@noble/ciphers` — the AEAD held to
+ * spec/vectors — tampered inputs included, and the native ones are used only
+ * when every byte and every refusal agrees. Otherwise, or where there is
+ * none, uploads and downloads fall back to JavaScript, slower but the same.
  *
  * This module imports nothing from React Native, so it is tested directly.
  */
 
 import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
 
-import { randomBytes, type ExternalBody } from '../core';
+import { concat, randomBytes, type ExternalBody } from '../core';
 import type { NativeSealPort, StagedFile } from '../platform/types';
 import { knownHash } from './jobs';
 
@@ -28,21 +29,45 @@ import { knownHash } from './jobs';
 export const SELF_TEST_SIZES = [0, 1, 15, 16, 17, 63, 64, 65, 127, 128, 129, 1000, 4099, 65535, 65536, 65537, 70001];
 
 /**
- * selfTest reports whether `port` seals exactly as `@noble/ciphers` does, on
- * random inputs of every size in SELF_TEST_SIZES. A failure to seal at all is
- * a "no", not an error: the caller falls back to JavaScript.
+ * selfTest reports whether `port` seals and opens exactly as `@noble/ciphers`
+ * does, on random inputs of every size in SELF_TEST_SIZES: the same
+ * ciphertext from sealing, the same plaintext from opening — and a refusal
+ * of every tampered input, a flipped ciphertext or tag byte, other associated
+ * data, another nonce. A failure to seal or open at all is a "no", not an
+ * error: the caller falls back to JavaScript.
  */
 export async function selfTest(port: NativeSealPort): Promise<boolean> {
+  const same = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i]);
+  const refuses = async (open: Promise<Uint8Array>) => open.then(
+    () => false,
+    () => true,
+  );
   try {
     for (const n of SELF_TEST_SIZES) {
       const key = randomBytes(32);
       const nonce = randomBytes(24);
       const aad = randomBytes(n % 41);
       const plain = randomBytes(n);
-      const want = xchacha20poly1305(key, nonce, aad).encrypt(plain);
-      const got = await port.sealBytes(key, nonce, aad, plain);
-      if (got.length !== want.length || !got.every((b, i) => b === want[i])) {
+      const sealed = xchacha20poly1305(key, nonce, aad).encrypt(plain);
+      if (!same(await port.sealBytes(key, nonce, aad, plain), sealed)) {
         return false;
+      }
+      if (!same(await port.openBytes(key, nonce, aad, sealed), plain)) {
+        return false;
+      }
+      const flipped = sealed.slice();
+      flipped[(n * 7) % flipped.length] ^= 1;
+      const otherNonce = nonce.slice();
+      otherNonce[0] ^= 1;
+      const tampered = [
+        port.openBytes(key, nonce, aad, flipped),
+        port.openBytes(key, nonce, concat(aad, new Uint8Array(1)), sealed),
+        port.openBytes(key, otherNonce, aad, sealed),
+      ];
+      for (const attempt of tampered) {
+        if (!(await refuses(attempt))) {
+          return false;
+        }
       }
     }
     return true;
