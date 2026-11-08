@@ -15,9 +15,11 @@ import { AppState } from 'react-native';
 import type { StoreDetails } from '../core';
 import { background, share } from '../platform';
 import { JobQueue, runJob, type Job, type UploadItem } from './jobs';
+import { keepAlive } from './keepAlive';
 import { externalBody, verifyNativeSeal } from './nativeSeal';
 import { failureMessage } from './session';
-import { getSnapshot, onTransferProgress, refresh, setNotice } from './sessionStore';
+import { getSnapshot, refresh, setNotice } from './sessionStore';
+import { onTransferProgress } from './transferEvents';
 import type { Payload } from './share';
 import { saveItem } from './storeState';
 
@@ -130,13 +132,17 @@ export async function enqueue(payload: Payload, target: Job['target'], details?:
 }
 
 /**
- * backgroundTask is the headless task: it runs the queue until it is empty.
- * The socket a background upload dialled is closed afterwards if the app is
- * still not on screen, as it would have been without the upload (SPEC §5.2).
+ * backgroundTask is the headless task: it runs the queue until it is empty and
+ * nothing else holds the runner — a large download the user started
+ * (`keepAlive.ts`). The socket is closed afterwards if the app is still not
+ * on screen, as it would have been without the work (SPEC §5.2).
  */
 export async function backgroundTask(): Promise<void> {
   try {
-    await queue.drain();
+    do {
+      await queue.drain();
+      await keepAlive.whenReleased();
+    } while (queue.running || queue.size > 0);
   } finally {
     if (AppState.currentState !== 'active' && !queue.running) {
       getSnapshot().client?.disconnect();

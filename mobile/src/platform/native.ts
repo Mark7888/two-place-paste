@@ -126,6 +126,15 @@ export interface TppFilesModule {
   pickFile(
     maxBytes: number,
   ): Promise<{ name: string; size: number; contentType?: string; base64?: string; tooLarge?: boolean } | null>;
+
+  /**
+   * pickToStage shows the system's file picker and stages the chosen file in
+   * the app's cache, hashed, without reading it into JavaScript. It resolves
+   * like `TppShareModule.stage`, or with null when the user backed out.
+   */
+  pickToStage(
+    maxBytes: number,
+  ): Promise<{ token?: string; name: string; size: number; contentType?: string; sha256?: string; tooLarge?: boolean } | null>;
 }
 
 /** TppCacheModule is implemented by `android/app/src/main/java/.../CacheModule.kt`. */

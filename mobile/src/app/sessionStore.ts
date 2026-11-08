@@ -41,6 +41,7 @@ import {
 } from './session';
 import { DemoGate, DemoMode } from './demo';
 import { clearStore, invalidate as invalidateStore, storeEvents } from './storeState';
+import { emitProgress } from './transferEvents';
 
 /** DirectionChoice is what the user answers a direction question with. */
 export type DirectionChoice = 'up' | 'down';
@@ -425,21 +426,6 @@ function ask(
   });
 }
 
-/** progressListeners hear every transfer's progress, as the screens' list does. */
-const progressListeners = new Set<(p: Progress) => void>();
-
-/**
- * onTransferProgress subscribes to the progress of every chunked transfer —
- * how the background uploads move their notification along. The returned
- * function unsubscribes.
- */
-export function onTransferProgress(listener: (p: Progress) => void): () => void {
-  progressListeners.add(listener);
-  return () => {
-    progressListeners.delete(listener);
-  };
-}
-
 /**
  * handlers are the client's callbacks. The real client and a demo's are given
  * the same ones, so every screen behaves the same in either.
@@ -484,9 +470,7 @@ const handlers: Handlers = {
     emit();
   },
   onProgress: (p) => {
-    for (const listener of progressListeners) {
-      listener(p);
-    }
+    emitProgress(p);
     const key = `${p.direction}:${p.entryId}`;
     if (p.done < p.total) {
       transfers.set(key, p);

@@ -22,4 +22,7 @@ export const files: FilesPort = {
   pick: async () => {
     throw new Error('picking files is not supported on iOS yet');
   },
+  pickToStage: async () => {
+    throw new Error('picking files is not supported on iOS yet');
+  },
 };

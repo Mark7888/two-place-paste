@@ -91,6 +91,14 @@ export interface FilesPort {
    * (nothing is read then), or with null when the user backed out.
    */
   pick(maxBytes: number): Promise<PickedFile | null>;
+
+  /**
+   * pickToStage lets the user choose a file the same way and stages it — a
+   * copy in the app's own storage, hashed — instead of reading it, so the
+   * store can save it sealed and sent natively, like a shared file. Null when
+   * the user backed out; it rejects where the platform cannot stage.
+   */
+  pickToStage(maxBytes: number): Promise<StageResult | null>;
 }
 
 /** PickedFile is a file the user chose to save to the store. */

@@ -45,9 +45,10 @@ class FileModule(reactContext: ReactApplicationContext) :
 
     override fun getName(): String = NAME
 
-    /** The pick in progress, and the most it may read. One at a time. */
+    /** The pick in progress, the most it may read, and whether it stages the file. One at a time. */
     private var pickPromise: Promise? = null
     private var pickMaxBytes: Long = 0
+    private var pickStages = false
 
     private val pickListener = object : BaseActivityEventListener() {
         override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
@@ -63,8 +64,22 @@ class FileModule(reactContext: ReactApplicationContext) :
                 return
             }
             val max = pickMaxBytes
+            val context = reactApplicationContext
             // Off the main thread: a file can be tens of megabytes.
-            Thread { ContentReader.read(reactApplicationContext, uri, max, promise) }.start()
+            if (pickStages) {
+                Thread {
+                    try {
+                        val picked = ContentReader.meta(context, uri).name
+                        val mime = context.contentResolver.getType(uri) ?: mimeOf("", picked)
+                        val name = safeName(picked, mime)
+                        ShareModule.stageUri(context, uri, max, name, mime, promise)
+                    } catch (e: Exception) {
+                        promise.reject(ERROR_CODE, "the picked file could not be read", e)
+                    }
+                }.start()
+            } else {
+                Thread { ContentReader.read(context, uri, max, promise) }.start()
+            }
         }
     }
 
@@ -81,6 +96,24 @@ class FileModule(reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun pickFile(maxBytes: Double, promise: Promise) {
+        startPick(maxBytes, false, promise)
+    }
+
+    /**
+     * pickToStage opens the system's file picker and stages the chosen file
+     * the way a shared one is ([ShareModule.stageUri]): copied into this app's
+     * cache and hashed, resolving with `{ token, name, contentType, size,
+     * sha256 }`, with `{ name, size, tooLarge: true }` and no copy when it is
+     * over [maxBytes], or with null when the user backed out. Nothing of the
+     * file enters JavaScript: the store saves it from the copy, sealed and
+     * sent natively.
+     */
+    @ReactMethod
+    fun pickToStage(maxBytes: Double, promise: Promise) {
+        startPick(maxBytes, true, promise)
+    }
+
+    private fun startPick(maxBytes: Double, stages: Boolean, promise: Promise) {
         val activity = reactApplicationContext.currentActivity
         if (activity == null) {
             promise.reject(ERROR_CODE, "the file picker needs the app in the foreground")
@@ -96,6 +129,7 @@ class FileModule(reactContext: ReactApplicationContext) :
         }
         pickPromise = promise
         pickMaxBytes = maxBytes.toLong()
+        pickStages = stages
         try {
             activity.startActivityForResult(intent, PICK_REQUEST)
         } catch (e: ActivityNotFoundException) {

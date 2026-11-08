@@ -143,39 +143,7 @@ class ShareModule(reactContext: ReactApplicationContext) :
         // Off the main thread, and off the module thread: copying a large file
         // takes a while, and nothing else should wait on it.
         Thread {
-            val token = newToken()
-            val dest = stagedFile(context, token)
-            try {
-                val meta = ContentReader.meta(context, uri)
-                val limit = maxBytes.toLong()
-                val digest = MessageDigest.getInstance("SHA-256")
-                // Refused before the copy when the provider says it will not fit.
-                val size = if (meta.size > limit) null else ContentReader.stage(context, uri, limit, dest, digest)
-                if (size == null) {
-                    promise.resolve(
-                        Arguments.createMap().apply {
-                            putString("name", name)
-                            putDouble("size", maxOf(meta.size, limit + 1).toDouble())
-                            putBoolean("tooLarge", true)
-                        },
-                    )
-                    return@Thread
-                }
-                promise.resolve(
-                    Arguments.createMap().apply {
-                        putString("token", token)
-                        putString("name", name)
-                        putString("contentType", shared.type.ifEmpty { FileModule.mimeOf("", name) })
-                        putDouble("size", size.toDouble())
-                        putString("sha256", digest.digest().joinToString("") { "%02x".format(it) })
-                    },
-                )
-            } catch (e: Throwable) {
-                // Throwable, not Exception: running out of memory or disk must
-                // be a refusal the panel shows, never a crash.
-                dest.delete()
-                promise.reject(ERROR_CODE, "the shared file could not be read", e)
-            }
+            stageUri(context, uri, maxBytes.toLong(), name, shared.type.ifEmpty { FileModule.mimeOf("", name) }, promise)
         }.start()
     }
 
@@ -464,6 +432,49 @@ class ShareModule(reactContext: ReactApplicationContext) :
         private const val MAX_SPLICED_FRAME = 15L * 1024 * 1024
 
         private fun decode(base64: String): ByteArray = Base64.decode(base64, Base64.NO_WRAP)
+
+        /**
+         * stageUri copies [uri] into a new staged copy within [limit], hashing
+         * it on the way, and resolves [promise] with `{ token, name,
+         * contentType, size, sha256 }`, or with `{ name, size, tooLarge: true }`
+         * and no copy when it is over the limit. It blocks: call it off the
+         * main thread. A shared file and a file picked for the store are both
+         * staged this way, so both upload the same way after.
+         */
+        internal fun stageUri(context: Context, uri: Uri, limit: Long, name: String, contentType: String, promise: Promise) {
+            val token = newToken()
+            val dest = stagedFile(context, token)
+            try {
+                val meta = ContentReader.meta(context, uri)
+                val digest = MessageDigest.getInstance("SHA-256")
+                // Refused before the copy when the provider says it will not fit.
+                val size = if (meta.size > limit) null else ContentReader.stage(context, uri, limit, dest, digest)
+                if (size == null) {
+                    promise.resolve(
+                        Arguments.createMap().apply {
+                            putString("name", name)
+                            putDouble("size", maxOf(meta.size, limit + 1).toDouble())
+                            putBoolean("tooLarge", true)
+                        },
+                    )
+                    return
+                }
+                promise.resolve(
+                    Arguments.createMap().apply {
+                        putString("token", token)
+                        putString("name", name)
+                        putString("contentType", contentType)
+                        putDouble("size", size.toDouble())
+                        putString("sha256", digest.digest().joinToString("") { "%02x".format(it) })
+                    },
+                )
+            } catch (e: Throwable) {
+                // Throwable, not Exception: running out of memory or disk must
+                // be a refusal the app shows, never a crash.
+                dest.delete()
+                promise.reject(ERROR_CODE, "the file could not be read", e)
+            }
+        }
 
         /**
          * clearStaged deletes every staged copy. Called when the module is

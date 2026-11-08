@@ -24,6 +24,7 @@ import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
 
 import type { EntryMeta, Progress } from '../../core';
 import type { SavedFile } from '../../platform';
+import { keepAliveDuring } from '../keepAlive';
 import { useSession } from '../SessionContext';
 import { receiveLabel } from '../choices';
 import {
@@ -187,7 +188,7 @@ export function HistoryScreen(): React.JSX.Element {
     fetchingEntry(meta.id, true);
     void (async () => {
       try {
-        const item = await client.getEntry(meta.id, meta);
+        const item = await keepAliveDuring(() => client.getEntry(meta.id, meta));
         // The download is over; what follows is local.
         fetchingEntry(meta.id, false);
         const result = await deliver(toClipboardItem(item), true);
@@ -388,8 +389,10 @@ export function HistoryScreen(): React.JSX.Element {
           }
           fetchingEntry(saving.id, true);
           try {
-            const entry = await client.getEntry(saving.id, saving);
-            const it = await saveItem(client, toClipboardItem(entry), details, allowDuplicate);
+            const it = await keepAliveDuring(async () => {
+              const entry = await client.getEntry(saving.id, saving);
+              return saveItem(client, toClipboardItem(entry), details, allowDuplicate);
+            });
             return `Saved “${it.name}” to the store.`;
           } finally {
             fetchingEntry(saving.id, false);

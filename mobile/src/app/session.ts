@@ -18,6 +18,7 @@ import {
   type EntryMeta,
 } from '../core';
 import { choiceRule, type ChoiceRule } from './choices';
+import { keepAliveDuring } from './keepAlive';
 import { formatSize, kindOf } from './preview';
 import {
   clipboard,
@@ -164,6 +165,11 @@ export function toClipboardItem(item: Item): ClipboardItem {
  * 24 hours (spec/crypto.md §7). The user is told there is nothing to copy.
  */
 export async function download(client: Client, latest?: EntryMeta): Promise<SyncResult> {
+  // A large latest entry carries on if the user switches apps meanwhile.
+  return keepAliveDuring(() => downloadLatest(client, latest));
+}
+
+async function downloadLatest(client: Client, latest?: EntryMeta): Promise<SyncResult> {
   const newest = latest ?? (await client.getHistory({ limit: 1 })).entries[0];
   if (newest !== undefined && newest.epoch === client.epoch && needsFileChoice(newest.header)) {
     const file = pendingFromEntry(newest);
@@ -229,6 +235,12 @@ export async function handleFile(
   file: PendingFile,
   choice: FileChoice,
 ): Promise<SyncResult> {
+  // A large file's download, and the save after it, carry on if the user
+  // switches apps meanwhile.
+  return keepAliveDuring(() => carryOut(client, file, choice));
+}
+
+async function carryOut(client: Client, file: PendingFile, choice: FileChoice): Promise<SyncResult> {
   let item = file.item;
   if (item === undefined) {
     if (file.entry === undefined) {

@@ -314,6 +314,29 @@ Only `content://` URIs from another app are read. A `file://` URI, or a
 `<user>@authority` form), is refused, because either would let the sending app
 make this one read — and upload — its own private files.
 
+## Large transfers in the background
+
+**The store's "Add file" goes the same way as a share.** The picked file is
+staged — copied and hashed natively (`FileModule.pickToStage`, which uses the
+same `ShareModule.stageUri`) — never read into JavaScript, and the save runs
+as a background job: sealed natively, sent from the staged copy, with the
+upload notification. The duplicate check is made in the save sheet first,
+while "Save anyway" can still be answered.
+
+**A large download carries on when the user switches apps.** Android freezes
+an app's process soon after it leaves the screen, and React Native pauses
+JavaScript timers, which the decryption yields through. So a download the user
+started — Sync down, a received file's Save / Open / Share, a History copy or
+save, a store item — runs inside `keepAliveDuring` (`src/app/holds.ts`,
+`keepAlive.ts`). Once the client reports progress, which it does only for
+chunked downloads, that holds `TransferService` running until the download,
+the decryption and the save are done, with "Downloading…" then
+"Decrypting…" in the notification, and a "Download finished" notification if
+the user is elsewhere when it ends. A small read never starts the service, and
+none is started from the background, which Android refuses.
+
+Downloads are still received and decrypted in JavaScript.
+
 ## Sync direction
 
 SPEC §6 says upload if the local clipboard is newer, otherwise download.

@@ -8,14 +8,20 @@
  *
  * Saving comes from three places: the clipboard and a file (here), and an
  * entry of the History. A file comes through the system's own picker, which
- * hands this app only the one file the user chose.
+ * hands this app only the one file the user chose. It is staged rather than
+ * read — copied and hashed by the platform — and saved in the background,
+ * sealed and sent natively, the same way as a file shared to the app
+ * (`backgroundJobs.ts`).
  */
 
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Alert, FlatList, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
 import type { Item, StoreItem, StoreSort } from '../../core';
-import { clipboard, files, type SavedFile } from '../../platform';
+import { background, clipboard, files, share, type SavedFile, type StagedFile } from '../../platform';
+import { enqueue } from '../backgroundJobs';
+import { describePayload, payloadHash, suggestedName, type Payload } from '../share';
+import { keepAliveDuring } from '../keepAlive';
 import { useSession } from '../SessionContext';
 import { Icon, type IconName } from '../icons';
 import { PreviewBody } from '../PreviewBody';
@@ -33,6 +39,7 @@ import {
 } from '../session';
 import { chip, chipOn, chipOnText, chipRow, chipText, StoreSheet } from '../StoreSheet';
 import {
+  DuplicateError,
   deleteItem,
   editItem,
   getStoreSnapshot,
@@ -63,9 +70,16 @@ const previewable = (it: StoreItem) =>
 
 type Dialog =
   | { kind: 'clipboard'; item: { contentType: string; filename: string; body: Uint8Array } }
-  | { kind: 'file'; item: { contentType: string; filename: string; body: Uint8Array } }
+  | { kind: 'staged'; payload: Payload }
   | { kind: 'edit'; item: StoreItem }
   | null;
+
+/** stagedShare describes a staged payload as a share, for the name the sheet suggests. */
+function stagedShare(p: Payload) {
+  return p.kind === 'file'
+    ? { id: 0, kind: 'file' as const, name: p.filename, contentType: p.contentType, size: p.file.size, previewUri: '' }
+    : { id: 0, kind: 'unsupported' as const };
+}
 
 export function StoreScreen(): React.JSX.Element {
   const session = useSession();
@@ -142,7 +156,7 @@ export function StoreScreen(): React.JSX.Element {
   const addFile = () =>
     run('file', async () => {
       const room = store.limits?.availableBytes ?? 0;
-      const picked = await files.pick(room);
+      const picked = await files.pickToStage(room);
       if (picked === null) {
         return;
       }
@@ -150,12 +164,28 @@ export function StoreScreen(): React.JSX.Element {
         report(false, `${picked.name} is ${formatSize(picked.size)}; the store has room for ${formatSize(room)}.`);
         return;
       }
-      if (picked.body.length === 0) {
+      if (picked.size === 0) {
+        share.discard(picked.token);
         report(false, 'That file is empty.');
         return;
       }
-      setDialog({ kind: 'file', item: { contentType: picked.contentType, filename: picked.name, body: picked.body } });
+      const file: StagedFile = {
+        token: picked.token,
+        name: picked.name,
+        contentType: picked.contentType,
+        size: picked.size,
+        sha256: picked.sha256,
+      };
+      setDialog({ kind: 'staged', payload: { kind: 'file', file, contentType: picked.contentType, filename: picked.name } });
     });
+
+  /** closeDialog closes the save sheet, deleting a staged file that will not be saved. */
+  const closeDialog = () => {
+    if (dialog?.kind === 'staged' && dialog.payload.kind === 'file') {
+      share.discard(dialog.payload.file.token);
+    }
+    setDialog(null);
+  };
 
   /** fetchItem downloads an item, or reuses the one its preview just read. */
   const fetchItem = async (it: StoreItem): Promise<Item> => {
@@ -166,7 +196,8 @@ export function StoreScreen(): React.JSX.Element {
     if (kept !== null && kept.id === it.id) {
       return kept.item;
     }
-    const item = await client.fetchStoreItem(it);
+    // A large item's download carries on if the user switches apps meanwhile.
+    const item = await keepAliveDuring(() => client.fetchStoreItem(it));
     // Only something a preview could have read is kept: a large file copied
     // once is not worth holding in memory.
     lastFetched.current = item.body.length <= MAX_FILE_PREVIEW_BYTES ? { id: it.id, item } : null;
@@ -456,16 +487,22 @@ export function StoreScreen(): React.JSX.Element {
       <StoreSheet
         visible={dialog !== null}
         title={dialog?.kind === 'edit' ? 'Edit item' : 'Save to store'}
-        what={dialog !== null && dialog.kind !== 'edit' ? describeItem(dialog.item) : undefined}
+        what={
+          dialog === null || dialog.kind === 'edit'
+            ? undefined
+            : dialog.kind === 'staged'
+              ? describePayload(dialog.payload)
+              : describeItem(dialog.item)
+        }
         available={dialog?.kind === 'edit' ? undefined : storeRoom(store.limits)}
         initial={
           dialog?.kind === 'edit'
             ? { name: dialog.item.name, description: dialog.item.description, tags: dialog.item.tags }
-            : { name: dialog?.kind === 'file' ? dialog.item.filename : '', description: '', tags: [] }
+            : { name: dialog?.kind === 'staged' ? suggestedName(stagedShare(dialog.payload)) : '', description: '', tags: [] }
         }
         knownTags={knownTags}
         saveLabel={dialog?.kind === 'edit' ? 'Save changes' : 'Save'}
-        onClose={() => setDialog(null)}
+        onClose={closeDialog}
         onSubmit={async (details, allowDuplicate) => {
           if (client === null || dialog === null) {
             return '';
@@ -473,6 +510,20 @@ export function StoreScreen(): React.JSX.Element {
           if (dialog.kind === 'edit') {
             const it = await editItem(client, dialog.item, details);
             return `Saved the changes to “${it.name}”.`;
+          }
+          if (dialog.kind === 'staged') {
+            // The duplicate check is made here, while "Save anyway" can still
+            // be answered; the save runs in the background, with a notification.
+            if (!allowDuplicate) {
+              await loadStore(client);
+              const dups = index.duplicates(await payloadHash(dialog.payload));
+              if (dups.length > 0) {
+                throw new DuplicateError(dups);
+              }
+            }
+            await background.askToNotify();
+            await enqueue(dialog.payload, 'store', details);
+            return `Saving “${details.name}” to the store in the background.`;
           }
           const it = await saveItem(client, dialog.item, details, allowDuplicate);
           return `Saved “${it.name}” to the store.`;
