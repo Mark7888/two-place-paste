@@ -323,17 +323,30 @@ as a background job: sealed natively, sent from the staged copy, with the
 upload notification. The duplicate check is made in the save sheet first,
 while "Save anyway" can still be answered.
 
-**A large download carries on when the user switches apps.** Android freezes
-an app's process soon after it leaves the screen, and React Native pauses
-JavaScript timers, which the decryption yields through. So a download the user
-started — Sync down, a received file's Save / Open / Share, a History copy or
-save, a store item — runs inside `keepAliveDuring` (`src/app/holds.ts`,
-`keepAlive.ts`). Once the client reports progress, which it does only for
-chunked downloads, that holds `TransferService` running until the download,
-the decryption and the save are done, with "Downloading…" then
-"Decrypting…" in the notification, and a "Download finished" notification if
-the user is elsewhere when it ends. A small read never starts the service, and
-none is started from the background, which Android refuses.
+**One transfer queue, shown in the app.** Every large transfer — a shared
+file or a store "Add file" uploading, a received file saved, opened or shared,
+a store item, a large latest entry, a History copy, preview or save to the
+store — runs as a transfer in one queue (`src/app/transferQueue.ts`, wired in
+`transfers.ts`): one at a time, uploads and downloads alike, in the order the
+user asked. A download that fits in one frame (1 MiB) is not queued, so
+copying a line of text never waits behind an 80 MB upload.
+
+Each transfer says what it is — which way, to or from the group or the store,
+its name and size — and where it is: waiting, its step and progress while it
+runs ("Encrypting…", "Uploading… 40%", "Downloading…", "Decrypting…"), and
+how it ended. The **Transfers** panel (`TransferPanel.tsx`) shows them on the
+Sync, History and Store screens and on the tile's panel: the running one, the
+ones waiting, and the last few finished until the user clears them.
+
+The queue also keeps the app running when the user switches apps. Android
+freezes an app's process soon after it leaves the screen, and React Native
+pauses JavaScript timers, which the crypto yields through; so as soon as the
+queue has something in it — which happens while the app is on screen, as
+Android requires — it starts `TransferService`, whose headless task lasts
+until the queue is empty. The notification follows the running transfer:
+its step, its progress and "2 of 3". Each upload's outcome gets a
+notification of its own, and a download's does when the user is elsewhere as
+it ends. Notification text never names the file: it shows on the lock screen.
 
 **A large download never enters JavaScript either.** Saving, opening or
 sharing a received file or a store item downloads it with

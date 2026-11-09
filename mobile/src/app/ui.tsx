@@ -13,11 +13,9 @@ import {
   View,
 } from 'react-native';
 
-import type { Progress } from '../core';
 import { clipboard, files, type SavedFile } from '../platform';
 
 import { Icon, type IconName } from './icons';
-import { transferText } from './preview';
 import { failureMessage, type FileChoice } from './session';
 import { colors, styles, touchTarget } from './theme';
 
@@ -190,55 +188,6 @@ export function Notice({
           <Text style={{ color: palette.fg, fontWeight: '600', fontSize: 14 }}>{action.label}</Text>
         </Pressable>
       )}
-    </View>
-  );
-}
-
-/** TransferBar shows a large entry moving in chunks: which way, and how far. */
-export function TransferBar({ transfer }: { transfer: Progress | null }): React.JSX.Element | null {
-  if (transfer === null || transfer.total <= 0) {
-    return null;
-  }
-  const { title, detail, percent } = transferText(transfer);
-  // The text is styled here rather than with `noticeText`: that style has
-  // `flex: 1`, which in this column layout gives the text a height of zero —
-  // which is how the bar came to be drawn with no words on it.
-  return (
-    <View
-      style={[styles.notice, { backgroundColor: colors.accentSoft, flexDirection: 'column', alignItems: 'stretch', gap: 2 }]}
-      accessibilityRole="progressbar"
-      accessibilityLabel={`${title}, ${detail}`}
-      accessibilityValue={{ min: 0, max: 100, now: percent }}
-    >
-      <Text style={{ color: colors.text, fontSize: 14, fontWeight: '600' }} numberOfLines={1} ellipsizeMode="middle">
-        {title}
-      </Text>
-      <Text style={{ color: colors.muted, fontSize: 13, lineHeight: 19 }}>{detail}</Text>
-      <View style={{ height: 6, borderRadius: 3, backgroundColor: colors.border, marginTop: 6, overflow: 'hidden' }}>
-        <View style={{ height: 6, width: `${percent}%`, backgroundColor: colors.accent }} />
-      </View>
-    </View>
-  );
-}
-
-/**
- * TransferList shows every chunked transfer in flight, one bar each: the one
- * running and any queued behind it, so a second download does not make the
- * first one's bar jump or vanish.
- */
-export function TransferList({
-  transfers,
-}: {
-  transfers: readonly Progress[];
-}): React.JSX.Element | null {
-  if (transfers.length === 0) {
-    return null;
-  }
-  return (
-    <View style={{ gap: 8 }}>
-      {transfers.map((t) => (
-        <TransferBar key={`${t.direction}:${t.entryId}`} transfer={t} />
-      ))}
     </View>
   );
 }

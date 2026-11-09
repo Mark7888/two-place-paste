@@ -22,7 +22,7 @@ import {
 } from '../core';
 import { choiceRule, type ChoiceRule } from './choices';
 import { downloadSink } from './downloads';
-import { keepAliveDuring } from './keepAlive';
+import { queueDownload } from './transfers';
 import { formatSize, kindOf } from './preview';
 import {
   clipboard,
@@ -182,11 +182,6 @@ export function toClipboardItem(item: Item): ClipboardItem {
  * 24 hours (spec/crypto.md §7). The user is told there is nothing to copy.
  */
 export async function download(client: Client, latest?: EntryMeta): Promise<SyncResult> {
-  // A large latest entry carries on if the user switches apps meanwhile.
-  return keepAliveDuring(() => downloadLatest(client, latest));
-}
-
-async function downloadLatest(client: Client, latest?: EntryMeta): Promise<SyncResult> {
   const newest = latest ?? (await client.getHistory({ limit: 1 })).entries[0];
   if (newest !== undefined && newest.epoch === client.epoch && needsFileChoice(newest.header)) {
     const file = pendingFromEntry(newest);
@@ -194,7 +189,12 @@ async function downloadLatest(client: Client, latest?: EntryMeta): Promise<SyncR
   }
   let item: Item;
   try {
-    item = await client.getLatest();
+    // A large entry waits its turn in the transfer queue, and carries on if
+    // the user switches apps meanwhile.
+    item =
+      newest === undefined
+        ? await client.getLatest()
+        : await queueDownload({ target: 'group', name: nameOf(newest), size: newest.size }, () => client.getLatest());
   } catch (err) {
     if (err instanceof TppError && err.kind === 'no-entry') {
       return { direction: 'nothing', message: 'The group has no entry yet.' };
@@ -252,9 +252,26 @@ export async function handleFile(
   file: PendingFile,
   choice: FileChoice,
 ): Promise<SyncResult> {
-  // A large file's download, and the save after it, carry on if the user
-  // switches apps meanwhile.
-  return keepAliveDuring(() => carryOut(client, file, choice));
+  if (file.item !== undefined) {
+    // Already downloaded: what is left is local.
+    return carryOut(client, file, choice);
+  }
+  // A large file waits its turn in the transfer queue, and its download and
+  // the save after it carry on if the user switches apps meanwhile.
+  const info =
+    file.storeItem !== undefined
+      ? { target: 'store' as const, name: file.name, size: file.storeItem.blobSize }
+      : { target: 'group' as const, name: file.name, size: file.entry?.size ?? 0 };
+  return queueDownload(info, () => carryOut(client, file, choice));
+}
+
+/** nameOf is how an entry is named in the Transfers panel, from its sealed header. */
+export function nameOf(meta: EntryMeta): string {
+  const h = meta.header;
+  if (h === null) {
+    return 'Entry';
+  }
+  return h.filename !== '' ? h.filename : h.contentType.startsWith('text/') ? 'Text' : h.contentType.split(';')[0].trim();
 }
 
 async function carryOut(client: Client, file: PendingFile, choice: FileChoice): Promise<SyncResult> {

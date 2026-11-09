@@ -12,6 +12,7 @@ import React, { useState } from 'react';
 import { Text, View } from 'react-native';
 
 import { useSession } from '../SessionContext';
+import { TransferPanel } from '../TransferPanel';
 import type { SavedFile } from '../../platform';
 import {
   download,
@@ -33,8 +34,7 @@ import {
   Section,
   Sheet,
   Status,
-  TransferList,
-} from '../ui';
+  } from '../ui';
 import { colors, styles } from '../theme';
 
 export function SyncScreen(): React.JSX.Element {
@@ -165,7 +165,7 @@ export function SyncScreen(): React.JSX.Element {
           has since closed — which would otherwise have existed only as a toast
           nobody was looking at; `session.notice` is what merely happened.
         */}
-        <TransferList transfers={session.transfers} />
+        <TransferPanel />
         {message !== '' && (
           <OutcomeNotice
             message={message}

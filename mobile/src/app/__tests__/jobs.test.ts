@@ -1,6 +1,6 @@
 import { utf8, type ExternalBody, type StoreDetails } from '../../core';
 import type { StagedFile } from '../../platform/types';
-import { JobQueue, knownHash, runJob, type Job, type JobDeps, type UploadItem } from '../jobs';
+import { knownHash, runJob, type JobDeps, type UploadItem } from '../jobs';
 import { SENT, STORED, TEXT_CONTENT_TYPE, type ShareClient } from '../share';
 
 const file: StagedFile = { token: 'tok', name: 'x', contentType: 'application/pdf', size: 3, sha256: '' };
@@ -119,117 +119,6 @@ describe('runJob', () => {
       runJob({ id: 3, target: 'send', payload: { kind: 'file', file, contentType: 'application/pdf', filename: 'r.pdf' } }, d),
     ).rejects.toThrow(want);
     expect(log).toContain('discard tok');
-  });
-});
-
-describe('JobQueue', () => {
-  const job = (id: number): Job => ({
-    id,
-    target: 'send',
-    payload: { kind: 'text', item: { contentType: TEXT_CONTENT_TYPE, filename: '', body: utf8(String(id)) } },
-  });
-
-  it('runs jobs one at a time, in order, and reports each outcome', async () => {
-    const order: string[] = [];
-    let active = 0;
-    const reports: [boolean, string][] = [];
-    const q = new JobQueue(
-      async (j) => {
-        active++;
-        expect(active).toBe(1);
-        order.push(`start ${j.id}`);
-        await Promise.resolve();
-        order.push(`end ${j.id}`);
-        active--;
-        if (j.id === 2) {
-          throw new Error('two failed');
-        }
-        return `done ${j.id}`;
-      },
-      (_job, ok, message) => reports.push([ok, message]),
-      (err) => (err as Error).message,
-    );
-    q.add(job(1));
-    q.add(job(2));
-    q.add(job(3));
-    await q.drain();
-    expect(order).toEqual(['start 1', 'end 1', 'start 2', 'end 2', 'start 3', 'end 3']);
-    expect(reports).toEqual([
-      [true, 'done 1'],
-      [false, 'two failed'],
-      [true, 'done 3'],
-    ]);
-    expect(q.running).toBe(false);
-  });
-
-  it('picks up a job added while it runs, and joins a drain in progress', async () => {
-    const ran: number[] = [];
-    const q: JobQueue = new JobQueue(
-      async (j) => {
-        ran.push(j.id);
-        if (j.id === 1) {
-          q.add(job(2));
-        }
-        return '';
-      },
-      () => {},
-      String,
-    );
-    q.add(job(1));
-    const first = q.drain();
-    const second = q.drain();
-    expect(second).toBe(first);
-    await first;
-    expect(ran).toEqual([1, 2]);
-  });
-
-  it('starts a new drain for a job added after the last one finished', async () => {
-    const ran: number[] = [];
-    const q = new JobQueue(
-      async (j) => {
-        ran.push(j.id);
-        return '';
-      },
-      () => {},
-      String,
-    );
-    await q.drain();
-    expect(q.running).toBe(false);
-    q.add(job(4));
-    await q.drain();
-    expect(ran).toEqual([4]);
-  });
-});
-
-describe('JobQueue.position', () => {
-  const job = (id: number): Job => ({
-    id,
-    target: 'send',
-    payload: { kind: 'text', item: { contentType: TEXT_CONTENT_TYPE, filename: '', body: utf8(String(id)) } },
-  });
-
-  it('counts which upload of the run is going, including ones added meanwhile', async () => {
-    const seen: string[] = [];
-    const q: JobQueue = new JobQueue(
-      async (j) => {
-        if (j.id === 1) {
-          q.add(job(3));
-        }
-        const { index, total } = q.position;
-        seen.push(`${index} of ${total}`);
-        return '';
-      },
-      () => {},
-      String,
-    );
-    q.add(job(1));
-    q.add(job(2));
-    await q.drain();
-    expect(seen).toEqual(['1 of 3', '2 of 3', '3 of 3']);
-    // A new run counts from one again.
-    q.add(job(4));
-    await q.drain();
-    expect(seen[3]).toBe('1 of 1');
   });
 });
 

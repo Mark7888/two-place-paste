@@ -21,8 +21,9 @@ import type { Item, StoreItem, StoreSort } from '../../core';
 import { background, clipboard, files, share, type SavedFile, type StagedFile } from '../../platform';
 import { enqueue } from '../backgroundJobs';
 import { describePayload, payloadHash, suggestedName, type Payload } from '../share';
-import { keepAliveDuring } from '../keepAlive';
+import { queueDownload } from '../transfers';
 import { useSession } from '../SessionContext';
+import { TransferPanel } from '../TransferPanel';
 import { Icon, type IconName } from '../icons';
 import { PreviewBody } from '../PreviewBody';
 import { formatSize, headerPreviewable, MAX_FILE_PREVIEW_BYTES, previewOf, storeRoom, type Preview } from '../preview';
@@ -50,7 +51,7 @@ import {
   subscribeStore,
 } from '../storeState';
 import { colors, styles } from '../theme';
-import { Button, FILE_CHOICES_TITLE, FileChoices, Notice, OutcomeNotice, Sheet, TransferList } from '../ui';
+import { Button, FILE_CHOICES_TITLE, FileChoices, Notice, OutcomeNotice, Sheet, } from '../ui';
 
 const SORTS: { id: StoreSort; label: string }[] = [
   { id: 'newest', label: 'Newest' },
@@ -197,8 +198,11 @@ export function StoreScreen(): React.JSX.Element {
     if (kept !== null && kept.id === it.id) {
       return kept.item;
     }
-    // A large item's download carries on if the user switches apps meanwhile.
-    const item = await keepAliveDuring(() => client.fetchStoreItem(it));
+    // A large item waits its turn in the transfer queue, and carries on if
+    // the user switches apps meanwhile.
+    const item = await queueDownload({ target: 'store', name: it.name, size: it.blobSize }, () =>
+      client.fetchStoreItem(it),
+    );
     // Only something a preview could have read is kept: a large file copied
     // once is not worth holding in memory.
     lastFetched.current = item.body.length <= MAX_FILE_PREVIEW_BYTES ? { id: it.id, item } : null;
@@ -293,7 +297,7 @@ export function StoreScreen(): React.JSX.Element {
       <Text style={styles.lede}>
         What the group keeps on purpose. Items do not expire, and the relay cannot read a name, a tag or a byte.
       </Text>
-      <TransferList transfers={session.transfers} />
+      <TransferPanel />
       {message !== '' && (
         <OutcomeNotice message={message} ok={ok} saved={saved} onError={(m) => report(false, m)} />
       )}

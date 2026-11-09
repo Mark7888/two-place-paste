@@ -24,8 +24,9 @@ import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
 
 import type { EntryMeta, Progress } from '../../core';
 import type { SavedFile } from '../../platform';
-import { keepAliveDuring } from '../keepAlive';
+import { queueDownload, queueTransfer } from '../transfers';
 import { useSession } from '../SessionContext';
+import { TransferPanel } from '../TransferPanel';
 import { receiveLabel } from '../choices';
 import {
   choiceFor,
@@ -37,9 +38,10 @@ import {
   toClipboardItem,
   type FileChoice,
   type PendingFile,
+  nameOf,
 } from '../session';
 import { describeHeader, formatSize, headerPreviewable, previewOf, storeRoom, type Preview } from '../preview';
-import { Button, FILE_CHOICES_TITLE, FileChoices, Notice, OutcomeNotice, Sheet, Shimmer, TransferList } from '../ui';
+import { Button, FILE_CHOICES_TITLE, FileChoices, Notice, OutcomeNotice, Sheet, Shimmer, } from '../ui';
 import { colors, styles } from '../theme';
 import { PreviewBody } from '../PreviewBody';
 import { StoreSheet } from '../StoreSheet';
@@ -158,7 +160,10 @@ export function HistoryScreen(): React.JSX.Element {
     fetchingEntry(id, true);
     void (async () => {
       try {
-        const item = await client.getEntry(id, meta);
+        // A large image waits its turn in the transfer queue like any download.
+        const item = await queueDownload({ target: 'group', name: nameOf(meta), size: meta.size }, () =>
+          client.getEntry(id, meta),
+        );
         setPreviews((prev) => ({ ...prev, [id]: { ok: true, preview: previewOf(item) } }));
       } catch (err) {
         setPreviews((prev) => ({ ...prev, [id]: { ok: false, error: failureMessage(err) } }));
@@ -188,7 +193,9 @@ export function HistoryScreen(): React.JSX.Element {
     fetchingEntry(meta.id, true);
     void (async () => {
       try {
-        const item = await keepAliveDuring(() => client.getEntry(meta.id, meta));
+        const item = await queueDownload({ target: 'group', name: nameOf(meta), size: meta.size }, () =>
+          client.getEntry(meta.id, meta),
+        );
         // The download is over; what follows is local.
         fetchingEntry(meta.id, false);
         const result = await deliver(toClipboardItem(item), true);
@@ -256,7 +263,7 @@ export function HistoryScreen(): React.JSX.Element {
         <Text style={styles.lede}>
           Newest first. Entries expire within 24 hours. Tap one to see what is in it.
         </Text>
-        <TransferList transfers={session.transfers} />
+        <TransferPanel />
         {message !== '' && (
           <OutcomeNotice
             message={message}
@@ -389,10 +396,16 @@ export function HistoryScreen(): React.JSX.Element {
           }
           fetchingEntry(saving.id, true);
           try {
-            const it = await keepAliveDuring(async () => {
-              const entry = await client.getEntry(saving.id, saving);
-              return saveItem(client, toClipboardItem(entry), details, allowDuplicate);
-            });
+            // Downloaded from the group and saved to the store as one
+            // transfer, in its turn in the queue.
+            const it = await queueTransfer(
+              { direction: 'upload', target: 'store', name: details.name, size: saving.size },
+              async () => {
+                const entry = await client.getEntry(saving.id, saving);
+                return saveItem(client, toClipboardItem(entry), details, allowDuplicate);
+              },
+              () => 'Saved to the store.',
+            );
             return `Saved “${it.name}” to the store.`;
           } finally {
             fetchingEntry(saving.id, false);
