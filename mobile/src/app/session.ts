@@ -21,7 +21,7 @@ import {
   type EntryMeta,
 } from '../core';
 import { choiceRule, type ChoiceRule } from './choices';
-import { downloadSink } from './downloads';
+import { downloadSink, entryBody, storeBody } from './downloads';
 import { queueDownload } from './transfers';
 import { formatSize, kindOf } from './preview';
 import {
@@ -194,7 +194,9 @@ export async function download(client: Client, latest?: EntryMeta): Promise<Sync
     item =
       newest === undefined
         ? await client.getLatest()
-        : await queueDownload({ target: 'group', name: nameOf(newest), size: newest.size }, () => client.getLatest());
+        : await queueDownload({ target: 'group', name: nameOf(newest), size: newest.size, key: `entry:${newest.id}` }, () =>
+            client.getLatest(),
+          );
   } catch (err) {
     if (err instanceof TppError && err.kind === 'no-entry') {
       return { direction: 'nothing', message: 'The group has no entry yet.' };
@@ -258,10 +260,11 @@ export async function handleFile(
   }
   // A large file waits its turn in the transfer queue, and its download and
   // the save after it carry on if the user switches apps meanwhile.
+  // Keyed by what it reads, so asking again for the same file joins this.
   const info =
     file.storeItem !== undefined
-      ? { target: 'store' as const, name: file.name, size: file.storeItem.blobSize }
-      : { target: 'group' as const, name: file.name, size: file.entry?.size ?? 0 };
+      ? { target: 'store' as const, name: file.name, size: file.storeItem.blobSize, key: `store:${file.storeItem.id}` }
+      : { target: 'group' as const, name: file.name, size: file.entry?.size ?? 0, key: file.entry ? `entry:${file.entry.id}` : undefined };
   return queueDownload(info, () => carryOut(client, file, choice));
 }
 
@@ -283,7 +286,7 @@ async function carryOut(client: Client, file: PendingFile, choice: FileChoice): 
     if (sink !== null) {
       return deliverStaged(await client.fetchStoreItemStaged(file.storeItem, sink), choice);
     }
-    item = toClipboardItem(await client.fetchStoreItem(file.storeItem));
+    item = toClipboardItem(await storeBody(client, file.storeItem));
   }
   if (item === undefined) {
     if (file.entry === undefined) {
@@ -299,7 +302,7 @@ async function carryOut(client: Client, file: PendingFile, choice: FileChoice): 
       }
       item = toClipboardItem(got);
     } else {
-      item = toClipboardItem(await client.getEntry(file.entry.id, file.entry));
+      item = toClipboardItem(await entryBody(client, file.entry.id, file.entry));
     }
   }
   switch (choice) {

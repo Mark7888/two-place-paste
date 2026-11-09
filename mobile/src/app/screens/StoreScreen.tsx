@@ -21,6 +21,7 @@ import type { Item, StoreItem, StoreSort } from '../../core';
 import { background, clipboard, files, share, type SavedFile, type StagedFile } from '../../platform';
 import { enqueue } from '../backgroundJobs';
 import { describePayload, payloadHash, suggestedName, type Payload } from '../share';
+import { storeBody } from '../downloads';
 import { queueDownload } from '../transfers';
 import { useSession } from '../SessionContext';
 import { TransferPanel } from '../TransferPanel';
@@ -200,8 +201,8 @@ export function StoreScreen(): React.JSX.Element {
     }
     // A large item waits its turn in the transfer queue, and carries on if
     // the user switches apps meanwhile.
-    const item = await queueDownload({ target: 'store', name: it.name, size: it.blobSize }, () =>
-      client.fetchStoreItem(it),
+    const item = await queueDownload({ target: 'store', name: it.name, size: it.blobSize, key: `store:${it.id}` }, () =>
+      storeBody(client, it),
     );
     // Only something a preview could have read is kept: a large file copied
     // once is not worth holding in memory.

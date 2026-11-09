@@ -535,10 +535,76 @@ class ShareModule(reactContext: ReactApplicationContext) :
         synchronized(Companion) { captureHandlers[socketId.toInt()] }?.release(envelopeId)
     }
 
-    /** discard deletes staged copy [token]. Deleting one already gone is fine. */
+    /**
+     * discard deletes staged copy [token]. Deleting one already gone is fine,
+     * and a container kept in the [SealedCache] is not touched: only the
+     * cache drops what it keeps.
+     */
     @ReactMethod
     fun discard(token: String) {
-        stagedFileOrNull(reactApplicationContext, token)?.delete()
+        if (TOKEN.matches(token)) {
+            stagedFile(reactApplicationContext, token).delete()
+        }
+    }
+
+    /**
+     * cacheLookup resolves with the sealed container kept under [key] —
+     * `{ token, size, info }` — or with null when none is, or it has expired.
+     */
+    @ReactMethod
+    fun cacheLookup(key: String, promise: Promise) {
+        try {
+            val kept = SealedCache.lookup(reactApplicationContext, key, System.currentTimeMillis())
+            promise.resolve(
+                kept?.let {
+                    Arguments.createMap().apply {
+                        putString("token", it.token)
+                        putDouble("size", it.size.toDouble())
+                        putString("info", it.info)
+                    }
+                },
+            )
+        } catch (e: Throwable) {
+            promise.resolve(null)
+        }
+    }
+
+    /** cacheKeep moves staged container [token] into the cache under [key] until [until] (ms), with [info]. */
+    @ReactMethod
+    fun cacheKeep(key: String, token: String, info: String, until: Double, promise: Promise) {
+        val context = reactApplicationContext
+        if (!TOKEN.matches(token)) {
+            promise.reject(ERROR_CODE, "not a staged file")
+            return
+        }
+        Thread {
+            try {
+                SealedCache.keep(context, key, token, stagedFile(context, token), info, until.toLong(), System.currentTimeMillis())
+                promise.resolve(null)
+            } catch (e: Throwable) {
+                promise.reject(ERROR_CODE, "the download could not be kept", e)
+            }
+        }.start()
+    }
+
+    /** cacheClear drops everything the cache keeps: the group in use changed. */
+    @ReactMethod
+    fun cacheClear() {
+        try {
+            SealedCache.clear(reactApplicationContext)
+        } catch (e: Throwable) {
+            // Whatever could not be deleted now expires within the hour.
+        }
+    }
+
+    /** cacheForget drops what the cache keeps under [key]. */
+    @ReactMethod
+    fun cacheForget(key: String) {
+        try {
+            SealedCache.forget(reactApplicationContext, key)
+        } catch (e: Throwable) {
+            // Nothing kept, or nothing to drop: either way it is gone.
+        }
     }
 
     /**
@@ -638,9 +704,22 @@ class ShareModule(reactContext: ReactApplicationContext) :
         private fun stagedFile(context: Context, token: String) =
             File(File(context.cacheDir, STAGE_DIRECTORY), token)
 
-        /** stagedFileOrNull is [stagedFile] for a token JavaScript sent back, which must be one [newToken] made. */
-        internal fun stagedFileOrNull(context: Context, token: String) =
-            if (TOKEN.matches(token)) stagedFile(context, token) else null
+        /**
+         * stagedFileOrNull is the file of a token JavaScript sent back, which
+         * must be one [newToken] made: a staged copy, or a container moved into
+         * the [SealedCache], which keeps its token.
+         */
+        internal fun stagedFileOrNull(context: Context, token: String): File? {
+            if (!TOKEN.matches(token)) {
+                return null
+            }
+            val staged = stagedFile(context, token)
+            if (staged.exists()) {
+                return staged
+            }
+            val kept = File(SealedCache.directory(context), token)
+            return if (kept.exists()) kept else staged
+        }
 
         private fun newToken(): String = UUID.randomUUID().toString()
 

@@ -24,6 +24,7 @@ import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
 
 import type { EntryMeta, Progress } from '../../core';
 import type { SavedFile } from '../../platform';
+import { entryBody } from '../downloads';
 import { queueDownload, queueTransfer } from '../transfers';
 import { useSession } from '../SessionContext';
 import { TransferPanel } from '../TransferPanel';
@@ -161,8 +162,8 @@ export function HistoryScreen(): React.JSX.Element {
     void (async () => {
       try {
         // A large image waits its turn in the transfer queue like any download.
-        const item = await queueDownload({ target: 'group', name: nameOf(meta), size: meta.size }, () =>
-          client.getEntry(id, meta),
+        const item = await queueDownload({ target: 'group', name: nameOf(meta), size: meta.size, key: `entry:${id}` }, () =>
+          entryBody(client, id, meta),
         );
         setPreviews((prev) => ({ ...prev, [id]: { ok: true, preview: previewOf(item) } }));
       } catch (err) {
@@ -193,8 +194,9 @@ export function HistoryScreen(): React.JSX.Element {
     fetchingEntry(meta.id, true);
     void (async () => {
       try {
-        const item = await queueDownload({ target: 'group', name: nameOf(meta), size: meta.size }, () =>
-          client.getEntry(meta.id, meta),
+        const item = await queueDownload(
+          { target: 'group', name: nameOf(meta), size: meta.size, key: `entry:${meta.id}` },
+          () => entryBody(client, meta.id, meta),
         );
         // The download is over; what follows is local.
         fetchingEntry(meta.id, false);
@@ -399,9 +401,9 @@ export function HistoryScreen(): React.JSX.Element {
             // Downloaded from the group and saved to the store as one
             // transfer, in its turn in the queue.
             const it = await queueTransfer(
-              { direction: 'upload', target: 'store', name: details.name, size: saving.size },
+              { direction: 'upload', target: 'store', name: details.name, size: saving.size, key: `entry:${saving.id}` },
               async () => {
-                const entry = await client.getEntry(saving.id, saving);
+                const entry = await entryBody(client, saving.id, saving);
                 return saveItem(client, toClipboardItem(entry), details, allowDuplicate);
               },
               () => 'Saved to the store.',

@@ -366,9 +366,24 @@ sharing a received file or a store item downloads it with
    back to it, and a store item's hash is checked natively too;
 3. `FileModule` saves, opens or shares the body straight from the staged file.
 
-Copying an entry, and a preview, still read it into JavaScript: the
-clipboard and the screen need it there. The staged download does not use
-the hour-long entry cache, which holds containers in memory.
+**One download per file per hour.** The sealed container of a native
+download is kept, still sealed, for up to an hour (never past the entry's own
+expiry), at most 200 MB in all (`SealedCache.kt`, behind `DownloadSink.cached`
+/ `keep`). Every action reads through it: a preview or a copy goes the native
+way too and then reads the opened body into JavaScript (`entryBody`,
+`storeBody` in `src/app/downloads.ts`), and a save, an open or a share opens
+the kept container again natively. So previewing a file and then saving it,
+or saving it and then opening it, downloads it once. A kept container is
+used only once it has opened; one that later does not is dropped and the file
+read again. Nothing decrypted is kept beyond the action that needed it. The
+cache is cleared when the device leaves or switches group.
+
+Asking again for a file already in the transfer queue joins it rather than
+queueing it twice: a transfer carries the key of what it reads (`entry:<id>`,
+`store:<id>`), and work asked for under a key that is waiting or running runs
+on the same row right after the first — even with other transfers queued in
+between. "Save report.pdf, open photo.jpg, open report.pdf" is two rows, and
+report.pdf is opened, from the kept container, as soon as it is saved.
 
 The opener is fenced like the sealer: the same self-test (round trips, and a
 refusal of a flipped ciphertext or tag byte, other associated data and

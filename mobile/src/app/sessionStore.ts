@@ -27,7 +27,7 @@
 import { AppState, Linking, type AppStateStatus } from 'react-native';
 
 import type { Client, Handlers, ParkedGroup, Progress } from '../core';
-import { secureStore, tile } from '../platform';
+import { secureStore, share, tile } from '../platform';
 import { stripCodeEnvelope } from '../core';
 import {
   download,
@@ -275,6 +275,8 @@ export async function forget(): Promise<void> {
     return;
   }
   await client.forget();
+  // Downloads of a group this device is no longer in are no business of its cache.
+  share.downloadSink?.clear?.();
   clearStore();
   probablyRevoked = false;
   notice = '';
@@ -352,6 +354,8 @@ export async function removeGroup(ref: string): Promise<void> {
 /** resetScreens drops what the screens showed of the group that is going away. */
 function resetScreens(): void {
   clearStore();
+  // And the downloads kept from it: the cache is the group in use's.
+  share.downloadSink?.clear?.();
   transfers.clear();
   probablyRevoked = false;
   notice = '';

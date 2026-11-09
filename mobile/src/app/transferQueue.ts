@@ -14,6 +14,14 @@
  * phase and progress while it runs, and how it ended. That is what the app's
  * Transfers panel and the notification show.
  *
+ * Asking again for a file already in the queue does not queue it twice. A
+ * transfer can carry a key — the entry or store item it reads — and work
+ * asked for under a key that is waiting or running joins that transfer, to
+ * run right after what it was asked for first, even when other transfers were
+ * queued in between: "save report.pdf", "open photo.jpg", "open report.pdf"
+ * is two transfers, and the second action on report.pdf, run once it has
+ * been downloaded, opens the copy the first one kept.
+ *
  * This module imports nothing from React Native, so it is tested directly.
  */
 
@@ -31,6 +39,11 @@ export interface TransferInfo {
   name: string;
   /** size is in bytes, or 0 when not known yet. */
   size: number;
+  /**
+   * key names what the transfer reads — "entry:<id>", "store:<id>" — so a
+   * second ask for it joins this one rather than queueing it again.
+   */
+  key?: string;
 }
 
 /** TransferState is where a transfer is. */
@@ -58,9 +71,19 @@ export interface TransferControl {
 /** KEEP_FINISHED is how many finished transfers stay in the panel until cleared. */
 export const KEEP_FINISHED = 5;
 
+/** Job is one piece of work asked for: what it does, how its success is named, and who waits on it. */
+interface Job {
+  work: (control: TransferControl) => Promise<unknown>;
+  outcome: (result: unknown) => string;
+  resolve: (result: unknown) => void;
+  reject: (err: Error) => void;
+}
+
+/** Task is one transfer in the queue: the work asked for under it, run in turn. */
 interface Task {
   transfer: Transfer;
-  start: () => void;
+  key: string | undefined;
+  jobs: Job[];
 }
 
 export class TransferQueue {
@@ -81,40 +104,28 @@ export class TransferQueue {
   /**
    * run queues `work` as a transfer and resolves with what it resolves with,
    * once it has had its turn and finished. `outcome` names a success for the
-   * panel; a failure is named from its error.
+   * panel; a failure is named from its error. Work under the key of a
+   * transfer that is waiting or running joins it instead (see the top).
    */
   run<T>(info: TransferInfo, work: (control: TransferControl) => Promise<T>, outcome: (result: T) => string): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      const transfer: Transfer = { ...info, id: this.nextId++, state: 'waiting', phase: '', done: 0, total: 0, message: '' };
-      const task: Task = {
-        transfer,
-        start: () => {
-          const control: TransferControl = {
-            progress: (phase, done, total) => {
-              if (this.running === task) {
-                this.update(transfer, { phase, done, total });
-              }
-            },
-          };
-          let settled: Promise<T>;
-          try {
-            settled = work(control);
-          } catch (err) {
-            settled = Promise.reject(asError(err));
-          }
-          settled.then(
-            (result) => {
-              this.finish(task, 'done', outcome(result));
-              resolve(result);
-            },
-            (err: unknown) => {
-              this.finish(task, 'failed', this.describeError(err));
-              reject(asError(err));
-            },
-          );
-        },
+      const job: Job = {
+        work,
+        outcome: (result) => outcome(result as T),
+        resolve: (result) => resolve(result as T),
+        reject,
       };
-      this.tasks.push(task);
+      const same =
+        info.key === undefined
+          ? undefined
+          : [...(this.running === null ? [] : [this.running]), ...this.tasks].find((t) => t.key === info.key);
+      if (same !== undefined) {
+        same.jobs.push(job);
+        this.changed();
+        return;
+      }
+      const transfer: Transfer = { ...info, id: this.nextId++, state: 'waiting', phase: '', done: 0, total: 0, message: '' };
+      this.tasks.push({ transfer, key: info.key, jobs: [job] });
       this.changed();
       this.next();
     });
@@ -176,7 +187,47 @@ export class TransferQueue {
     }
     this.running = task;
     this.update(task.transfer, { state: 'running' });
-    task.start();
+    void this.runJobs(task);
+  }
+
+  /**
+   * runJobs runs a transfer's work in turn, including work that joins it
+   * while it runs, and ends it as its last work ended. Nothing is awaited
+   * between finding no more work and ending it, so work that joins can never
+   * be left behind.
+   */
+  private async runJobs(task: Task): Promise<void> {
+    let state: 'done' | 'failed' = 'done';
+    let message = '';
+    for (let job = task.jobs.shift(); job !== undefined; job = task.jobs.shift()) {
+      const current = job;
+      // Progress counts only while this work runs: a late report from work
+      // that has finished does not move the row.
+      let live = true;
+      const control: TransferControl = {
+        progress: (phase, done, total) => {
+          if (live && this.running === task) {
+            this.update(task.transfer, { phase, done, total });
+          }
+        },
+      };
+      try {
+        const result = await Promise.resolve().then(() => current.work(control));
+        state = 'done';
+        message = current.outcome(result);
+        current.resolve(result);
+      } catch (err) {
+        state = 'failed';
+        message = this.describeError(err);
+        current.reject(asError(err));
+      }
+      live = false;
+      if (task.jobs.length > 0) {
+        // Joined work starts afresh on the same row.
+        this.update(task.transfer, { phase: '', done: 0, total: 0 });
+      }
+    }
+    this.finish(task, state, message);
   }
 
   private finish(task: Task, state: 'done' | 'failed', message: string): void {

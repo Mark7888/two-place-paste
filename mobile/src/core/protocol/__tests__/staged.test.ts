@@ -21,8 +21,11 @@ import type { SocketFactory } from '../connection';
 const MiB = 1 << 20;
 
 /** files holds the staged files, by token, as the platform's cache does. */
-function platform() {
+function platform(now: () => number = () => Date.now()) {
   const files = new Map<string, Uint8Array>();
+  /** cache is the sealed cache: key to a kept container's token, what came with it, and until when. */
+  const cache = new Map<string, { token: string; info: string; until: number }>();
+  const kept = () => new Set([...cache.values()].map((c) => c.token));
   const calls = { captured: 0, wholeRanges: 0, opened: 0 };
   let next = 1;
   const writeAt = (token: string, offset: number, data: Uint8Array) => {
@@ -61,7 +64,27 @@ function platform() {
     },
     digest: async (token, offset) => sha256((files.get(token) ?? new Uint8Array(0)).subarray(offset)),
     discard: (token) => {
-      files.delete(token);
+      // A container moved into the cache is not the caller's to delete.
+      if (!kept().has(token)) {
+        files.delete(token);
+      }
+    },
+    cached: async (key) => {
+      const c = cache.get(key);
+      if (c === undefined || now() >= c.until || !files.has(c.token)) {
+        return null;
+      }
+      return { token: c.token, size: files.get(c.token)!.length, info: c.info };
+    },
+    keep: async (key, token, info, until) => {
+      cache.set(key, { token, info, until });
+    },
+    forget: (key) => {
+      const c = cache.get(key);
+      cache.delete(key);
+      if (c !== undefined) {
+        files.delete(c.token);
+      }
     },
   };
 
@@ -108,7 +131,7 @@ function platform() {
         },
       };
     };
-  return { files, calls, sink, capturing };
+  return { files, calls, sink, capturing, cache };
 }
 
 function chunkingRelay(): FakeRelay {
@@ -192,10 +215,12 @@ describe('a staged entry download', () => {
     // Twelve 1 MiB ranges, all captured; none came through JavaScript.
     expect(p.calls.captured).toBe(12);
     expect(p.calls.wholeRanges).toBe(0);
-    // Only the opened frame is left, until the caller releases it.
-    expect([...p.files.keys()]).toEqual([item.staged.token]);
+    // The opened frame is left until the caller releases it, and the sealed
+    // container is kept in the cache.
+    expect(p.files.has(item.staged.token)).toBe(true);
+    expect(p.cache.get(`entry:${meta.id}`)).toBeDefined();
     item.staged.release();
-    expect(p.files.size).toBe(0);
+    expect([...p.files.keys()]).toEqual([p.cache.get(`entry:${meta.id}`)!.token]);
   });
 
   test('writes the ranges itself when the socket cannot capture', async () => {
@@ -268,7 +293,8 @@ describe('a staged store item download', () => {
     expect(p.calls.captured).toBeGreaterThan(1);
     expect(p.calls.wholeRanges).toBe(0);
     item.staged.release();
-    expect(p.files.size).toBe(0);
+    // Only the sealed container is left, in the cache.
+    expect([...p.files.keys()]).toEqual([p.cache.get(`store:${saved.id}`)!.token]);
   });
 
   test('refuses an item whose body is not the one its metadata names', async () => {
@@ -297,5 +323,97 @@ describe('a staged store item download', () => {
     const memory = await laptop.fetchStoreItem(saved);
     expect(fromUTF8(bodyOf(p.files, staged))).toBe(fromUTF8(memory.body));
     expect(concat(utf8('note')).length).toBe(staged.staged.size);
+  });
+});
+
+describe('the sealed cache', () => {
+  test('a second read of an entry opens the kept container, without the relay', async () => {
+    const relay = chunkingRelay();
+    const p = platform();
+    const laptop = await open(relay, 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const phone = await open(relay, 'phone', p.capturing(relay.factory));
+    await pair(laptop, phone);
+    const meta = await laptop.putEntry({ contentType: 'application/octet-stream', filename: 'big.bin', body });
+
+    const first = (await phone.getEntryStaged(meta.id, meta, p.sink)) as StagedItem;
+    first.staged.release();
+    const ranges = p.calls.captured;
+    // No hint this time: what the cache kept says what the entry is.
+    const second = (await phone.getEntryStaged(meta.id, undefined, p.sink)) as StagedItem;
+    expect(p.calls.captured).toBe(ranges);
+    expect(p.calls.opened).toBe(2);
+    expect(second.filename).toBe('big.bin');
+    expect(Buffer.from(bodyOf(p.files, second)).equals(Buffer.from(body))).toBe(true);
+    second.staged.release();
+  });
+
+  test('a store item is kept the same way', async () => {
+    const relay = chunkingRelay();
+    const p = platform();
+    const laptop = await open(relay, 'laptop', p.capturing(relay.factory));
+    await laptop.createGroup(relay.creationURL);
+    const saved = await laptop.saveToStore(
+      { contentType: 'application/octet-stream', filename: 'kept.bin', body },
+      { name: 'Kept', description: '', tags: [] },
+    );
+    (await laptop.fetchStoreItemStaged(saved, p.sink)).staged.release();
+    const ranges = p.calls.captured;
+    const again = await laptop.fetchStoreItemStaged(saved, p.sink);
+    expect(p.calls.captured).toBe(ranges);
+    expect(Buffer.from(bodyOf(p.files, again)).equals(Buffer.from(body))).toBe(true);
+    again.staged.release();
+  });
+
+  test('a kept container that does not open is dropped and the entry read again', async () => {
+    const relay = chunkingRelay();
+    const p = platform();
+    const laptop = await open(relay, 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const phone = await open(relay, 'phone', p.capturing(relay.factory));
+    await pair(laptop, phone);
+    const meta = await laptop.putEntry({ contentType: 'application/octet-stream', filename: 'big.bin', body });
+    (await phone.getEntryStaged(meta.id, meta, p.sink) as StagedItem).staged.release();
+    const keptToken = p.cache.get(`entry:${meta.id}`)!.token;
+    p.files.get(keptToken)![5000] ^= 1;
+    const ranges = p.calls.captured;
+
+    const item = (await phone.getEntryStaged(meta.id, meta, p.sink)) as StagedItem;
+    expect(Buffer.from(bodyOf(p.files, item)).equals(Buffer.from(body))).toBe(true);
+    expect(p.calls.captured).toBeGreaterThan(ranges);
+    expect(p.files.has(keptToken)).toBe(false);
+    item.staged.release();
+  });
+
+  test('an expired container is not used', async () => {
+    let clock = Date.now();
+    const relay = chunkingRelay();
+    const p = platform(() => clock);
+    const laptop = await open(relay, 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const phone = await open(relay, 'phone', p.capturing(relay.factory));
+    await pair(laptop, phone);
+    const meta = await laptop.putEntry({ contentType: 'application/octet-stream', filename: 'big.bin', body });
+    (await phone.getEntryStaged(meta.id, meta, p.sink) as StagedItem).staged.release();
+    expect(p.cache.get(`entry:${meta.id}`)!.until).toBeLessThanOrEqual(Date.now() + 60 * 60 * 1000 + 1000);
+    clock += 61 * 60 * 1000;
+    const ranges = p.calls.captured;
+    (await phone.getEntryStaged(meta.id, meta, p.sink) as StagedItem).staged.release();
+    expect(p.calls.captured).toBeGreaterThan(ranges);
+  });
+
+  test('a kept entry from before a re-key is refused, not read again', async () => {
+    const relay = chunkingRelay();
+    const p = platform();
+    const laptop = await open(relay, 'laptop', p.capturing(relay.factory));
+    await laptop.createGroup(relay.creationURL);
+    const phone = await open(relay, 'phone');
+    await pair(laptop, phone);
+    const meta = await laptop.putEntry({ contentType: 'application/octet-stream', filename: 'big.bin', body });
+    (await laptop.getEntryStaged(meta.id, meta, p.sink) as StagedItem).staged.release();
+    await (await laptop.prepareRevoke(phone.deviceId)).confirm();
+    const ranges = p.calls.captured;
+    await expect(laptop.getEntryStaged(meta.id, meta, p.sink)).rejects.toMatchObject({ kind: 'stale-entry' });
+    expect(p.calls.captured).toBe(ranges);
   });
 });

@@ -144,7 +144,7 @@ import {
   VERSION,
 } from '../crypto';
 import { Connection, REQUEST_TIMEOUT_MS, SocketFactory, fieldHead, webSocketFactory } from './connection';
-import { DEFAULT_TTL_MS, type EntryCache } from './entryCache';
+import { DEFAULT_TTL_MS, decodeEntryMeta, encodeEntryMeta, type EntryCache } from './entryCache';
 import { ProtocolError, TppError, isCode } from './errors';
 import {
   PARKED_STATE_NAME,
@@ -334,8 +334,29 @@ export interface DownloadSink {
   open(token: string, params: { key: Uint8Array; nonce: Uint8Array; aad: Uint8Array }): Promise<{ token: string; size: number; head: Uint8Array }>;
   /** digest is the SHA-256 of a staged file from `offset` to its end. */
   digest(token: string, offset: number): Promise<Uint8Array>;
+  /** discard deletes a staged file. One kept in the cache stays there. */
   discard(token: string): void;
+
+  /**
+   * cached returns the sealed container kept under `key`, if one is and has
+   * not expired: a staged file to open, its size, and what was kept with it.
+   * It is never deleted by `discard`; `forget` drops it.
+   *
+   * The cache holds containers only — still sealed — for up to an hour, as
+   * the in-memory path's `EntryCache` does, so a preview, a save and an open
+   * of the same file are one download.
+   */
+  cached?(key: string): Promise<{ token: string; size: number; info: string } | null>;
+  /** keep moves staged container `token` into the cache under `key`, with `info`, until `keepUntil` (ms). */
+  keep?(key: string, token: string, info: string, keepUntil: number): Promise<void>;
+  /** forget drops what the cache keeps under `key`: it would not open. */
+  forget?(key: string): void;
+  /** clear drops everything the cache keeps: the group in use changed. */
+  clear?(): void;
 }
+
+/** SEALED_CACHE_TTL_MS is how long a container downloaded natively is kept: an hour, as `EntryCache` keeps one. */
+export const SEALED_CACHE_TTL_MS = DEFAULT_TTL_MS;
 
 /**
  * StagedItem is a decrypted entry or store item whose body stayed on the
@@ -2074,6 +2095,26 @@ export class Client {
    */
   async getEntryStaged(entryId: string, hint: EntryHint | undefined, sink: DownloadSink): Promise<Item | StagedItem> {
     this.requireGroup();
+    const key = `entry:${entryId}`;
+    const cached = (await sink.cached?.(key).catch(() => null)) ?? null;
+    if (cached !== null) {
+      const meta = decodeEntryMeta(cached.info);
+      if (meta !== null && meta.id === entryId && Number(meta.size) === cached.size) {
+        try {
+          return await this.openStagedEntry(meta, cached.token, sink);
+        } catch (err) {
+          // An epoch refusal is the entry's, not the copy's: the relay's copy
+          // would be refused the same way.
+          if (err instanceof TppError && (err.kind === 'stale-entry' || err.kind === 'epoch-ahead')) {
+            throw err;
+          }
+        }
+      }
+      // A copy that does not open, or does not match, is dropped and the
+      // entry read again from the relay.
+      sink.forget?.(key);
+    }
+
     const limits = await this.limits();
     if (limits.chunkBytes === 0) {
       return this.read(entryId, hint);
@@ -2081,21 +2122,32 @@ export class Client {
     const rx = await sink.create();
     try {
       const { meta } = await this.transfer(() => this.readRanges(entryId, limits, hint, { sink, token: rx }));
-      this.checkEpoch(meta);
-      const head = await sink.read(rx, 0, 1 + NONCE_SIZE);
-      if (head.length !== 1 + NONCE_SIZE || head[0] !== VERSION) {
-        throw new TppError('invalid', `entry ${entryId} is not a version ${VERSION} container`);
-      }
-      const nonce = head.slice(1);
-      const opened = await sink.open(rx, {
-        key: deriveContentKey(this.state.groupKey, nonce, meta.epoch),
-        nonce,
-        aad: entryAAD(meta.epoch, meta.id),
-      });
-      return stagedFrame(opened, sink, meta);
+      const item = await this.openStagedEntry(meta, rx, sink);
+      // Kept once it has opened, so the cache never holds a container that
+      // does not; a cache that cannot keep it is only a cache that does not help.
+      const until = Math.min(this.now().getTime() + SEALED_CACHE_TTL_MS, meta.expiresAt.getTime());
+      await sink.keep?.(key, rx, encodeEntryMeta(meta), until).catch(() => undefined);
+      return item;
     } finally {
+      // A container moved into the cache is not deleted by this.
       sink.discard(rx);
     }
+  }
+
+  /** openStagedEntry opens a staged entry container natively, after the epoch rules. */
+  private async openStagedEntry(meta: EntryMeta, token: string, sink: DownloadSink): Promise<StagedItem> {
+    this.checkEpoch(meta);
+    const head = await sink.read(token, 0, 1 + NONCE_SIZE);
+    if (head.length !== 1 + NONCE_SIZE || head[0] !== VERSION) {
+      throw new TppError('invalid', `entry ${meta.id} is not a version ${VERSION} container`);
+    }
+    const nonce = head.slice(1);
+    const opened = await sink.open(token, {
+      key: deriveContentKey(this.state.groupKey, nonce, meta.epoch),
+      nonce,
+      aad: entryAAD(meta.epoch, meta.id),
+    });
+    return stagedFrame(opened, sink, meta);
   }
 
   /**
@@ -2923,35 +2975,54 @@ export class Client {
    */
   async fetchStoreItemStaged(it: StoreItem, sink: DownloadSink): Promise<StagedItem> {
     this.requireGroup();
+    const key = `store:${it.id}`;
+    const cached = (await sink.cached?.(key).catch(() => null)) ?? null;
+    if (cached !== null) {
+      if (cached.size === it.blobSize) {
+        try {
+          return await this.openStagedStoreItem(it, cached.token, sink);
+        } catch {
+          // Dropped below, and read again from the relay.
+        }
+      }
+      sink.forget?.(key);
+    }
     const rx = await sink.create();
     try {
       await this.readStoreBlob(it, (offset, data) => sink.write(rx, offset, data), rx);
-      const { contentKey, contentId, contentEpoch } = it.secrets;
-      const head = await sink.read(rx, 0, 1 + NONCE_SIZE);
-      if (head.length !== 1 + NONCE_SIZE || head[0] !== VERSION) {
-        throw new TppError('store-unreadable', `store item ${it.id} is not a version ${VERSION} container`);
-      }
-      const nonce = head.slice(1);
-      let opened: { token: string; size: number; head: Uint8Array };
-      try {
-        opened = await sink.open(rx, { key: contentKey, nonce, aad: entryAAD(contentEpoch, contentId) });
-      } catch (err) {
-        throw new TppError('store-unreadable', `store item ${it.id} did not decrypt`, { cause: err });
-      }
-      const item = stagedFrame(opened, sink, null);
-      try {
-        const sum = await sink.digest(item.staged.token, item.staged.offset);
-        if (item.staged.size !== it.bodySize || hashHex(sum) !== it.sha256Hex) {
-          throw new TppError('store-unreadable', `store item ${it.id} does not match its metadata`);
-        }
-      } catch (err) {
-        item.staged.release();
-        throw err;
-      }
+      const item = await this.openStagedStoreItem(it, rx, sink);
+      await sink.keep?.(key, rx, '', this.now().getTime() + SEALED_CACHE_TTL_MS).catch(() => undefined);
       return item;
     } finally {
       sink.discard(rx);
     }
+  }
+
+  /** openStagedStoreItem opens a staged store blob natively and checks it against the item's metadata. */
+  private async openStagedStoreItem(it: StoreItem, token: string, sink: DownloadSink): Promise<StagedItem> {
+    const { contentKey, contentId, contentEpoch } = it.secrets;
+    const head = await sink.read(token, 0, 1 + NONCE_SIZE);
+    if (head.length !== 1 + NONCE_SIZE || head[0] !== VERSION) {
+      throw new TppError('store-unreadable', `store item ${it.id} is not a version ${VERSION} container`);
+    }
+    const nonce = head.slice(1);
+    let opened: { token: string; size: number; head: Uint8Array };
+    try {
+      opened = await sink.open(token, { key: contentKey, nonce, aad: entryAAD(contentEpoch, contentId) });
+    } catch (err) {
+      throw new TppError('store-unreadable', `store item ${it.id} did not decrypt`, { cause: err });
+    }
+    const item = stagedFrame(opened, sink, null);
+    try {
+      const sum = await sink.digest(item.staged.token, item.staged.offset);
+      if (item.staged.size !== it.bodySize || hashHex(sum) !== it.sha256Hex) {
+        throw new TppError('store-unreadable', `store item ${it.id} does not match its metadata`);
+      }
+    } catch (err) {
+      item.staged.release();
+      throw err;
+    }
+    return item;
   }
 
   /**

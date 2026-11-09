@@ -153,3 +153,92 @@ describe('TransferQueue', () => {
     expect(idle).toBe(true);
   });
 });
+
+describe('TransferQueue, asked twice for the same file', () => {
+  const file = (key: string, name: string): TransferInfo => ({ direction: 'download', target: 'group', name, size: 30, key });
+
+  it('joins the second ask to the first, even with another transfer queued between them', async () => {
+    const { q } = queue();
+    const log: string[] = [];
+    const first = deferred<string>();
+    const save1 = q.run(file('entry:1', 'one.pdf'), async () => {
+      log.push('save 1');
+      return first.promise;
+    }, (r) => r);
+    const open2 = q.run(file('entry:2', 'two.jpg'), async () => {
+      log.push('open 2');
+      return 'opened 2';
+    }, (r) => r);
+    const open1 = q.run(file('entry:1', 'one.pdf'), async () => {
+      log.push('open 1');
+      return 'opened 1';
+    }, (r) => r);
+    await settle();
+    // Two rows, not three: the second ask for one.pdf is part of the first.
+    expect(q.transfers.map((t) => [t.name, t.state])).toEqual([
+      ['one.pdf', 'running'],
+      ['two.jpg', 'waiting'],
+    ]);
+    expect(q.position).toEqual({ index: 1, total: 2 });
+
+    first.resolve('saved 1');
+    expect(await save1).toBe('saved 1');
+    expect(await open1).toBe('opened 1');
+    expect(await open2).toBe('opened 2');
+    // One.pdf is opened once it is saved, before two.jpg's turn.
+    expect(log).toEqual(['save 1', 'open 1', 'open 2']);
+    expect(q.transfers.map((t) => [t.name, t.state, t.message])).toEqual([
+      ['two.jpg', 'done', 'opened 2'],
+      ['one.pdf', 'done', 'opened 1'],
+    ]);
+  });
+
+  it('joins a transfer that is still waiting, too', async () => {
+    const { q } = queue();
+    const log: string[] = [];
+    const block = deferred<string>();
+    void q.run(up('upload'), () => block.promise, (r) => r);
+    const a = q.run(file('store:9', 'kept'), async () => {
+      log.push('a');
+      return 'a';
+    }, (r) => r);
+    const b = q.run(file('store:9', 'kept'), async () => {
+      log.push('b');
+      return 'b';
+    }, (r) => r);
+    await settle();
+    expect(q.transfers).toHaveLength(2);
+    block.resolve('done');
+    expect([await a, await b]).toEqual(['a', 'b']);
+    expect(log).toEqual(['a', 'b']);
+  });
+
+  it('runs the joined work even when the first fails, and ends as the last ended', async () => {
+    const { q } = queue();
+    const failing = q.run(file('entry:5', 'f'), async () => {
+      throw new Error('lost the relay');
+    }, () => '');
+    const retry = q.run(file('entry:5', 'f'), async () => 'got it', (r) => r);
+    await expect(failing).rejects.toThrow('lost the relay');
+    expect(await retry).toBe('got it');
+    expect(q.transfers[0]).toMatchObject({ state: 'done', message: 'got it' });
+  });
+
+  it('does not join a file once its transfer has finished: it is asked for afresh', async () => {
+    const { q } = queue();
+    await q.run(file('entry:7', 'f'), async () => 'first', (r) => r);
+    await q.run(file('entry:7', 'f'), async () => 'second', (r) => r);
+    expect(q.transfers.map((t) => t.message)).toEqual(['second', 'first']);
+  });
+
+  it('never joins transfers without a key', async () => {
+    const { q } = queue();
+    const block = deferred<string>();
+    void q.run(up('same'), () => block.promise, (r) => r);
+    void q.run(up('same'), async () => 'x', (r) => r);
+    await settle();
+    expect(q.transfers).toHaveLength(2);
+    block.resolve('y');
+    await q.whenIdle();
+  });
+});

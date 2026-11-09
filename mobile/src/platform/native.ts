@@ -76,6 +76,14 @@ export interface TppShareModule {
   armCapture(socketId: number, envelopeId: string, responseType: number, token: string, offset: number): Promise<number | null>;
   /** releaseCapture withdraws a capture whose reply will not come. */
   releaseCapture(socketId: number, envelopeId: string): void;
+  /** cacheLookup resolves with the sealed container kept under `key`, or null. */
+  cacheLookup(key: string): Promise<{ token: string; size: number; info: string } | null>;
+  /** cacheKeep moves staged container `token` into the sealed cache under `key` until `until` (ms). */
+  cacheKeep(key: string, token: string, info: string, until: number): Promise<void>;
+  /** cacheForget drops what the sealed cache keeps under `key`. */
+  cacheForget(key: string): void;
+  /** cacheClear drops everything the sealed cache keeps. */
+  cacheClear(): void;
   /** sealBytes seals base64 `plain` in memory and resolves with ciphertext and tag as base64. */
   sealBytes(key: string, nonce: string, aad: string, plain: string): Promise<string>;
   /** finish closes the share panel and forgets the share, with an optional toast. */

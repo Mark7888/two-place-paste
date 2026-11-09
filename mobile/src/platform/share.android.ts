@@ -93,7 +93,8 @@ const nativeSeal: NativeSealPort | null =
  * downloadSink keeps a large download on the native side: ranges captured or
  * written into a staged file, opened there by `XChaCha20Poly1305Opener`, and
  * hashed there. Only the container's first bytes and the frame's head come
- * back to JavaScript.
+ * back to JavaScript. The sealed container is then kept for up to an hour
+ * (`SealedCache.kt`), so the next action on the same file needs no download.
  */
 const downloadSink: DownloadSink | null =
   TppShare === null
@@ -115,6 +116,10 @@ const downloadSink: DownloadSink | null =
         },
         digest: async (token, offset) => fromHex(await (TppShare as TppShareModule).digestStaged(token, offset)),
         discard: (token) => TppShare?.discard(token),
+        cached: (key) => (TppShare as TppShareModule).cacheLookup(key),
+        keep: (key, token, info, until) => (TppShare as TppShareModule).cacheKeep(key, token, info, until),
+        forget: (key) => TppShare?.cacheForget(key),
+        clear: () => TppShare?.cacheClear(),
       };
 
 export const share: SharePort = {
