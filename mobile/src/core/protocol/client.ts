@@ -143,7 +143,7 @@ import {
   TAG_SIZE,
   VERSION,
 } from '../crypto';
-import { Connection, REQUEST_TIMEOUT_MS, SocketFactory, fieldHead, webSocketFactory } from './connection';
+import { Connection, REQUEST_TIMEOUT_MS, SocketFactory, fieldHead, webSocketFactory, type Codec } from './connection';
 import { DEFAULT_TTL_MS, decodeEntryMeta, encodeEntryMeta, type EntryCache } from './entryCache';
 import { ProtocolError, TppError, isCode } from './errors';
 import {
@@ -428,6 +428,22 @@ export interface ExternalSeal {
  * `ExternalBody`.
  */
 export type UploadBody = { body: Uint8Array; sha256?: Uint8Array } | { external: ExternalBody };
+
+/**
+ * lostWith reports whether a request failed because the socket it went out on
+ * is gone — not because the relay refused it or was slow to answer.
+ */
+function lostWith(err: unknown, conn: Connection): boolean {
+  return err instanceof TppError && err.kind === 'disconnected' && conn.isClosed;
+}
+
+/** LostSocket carries a read lost with its socket out of a helper, to be asked again; it is never thrown further. */
+class LostSocket extends Error {
+  constructor(readonly lost: unknown) {
+    super('the socket was lost', { cause: lost });
+    this.name = 'LostSocket';
+  }
+}
 
 /** uploadSize is an upload's body length. */
 function uploadSize(item: UploadBody): number {
@@ -1008,6 +1024,40 @@ export class Client {
   }
 
   /** connection returns a live connection, dialling if there is none. */
+  /**
+   * readCall is `call` for a request that only reads — the latest entry, the
+   * history, an entry, a range of a store item, the device list, the limits —
+   * asked again, once, on a fresh socket when the socket it went out on was
+   * lost under it.
+   *
+   * A socket can drop under a request that has nothing to do with why: a
+   * large transfer on the same socket, a network handover. The client
+   * reconnects by itself, but the request that was in flight failed with
+   * "connection lost", and a preview, a refresh or a sync failed with it.
+   * Asking a read again changes nothing on the relay, so it is asked again;
+   * a request that writes is not, since it may have been carried out before
+   * the socket went. A request that timed out on a live socket is not asked
+   * again either: the relay is there, and slow.
+   */
+  private async readCall<Req, Resp>(
+    type: MessageType,
+    request: { codec: Codec<Req>; message: Req },
+    response: Codec<Resp>,
+    timeoutMs?: number,
+  ): Promise<Resp> {
+    for (let attempt = 0; ; attempt++) {
+      const conn = await this.connection();
+      try {
+        return await conn.call(type, request, response, timeoutMs);
+      } catch (err) {
+        if (attempt === 0 && lostWith(err, conn)) {
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+
   private async connection(): Promise<Connection> {
     if (this.deleted) {
       throw new TppError('group-deleted', "the server admin deleted this device's group");
@@ -1834,8 +1884,7 @@ export class Client {
    */
   async devices(): Promise<Roster> {
     this.requireGroup();
-    const conn = await this.connection();
-    const response = await conn.call(
+    const response = await this.readCall(
       MessageType.MESSAGE_TYPE_DEVICE_LIST_REQUEST,
       { codec: DeviceListRequest, message: {} },
       DeviceListResponse,
@@ -2032,8 +2081,7 @@ export class Client {
    */
   async getLatest(): Promise<Item> {
     this.requireGroup();
-    const conn = await this.connection();
-    const response = await conn.call(
+    const response = await this.readCall(
       MessageType.MESSAGE_TYPE_ENTRY_LATEST_REQUEST,
       { codec: EntryLatestRequest, message: {} },
       EntryLatestResponse,
@@ -2058,8 +2106,7 @@ export class Client {
    */
   async getHistory(query: { limit?: number; before?: Date } = {}): Promise<HistoryPage> {
     this.requireGroup();
-    const conn = await this.connection();
-    const response = await conn.call(
+    const response = await this.readCall(
       MessageType.MESSAGE_TYPE_ENTRY_HISTORY_REQUEST,
       {
         codec: EntryHistoryRequest,
@@ -2186,7 +2233,23 @@ export class Client {
    * question, and gets the limits it has always had.
    */
   async limits(): Promise<Limits> {
-    const conn = await this.connection();
+    // Asked again, once, on a fresh socket if the first is lost (see readCall).
+    try {
+      return await this.limitsOn(await this.connection());
+    } catch (err) {
+      if (!(err instanceof LostSocket)) {
+        throw err;
+      }
+    }
+    try {
+      return await this.limitsOn(await this.connection());
+    } catch (err) {
+      throw err instanceof LostSocket ? err.lost : err;
+    }
+  }
+
+  /** limitsOn asks one socket for the limits, which are kept for as long as it lasts. */
+  private async limitsOn(conn: Connection): Promise<Limits> {
     if (this.limitsCache?.conn === conn) {
       return this.limitsCache.limits;
     }
@@ -2207,6 +2270,9 @@ export class Client {
         headerV2: resp.headerV2,
       };
     } catch (err) {
+      if (lostWith(err, conn)) {
+        throw new LostSocket(err);
+      }
       if (!isCode(err, ErrorCode.ERROR_CODE_UNSUPPORTED_MESSAGE)) {
         throw err;
       }
@@ -2541,8 +2607,7 @@ export class Client {
     if (limits.chunkBytes > 0) {
       got = await this.fetchRanges(entryId, limits, hint);
     } else {
-      const conn = await this.connection();
-      const response = await conn.call(
+      const response = await this.readCall(
         MessageType.MESSAGE_TYPE_ENTRY_FETCH_REQUEST,
         { codec: EntryFetchRequest, message: { entryId } },
         EntryFetchResponse,
@@ -2612,9 +2677,8 @@ export class Client {
   /** storeLimits asks the relay for the group's store limits and usage. A relay without a store has none. */
   async storeLimits(): Promise<StoreLimits> {
     this.requireGroup();
-    const conn = await this.connection();
     try {
-      const r = await conn.call(
+      const r = await this.readCall(
         MessageType.MESSAGE_TYPE_STORE_LIMITS_REQUEST,
         { codec: StoreLimitsRequest, message: {} },
         StoreLimitsResponse,
@@ -2789,7 +2853,7 @@ export class Client {
     const out: StoreListing = { items: [], unreadable: [] };
     let cursor = '';
     for (;;) {
-      const resp = await (await this.connection()).call(
+      const resp = await this.readCall(
         MessageType.MESSAGE_TYPE_STORE_LIST_REQUEST,
         { codec: StoreListRequest, message: { limit: 0, cursor } },
         StoreListResponse,
@@ -2921,28 +2985,38 @@ export class Client {
         progress(0);
       }
       while (filled < size) {
-        const conn = await this.connection();
         const request = {
           codec: StoreFetchChunkRequest,
           message: { itemId: it.id, offset: filled.toString(), length: SINGLE_FRAME_MAX_BYTES.toString() },
         };
         const timeout = chunkTimeoutMs(Math.min(SINGLE_FRAME_MAX_BYTES, size - filled));
-        let resp: StoreFetchChunkResponse;
+        let resp: StoreFetchChunkResponse | undefined;
         let captured: number | null = null;
-        if (capture !== undefined && conn.canCapture) {
-          // Straight to the staged file: the range never enters JavaScript.
-          const got = await conn.callCapturing(
-            MessageType.MESSAGE_TYPE_STORE_FETCH_CHUNK_REQUEST,
-            request,
-            StoreFetchChunkResponse,
-            MessageType.MESSAGE_TYPE_STORE_FETCH_CHUNK_RESPONSE,
-            { token: capture, offset: filled },
-            timeout,
-          );
-          resp = got.reply;
-          captured = got.captured;
-        } else {
-          resp = await conn.call(MessageType.MESSAGE_TYPE_STORE_FETCH_CHUNK_REQUEST, request, StoreFetchChunkResponse, timeout);
+        // A range lost with its socket is asked again, once, on a fresh one:
+        // reading a range twice costs nothing but the bytes (see readCall).
+        for (let attempt = 0; resp === undefined; attempt++) {
+          const conn = await this.connection();
+          try {
+            if (capture !== undefined && conn.canCapture) {
+              // Straight to the staged file: the range never enters JavaScript.
+              const got = await conn.callCapturing(
+                MessageType.MESSAGE_TYPE_STORE_FETCH_CHUNK_REQUEST,
+                request,
+                StoreFetchChunkResponse,
+                MessageType.MESSAGE_TYPE_STORE_FETCH_CHUNK_RESPONSE,
+                { token: capture, offset: filled },
+                timeout,
+              );
+              resp = got.reply;
+              captured = got.captured;
+            } else {
+              resp = await conn.call(MessageType.MESSAGE_TYPE_STORE_FETCH_CHUNK_REQUEST, request, StoreFetchChunkResponse, timeout);
+            }
+          } catch (err) {
+            if (attempt > 0 || !lostWith(err, conn)) {
+              throw err;
+            }
+          }
         }
         const length = captured ?? resp.data.length;
         if (
@@ -3096,7 +3170,7 @@ export class Client {
       return cached;
     }
     if (cache.links === null) {
-      const resp = await (await this.connection()).call(
+      const resp = await this.readCall(
         MessageType.MESSAGE_TYPE_STORE_LINKS_REQUEST,
         { codec: StoreLinksRequest, message: {} },
         StoreLinksResponse,

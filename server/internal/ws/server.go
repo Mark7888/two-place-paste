@@ -255,7 +255,7 @@ func (s *Server) onAuthenticated(ctx context.Context, c *conn, device store.Devi
 // readLoop reads frames until the socket closes.
 func (s *Server) readLoop(ctx context.Context, c *conn) {
 	for {
-		typ, data, err := c.ws.Read(ctx)
+		typ, data, err := c.readFrame(ctx)
 		if err != nil {
 			s.logger.DebugContext(ctx, "websocket closed", slog.Any("reason", err))
 			return
@@ -273,7 +273,12 @@ func (s *Server) readLoop(ctx context.Context, c *conn) {
 			continue
 		}
 
+		// A request being handled counts as activity: a slow one holds up
+		// this loop, and the pong to any ping with it (see pingInterval).
+		c.handling.Add(1)
 		frame, err := s.dispatch(ctx, c, &env)
+		c.handling.Add(-1)
+		c.touch()
 		s.reply(ctx, c, env.GetId(), frame, err)
 	}
 }

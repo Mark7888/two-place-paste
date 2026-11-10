@@ -10,6 +10,8 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { concat, fromUTF8, toHex, u8, utf8 } from '../../bytes';
 import { HEADER_CONTAINER_SIZE, HEADER_V2_CONTAINER_SIZE, openStoreLink, storeKey } from '../../crypto';
 import { Client, type ExternalBody } from '../client';
+import type { SocketFactory } from '../connection';
+import { Envelope, MessageType } from '../../../protocol/gen/tpp/v1/envelope';
 import { TppError, describe as describeError } from '../errors';
 import { classifyCode, decodePairingPayload, fingerprint } from '../pairing';
 import { FakeRelay, MemoryStore } from '../../demo';
@@ -435,6 +437,77 @@ describe('a body sealed outside JavaScript (ExternalBody)', () => {
       laptop.putEntry({ contentType: 'text/plain', external: external(utf8('x'), tamper) }),
     ).rejects.toThrow('the sealed body is');
     expect((await laptop.getHistory({ limit: 10 })).entries).toHaveLength(0);
+  });
+});
+
+describe('a read whose socket is lost under it', () => {
+  /**
+   * dropOn kills the socket, as a socket error would, when a request of
+   * `type` is sent on it — the first `left.n` times once armed, across reconnects.
+   */
+  const dropOn = (inner: SocketFactory, type: MessageType, left: { n: number }): SocketFactory => {
+    return (url) => {
+      const socket = inner(url);
+      let onError: (reason: string) => void = () => {};
+      return {
+        ...socket,
+        onError: (handler) => {
+          onError = handler;
+          socket.onError(handler);
+        },
+        send: (frame) => {
+          if (left.n > 0 && Envelope.decode(frame).type === type) {
+            left.n--;
+            socket.close();
+            queueMicrotask(() => onError('socket error'));
+            return;
+          }
+          socket.send(frame);
+        },
+      };
+    };
+  };
+
+  async function setUp(type: MessageType, times = 1): Promise<Client> {
+    const relay = new FakeRelay();
+    const left = { n: 0 };
+    const client = await Client.open({
+      store: new MemoryStore(),
+      deviceName: 'phone',
+      socketFactory: dropOn(relay.factory, type, left),
+      healthCheck: async () => false,
+      deviceStatus: relay.deviceStatus,
+    });
+    opened.push(client);
+    await client.createGroup(relay.creationURL);
+    await client.putEntry({ contentType: 'text/plain', body: utf8('kept') });
+    left.n = times;
+    return client;
+  }
+
+  test('is asked again on a fresh socket, once, and answers', async () => {
+    const client = await setUp(MessageType.MESSAGE_TYPE_ENTRY_HISTORY_REQUEST);
+    const page = await client.getHistory({ limit: 10 });
+    expect(page.entries).toHaveLength(1);
+  });
+
+  test('the latest entry, too', async () => {
+    const client = await setUp(MessageType.MESSAGE_TYPE_ENTRY_LATEST_REQUEST);
+    expect(fromUTF8((await client.getLatest()).body)).toBe('kept');
+  });
+
+  test('fails as before when the fresh socket is lost too', async () => {
+    const client = await setUp(MessageType.MESSAGE_TYPE_ENTRY_HISTORY_REQUEST, 2);
+    await expect(client.getHistory({ limit: 10 })).rejects.toMatchObject({ kind: 'disconnected' });
+  });
+
+  test('a write is not asked again: it may have been carried out', async () => {
+    const client = await setUp(MessageType.MESSAGE_TYPE_ENTRY_PUT_REQUEST);
+    await expect(client.putEntry({ contentType: 'text/plain', body: utf8('again') })).rejects.toMatchObject({
+      kind: 'disconnected',
+    });
+    // Only the first entry made it.
+    expect((await client.getHistory({ limit: 10 })).entries).toHaveLength(1);
   });
 });
 
