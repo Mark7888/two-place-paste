@@ -3,6 +3,7 @@ package ws
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"slices"
@@ -106,11 +107,14 @@ func (c *conn) activeSince(t time.Time) bool {
 func (c *conn) readFrame(ctx context.Context) (websocket.MessageType, []byte, error) {
 	typ, r, err := c.ws.Reader(ctx)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, fmt.Errorf("read frame: %w", err)
 	}
 	c.touch()
 	data, err := io.ReadAll(activityReader{r: r, c: c})
-	return typ, data, err
+	if err != nil {
+		return 0, nil, fmt.Errorf("read frame body: %w", err)
+	}
+	return typ, data, nil
 }
 
 // activityReader touches the connection on every read that returns bytes.
@@ -124,7 +128,7 @@ func (a activityReader) Read(p []byte) (int, error) {
 	if n > 0 {
 		a.c.touch()
 	}
-	return n, err
+	return n, err //nolint:wrapcheck // io.Reader's contract: io.EOF must pass through as is
 }
 
 // writeFrame writes one message as fragments of writePiece bytes, recording
@@ -133,18 +137,21 @@ func (a activityReader) Read(p []byte) (int, error) {
 func (c *conn) writeFrame(ctx context.Context, frame []byte) error {
 	w, err := c.ws.Writer(ctx, websocket.MessageBinary)
 	if err != nil {
-		return err
+		return fmt.Errorf("open frame writer: %w", err)
 	}
 	for len(frame) > 0 {
 		n := min(len(frame), writePiece)
 		if _, err := w.Write(frame[:n]); err != nil {
 			_ = w.Close()
-			return err
+			return fmt.Errorf("write frame: %w", err)
 		}
 		c.touch()
 		frame = frame[n:]
 	}
-	return w.Close()
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("finish frame: %w", err)
+	}
+	return nil
 }
 
 // identity returns the connection's device and group, both empty when the
