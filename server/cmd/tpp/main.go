@@ -71,6 +71,8 @@ func run(args []string) error {
 		return serve(args)
 	case "gc":
 		return runGC(args)
+	case "apikey":
+		return runAPIKey(args)
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return nil
@@ -92,6 +94,9 @@ Commands:
   gc --rebuild-accounting
                      recompute the storage limits' bookkeeping from the
                      entries in Redis; never deletes a blob
+  apikey create|list|revoke
+                     manage the admin REST API's keys; run
+                     "tpp apikey help" for the flags
 
 Configuration comes from .env and the process environment; see
 deploy/.env.example and
