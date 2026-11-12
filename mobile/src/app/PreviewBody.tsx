@@ -76,7 +76,7 @@ export function PreviewBody({ preview }: { preview: Preview }): React.JSX.Elemen
  * is pinned to a maximum height and derives its width, so a tall screenshot
  * does not take over the whole screen.
  */
-function ImagePreview({ uri }: { uri: string }): React.JSX.Element {
+export function ImagePreview({ uri }: { uri: string }): React.JSX.Element {
   const [ratio, setRatio] = useState<number | null>(null);
 
   const box =

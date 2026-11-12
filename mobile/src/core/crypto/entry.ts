@@ -201,6 +201,84 @@ export async function openEntrySlicedWithKey(
 }
 
 /**
+ * sealEntrySliced is `sealEntry` for large frames, done a slice at a time with
+ * the event loop let run in between — the other half of `openEntrySliced`.
+ *
+ * Sealing 80 MB in one call held the phone's JavaScript thread for many
+ * seconds, and every window of the app shares that thread: the app froze, and
+ * one opened meanwhile stayed blank until the upload was sealed. This is the
+ * same XChaCha20-Poly1305 of spec/crypto.md §5.2, composed from its parts as
+ * `openEntrySliced` is: the ChaCha20 keystream is applied slice by slice from
+ * block counter 1, and the Poly1305 tag is computed over each ciphertext slice
+ * as it is made. The container is byte for byte what `sealEntry` returns, and
+ * a test holds the two to that.
+ */
+export async function sealEntrySliced(
+  groupKey: Uint8Array,
+  nonce: Uint8Array,
+  epoch: bigint,
+  entryID: string,
+  frame: Uint8Array,
+  pause: () => Promise<void> = yieldToUI,
+): Promise<Uint8Array> {
+  if (nonce.length !== NONCE_SIZE) {
+    throw new Error(`entry nonce is ${nonce.length} bytes, want ${NONCE_SIZE}`);
+  }
+  const key = contentKey(groupKey, nonce, epoch);
+  const aad = entryAAD(epoch, entryID);
+  const head = 1 + NONCE_SIZE;
+  // Written in place: version, nonce, ciphertext, tag.
+  const out = new Uint8Array(head + frame.length + TAG_SIZE);
+  out[0] = VERSION;
+  out.set(nonce, 1);
+  const data = out.subarray(head, head + frame.length);
+
+  // The one-time Poly1305 key is the first 32 bytes of keystream block 0.
+  const authKey = xchacha20(key, nonce, new Uint8Array(32), undefined, 0);
+  const mac = poly1305.create(authKey);
+  mac.update(aad);
+  const aadPad = polyPad(aad.length);
+  if (aadPad !== null) {
+    mac.update(aadPad);
+  }
+  for (let off = 0; off < frame.length; off += SLICE_BYTES) {
+    const end = Math.min(off + SLICE_BYTES, frame.length);
+    xchacha20(key, nonce, frame.subarray(off, end), data.subarray(off, end), 1 + off / 64);
+    mac.update(data.subarray(off, end));
+    await pause();
+  }
+  const dataPad = polyPad(frame.length);
+  if (dataPad !== null) {
+    mac.update(dataPad);
+  }
+  mac.update(polyLengths(aad.length, frame.length));
+  out.set(mac.digest(), head + frame.length);
+  return out;
+}
+
+/** polyPad is the zero padding RFC 8439 §2.8 puts after the AAD and the ciphertext, or null for none. */
+function polyPad(n: number): Uint8Array | null {
+  return n % 16 === 0 ? null : new Uint8Array(16 - (n % 16));
+}
+
+/**
+ * polyLengths is the AAD and ciphertext lengths as two little-endian 64-bit
+ * numbers, written by hand: both fit in 2^53, and this avoids depending on
+ * BigInt DataView support in the engine.
+ */
+function polyLengths(aadLength: number, dataLength: number): Uint8Array {
+  const lengths = new Uint8Array(16);
+  const le64 = (at: number, n: number) => {
+    for (let i = 0; i < 8; i++) {
+      lengths[at + i] = Math.floor(n / 2 ** (8 * i)) & 0xff;
+    }
+  };
+  le64(0, aadLength);
+  le64(8, dataLength);
+  return lengths;
+}
+
+/**
  * newEntryID returns the identifier this client binds into an entry's
  * associated data and sends with it (§5.3).
  *

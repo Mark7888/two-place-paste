@@ -4,9 +4,14 @@
  * the two places this client is required to refuse.
  */
 
-import { fromUTF8, utf8 } from '../../bytes';
+import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
+import { sha256 } from '@noble/hashes/sha2.js';
+
+import { concat, fromUTF8, toHex, u8, utf8 } from '../../bytes';
 import { HEADER_CONTAINER_SIZE, HEADER_V2_CONTAINER_SIZE, openStoreLink, storeKey } from '../../crypto';
-import { Client } from '../client';
+import { Client, type ExternalBody } from '../client';
+import type { SocketFactory } from '../connection';
+import { Envelope, MessageType } from '../../../protocol/gen/tpp/v1/envelope';
 import { TppError, describe as describeError } from '../errors';
 import { classifyCode, decodePairingPayload, fingerprint } from '../pairing';
 import { FakeRelay, MemoryStore } from '../../demo';
@@ -338,6 +343,171 @@ describe('entries (SPEC §6)', () => {
     expect(relay.lastHeader()).toHaveLength(size);
     const page = await laptop.getHistory({ limit: 10 });
     expect(page.entries[0].header?.filename).toBe(filename.slice(0, kept));
+  });
+});
+
+describe('a body hash the caller already has', () => {
+  const v2 = {
+    maxEntryBytes: '10485760',
+    singleFrameMaxBytes: '10485760',
+    chunkBytes: '0',
+    inlineMaxBytes: '0',
+    headerV2: true,
+  };
+
+  test('goes into the header as given, instead of being worked out again', async () => {
+    const relay = new FakeRelay();
+    relay.limits = v2;
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const given = new Uint8Array(32).fill(0xab);
+    await laptop.putEntry({ contentType: 'application/pdf', filename: 'a.pdf', body: utf8('%PDF-'), sha256: given });
+    const page = await laptop.getHistory({ limit: 10 });
+    expect(page.entries[0].header?.sha256Hex).toBe('ab'.repeat(32));
+  });
+
+  test('is worked out when none is given', async () => {
+    const relay = new FakeRelay();
+    relay.limits = v2;
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const body = utf8('%PDF-');
+    await laptop.putEntry({ contentType: 'application/pdf', filename: 'a.pdf', body });
+    const page = await laptop.getHistory({ limit: 10 });
+    expect(page.entries[0].header?.sha256Hex).toBe(toHex(sha256(body)));
+  });
+
+  test('of the wrong length is refused before anything is sent', async () => {
+    const relay = new FakeRelay();
+    relay.limits = v2;
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    await expect(
+      laptop.putEntry({ contentType: 'text/plain', body: utf8('x'), sha256: new Uint8Array(16) }),
+    ).rejects.toThrow('a body hash is 32 bytes, not 16');
+    expect((await laptop.getHistory({ limit: 10 })).entries).toHaveLength(0);
+  });
+});
+
+describe('a body sealed outside JavaScript (ExternalBody)', () => {
+  /** external seals as the platform should: the head, then the frame head and body under the AEAD. */
+  const external = (body: Uint8Array, tamper?: (c: Uint8Array) => Uint8Array): ExternalBody => ({
+    size: body.length,
+    sha256: sha256(body),
+    seal: async ({ key, nonce, aad, head, frameHead }) => {
+      const sealed = xchacha20poly1305(key, nonce, aad).encrypt(concat(frameHead, body));
+      const container = concat(head, sealed);
+      return tamper ? tamper(container) : container;
+    },
+  });
+
+  test('writes an entry another device opens to the same body', async () => {
+    const relay = new FakeRelay();
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const phone = await open(relay, new MemoryStore(), 'phone');
+    await pair(laptop, phone);
+    const body = utf8('a file the platform staged');
+    await phone.putEntry({ contentType: 'text/plain', filename: 'f.txt', external: external(body) });
+    const got = await laptop.getLatest();
+    expect(fromUTF8(got.body)).toBe('a file the platform staged');
+    expect(got.filename).toBe('f.txt');
+  });
+
+  test('saves a store item another device opens to the same body', async () => {
+    const relay = new FakeRelay({ store: { maxBytes: 1 << 20, maxItems: 10, maxItemBytes: 1 << 20 } });
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const body = utf8('kept');
+    const saved = await laptop.saveToStore(
+      { contentType: 'text/plain', filename: 'k.txt', external: external(body) },
+      { name: 'K', description: '', tags: [] },
+    );
+    expect(fromUTF8((await laptop.fetchStoreItem(saved)).body)).toBe('kept');
+  });
+
+  test.each([
+    ['a byte short', (c: Uint8Array) => c.subarray(0, c.length - 1)],
+    ['under another head', (c: Uint8Array) => concat(u8(c[0] ^ 1), c.subarray(1))],
+  ])('refuses a container %s, before anything is sent', async (_name, tamper) => {
+    const relay = new FakeRelay();
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    await expect(
+      laptop.putEntry({ contentType: 'text/plain', external: external(utf8('x'), tamper) }),
+    ).rejects.toThrow('the sealed body is');
+    expect((await laptop.getHistory({ limit: 10 })).entries).toHaveLength(0);
+  });
+});
+
+describe('a read whose socket is lost under it', () => {
+  /**
+   * dropOn kills the socket, as a socket error would, when a request of
+   * `type` is sent on it — the first `left.n` times once armed, across reconnects.
+   */
+  const dropOn = (inner: SocketFactory, type: MessageType, left: { n: number }): SocketFactory => {
+    return (url) => {
+      const socket = inner(url);
+      let onError: (reason: string) => void = () => {};
+      return {
+        ...socket,
+        onError: (handler) => {
+          onError = handler;
+          socket.onError(handler);
+        },
+        send: (frame) => {
+          if (left.n > 0 && Envelope.decode(frame).type === type) {
+            left.n--;
+            socket.close();
+            queueMicrotask(() => onError('socket error'));
+            return;
+          }
+          socket.send(frame);
+        },
+      };
+    };
+  };
+
+  async function setUp(type: MessageType, times = 1): Promise<Client> {
+    const relay = new FakeRelay();
+    const left = { n: 0 };
+    const client = await Client.open({
+      store: new MemoryStore(),
+      deviceName: 'phone',
+      socketFactory: dropOn(relay.factory, type, left),
+      healthCheck: async () => false,
+      deviceStatus: relay.deviceStatus,
+    });
+    opened.push(client);
+    await client.createGroup(relay.creationURL);
+    await client.putEntry({ contentType: 'text/plain', body: utf8('kept') });
+    left.n = times;
+    return client;
+  }
+
+  test('is asked again on a fresh socket, once, and answers', async () => {
+    const client = await setUp(MessageType.MESSAGE_TYPE_ENTRY_HISTORY_REQUEST);
+    const page = await client.getHistory({ limit: 10 });
+    expect(page.entries).toHaveLength(1);
+  });
+
+  test('the latest entry, too', async () => {
+    const client = await setUp(MessageType.MESSAGE_TYPE_ENTRY_LATEST_REQUEST);
+    expect(fromUTF8((await client.getLatest()).body)).toBe('kept');
+  });
+
+  test('fails as before when the fresh socket is lost too', async () => {
+    const client = await setUp(MessageType.MESSAGE_TYPE_ENTRY_HISTORY_REQUEST, 2);
+    await expect(client.getHistory({ limit: 10 })).rejects.toMatchObject({ kind: 'disconnected' });
+  });
+
+  test('a write is not asked again: it may have been carried out', async () => {
+    const client = await setUp(MessageType.MESSAGE_TYPE_ENTRY_PUT_REQUEST);
+    await expect(client.putEntry({ contentType: 'text/plain', body: utf8('again') })).rejects.toMatchObject({
+      kind: 'disconnected',
+    });
+    // Only the first entry made it.
+    expect((await client.getHistory({ limit: 10 })).entries).toHaveLength(1);
   });
 });
 

@@ -12,12 +12,17 @@ import {
   Handlers,
   Item,
   TppError,
+  isStaged,
+  type StagedItem,
+  type StoreItem,
   classifyCode,
   describe as describeError,
   type EntryHeaderView,
   type EntryMeta,
 } from '../core';
 import { choiceRule, type ChoiceRule } from './choices';
+import { downloadSink, entryBody, storeBody } from './downloads';
+import { queueDownload } from './transfers';
 import { formatSize, kindOf } from './preview';
 import {
   clipboard,
@@ -26,6 +31,7 @@ import {
   entryCache,
   files,
   secureStore,
+  socketFactory,
   type ClipboardItem,
   type SavedFile,
 } from '../platform';
@@ -83,6 +89,8 @@ export interface PendingFile {
   canCopy: boolean;
   entry?: EntryMeta;
   item?: ClipboardItem;
+  /** storeItem is a store item not downloaded yet: its opened metadata said what it is. */
+  storeItem?: StoreItem;
 }
 
 /**
@@ -123,6 +131,17 @@ export function pendingFromEntry(meta: EntryMeta, askForImages = false): Pending
   };
 }
 
+/** pendingFromStore is the question for a store item that has not been downloaded. */
+export function pendingFromStore(it: StoreItem, canCopy: boolean): PendingFile {
+  const type = it.contentType.split(';')[0].trim();
+  return {
+    name: it.filename !== '' ? it.filename : type,
+    detail: `${type} · ${formatSize(it.bodySize)} · saved ${it.savedAt.toLocaleString()}`,
+    canCopy,
+    storeItem: it,
+  };
+}
+
 /** pendingFromItem is the question for an entry already downloaded. */
 function pendingFromItem(item: ClipboardItem, canCopy: boolean): PendingFile {
   const type = item.contentType.split(';')[0].trim();
@@ -141,6 +160,7 @@ export async function openSession(handlers: Handlers): Promise<Client> {
     deviceName: deviceInfo.defaultName(),
     handlers,
     cache: entryCache ?? undefined,
+    socketFactory,
   });
 }
 
@@ -169,7 +189,14 @@ export async function download(client: Client, latest?: EntryMeta): Promise<Sync
   }
   let item: Item;
   try {
-    item = await client.getLatest();
+    // A large entry waits its turn in the transfer queue, and carries on if
+    // the user switches apps meanwhile.
+    item =
+      newest === undefined
+        ? await client.getLatest()
+        : await queueDownload({ target: 'group', name: nameOf(newest), size: newest.size, key: `entry:${newest.id}` }, () =>
+            client.getLatest(),
+          );
   } catch (err) {
     if (err instanceof TppError && err.kind === 'no-entry') {
       return { direction: 'nothing', message: 'The group has no entry yet.' };
@@ -227,12 +254,56 @@ export async function handleFile(
   file: PendingFile,
   choice: FileChoice,
 ): Promise<SyncResult> {
+  if (file.item !== undefined) {
+    // Already downloaded: what is left is local.
+    return carryOut(client, file, choice);
+  }
+  // A large file waits its turn in the transfer queue, and its download and
+  // the save after it carry on if the user switches apps meanwhile.
+  // Keyed by what it reads, so asking again for the same file joins this.
+  const info =
+    file.storeItem !== undefined
+      ? { target: 'store' as const, name: file.name, size: file.storeItem.blobSize, key: `store:${file.storeItem.id}` }
+      : { target: 'group' as const, name: file.name, size: file.entry?.size ?? 0, key: file.entry ? `entry:${file.entry.id}` : undefined };
+  return queueDownload(info, () => carryOut(client, file, choice));
+}
+
+/** nameOf is how an entry is named in the Transfers panel, from its sealed header. */
+export function nameOf(meta: EntryMeta): string {
+  const h = meta.header;
+  if (h === null) {
+    return 'Entry';
+  }
+  return h.filename !== '' ? h.filename : h.contentType.startsWith('text/') ? 'Text' : h.contentType.split(';')[0].trim();
+}
+
+async function carryOut(client: Client, file: PendingFile, choice: FileChoice): Promise<SyncResult> {
   let item = file.item;
+  if (item === undefined && file.storeItem !== undefined) {
+    // A store item, downloaded now that the user has chosen: natively when
+    // it is saved, opened or shared, into memory when it is copied.
+    const sink = choice === 'copy' ? null : await downloadSink();
+    if (sink !== null) {
+      return deliverStaged(await client.fetchStoreItemStaged(file.storeItem, sink), choice);
+    }
+    item = toClipboardItem(await storeBody(client, file.storeItem));
+  }
   if (item === undefined) {
     if (file.entry === undefined) {
       throw new Error('a pending file has neither an entry nor its bytes');
     }
-    item = toClipboardItem(await client.getEntry(file.entry.id, file.entry));
+    // Saved, opened or shared, the body need never enter JavaScript: it is
+    // downloaded and opened natively where it can be. Copy needs it here.
+    const sink = choice === 'copy' ? null : await downloadSink();
+    if (sink !== null) {
+      const got = await client.getEntryStaged(file.entry.id, file.entry, sink);
+      if (isStaged(got)) {
+        return deliverStaged(got, choice);
+      }
+      item = toClipboardItem(got);
+    } else {
+      item = toClipboardItem(await entryBody(client, file.entry.id, file.entry));
+    }
   }
   switch (choice) {
     case 'copy':
@@ -254,6 +325,38 @@ export async function handleFile(
       await files.share(item);
       return { direction: 'downloaded', message: `Opened the share sheet for ${describeItem(item)}.` };
   }
+}
+
+/**
+ * deliverStaged saves, opens or shares an item whose body stayed on the
+ * platform, then lets the staged copy go. (A saved one is in Downloads by
+ * then, and an opened or shared one has been copied for the other app.)
+ */
+export async function deliverStaged(item: StagedItem, choice: FileChoice): Promise<SyncResult> {
+  try {
+    switch (choice) {
+      case 'save': {
+        const saved = await files.saveStaged(item);
+        return { direction: 'downloaded', message: `Saved ${saved.name} to Downloads/TwoPlacePaste.`, saved };
+      }
+      case 'open':
+        await files.openStaged(item);
+        return { direction: 'downloaded', message: `Opened ${describeStaged(item)}.` };
+      case 'share':
+        await files.shareStaged(item);
+        return { direction: 'downloaded', message: `Opened the share sheet for ${describeStaged(item)}.` };
+      default:
+        throw new Error('a staged item cannot be copied');
+    }
+  } finally {
+    item.staged.release();
+  }
+}
+
+/** describeStaged names a staged item the way `describeItem` names one in memory. */
+export function describeStaged(item: StagedItem): string {
+  const size = formatSize(item.staged.size);
+  return item.filename !== '' ? `${item.filename} (${item.contentType}, ${size})` : `${item.contentType}, ${size}`;
 }
 
 /** upload writes this device's clipboard to the group as the latest entry. */

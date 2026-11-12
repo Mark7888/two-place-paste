@@ -15,16 +15,19 @@
  * action and this is the whole of it.
  */
 
-import React from 'react';
+import React, { useSyncExternalStore } from 'react';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
 import { tile } from '../platform';
 import { SessionProvider, useSession } from './SessionContext';
-import { Button, Choice, FILE_CHOICES_TITLE, FileChoices, Notice, TransferList } from './ui';
+import { Button, Choice, FILE_CHOICES_TITLE, FileChoices, Notice } from './ui';
+import { TransferPanel } from './TransferPanel';
+import { getTransfers, subscribeTransfers } from './transfers';
 import { colors, styles } from './theme';
 
 function Panel(): React.JSX.Element {
   const session = useSession();
+  const transfers = useSyncExternalStore(subscribeTransfers, getTransfers);
   const question = session.question;
   const error = session.error;
 
@@ -87,8 +90,9 @@ function Panel(): React.JSX.Element {
             <Button label="Close" variant="secondary" onPress={dismiss} />
           </>
         ) : session.syncing || !session.ready ? (
-          session.transfers.length > 0 ? (
-            <TransferList transfers={session.transfers} />
+          session.transfers.length > 0 || transfers.length > 0 ? (
+            // A large download waits its turn, then shows here as it moves.
+            <TransferPanel />
           ) : (
             <View style={[styles.rowInline, { paddingVertical: 4 }]}>
               <ActivityIndicator color={colors.accent} />

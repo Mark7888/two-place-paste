@@ -1232,3 +1232,60 @@ func TestIdleConnectionsArePinged(t *testing.T) {
 		t.Errorf("read on an unresponsive peer: %v, want the server to have closed it", err)
 	}
 }
+
+// TestBusyConnectionsAreNotDroppedForALatePong is the phone uploading a large
+// chunk over a slow link: its WebSocket writes the message whole, so it cannot
+// answer a ping until the message is out, which takes longer than the ping
+// interval. The connection must survive that, and every request on it with it.
+func TestBusyConnectionsAreNotDroppedForALatePong(t *testing.T) {
+	t.Parallel()
+
+	const interval = 20 * time.Millisecond
+	h := newHarnessWithOptions(t, ws.Options{
+		Logger:       slog.New(slog.DiscardHandler),
+		PingInterval: interval,
+	})
+	_, created := h.createGroup(t, "laptop")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	phone, _, err := websocket.Dial(ctx, h.url+"?device_id="+created.GetDeviceId(), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = phone.CloseNow() })
+
+	// Nothing reads this socket while the frame goes out, so no ping is
+	// answered: the pong is behind the message, as it is on the phone. The
+	// frame trickles out over many ping intervals.
+	w, err := phone.Writer(ctx, websocket.MessageBinary)
+	if err != nil {
+		t.Fatalf("writer: %v", err)
+	}
+	piece := make([]byte, 2<<10) // 32 KiB in all, under the harness's frame limit
+	for i := 0; i < 16; i++ {
+		if _, err := w.Write(piece); err != nil {
+			t.Fatalf("write piece %d: %v, want the server to keep a busy connection", i, err)
+		}
+		// Pacing the upload, not waiting for a condition: this is the slow link.
+		time.Sleep(interval / 2)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("finish the frame: %v", err)
+	}
+
+	// The frame is no envelope, so the server answers with an error — which
+	// it can only do on a connection it kept.
+	readCtx, readCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer readCancel()
+	for {
+		_, data, err := phone.Read(readCtx)
+		if err != nil {
+			t.Fatalf("read after a slow frame: %v, want the server's answer on the same connection", err)
+		}
+		var env tppv1.Envelope
+		if proto.Unmarshal(data, &env) == nil && env.GetType() == tppv1.MessageType_MESSAGE_TYPE_ERROR {
+			return
+		}
+	}
+}

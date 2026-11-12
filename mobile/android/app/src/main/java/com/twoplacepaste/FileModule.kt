@@ -11,7 +11,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import android.provider.OpenableColumns
 import android.util.Base64
 import android.webkit.MimeTypeMap
 import androidx.annotation.RequiresApi
@@ -23,6 +22,8 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import java.io.File
+import java.io.OutputStream
+import java.io.RandomAccessFile
 
 /**
  * What happens to a received entry the Android clipboard cannot hold — a file
@@ -46,9 +47,10 @@ class FileModule(reactContext: ReactApplicationContext) :
 
     override fun getName(): String = NAME
 
-    /** The pick in progress, and the most it may read. One at a time. */
+    /** The pick in progress, the most it may read, and whether it stages the file. One at a time. */
     private var pickPromise: Promise? = null
     private var pickMaxBytes: Long = 0
+    private var pickStages = false
 
     private val pickListener = object : BaseActivityEventListener() {
         override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
@@ -64,8 +66,22 @@ class FileModule(reactContext: ReactApplicationContext) :
                 return
             }
             val max = pickMaxBytes
+            val context = reactApplicationContext
             // Off the main thread: a file can be tens of megabytes.
-            Thread { readPicked(uri, max, promise) }.start()
+            if (pickStages) {
+                Thread {
+                    try {
+                        val picked = ContentReader.meta(context, uri).name
+                        val mime = context.contentResolver.getType(uri) ?: mimeOf("", picked)
+                        val name = safeName(picked, mime)
+                        ShareModule.stageUri(context, uri, max, name, mime, promise)
+                    } catch (e: Exception) {
+                        promise.reject(ERROR_CODE, "the picked file could not be read", e)
+                    }
+                }.start()
+            } else {
+                Thread { ContentReader.read(context, uri, max, promise) }.start()
+            }
         }
     }
 
@@ -82,6 +98,24 @@ class FileModule(reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun pickFile(maxBytes: Double, promise: Promise) {
+        startPick(maxBytes, false, promise)
+    }
+
+    /**
+     * pickToStage opens the system's file picker and stages the chosen file
+     * the way a shared one is ([ShareModule.stageUri]): copied into this app's
+     * cache and hashed, resolving with `{ token, name, contentType, size,
+     * sha256 }`, with `{ name, size, tooLarge: true }` and no copy when it is
+     * over [maxBytes], or with null when the user backed out. Nothing of the
+     * file enters JavaScript: the store saves it from the copy, sealed and
+     * sent natively.
+     */
+    @ReactMethod
+    fun pickToStage(maxBytes: Double, promise: Promise) {
+        startPick(maxBytes, true, promise)
+    }
+
+    private fun startPick(maxBytes: Double, stages: Boolean, promise: Promise) {
         val activity = reactApplicationContext.currentActivity
         if (activity == null) {
             promise.reject(ERROR_CODE, "the file picker needs the app in the foreground")
@@ -97,75 +131,12 @@ class FileModule(reactContext: ReactApplicationContext) :
         }
         pickPromise = promise
         pickMaxBytes = maxBytes.toLong()
+        pickStages = stages
         try {
             activity.startActivityForResult(intent, PICK_REQUEST)
         } catch (e: ActivityNotFoundException) {
             pickPromise = null
             promise.reject(ERROR_CODE, "this device has no file picker", e)
-        }
-    }
-
-    private fun readPicked(uri: Uri, maxBytes: Long, promise: Promise) {
-        try {
-            val resolver = reactApplicationContext.contentResolver
-            var name = ""
-            var size = -1L
-            resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use {
-                if (it.moveToFirst()) {
-                    name = it.getString(0) ?: ""
-                    if (!it.isNull(1)) {
-                        size = it.getLong(1)
-                    }
-                }
-            }
-            if (size > maxBytes) {
-                promise.resolve(
-                    Arguments.createMap().apply {
-                        putString("name", name)
-                        putDouble("size", size.toDouble())
-                        putBoolean("tooLarge", true)
-                    },
-                )
-                return
-            }
-            // The size a provider reports can be missing or wrong, so the read
-            // is bounded too.
-            val bytes = resolver.openInputStream(uri)?.use { input ->
-                val out = java.io.ByteArrayOutputStream()
-                val buffer = ByteArray(64 * 1024)
-                var total = 0L
-                while (true) {
-                    val n = input.read(buffer)
-                    if (n < 0) {
-                        break
-                    }
-                    total += n
-                    if (total > maxBytes) {
-                        promise.resolve(
-                            Arguments.createMap().apply {
-                                putString("name", name)
-                                putDouble("size", total.toDouble())
-                                putBoolean("tooLarge", true)
-                            },
-                        )
-                        return
-                    }
-                    out.write(buffer, 0, n)
-                }
-                out.toByteArray()
-            } ?: throw IllegalStateException("the picked file could not be opened")
-            val mime = resolver.getType(uri) ?: mimeOf("", name)
-            promise.resolve(
-                Arguments.createMap().apply {
-                    putString("name", name)
-                    putString("contentType", mime)
-                    putDouble("size", bytes.size.toDouble())
-                    putString("base64", Base64.encodeToString(bytes, Base64.NO_WRAP))
-                },
-            )
-        } catch (e: Exception) {
-            // The message names the operation, never the bytes or the name.
-            promise.reject(ERROR_CODE, "the picked file could not be read", e)
         }
     }
 
@@ -187,25 +158,52 @@ class FileModule(reactContext: ReactApplicationContext) :
             val mime = mimeOf(contentType, filename)
             val name = safeName(filename, mime)
             val context = reactApplicationContext
-            val (savedName, uri) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                saveWithMediaStore(context, bytes, name, mime)
-            } else {
-                saveLegacy(context, bytes, name, mime)
-            }
-            promise.resolve(
-                Arguments.createMap().apply {
-                    putString("name", savedName)
-                    putString("uri", uri.toString())
-                },
-            )
+            promise.resolve(saveToDownloads(context, name, mime) { it.write(bytes) })
         } catch (e: Exception) {
             // The message names the operation, never the bytes.
             promise.reject(ERROR_CODE, "the file could not be saved to Downloads", e)
         }
     }
 
+    /**
+     * saveStagedToDownloads is [saveToDownloads] for a body that never entered
+     * JavaScript: [length] bytes of staged copy [token] from [offset] — a
+     * download opened natively ([ShareModule.openStaged]). It resolves the
+     * same way.
+     */
+    @ReactMethod
+    fun saveStagedToDownloads(token: String, offset: Double, length: Double, filename: String, contentType: String, promise: Promise) {
+        val context = reactApplicationContext
+        val source = ShareModule.stagedFileOrNull(context, token)
+        if (source == null || !source.exists()) {
+            promise.reject(ERROR_CODE, "the downloaded file is no longer available")
+            return
+        }
+        Thread {
+            try {
+                val mime = mimeOf(contentType, filename)
+                val name = safeName(filename, mime)
+                promise.resolve(saveToDownloads(context, name, mime) { copyRegion(source, offset.toLong(), length.toLong(), it) })
+            } catch (e: Exception) {
+                promise.reject(ERROR_CODE, "the file could not be saved to Downloads", e)
+            }
+        }.start()
+    }
+
+    /** saveToDownloads writes a file through [write] and says where it went, as `{ name, uri }`. */
+    private fun saveToDownloads(context: Context, name: String, mime: String, write: (OutputStream) -> Unit) =
+        Arguments.createMap().apply {
+            val (savedName, uri) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                saveWithMediaStore(context, name, mime, write)
+            } else {
+                saveLegacy(context, name, mime, write)
+            }
+            putString("name", savedName)
+            putString("uri", uri.toString())
+        }
+
     @RequiresApi(Build.VERSION_CODES.Q)
-    private fun saveWithMediaStore(context: Context, bytes: ByteArray, name: String, mime: String): Pair<String, Uri> {
+    private fun saveWithMediaStore(context: Context, name: String, mime: String, write: (OutputStream) -> Unit): Pair<String, Uri> {
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
@@ -218,7 +216,7 @@ class FileModule(reactContext: ReactApplicationContext) :
         val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
             ?: throw IllegalStateException("MediaStore refused the insert")
         try {
-            resolver.openOutputStream(uri)?.use { it.write(bytes) }
+            resolver.openOutputStream(uri)?.use(write)
                 ?: throw IllegalStateException("MediaStore gave no output stream")
             values.clear()
             values.put(MediaStore.MediaColumns.IS_PENDING, 0)
@@ -237,7 +235,7 @@ class FileModule(reactContext: ReactApplicationContext) :
     }
 
     @Suppress("DEPRECATION")
-    private fun saveLegacy(context: Context, bytes: ByteArray, name: String, mime: String): Pair<String, Uri> {
+    private fun saveLegacy(context: Context, name: String, mime: String, write: (OutputStream) -> Unit): Pair<String, Uri> {
         val directory = File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
             SUBFOLDER,
@@ -246,7 +244,7 @@ class FileModule(reactContext: ReactApplicationContext) :
             throw IllegalStateException("the $SUBFOLDER folder in Downloads could not be created")
         }
         val file = uniqueFile(directory, name)
-        file.outputStream().use { it.write(bytes) }
+        file.outputStream().use(write)
         // So the file shows up in the Files app without a reboot.
         MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), arrayOf(mime), null)
         // A file:// URI cannot be handed to another app, so the saved file is
@@ -280,7 +278,55 @@ class FileModule(reactContext: ReactApplicationContext) :
     fun open(base64: String, filename: String, contentType: String, promise: Promise) {
         try {
             val mime = mimeOf(contentType, filename)
-            val (file, uri) = stage(base64, filename, mime)
+            val (file, uri) = stage(filename, mime) { it.write(Base64.decode(base64, Base64.DEFAULT)) }
+            view(file, uri, mime, promise)
+        } catch (e: Exception) {
+            promise.reject(ERROR_CODE, "the file could not be opened", e)
+        }
+    }
+
+    /** openStaged is [open] for [length] bytes of staged copy [token] from [offset], which never entered JavaScript. */
+    @ReactMethod
+    fun openStaged(token: String, offset: Double, length: Double, filename: String, contentType: String, promise: Promise) {
+        withStaged(token, offset, length, filename, contentType, promise, "opened") { file, uri, mime -> view(file, uri, mime, promise) }
+    }
+
+    /** shareStaged is [share] for [length] bytes of staged copy [token] from [offset], which never entered JavaScript. */
+    @ReactMethod
+    fun shareStaged(token: String, offset: Double, length: Double, filename: String, contentType: String, promise: Promise) {
+        withStaged(token, offset, length, filename, contentType, promise, "shared") { file, uri, mime -> send(file, uri, mime, promise) }
+    }
+
+    /** withStaged copies a staged region to the open/share staging file, off the main thread, then hands it on. */
+    private fun withStaged(
+        token: String,
+        offset: Double,
+        length: Double,
+        filename: String,
+        contentType: String,
+        promise: Promise,
+        verb: String,
+        then: (File, Uri, String) -> Unit,
+    ) {
+        val source = ShareModule.stagedFileOrNull(reactApplicationContext, token)
+        if (source == null || !source.exists()) {
+            promise.reject(ERROR_CODE, "the downloaded file is no longer available")
+            return
+        }
+        Thread {
+            try {
+                val mime = mimeOf(contentType, filename)
+                val (file, uri) = stage(filename, mime) { copyRegion(source, offset.toLong(), length.toLong(), it) }
+                then(file, uri, mime)
+            } catch (e: Exception) {
+                promise.reject(ERROR_CODE, "the file could not be $verb", e)
+            }
+        }.start()
+    }
+
+    /** view hands a staged file to an app that opens its type. */
+    private fun view(file: File, uri: Uri, mime: String, promise: Promise) {
+        try {
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, mime)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -310,7 +356,16 @@ class FileModule(reactContext: ReactApplicationContext) :
     fun share(base64: String, filename: String, contentType: String, promise: Promise) {
         try {
             val mime = mimeOf(contentType, filename)
-            val (file, uri) = stage(base64, filename, mime)
+            val (file, uri) = stage(filename, mime) { it.write(Base64.decode(base64, Base64.DEFAULT)) }
+            send(file, uri, mime, promise)
+        } catch (e: Exception) {
+            promise.reject(ERROR_CODE, "the file could not be shared", e)
+        }
+    }
+
+    /** send hands a staged file to the share sheet. */
+    private fun send(file: File, uri: Uri, mime: String, promise: Promise) {
+        try {
             val send = Intent(Intent.ACTION_SEND).apply {
                 type = mime
                 putExtra(Intent.EXTRA_STREAM, uri)
@@ -340,7 +395,7 @@ class FileModule(reactContext: ReactApplicationContext) :
      * before, and returns it with the FileProvider URI another app reads it by.
      * One staged file at a time keeps the cache from growing with every open.
      */
-    private fun stage(base64: String, filename: String, mime: String): Pair<File, Uri> {
+    private fun stage(filename: String, mime: String, write: (OutputStream) -> Unit): Pair<File, Uri> {
         val context = reactApplicationContext
         val directory = File(context.cacheDir, OPEN_DIRECTORY)
         directory.listFiles()?.forEach { it.delete() }
@@ -350,7 +405,7 @@ class FileModule(reactContext: ReactApplicationContext) :
         // The real name is kept, because the receiving app shows it — and
         // some pick how to read the file from its extension.
         val file = File(directory, safeName(filename, mime))
-        file.outputStream().use { it.write(Base64.decode(base64, Base64.DEFAULT)) }
+        file.outputStream().use(write)
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.clips", file)
         return file to uri
     }
@@ -382,6 +437,24 @@ class FileModule(reactContext: ReactApplicationContext) :
             promise.resolve(null)
         } catch (e: Exception) {
             promise.reject(ERROR_CODE, "the saved file could not be opened", e)
+        }
+    }
+
+    /** copyRegion writes [length] bytes of [source] from [offset] to [out], a buffer at a time. */
+    private fun copyRegion(source: File, offset: Long, length: Long, out: OutputStream) {
+        require(offset >= 0 && length >= 0 && offset + length <= source.length()) { "the region is outside the file" }
+        RandomAccessFile(source, "r").use { input ->
+            input.seek(offset)
+            val buffer = ByteArray(64 * 1024)
+            var left = length
+            while (left > 0) {
+                val n = input.read(buffer, 0, minOf(buffer.size.toLong(), left).toInt())
+                if (n < 0) {
+                    throw IllegalStateException("the file ended early")
+                }
+                out.write(buffer, 0, n)
+                left -= n
+            }
         }
     }
 

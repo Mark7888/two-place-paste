@@ -16,7 +16,8 @@ import { PermissionsAndroid, Platform } from 'react-native';
 import { decodeBase64StdAsync } from '../core/bytes';
 import { toStandardBase64 } from './clipboard.android';
 import { TppFiles } from './native';
-import type { ClipboardItem, FilesPort, PickedFile, SavedFile } from './types';
+import type { StagedItem } from '../core';
+import type { ClipboardItem, FilesPort, PickedFile, SavedFile, StageResult } from './types';
 
 /**
  * ensureLegacyWrite asks for storage access on Android 9 and older, the only
@@ -88,6 +89,53 @@ export const files: FilesPort = {
       name: picked.name,
       contentType: picked.contentType ?? 'application/octet-stream',
       body: await decodeBase64StdAsync(picked.base64),
+    };
+  },
+
+  async saveStaged(item: StagedItem): Promise<SavedFile> {
+    if (TppFiles === null) {
+      throw new Error('this build cannot save files');
+    }
+    await ensureLegacyWrite();
+    const { token, offset, size } = item.staged;
+    const saved = await TppFiles.saveStagedToDownloads(token, offset, size, item.filename, item.contentType);
+    return { ...saved, contentType: item.contentType, filename: item.filename };
+  },
+
+  async openStaged(item: StagedItem): Promise<void> {
+    if (TppFiles === null) {
+      throw new Error('this build cannot open files');
+    }
+    const { token, offset, size } = item.staged;
+    await TppFiles.openStaged(token, offset, size, item.filename, item.contentType);
+  },
+
+  async shareStaged(item: StagedItem): Promise<void> {
+    if (TppFiles === null) {
+      throw new Error('this build cannot share files');
+    }
+    const { token, offset, size } = item.staged;
+    await TppFiles.shareStaged(token, offset, size, item.filename, item.contentType);
+  },
+
+  async pickToStage(maxBytes: number): Promise<StageResult | null> {
+    if (TppFiles === null) {
+      throw new Error('this build cannot pick files');
+    }
+    const picked = await TppFiles.pickToStage(maxBytes);
+    if (picked === null) {
+      return null;
+    }
+    if (picked.tooLarge === true || picked.token === undefined) {
+      return { tooLarge: true, name: picked.name, size: picked.size };
+    }
+    return {
+      tooLarge: false,
+      token: picked.token,
+      name: picked.name,
+      contentType: picked.contentType ?? 'application/octet-stream',
+      size: picked.size,
+      sha256: picked.sha256 ?? '',
     };
   },
 };

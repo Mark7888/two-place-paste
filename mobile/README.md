@@ -200,6 +200,198 @@ to **save it to Downloads** or **open it**. Both go through `FileModule`
   one-off read grant. Each open replaces the last staged file. If no installed
   app opens the type, the user is told and can save it instead.
 
+## Sharing to the app
+
+The app is a share target: **Share → TwoPlacePaste** from any app takes one
+file, one image or a piece of text. `ShareActivity` registers for
+`ACTION_SEND` with `*/*` (which covers `text/plain`); `ACTION_SEND_MULTIPLE` is
+deliberately not registered, so a multi-item share does not list the app.
+
+It is the tile's panel again: a transparent activity with its own task, out of
+recents, mounting a third React surface — `TwoPlacePasteShare`, registered in
+`index.js` — on the same JavaScript context. Nothing is uploaded on arrival.
+The panel (`src/app/ShareOverlay.tsx`) asks whether to **send it to the group**
+(it becomes the latest entry, as a sync up would) or **save it to the store**
+(through the Store's own sheet), and dismissing it sends nothing. It always
+goes to the group in use.
+
+The share reaches JavaScript the way a tile tap does: `ShareModule` (`TppShare`)
+records it before the React surface mounts, a running app gets an event, and a
+cold start claims it once at startup (`src/app/shareState.ts`). The file's URI
+stays native; JavaScript sees its name, type and size.
+
+**The upload runs in the background.** Once the user picks a destination, the
+panel only gets the upload ready and closes:
+
+1. it checks the destination's limit — the relay's entry cap or the store's
+   room — refusing a file over it before it is read when the sender gives a
+   size, and at the limit otherwise;
+2. it copies the file, streaming, into the app's cache (`ShareModule.stage`,
+   `ContentReader.stage`), hashing it on the way for the store's duplicate
+   check. The copy is needed because the read grant ends with the panel; it
+   is named by a random token and deleted once read (or at the next start);
+3. for the store, it asks for the name, description and tags, and checks for a
+   duplicate while "Save anyway" can still be answered;
+4. it queues the upload (`src/app/backgroundJobs.ts`, `jobs.ts`) and starts
+   `TransferService`.
+
+`TransferService` is a `dataSync` foreground service running React Native's
+headless JS task, which drains the queue one upload at a time. Both halves are
+needed: without the service Android freezes or kills the process once no
+window is up, and without the headless task React Native pauses JavaScript
+timers, which the hashing and the chunked reads yield through. Its notification
+moves through Preparing (reading the copy back), Encrypting and Uploading
+(the relay's chunk progress), then a separate notification says how it ended.
+Notification text is a status, never the file's name: it shows on the lock
+screen. `POST_NOTIFICATIONS` is asked for when the user first sends from the
+panel; an upload runs without it, just without the notification. The copy
+crosses to JavaScript in 4 MB base64 chunks into one buffer: as one string it
+cost the Java heap several times the file's size and crashed the app.
+
+A background job runs under `Client.hold`, which keeps the socket the way a
+chunked transfer does: leaving the app no longer closes it under an upload
+that is still encrypting. It is closed when the job ends if the app is still
+not on screen, as SPEC §5.2 would have it.
+
+Every window of the app shares one JavaScript thread, so the job must not hold
+it. Entries over 1 MB are sealed with `sealEntrySliced`, the encrypting half of
+`openEntrySliced`: the same XChaCha20-Poly1305, byte for byte, done in 256 KB
+slices with the event loop let run in between. Sealed in one call, an 80 MB
+upload froze the app and left a window opened meanwhile blank until it was done.
+
+Hashing is the other slow step — in pure JavaScript with no JIT it is slower
+than the encryption — so a shared file is hashed once, natively, while it is
+copied, and `putEntry` / `saveToStore` take that hash (`sha256`) instead of
+hashing the body again. A wrong hash would only make the entry fail its check
+where it is read, as a corrupted body would.
+
+**A shared file is sealed natively.** The core's crypto is `@noble/*`
+(docs/internal/conventions.md), and in pure JavaScript with no JIT it ran at a
+few MB/s: most of an upload's time. A staged file is sealed by
+`XChaCha20Poly1305Sealer.java` instead (`ShareModule.sealStaged`), streaming
+into a second staged copy, and never enters JavaScript to be encrypted. The
+core still draws the nonce, derives the key, builds the associated data and the
+frame's head, and checks the container's length and head (`ExternalBody` in
+`src/core/protocol/client.ts`).
+
+It is a deliberate exception to the `@noble` rule, fenced three ways:
+
+- before the first native seal in a run, `src/app/nativeSeal.ts` seals random
+  inputs of many sizes both natively and with `@noble/ciphers`, and uses the
+  native one only when every byte agrees; otherwise the upload is sealed in
+  JavaScript as before;
+- `npm run sealer-check` (needs a JDK) holds the Java sealer to
+  `spec/vectors/entry.json` and to hundreds of `@noble` cases, each fed in
+  uneven pieces;
+- only sealing is native. Opening, and everything else, stays in `@noble`.
+
+The platform's own ChaCha20-Poly1305 is not used: it exists only on Android 9+
+and buffers the whole input on the Java heap before it encrypts.
+
+**A large sealed file is sent without entering JavaScript.** React Native's
+bridge carries bytes only as base64: reading the sealed copy into JavaScript,
+and React Native's WebSocket sending it back out, each meant a base64 pass in
+an engine with no JIT — slower than the network. The sealed copy is handed to
+the client as a `StagedContainer`, and each upload chunk is spliced:
+JavaScript encodes the frame up to the chunk request's last field, `data`
+(`fieldHead`, `Connection.callSpliced`), and `ShareModule.sendSpliced`
+appends that slice of the file and sends the frame on the same socket through
+React Native's WebSocket module, which takes okio bytes natively. The reply
+comes back through JavaScript as usual.
+
+That needs the socket's id in the native module, which React Native keeps on
+the WebSocket as the undocumented `_socketId` (`src/platform/socket.android.ts`).
+Without it, chunks are read in one at a time (`readSlice`) — slower, but never
+the whole file. An upload that fits in one frame (10 MB) is read in whole. The
+interop test sends a spliced 20 MB upload through the real relay to the Go
+client.
+
+The notification counts the run — "45% · 2 of 3" — when more than one upload is
+queued, and each upload's outcome gets a notification of its own.
+
+Only `content://` URIs from another app are read. A `file://` URI, or a
+`content://` URI served by this app's own providers (including a
+`<user>@authority` form), is refused, because either would let the sending app
+make this one read — and upload — its own private files.
+
+## Large transfers in the background
+
+**The store's "Add file" goes the same way as a share.** The picked file is
+staged — copied and hashed natively (`FileModule.pickToStage`, which uses the
+same `ShareModule.stageUri`) — never read into JavaScript, and the save runs
+as a background job: sealed natively, sent from the staged copy, with the
+upload notification. The duplicate check is made in the save sheet first,
+while "Save anyway" can still be answered.
+
+**One transfer queue, shown in the app.** Every large transfer — a shared
+file or a store "Add file" uploading, a received file saved, opened or shared,
+a store item, a large latest entry, a History copy, preview or save to the
+store — runs as a transfer in one queue (`src/app/transferQueue.ts`, wired in
+`transfers.ts`): one at a time, uploads and downloads alike, in the order the
+user asked. A download that fits in one frame (1 MiB) is not queued, so
+copying a line of text never waits behind an 80 MB upload.
+
+Each transfer says what it is — which way, to or from the group or the store,
+its name and size — and where it is: waiting, its step and progress while it
+runs ("Encrypting…", "Uploading… 40%", "Downloading…", "Decrypting…"), and
+how it ended. The **Transfers** panel (`TransferPanel.tsx`) shows them on the
+Sync, History and Store screens and on the tile's panel: the running one, the
+ones waiting, and the last few finished until the user clears them.
+
+The queue also keeps the app running when the user switches apps. Android
+freezes an app's process soon after it leaves the screen, and React Native
+pauses JavaScript timers, which the crypto yields through; so as soon as the
+queue has something in it — which happens while the app is on screen, as
+Android requires — it starts `TransferService`, whose headless task lasts
+until the queue is empty. The notification follows the running transfer:
+its step, its progress and "2 of 3". Each upload's outcome gets a
+notification of its own, and a download's does when the user is elsewhere as
+it ends. Notification text never names the file: it shows on the lock screen.
+
+**A large download never enters JavaScript either.** Saving, opening or
+sharing a received file or a store item downloads it with
+`Client.getEntryStaged` / `fetchStoreItemStaged` into a `DownloadSink`:
+
+1. each range reply is captured on the way in. Before the request is sent,
+   JavaScript arms a capture for its envelope id (`Connection.callCapturing`,
+   `ShareModule.armCapture`); `CaptureHandler.kt`, a content handler on the
+   socket — the hook React Native's own Blob support uses — writes the reply's
+   `data` field to a staged file and hands JavaScript the frame without it
+   (`RangeCapture.java`). Every frame not armed for goes through exactly as
+   React Native would hand it over, and anything unexpected arrives whole;
+2. the container is opened natively by `XChaCha20Poly1305Opener.java`: the
+   whole ciphertext is authenticated first, and nothing is decrypted unless
+   the tag verifies. The client reads the nonce, derives the key, builds the
+   associated data and applies the epoch rules; only the frame's head comes
+   back to it, and a store item's hash is checked natively too;
+3. `FileModule` saves, opens or shares the body straight from the staged file.
+
+**One download per file per hour.** The sealed container of a native
+download is kept, still sealed, for up to an hour (never past the entry's own
+expiry), at most 200 MB in all (`SealedCache.kt`, behind `DownloadSink.cached`
+/ `keep`). Every action reads through it: a preview or a copy goes the native
+way too and then reads the opened body into JavaScript (`entryBody`,
+`storeBody` in `src/app/downloads.ts`), and a save, an open or a share opens
+the kept container again natively. So previewing a file and then saving it,
+or saving it and then opening it, downloads it once. A kept container is
+used only once it has opened; one that later does not is dropped and the file
+read again. Nothing decrypted is kept beyond the action that needed it. The
+cache is cleared when the device leaves or switches group.
+
+Asking again for a file already in the transfer queue joins it rather than
+queueing it twice: a transfer carries the key of what it reads (`entry:<id>`,
+`store:<id>`), and work asked for under a key that is waiting or running runs
+on the same row right after the first — even with other transfers queued in
+between. "Save report.pdf, open photo.jpg, open report.pdf" is two rows, and
+report.pdf is opened, from the kept container, as soon as it is saved.
+
+The opener is fenced like the sealer: the same self-test (round trips, and a
+refusal of a flipped ciphertext or tag byte, other associated data and
+another nonce) gates both, `npm run sealer-check` covers it and the frame
+splitting, and the interop test downloads a 20 MB entry from the real relay
+through the capture. `src/app/__tests__/reactNativeInternals.test.ts` fails
+if a React Native upgrade changes the content-handler hook or `_socketId`.
+
 ## Sync direction
 
 SPEC §6 says upload if the local clipboard is newer, otherwise download.

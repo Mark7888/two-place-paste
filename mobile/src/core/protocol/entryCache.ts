@@ -59,6 +59,44 @@ interface Index {
 /** SAFE_ID is what an entry id must look like to become part of a file name. */
 const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
+/**
+ * encodeEntryMeta writes an entry's metadata as JSON, for a cache that keeps
+ * it beside the sealed container: this one, and the platform's cache of
+ * containers downloaded natively (`DownloadSink.keep`).
+ */
+export function encodeEntryMeta(meta: EntryMeta): string {
+  return JSON.stringify({
+    id: meta.id,
+    epoch: meta.epoch.toString(),
+    size: meta.size,
+    createdAt: meta.createdAt.getTime(),
+    expiresAt: meta.expiresAt.getTime(),
+    inline: meta.inline,
+    header: meta.header,
+  });
+}
+
+/** decodeEntryMeta reads what encodeEntryMeta wrote, or returns null for anything else. */
+export function decodeEntryMeta(raw: string): EntryMeta | null {
+  try {
+    const m = JSON.parse(raw) as Index['meta'];
+    if (typeof m.id !== 'string' || typeof m.epoch !== 'string' || typeof m.size !== 'number') {
+      return null;
+    }
+    return {
+      id: m.id,
+      epoch: BigInt(m.epoch),
+      size: m.size,
+      createdAt: new Date(m.createdAt),
+      expiresAt: new Date(m.expiresAt),
+      inline: m.inline,
+      header: m.header ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export class EntryCache {
   private readonly ttlMs: number;
   private readonly maxBytes: number;

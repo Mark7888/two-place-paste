@@ -5,7 +5,9 @@
  * it, so what is checked is that the two agree on the wire.
  */
 
-import { utf8 } from '../../bytes';
+import { sha256 } from '@noble/hashes/sha2.js';
+
+import { toHex, utf8 } from '../../bytes';
 import { Client, type Handlers } from '../../protocol/client';
 import { ProtocolError } from '../../protocol/errors';
 import type { StoreItem } from '../../protocol/store';
@@ -164,6 +166,29 @@ describe('history', () => {
 });
 
 describe('store (SPEC §6b)', () => {
+  test('a body hash the caller already has is used as given', async () => {
+    const relay = relayWith();
+    const [a, b] = await group(relay, {});
+    const body = utf8('a shared file');
+    const right = sha256(body);
+    const saved = await a.saveToStore(
+      { contentType: 'text/plain', filename: 'f.txt', body, sha256: right },
+      { name: 'F', description: '', tags: [] },
+    );
+    expect(saved.sha256Hex).toBe(toHex(right));
+    expect((await b.fetchStoreItem((await b.listStore()).items[0])).body).toEqual(body);
+
+    // Not worked out again: a wrong one is stored as given, and the item then
+    // fails its check where it is read, as a corrupted body would.
+    const wrong = new Uint8Array(32).fill(1);
+    const bad = await a.saveToStore(
+      { contentType: 'text/plain', filename: 'g.txt', body: utf8('other'), sha256: wrong },
+      { name: 'G', description: '', tags: [] },
+    );
+    expect(bad.sha256Hex).toBe(toHex(wrong));
+    await expect(a.fetchStoreItem(bad)).rejects.toThrow();
+  });
+
   test('save, list, fetch, edit and delete, with the other device told of each', async () => {
     const relay = relayWith();
     const added = signal<StoreItem>();

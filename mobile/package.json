@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "jest",
-    "interop": "jest --config jest.interop.config.js"
+    "interop": "jest --config jest.interop.config.js",
+    "sealer-check": "sh scripts/sealer-check/run.sh"
   },
   "dependencies": {
     "@bufbuild/protobuf": "~2.10.1",

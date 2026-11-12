@@ -1,0 +1,884 @@
+package com.twoplacepaste
+
+import android.content.ContentResolver
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import android.util.Base64
+import android.widget.Toast
+import androidx.core.content.IntentCompat
+import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.ReactContextBaseJavaModule
+import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.modules.core.DeviceEventManagerModule
+import com.facebook.react.modules.websocket.WebSocketModule
+import java.io.File
+import java.io.RandomAccessFile
+import java.security.MessageDigest
+import java.util.UUID
+import okio.ByteString.Companion.toByteString
+
+/**
+ * The bridge between [ShareActivity] and the JavaScript that asks the user
+ * what to do with what was shared.
+ *
+ * It works like [TileModule]: a share can find the app running (an event is
+ * emitted and JavaScript claims it) or starting (JavaScript claims it once,
+ * during startup). Each share is claimed exactly once.
+ *
+ * Unlike a tile tap, a share carries something — a `content://` URI or text —
+ * and the URI stays here. JavaScript is told its name, type and size, and asks
+ * for the bytes only once the user has chosen to send or store it, with the
+ * limit that destination allows. The shared URI is never handed to JavaScript
+ * as a way to read it, except as an image preview.
+ *
+ * Only `content://` URIs from another app are read. A `file://` URI, or a
+ * `content://` URI served by this app's own providers, is refused: either
+ * would let the sending app make this one read — and upload — its own private
+ * files.
+ */
+class ShareModule(reactContext: ReactApplicationContext) :
+    ReactContextBaseJavaModule(reactContext) {
+
+    init {
+        clearStaged(reactContext)
+    }
+
+    override fun getName(): String = NAME
+
+    /**
+     * consumePending resolves with the share waiting to be claimed, or null.
+     * It runs on the native modules thread, so the provider is asked for the
+     * file's name and size here rather than on the main thread when it arrived.
+     *
+     * The shape is one of
+     *  - `{ id, kind: "file", name, contentType, size, previewUri }` (size is -1 when unknown);
+     *  - `{ id, kind: "text", text, subject }`;
+     *  - `{ id, kind: "unsupported" }` — something this app will not read.
+     */
+    @ReactMethod
+    fun consumePending(promise: Promise) {
+        val shared = claim()
+        if (shared == null) {
+            promise.resolve(null)
+            return
+        }
+        try {
+            promise.resolve(describe(shared))
+        } catch (e: Exception) {
+            // A provider that cannot even say what the file is. Reported as
+            // something this app cannot take, never with the URI or the name.
+            promise.resolve(
+                Arguments.createMap().apply {
+                    putInt("id", shared.id)
+                    putString("kind", KIND_UNSUPPORTED)
+                },
+            )
+        }
+    }
+
+    private fun describe(shared: Shared) = Arguments.createMap().apply {
+        putInt("id", shared.id)
+        val uri = shared.uri
+        when {
+            uri != null -> {
+                val context = reactApplicationContext
+                val meta = ContentReader.meta(context, uri)
+                val mime = FileModule.mimeOf(
+                    context.contentResolver.getType(uri) ?: shared.type,
+                    meta.name,
+                )
+                val name = FileModule.safeName(meta.name, mime)
+                synchronized(Companion) {
+                    if (current?.id == shared.id) {
+                        current = shared.copy(name = name, type = mime)
+                    }
+                }
+                putString("kind", KIND_FILE)
+                putString("name", name)
+                putString("contentType", mime)
+                putDouble("size", meta.size.toDouble())
+                putString("previewUri", if (mime.startsWith("image/")) uri.toString() else "")
+            }
+            shared.text != null -> {
+                putString("kind", KIND_TEXT)
+                putString("text", shared.text)
+                putString("subject", shared.subject)
+            }
+            else -> putString("kind", KIND_UNSUPPORTED)
+        }
+    }
+
+    /**
+     * stage copies the shared file into this app's cache, within [maxBytes],
+     * and resolves with `{ token, name, contentType, size, sha256 }`, or with
+     * `{ name, size, tooLarge: true }` and no copy when it is over the limit.
+     *
+     * The copy is what lets the upload outlive the panel: the read grant ends
+     * with [ShareActivity], the copy does not. It is read back with
+     * [readChunk] and deleted with [discard], by its token; whatever is left
+     * when the process starts again is deleted then. `sha256` is the
+     * file's hash in hex, worked out during the copy, for the store's
+     * duplicate check.
+     *
+     * It rejects when the share [id] names is no longer the one waiting, and
+     * when the file cannot be read — with a message that names neither the
+     * file nor the URI.
+     */
+    @ReactMethod
+    fun stage(id: Double, maxBytes: Double, promise: Promise) {
+        val wanted = id.toInt()
+        val shared = synchronized(Companion) { current?.takeIf { it.id == wanted } }
+        val uri = shared?.uri
+        if (shared == null || uri == null) {
+            promise.reject(ERROR_CODE, "the shared file is no longer available")
+            return
+        }
+        val context = reactApplicationContext
+        val name = shared.name ?: ""
+        // Off the main thread, and off the module thread: copying a large file
+        // takes a while, and nothing else should wait on it.
+        Thread {
+            stageUri(context, uri, maxBytes.toLong(), name, shared.type.ifEmpty { FileModule.mimeOf("", name) }, promise)
+        }.start()
+    }
+
+    /** readChunk resolves with [length] bytes of staged copy [token] from [offset], as base64. */
+    @ReactMethod
+    fun readChunk(token: String, offset: Double, length: Double, promise: Promise) {
+        val file = stagedFileOrNull(reactApplicationContext, token)
+        if (file == null || !file.exists()) {
+            promise.reject(ERROR_CODE, "the shared file is no longer available")
+            return
+        }
+        try {
+            promise.resolve(ContentReader.chunk(file, offset.toLong(), length.toInt()))
+        } catch (e: Throwable) {
+            promise.reject(ERROR_CODE, "the shared file could not be read", e)
+        }
+    }
+
+    /**
+     * sealStaged seals staged copy [token] into a new staged copy holding the
+     * entry container: [head], then the XChaCha20-Poly1305 sealing under
+     * [key], [nonce] and [aad] of [frameHead] followed by the file
+     * (spec/crypto.md §5.2). It resolves with `{ token, size, head }` for the
+     * container — `head` being its first bytes as written — and leaves the
+     * file's copy for the caller to discard.
+     *
+     * The JavaScript client decides everything — key, nonce, associated data,
+     * the frame's head — and checks the container's shape; this only does the
+     * bulk work, at native speed, streaming through a 64 KB buffer. JavaScript
+     * uses it only after [sealBytes] has matched `@noble/ciphers` byte for byte.
+     * The key is never logged or put in an error.
+     */
+    @ReactMethod
+    fun sealStaged(
+        token: String,
+        key: String,
+        nonce: String,
+        aad: String,
+        head: String,
+        frameHead: String,
+        promise: Promise,
+    ) {
+        val context = reactApplicationContext
+        val input = stagedFileOrNull(context, token)
+        if (input == null || !input.exists()) {
+            promise.reject(ERROR_CODE, "the shared file is no longer available")
+            return
+        }
+        Thread {
+            val outToken = newToken()
+            val output = stagedFile(context, outToken)
+            try {
+                val sealer = XChaCha20Poly1305Sealer(decode(key), decode(nonce), decode(aad))
+                val headBytes = decode(head)
+                val frameHeadBytes = decode(frameHead)
+                var size = 0L
+                output.parentFile?.mkdirs()
+                output.outputStream().buffered(SEAL_BUFFER).use { out ->
+                    out.write(headBytes)
+                    sealer.update(frameHeadBytes, 0, frameHeadBytes.size, frameHeadBytes, 0)
+                    out.write(frameHeadBytes)
+                    size += headBytes.size + frameHeadBytes.size
+                    input.inputStream().use { inp ->
+                        val buffer = ByteArray(SEAL_BUFFER)
+                        while (true) {
+                            val n = inp.read(buffer)
+                            if (n < 0) {
+                                break
+                            }
+                            sealer.update(buffer, 0, n, buffer, 0)
+                            out.write(buffer, 0, n)
+                            size += n
+                        }
+                    }
+                    val tag = sealer.finish()
+                    out.write(tag)
+                    size += tag.size
+                }
+                // The head as it is in the file, read back, so JavaScript checks
+                // what will be sent rather than what it asked for.
+                val written = ByteArray(headBytes.size)
+                RandomAccessFile(output, "r").use { it.readFully(written) }
+                promise.resolve(
+                    Arguments.createMap().apply {
+                        putString("token", outToken)
+                        putDouble("size", size.toDouble())
+                        putString("head", Base64.encodeToString(written, Base64.NO_WRAP))
+                    },
+                )
+            } catch (e: Throwable) {
+                output.delete()
+                promise.reject(ERROR_CODE, "the shared file could not be sealed", e)
+            }
+        }.start()
+    }
+
+    /**
+     * sealBytes seals [plain] in memory the way [sealStaged] seals a file,
+     * feeding it to the sealer in uneven pieces, and resolves with the
+     * ciphertext and tag as base64. JavaScript compares it with
+     * `@noble/ciphers` before it trusts [sealStaged].
+     */
+    @ReactMethod
+    fun sealBytes(key: String, nonce: String, aad: String, plain: String, promise: Promise) {
+        try {
+            val sealer = XChaCha20Poly1305Sealer(decode(key), decode(nonce), decode(aad))
+            val data = decode(plain)
+            // Uneven pieces, so the buffering across blocks is what is tested.
+            var off = 0
+            var piece = 1
+            while (off < data.size) {
+                val n = minOf(piece, data.size - off)
+                sealer.update(data, off, n, data, off)
+                off += n
+                piece = piece * 3 + 1
+            }
+            val tag = sealer.finish()
+            promise.resolve(Base64.encodeToString(data + tag, Base64.NO_WRAP))
+        } catch (e: Throwable) {
+            promise.reject(ERROR_CODE, "the self-test could not be sealed", e)
+        }
+    }
+
+    /**
+     * sendSpliced sends one binary frame on React Native WebSocket [socketId]:
+     * [head], then [length] bytes of staged copy [token] from [offset]. It
+     * resolves once the frame is queued.
+     *
+     * This is how a large upload leaves the phone without its bytes crossing
+     * into JavaScript: React Native's WebSocket only takes binary from
+     * JavaScript as base64, which the engine there encodes slowly, while its
+     * native module sends okio bytes directly. JavaScript writes the frame's
+     * head — the envelope and the chunk request up to its data field — and the
+     * slice is appended here (`Connection.callSpliced`). The reply comes back
+     * through the socket as usual.
+     */
+    @ReactMethod
+    fun sendSpliced(socketId: Double, head: String, token: String, offset: Double, length: Double, promise: Promise) {
+        val context = reactApplicationContext
+        val file = stagedFileOrNull(context, token)
+        if (file == null || !file.exists()) {
+            promise.reject(ERROR_CODE, "the shared file is no longer available")
+            return
+        }
+        val socket = context.getNativeModule(WebSocketModule::class.java)
+        if (socket == null) {
+            promise.reject(ERROR_CODE, "the WebSocket module is not available")
+            return
+        }
+        Thread {
+            try {
+                val headBytes = decode(head)
+                val start = offset.toLong()
+                val count = length.toLong()
+                // Within the file, and within what OkHttp queues for one frame.
+                require(start >= 0 && count >= 0 && start + count <= file.length()) { "the slice is outside the file" }
+                require(headBytes.size + count <= MAX_SPLICED_FRAME) { "the frame is too large to send" }
+                val frame = ByteArray(headBytes.size + count.toInt())
+                System.arraycopy(headBytes, 0, frame, 0, headBytes.size)
+                RandomAccessFile(file, "r").use {
+                    it.seek(start)
+                    it.readFully(frame, headBytes.size, count.toInt())
+                }
+                socket.sendBinary(frame.toByteString(), socketId.toInt())
+                promise.resolve(null)
+            } catch (e: Throwable) {
+                promise.reject(ERROR_CODE, "the upload chunk could not be sent", e)
+            }
+        }.start()
+    }
+
+    /** createStaged makes a new, empty staged file and resolves with its token: where a download is captured. */
+    @ReactMethod
+    fun createStaged(promise: Promise) {
+        try {
+            val token = newToken()
+            val file = stagedFile(reactApplicationContext, token)
+            file.parentFile?.mkdirs()
+            file.outputStream().close()
+            promise.resolve(token)
+        } catch (e: Throwable) {
+            promise.reject(ERROR_CODE, "a download file could not be made", e)
+        }
+    }
+
+    /**
+     * writeStaged writes base64 [data] into staged copy [token] at [offset]:
+     * how a range JavaScript did receive — over a socket that cannot capture —
+     * joins the ones captured natively.
+     */
+    @ReactMethod
+    fun writeStaged(token: String, offset: Double, data: String, promise: Promise) {
+        val file = stagedFileOrNull(reactApplicationContext, token)
+        if (file == null || !file.exists()) {
+            promise.reject(ERROR_CODE, "the download file is no longer available")
+            return
+        }
+        try {
+            RandomAccessFile(file, "rw").use {
+                it.seek(offset.toLong())
+                it.write(decode(data))
+            }
+            promise.resolve(null)
+        } catch (e: Throwable) {
+            promise.reject(ERROR_CODE, "the download could not be written", e)
+        }
+    }
+
+    /**
+     * openStaged opens staged container [token] — version byte, [nonce], then
+     * the sealed frame — under [key] and [aad] (spec/crypto.md §5.4), into a
+     * new staged copy of the frame. It resolves with `{ token, size, head }`:
+     * the plaintext's length and its first bytes, which hold the frame's head.
+     *
+     * The whole ciphertext is authenticated first, and nothing is decrypted
+     * unless the tag verifies ([XChaCha20Poly1305Opener]). A container that
+     * does not open is refused with "invalid tag", as `@noble/ciphers` refuses
+     * it, and leaves nothing behind. The container's own copy is the caller's
+     * to discard.
+     */
+    @ReactMethod
+    fun openStaged(token: String, key: String, nonce: String, aad: String, promise: Promise) {
+        val context = reactApplicationContext
+        val input = stagedFileOrNull(context, token)
+        if (input == null || !input.exists()) {
+            promise.reject(ERROR_CODE, "the download file is no longer available")
+            return
+        }
+        Thread {
+            val outToken = newToken()
+            val output = stagedFile(context, outToken)
+            try {
+                val nonceBytes = decode(nonce)
+                val head = 1 + XChaCha20Poly1305Sealer.NONCE_SIZE
+                val total = input.length()
+                require(total >= head + XChaCha20Poly1305Sealer.TAG_SIZE) { "the container is too short" }
+                val sealedLength = total - head - XChaCha20Poly1305Sealer.TAG_SIZE
+                val opener = XChaCha20Poly1305Opener(decode(key), nonceBytes, decode(aad))
+                val buffer = ByteArray(SEAL_BUFFER)
+                RandomAccessFile(input, "r").use { file ->
+                    // The nonce in the file must be the one the key was derived from.
+                    val fileNonce = ByteArray(nonceBytes.size)
+                    file.seek(1)
+                    file.readFully(fileNonce)
+                    require(fileNonce.contentEquals(nonceBytes)) { "the container's nonce is not the one given" }
+                    // Pass one: authenticate everything.
+                    file.seek(head.toLong())
+                    var left = sealedLength
+                    while (left > 0) {
+                        val n = minOf(buffer.size.toLong(), left).toInt()
+                        file.readFully(buffer, 0, n)
+                        opener.authenticate(buffer, 0, n)
+                        left -= n
+                    }
+                    val tag = ByteArray(XChaCha20Poly1305Sealer.TAG_SIZE)
+                    file.readFully(tag)
+                    if (!opener.verify(tag)) {
+                        promise.reject(ERROR_CODE, "invalid tag")
+                        return@Thread
+                    }
+                    // Pass two: decrypt what was verified.
+                    output.parentFile?.mkdirs()
+                    output.outputStream().buffered(SEAL_BUFFER).use { out ->
+                        file.seek(head.toLong())
+                        left = sealedLength
+                        while (left > 0) {
+                            val n = minOf(buffer.size.toLong(), left).toInt()
+                            file.readFully(buffer, 0, n)
+                            opener.decrypt(buffer, 0, n, buffer, 0)
+                            out.write(buffer, 0, n)
+                            left -= n
+                        }
+                    }
+                }
+                val first = ByteArray(minOf(sealedLength, OPEN_HEAD_BYTES).toInt())
+                RandomAccessFile(output, "r").use { it.readFully(first) }
+                promise.resolve(
+                    Arguments.createMap().apply {
+                        putString("token", outToken)
+                        putDouble("size", sealedLength.toDouble())
+                        putString("head", Base64.encodeToString(first, Base64.NO_WRAP))
+                    },
+                )
+            } catch (e: Throwable) {
+                output.delete()
+                promise.reject(ERROR_CODE, "the download could not be opened", e)
+            }
+        }.start()
+    }
+
+    /**
+     * openBytes opens ciphertext-with-tag [sealed] in memory the way
+     * [openStaged] opens a file, in uneven pieces, resolving with the
+     * plaintext as base64 or refusing with "invalid tag". JavaScript compares
+     * it with `@noble/ciphers`, tampered inputs included, before it trusts
+     * [openStaged].
+     */
+    @ReactMethod
+    fun openBytes(key: String, nonce: String, aad: String, sealed: String, promise: Promise) {
+        try {
+            val data = decode(sealed)
+            require(data.size >= XChaCha20Poly1305Sealer.TAG_SIZE) { "too short" }
+            val length = data.size - XChaCha20Poly1305Sealer.TAG_SIZE
+            val opener = XChaCha20Poly1305Opener(decode(key), decode(nonce), decode(aad))
+            var off = 0
+            var piece = 1
+            while (off < length) {
+                val n = minOf(piece, length - off)
+                opener.authenticate(data, off, n)
+                off += n
+                piece = piece * 3 + 1
+            }
+            if (!opener.verify(data.copyOfRange(length, data.size))) {
+                promise.reject(ERROR_CODE, "invalid tag")
+                return
+            }
+            off = 0
+            piece = 1
+            while (off < length) {
+                val n = minOf(piece, length - off)
+                opener.decrypt(data, off, n, data, off)
+                off += n
+                piece = piece * 3 + 1
+            }
+            promise.resolve(Base64.encodeToString(data, 0, length, Base64.NO_WRAP))
+        } catch (e: Throwable) {
+            promise.reject(ERROR_CODE, "the self-test could not be opened", e)
+        }
+    }
+
+    /** digestStaged resolves with the SHA-256, in hex, of staged copy [token] from [offset] to its end. */
+    @ReactMethod
+    fun digestStaged(token: String, offset: Double, promise: Promise) {
+        val file = stagedFileOrNull(reactApplicationContext, token)
+        if (file == null || !file.exists()) {
+            promise.reject(ERROR_CODE, "the download file is no longer available")
+            return
+        }
+        Thread {
+            try {
+                val digest = MessageDigest.getInstance("SHA-256")
+                RandomAccessFile(file, "r").use { input ->
+                    input.seek(offset.toLong())
+                    val buffer = ByteArray(SEAL_BUFFER)
+                    while (true) {
+                        val n = input.read(buffer)
+                        if (n < 0) {
+                            break
+                        }
+                        digest.update(buffer, 0, n)
+                    }
+                }
+                promise.resolve(digest.digest().joinToString("") { "%02x".format(it) })
+            } catch (e: Throwable) {
+                promise.reject(ERROR_CODE, "the download could not be hashed", e)
+            }
+        }.start()
+    }
+
+    /**
+     * armCapture asks for the reply to request [envelopeId] on React Native
+     * WebSocket [socketId] to be captured: if it comes as a [responseType]
+     * frame, its payload's `data` field is written to staged copy [token] at
+     * [offset] and JavaScript receives the frame without it ([RangeCapture]).
+     * It resolves, once the reply has come, with the bytes captured — or
+     * with null when the reply was anything else, which then reaches
+     * JavaScript whole. Armed before the request is sent, so the reply cannot
+     * arrive first.
+     */
+    @ReactMethod
+    fun armCapture(socketId: Double, envelopeId: String, responseType: Double, token: String, offset: Double, promise: Promise) {
+        val context = reactApplicationContext
+        val file = stagedFileOrNull(context, token)
+        if (file == null || !file.exists()) {
+            promise.reject(ERROR_CODE, "the download file is no longer available")
+            return
+        }
+        val socket = context.getNativeModule(WebSocketModule::class.java)
+        if (socket == null) {
+            promise.reject(ERROR_CODE, "the WebSocket module is not available")
+            return
+        }
+        captureHandler(socket, socketId.toInt()).arm(envelopeId, CaptureHandler.Arm(responseType.toLong(), file, offset.toLong(), promise))
+    }
+
+    /** releaseCapture withdraws a capture whose reply will not come — the request failed — resolving it with null. */
+    @ReactMethod
+    fun releaseCapture(socketId: Double, envelopeId: String) {
+        synchronized(Companion) { captureHandlers[socketId.toInt()] }?.release(envelopeId)
+    }
+
+    /**
+     * discard deletes staged copy [token]. Deleting one already gone is fine,
+     * and a container kept in the [SealedCache] is not touched: only the
+     * cache drops what it keeps.
+     */
+    @ReactMethod
+    fun discard(token: String) {
+        if (TOKEN.matches(token)) {
+            stagedFile(reactApplicationContext, token).delete()
+        }
+    }
+
+    /**
+     * cacheLookup resolves with the sealed container kept under [key] —
+     * `{ token, size, info }` — or with null when none is, or it has expired.
+     */
+    @ReactMethod
+    fun cacheLookup(key: String, promise: Promise) {
+        try {
+            val kept = SealedCache.lookup(reactApplicationContext, key, System.currentTimeMillis())
+            promise.resolve(
+                kept?.let {
+                    Arguments.createMap().apply {
+                        putString("token", it.token)
+                        putDouble("size", it.size.toDouble())
+                        putString("info", it.info)
+                    }
+                },
+            )
+        } catch (e: Throwable) {
+            promise.resolve(null)
+        }
+    }
+
+    /** cacheKeep moves staged container [token] into the cache under [key] until [until] (ms), with [info]. */
+    @ReactMethod
+    fun cacheKeep(key: String, token: String, info: String, until: Double, promise: Promise) {
+        val context = reactApplicationContext
+        if (!TOKEN.matches(token)) {
+            promise.reject(ERROR_CODE, "not a staged file")
+            return
+        }
+        Thread {
+            try {
+                SealedCache.keep(context, key, token, stagedFile(context, token), info, until.toLong(), System.currentTimeMillis())
+                promise.resolve(null)
+            } catch (e: Throwable) {
+                promise.reject(ERROR_CODE, "the download could not be kept", e)
+            }
+        }.start()
+    }
+
+    /** cacheClear drops everything the cache keeps: the group in use changed. */
+    @ReactMethod
+    fun cacheClear() {
+        try {
+            SealedCache.clear(reactApplicationContext)
+        } catch (e: Throwable) {
+            // Whatever could not be deleted now expires within the hour.
+        }
+    }
+
+    /** cacheForget drops what the cache keeps under [key]. */
+    @ReactMethod
+    fun cacheForget(key: String) {
+        try {
+            SealedCache.forget(reactApplicationContext, key)
+        } catch (e: Throwable) {
+            // Nothing kept, or nothing to drop: either way it is gone.
+        }
+    }
+
+    /**
+     * finish closes the share panel for share [id] and forgets the share. A
+     * [message] that is not empty is shown as a toast over the app the user
+     * returns to; it is a status — "Sent to the group." — and never the
+     * shared content or its name, because a toast is visible over other apps.
+     *
+     * A finish for a share that has since been replaced does nothing, so an
+     * upload that ends after the user shared something else does not close
+     * the panel that is asking about the new one. Id 0 closes the panel
+     * whatever it shows: it is how a panel with no share on it is dismissed.
+     */
+    @ReactMethod
+    fun finish(id: Double, message: String) {
+        val wanted = id.toInt()
+        val matched = synchronized(Companion) {
+            if (wanted == 0 || current?.id == wanted) {
+                current = null
+                delivered = true
+                true
+            } else {
+                false
+            }
+        }
+        if (!matched) {
+            return
+        }
+        if (message.isNotEmpty()) {
+            val context = reactApplicationContext
+            Handler(Looper.getMainLooper()).post {
+                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            }
+        }
+        ShareActivity.close()
+    }
+
+    /** openApp brings the app itself forward — to pair, say — and closes the panel. */
+    @ReactMethod
+    fun openApp() {
+        val context = reactApplicationContext
+        val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
+        if (launch != null) {
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(launch)
+        }
+        drop()
+        ShareActivity.close()
+    }
+
+    /** addListener and removeListeners exist because NativeEventEmitter requires them. */
+    @ReactMethod
+    fun addListener(eventName: String) = Unit
+
+    @ReactMethod
+    fun removeListeners(count: Int) = Unit
+
+    /**
+     * Shared is one share. [uri] is set for a file, [text] for text, and
+     * neither for something this app refused. [name] and [type] are filled in
+     * when JavaScript claims it, so that a later read uses the same ones the
+     * panel showed.
+     */
+    data class Shared(
+        val id: Int,
+        val uri: Uri?,
+        val type: String,
+        val text: String?,
+        val subject: String,
+        val name: String? = null,
+    )
+
+    companion object {
+        const val NAME = "TppShare"
+
+        /** SHARE_EVENT is what a running app listens for. */
+        const val SHARE_EVENT = "TppShareReceived"
+
+        private const val ERROR_CODE = "tpp_share"
+        private const val KIND_FILE = "file"
+        private const val KIND_TEXT = "text"
+        private const val KIND_UNSUPPORTED = "unsupported"
+
+        private var nextId = 1
+
+        /** current is the share the panel is about, from arrival until it is finished or dropped. */
+        private var current: Shared? = null
+
+        /** delivered is whether JavaScript has claimed [current] yet. */
+        private var delivered = true
+
+        /**
+         * stagedFile is where a shared file is copied for the upload that takes
+         * it, one file per upload, in the cache. No provider of this app serves
+         * that directory.
+         */
+        private fun stagedFile(context: Context, token: String) =
+            File(File(context.cacheDir, STAGE_DIRECTORY), token)
+
+        /**
+         * stagedFileOrNull is the file of a token JavaScript sent back, which
+         * must be one [newToken] made: a staged copy, or a container moved into
+         * the [SealedCache], which keeps its token.
+         */
+        internal fun stagedFileOrNull(context: Context, token: String): File? {
+            if (!TOKEN.matches(token)) {
+                return null
+            }
+            val staged = stagedFile(context, token)
+            if (staged.exists()) {
+                return staged
+            }
+            val kept = File(SealedCache.directory(context), token)
+            return if (kept.exists()) kept else staged
+        }
+
+        private fun newToken(): String = UUID.randomUUID().toString()
+
+        private val TOKEN = Regex("^[0-9a-f-]{36}$")
+        private const val STAGE_DIRECTORY = "shared"
+        private const val SEAL_BUFFER = 64 * 1024
+
+        /**
+         * OPEN_HEAD_BYTES is how much of an opened frame JavaScript is given:
+         * enough for the longest head a frame can have (two 64 KiB strings and
+         * their fields), so the body never has to cross.
+         */
+        private const val OPEN_HEAD_BYTES = 1L + 2 + 65535 + 2 + 65535 + 8 + 4 + 4
+
+        /**
+         * captureHandlers is the capture handler of each socket that has had a
+         * capture armed. Only the newest socket keeps one: the app talks to
+         * the relay over one socket at a time, and an older one is closed.
+         */
+        private val captureHandlers = HashMap<Int, CaptureHandler>()
+
+        private fun captureHandler(socket: WebSocketModule, socketId: Int): CaptureHandler {
+            synchronized(this) {
+                captureHandlers[socketId]?.let { return it }
+                for ((old, handler) in captureHandlers) {
+                    socket.setContentHandler(old, null)
+                    handler.releaseAll()
+                }
+                captureHandlers.clear()
+                val handler = CaptureHandler()
+                captureHandlers[socketId] = handler
+                socket.setContentHandler(socketId, handler)
+                return handler
+            }
+        }
+
+        /** MAX_SPLICED_FRAME stays under OkHttp's 16 MiB send queue, which a larger frame would overflow. */
+        private const val MAX_SPLICED_FRAME = 15L * 1024 * 1024
+
+        private fun decode(base64: String): ByteArray = Base64.decode(base64, Base64.NO_WRAP)
+
+        /**
+         * stageUri copies [uri] into a new staged copy within [limit], hashing
+         * it on the way, and resolves [promise] with `{ token, name,
+         * contentType, size, sha256 }`, or with `{ name, size, tooLarge: true }`
+         * and no copy when it is over the limit. It blocks: call it off the
+         * main thread. A shared file and a file picked for the store are both
+         * staged this way, so both upload the same way after.
+         */
+        internal fun stageUri(context: Context, uri: Uri, limit: Long, name: String, contentType: String, promise: Promise) {
+            val token = newToken()
+            val dest = stagedFile(context, token)
+            try {
+                val meta = ContentReader.meta(context, uri)
+                val digest = MessageDigest.getInstance("SHA-256")
+                // Refused before the copy when the provider says it will not fit.
+                val size = if (meta.size > limit) null else ContentReader.stage(context, uri, limit, dest, digest)
+                if (size == null) {
+                    promise.resolve(
+                        Arguments.createMap().apply {
+                            putString("name", name)
+                            putDouble("size", maxOf(meta.size, limit + 1).toDouble())
+                            putBoolean("tooLarge", true)
+                        },
+                    )
+                    return
+                }
+                promise.resolve(
+                    Arguments.createMap().apply {
+                        putString("token", token)
+                        putString("name", name)
+                        putString("contentType", contentType)
+                        putDouble("size", size.toDouble())
+                        putString("sha256", digest.digest().joinToString("") { "%02x".format(it) })
+                    },
+                )
+            } catch (e: Throwable) {
+                // Throwable, not Exception: running out of memory or disk must
+                // be a refusal the app shows, never a crash.
+                dest.delete()
+                promise.reject(ERROR_CODE, "the file could not be read", e)
+            }
+        }
+
+        /**
+         * clearStaged deletes every staged copy. Called when the module is
+         * created, which is when the process starts: no upload outlives its
+         * process, so whatever is there is left over.
+         */
+        fun clearStaged(context: Context) {
+            File(context.cacheDir, STAGE_DIRECTORY).listFiles()?.forEach { it.delete() }
+        }
+
+        /**
+         * receive records what an `ACTION_SEND` intent carries and tells a
+         * running app about it. A file wins over text when an app sends both
+         * (a photo with a caption, say), because the file is what was shared.
+         */
+        fun receive(context: Context, intent: Intent?) {
+            if (intent?.action != Intent.ACTION_SEND) {
+                return
+            }
+            val stream = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
+            val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+            val subject = intent.getCharSequenceExtra(Intent.EXTRA_SUBJECT)?.toString() ?: ""
+            synchronized(this) {
+                val id = nextId++
+                current = when {
+                    stream != null && readable(context, stream) ->
+                        Shared(id, stream, intent.type ?: "", null, subject)
+                    stream == null && !text.isNullOrEmpty() ->
+                        Shared(id, null, "", text, subject)
+                    else -> Shared(id, null, "", null, "")
+                }
+                delivered = false
+            }
+            val host = (context.applicationContext as? MainApplication)?.reactHost
+            val reactContext = host?.currentReactContext ?: return
+            reactContext
+                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                .emit(SHARE_EVENT, null)
+        }
+
+        /** drop forgets the share, if there is one: the panel is gone, and its grant with it. */
+        @Synchronized
+        fun drop() {
+            current = null
+            delivered = true
+        }
+
+        /** claim hands a waiting share to exactly one caller. */
+        @Synchronized
+        private fun claim(): Shared? {
+            if (delivered) {
+                return null
+            }
+            delivered = true
+            return current
+        }
+
+        /**
+         * readable reports whether [uri] is one this app may read on the
+         * sender's behalf: `content://`, and not served by this app itself.
+         */
+        @Suppress("DEPRECATION") // The flags-object overload is API 33+; this app runs on 24.
+        private fun readable(context: Context, uri: Uri): Boolean {
+            if (uri.scheme != ContentResolver.SCHEME_CONTENT) {
+                return false
+            }
+            // An authority can carry a user ("10@com.example.provider") for a
+            // share across profiles; the provider is the part after it, and
+            // that is what is checked, or "0@" would get this app's own
+            // provider past the check.
+            val authority = uri.authority?.substringAfterLast('@') ?: return false
+            if (authority.isEmpty()) {
+                return false
+            }
+            val provider = context.packageManager.resolveContentProvider(authority, 0)
+            return provider?.packageName != context.packageName
+        }
+    }
+}

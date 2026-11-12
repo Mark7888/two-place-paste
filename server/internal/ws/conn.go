@@ -3,9 +3,12 @@ package ws
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -24,7 +27,22 @@ const writeQueueDepth = 32
 // time, so the server pings well inside that window; a peer that does not
 // answer before the next ping is due is gone, and its socket is closed rather
 // than kept registered.
+//
+// Only a silent connection is pinged, and only a silent one is closed for
+// not answering. A connection moving a large frame — an upload chunk coming
+// in, a download range going out, several megabytes over a phone's link —
+// can take longer than the interval to move one frame, and neither end can
+// slip a ping or a pong into the middle of it: the phone's WebSocket writes a
+// message whole, and a ping waits behind the frame being written. Closing
+// such a connection for a late pong killed it mid-transfer and failed every
+// request on it. Bytes moving, or a request being handled, are proof enough
+// that the peer is there, and they keep a proxy's idle timer from firing too.
 const pingInterval = 25 * time.Second
+
+// writePiece is how much of an outgoing frame is written at once: the frame
+// goes out as fragments of this size, so a ping can go between them and the
+// connection's activity is seen while a large frame is still on its way.
+const writePiece = 64 << 10
 
 // conn is one WebSocket connection and the identity it has established.
 type conn struct {
@@ -50,15 +68,90 @@ type conn struct {
 
 	closeOnce sync.Once
 	closed    chan struct{}
+
+	// now is the clock activity is measured by; tests replace it.
+	now func() time.Time
+	// lastActivity is when bytes last moved either way, in Unix nanoseconds.
+	lastActivity atomic.Int64
+	// handling counts requests being handled: a slow one (a chunk going to
+	// S3, say) holds up the read loop, and with it any pong.
+	handling atomic.Int32
 }
 
 func newConn(ws *websocket.Conn, logger *slog.Logger) *conn {
-	return &conn{
+	c := &conn{
 		ws:     ws,
 		logger: logger,
 		out:    make(chan []byte, writeQueueDepth),
 		closed: make(chan struct{}),
+		now:    time.Now,
 	}
+	c.touch()
+	return c
+}
+
+// touch records that bytes moved on the connection.
+func (c *conn) touch() {
+	c.lastActivity.Store(c.now().UnixNano())
+}
+
+// activeSince reports whether the connection has been busy since t: bytes
+// moved, or a request is being handled now.
+func (c *conn) activeSince(t time.Time) bool {
+	return c.handling.Load() > 0 || c.lastActivity.Load() >= t.UnixNano()
+}
+
+// readFrame reads one whole message, recording activity as its bytes arrive
+// rather than only once the last of them has: a large upload chunk on a slow
+// link takes a while, and the peer is plainly there throughout.
+func (c *conn) readFrame(ctx context.Context) (websocket.MessageType, []byte, error) {
+	typ, r, err := c.ws.Reader(ctx)
+	if err != nil {
+		return 0, nil, fmt.Errorf("read frame: %w", err)
+	}
+	c.touch()
+	data, err := io.ReadAll(activityReader{r: r, c: c})
+	if err != nil {
+		return 0, nil, fmt.Errorf("read frame body: %w", err)
+	}
+	return typ, data, nil
+}
+
+// activityReader touches the connection on every read that returns bytes.
+type activityReader struct {
+	r io.Reader
+	c *conn
+}
+
+func (a activityReader) Read(p []byte) (int, error) {
+	n, err := a.r.Read(p)
+	if n > 0 {
+		a.c.touch()
+	}
+	return n, err //nolint:wrapcheck // io.Reader's contract: io.EOF must pass through as is
+}
+
+// writeFrame writes one message as fragments of writePiece bytes, recording
+// activity as each goes out, so a large download range on a slow link counts
+// as the activity it is and a ping can be written between fragments.
+func (c *conn) writeFrame(ctx context.Context, frame []byte) error {
+	w, err := c.ws.Writer(ctx, websocket.MessageBinary)
+	if err != nil {
+		return fmt.Errorf("open frame writer: %w", err)
+	}
+	for len(frame) > 0 {
+		n := min(len(frame), writePiece)
+		if _, err := w.Write(frame[:n]); err != nil {
+			_ = w.Close()
+			return fmt.Errorf("write frame: %w", err)
+		}
+		c.touch()
+		frame = frame[n:]
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("finish frame: %w", err)
+	}
+	return nil
 }
 
 // identity returns the connection's device and group, both empty when the
@@ -121,7 +214,7 @@ func (c *conn) writePump(ctx context.Context) {
 		case <-c.closed:
 			return
 		case frame := <-c.out:
-			if err := c.ws.Write(ctx, websocket.MessageBinary, frame); err != nil {
+			if err := c.writeFrame(ctx, frame); err != nil {
 				if ctx.Err() == nil && !errors.Is(err, context.Canceled) {
 					c.logger.DebugContext(ctx, "websocket write failed", slog.Any("error", err))
 				}
@@ -133,8 +226,16 @@ func (c *conn) writePump(ctx context.Context) {
 }
 
 // keepalive pings the peer every interval until ctx is done or the connection
-// closes, and gives each ping until the next one to be answered. Ping writes a control frame, which coder/websocket allows alongside
-// the write pump's data frames; the pong is read by the server's read loop.
+// closes, and gives each ping until the next one to be answered. Ping writes a
+// control frame, which coder/websocket allows between the write pump's
+// fragments; the pong is read by the server's read loop.
+//
+// A connection that has been busy over the last interval is not pinged: its
+// traffic already shows the peer is there (see pingInterval). That also keeps
+// a ping from being written into a socket whose buffers a large frame has
+// filled — coder/websocket closes the connection if a ping's deadline passes
+// mid-write. And a ping that goes unanswered while the connection turns
+// busy is not held against it.
 func (c *conn) keepalive(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -146,9 +247,18 @@ func (c *conn) keepalive(ctx context.Context, interval time.Duration) {
 			return
 		case <-ticker.C:
 		}
+		start := c.now()
+		if c.activeSince(start.Add(-interval)) {
+			continue
+		}
 		pingCtx, cancel := context.WithTimeout(ctx, interval)
 		err := c.ws.Ping(pingCtx)
 		cancel()
+		if err != nil && ctx.Err() == nil && c.activeSince(start) {
+			// It went busy while the ping was out: a transfer started, and
+			// its frame is between the ping and the pong.
+			continue
+		}
 		if err != nil {
 			if ctx.Err() == nil {
 				deviceID, _ := c.identity()
