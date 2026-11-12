@@ -32,6 +32,7 @@ return 0
 // CreateAPIKey implements APIKeys.
 func (s *RedisStore) CreateAPIKey(ctx context.Context, k APIKey) error {
 	args := []any{MaxAPIKeys, k.ID,
+		"id", k.ID,
 		"name", k.Name,
 		"hash", hex.EncodeToString(k.Hash),
 		"scopes", strings.Join(k.Scopes, " "),
@@ -60,19 +61,22 @@ func (s *RedisStore) GetAPIKey(ctx context.Context, id string) (APIKey, error) {
 	if id == "" {
 		return APIKey{}, ErrNotFound
 	}
+	// The id the caller passes may come straight from a request header, so
+	// neither the error nor the record repeats it: the record's id is the one
+	// stored with it, which callers may log.
 	fields, err := s.rdb.HGetAll(ctx, apiKeyKey(id)).Result()
 	if err != nil {
-		return APIKey{}, fmt.Errorf("get API key %s: %w", id, err)
+		return APIKey{}, fmt.Errorf("get API key: %w", err)
 	}
-	if len(fields) == 0 {
+	if len(fields) == 0 || fields["id"] != id {
 		return APIKey{}, ErrNotFound
 	}
 	hash, err := hex.DecodeString(fields["hash"])
 	if err != nil {
-		return APIKey{}, fmt.Errorf("get API key %s: malformed hash: %w", id, err)
+		return APIKey{}, fmt.Errorf("get API key %s: malformed hash: %w", fields["id"], err)
 	}
 	return APIKey{
-		ID:         id,
+		ID:         fields["id"],
 		Name:       fields["name"],
 		Hash:       hash,
 		Scopes:     strings.Fields(fields["scopes"]),

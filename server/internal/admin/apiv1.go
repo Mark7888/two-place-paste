@@ -188,7 +188,9 @@ func (s *Server) authenticate(ctx context.Context, header string) (store.APIKey,
 		return store.APIKey{}, errBadKey
 	}
 	if err != nil {
-		return store.APIKey{}, fmt.Errorf("authenticate API key %s: %w", id, err)
+		// Not named by id: it is still the request's, not yet one the store
+		// vouched for.
+		return store.APIKey{}, fmt.Errorf("authenticate API key: %w", err)
 	}
 	if !apikey.Matches(rec, key) || rec.Expired(s.now()) {
 		return store.APIKey{}, errBadKey
