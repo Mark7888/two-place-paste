@@ -26,6 +26,8 @@ Sizes take a plain byte count or a unit: `500MB`, `5GiB`, `1.5GiB`.
 | `TPP_HOST_BIND_ADDR` | `127.0.0.1` | Compose only: the host address the port is published on. Change it only when the proxy is on another machine, and name one private interface — never `0.0.0.0`. |
 | `TPP_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. Even `debug` never logs clipboard content. |
 | `TPP_ADMIN_SESSION_TTL` | `12h` | How long an admin sign-in lasts. |
+| `TPP_API_READ_RATE`, `TPP_API_READ_BURST` | `10`, `60` | Each [admin API](/two-place-paste/self-hosting/api/) key's budget for reads (`GET`): requests a second, refilled continuously, and how many it may spend at once. |
+| `TPP_API_WRITE_RATE`, `TPP_API_WRITE_BURST` | `2`, `10` | The same for every other request: creating, changing, purging and deleting. |
 | `TPP_SOURCE_URL` | `https://github.com/Mark7888/two-place-paste` | Where the **Source code** link on the admin and pairing pages points. If you run a modified relay for other people, set it to your version's source — see [License](/two-place-paste/self-hosting/overview/#license). |
 
 ## Redis

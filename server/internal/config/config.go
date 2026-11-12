@@ -44,6 +44,12 @@ const (
 	DefaultBlobRoot      = "/var/lib/tpp/blobs"
 	DefaultSweepInterval = 10 * time.Minute
 	DefaultSessionTTL    = 12 * time.Hour
+
+	// The admin REST API's default budget per key (D11).
+	DefaultAPIReadRate   = 10
+	DefaultAPIReadBurst  = 60
+	DefaultAPIWriteRate  = 2
+	DefaultAPIWriteBurst = 10
 	DefaultInlineMax     = 256 << 10 // 256 KiB, SPEC §4.3
 	DefaultEntryMax      = 50 << 20  // 50 MiB ciphertext, SPEC §4.3
 	DefaultChunk         = 8 << 20   // 8 MiB: under the frame cap, over S3's 5 MiB part floor
@@ -116,6 +122,20 @@ type AdminConfig struct {
 
 	// SessionTTL bounds the admin session cookie lifetime.
 	SessionTTL time.Duration
+
+	// API is each admin REST API key's request budget.
+	API APIRates
+}
+
+// APIRates is each admin REST API key's request budget
+// (docs/internal/plans/admin-rest-api.md D11): requests a second, refilled
+// continuously, and the burst a key may spend at once, for reads (GET) and
+// for everything else.
+type APIRates struct {
+	ReadPerSecond  int
+	ReadBurst      int
+	WritePerSecond int
+	WriteBurst     int
 }
 
 // UsesHash reports whether the hashed-credential path is configured. Callers
@@ -281,6 +301,12 @@ func Load(opts Options) (*Config, error) {
 			Password:     r.str("ADMIN_PASSWORD", ""),
 			PasswordHash: r.str("ADMIN_PASSWORD_HASH", ""),
 			SessionTTL:   r.duration("TPP_ADMIN_SESSION_TTL", DefaultSessionTTL),
+			API: APIRates{
+				ReadPerSecond:  r.intVal("TPP_API_READ_RATE", DefaultAPIReadRate),
+				ReadBurst:      r.intVal("TPP_API_READ_BURST", DefaultAPIReadBurst),
+				WritePerSecond: r.intVal("TPP_API_WRITE_RATE", DefaultAPIWriteRate),
+				WriteBurst:     r.intVal("TPP_API_WRITE_BURST", DefaultAPIWriteBurst),
+			},
 		},
 		Blob: BlobConfig{
 			Backend:       BlobBackend(r.str("TPP_BLOB_BACKEND", string(BlobBackendDisk))),
@@ -344,6 +370,19 @@ func (c *Config) Validate() error {
 	}
 	if c.Admin.SessionTTL <= 0 {
 		errs = append(errs, fmt.Errorf("TPP_ADMIN_SESSION_TTL must be positive, got %s", c.Admin.SessionTTL))
+	}
+	for _, v := range []struct {
+		name string
+		n    int
+	}{
+		{"TPP_API_READ_RATE", c.Admin.API.ReadPerSecond},
+		{"TPP_API_READ_BURST", c.Admin.API.ReadBurst},
+		{"TPP_API_WRITE_RATE", c.Admin.API.WritePerSecond},
+		{"TPP_API_WRITE_BURST", c.Admin.API.WriteBurst},
+	} {
+		if v.n <= 0 {
+			errs = append(errs, fmt.Errorf("%s must be a positive whole number, got %d", v.name, v.n))
+		}
 	}
 
 	switch c.Blob.Backend {
