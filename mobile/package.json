@@ -49,5 +49,11 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "overrides": {
+    "@jest/reporters": { "glob": "~14.0.6" },
+    "@typescript-eslint/typescript-estree": { "minimatch": "~11.0.8" },
+    "jest-config": { "glob": "~14.0.6" },
+    "jest-runtime": { "glob": "~14.0.6" }
   }
 }
