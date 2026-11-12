@@ -66,11 +66,12 @@ type groupStoreJSON struct {
 // storeRowJSON is a group's store on the groups list: whether it is on, and
 // how much it holds against the cap it runs into.
 type storeRowJSON struct {
-	Enabled    bool  `json:"enabled"`
-	Emptying   bool  `json:"emptying"`
-	UsedBytes  int64 `json:"used_bytes"`
-	UsedItems  int64 `json:"used_items"`
-	LimitBytes int64 `json:"limit_bytes"`
+	Enabled     bool   `json:"enabled"`
+	Emptying    bool   `json:"emptying"`
+	UsedBytes   int64  `json:"used_bytes"`
+	UsedItems   int64  `json:"used_items"`
+	LimitBytes  int64  `json:"limit_bytes"`
+	LimitSource string `json:"limit_source"`
 }
 
 // storeRow builds a group's store cell for the groups list, or nil when the
@@ -81,8 +82,9 @@ func (s *Server) storeRow(ctx context.Context, g store.Group, tags map[string]st
 	}
 	limit := s.storeSvc.GroupLimit(g, tagOf(g, tags))
 	v := &storeRowJSON{
-		Enabled:    g.StoreEnabled,
-		LimitBytes: storeShown(limit.Bytes, s.storeSvc.Config().MaxTotalBytes),
+		Enabled:     g.StoreEnabled,
+		LimitBytes:  storeShown(limit.Bytes, s.storeSvc.Config().MaxTotalBytes),
+		LimitSource: limit.Source,
 	}
 	if u, err := s.store.StoreUsage(ctx, g.ID); err != nil {
 		probs.add("the store usage of "+g.Name, err)

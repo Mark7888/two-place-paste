@@ -148,6 +148,20 @@ func (s *Server) tagListView(ctx context.Context, query url.Values) (tagsJSON, e
 	return v, nil
 }
 
+// tagView builds one tag's row.
+func (s *Server) tagView(ctx context.Context, name string) (tagJSON, error) {
+	rows, err := s.tagRows(ctx, s.problems(ctx, "tag"))
+	if err != nil {
+		return tagJSON{}, err
+	}
+	for _, row := range rows {
+		if row.Name == name {
+			return row, nil
+		}
+	}
+	return tagJSON{}, notFound("That tag no longer exists.")
+}
+
 // handleTags returns one page of the tag screen.
 func (s *Server) handleTags(w http.ResponseWriter, r *http.Request, _ session) {
 	v, err := s.tagListView(r.Context(), r.URL.Query())

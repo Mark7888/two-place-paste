@@ -14,6 +14,10 @@ import "net/http"
 //   - its static files: the bundle under /admin/assets/ and the favicons.
 //   - the JSON API under /admin/api/, which is all the app talks to.
 //
+// It also attaches the public admin REST API under /api/v1/ (apiv1.go): one
+// prefix pattern whose front door authenticates every request before the
+// generated router sees it.
+//
 // Groups and tokens are named in every path by their handle (handle.go),
 // never by their id or value.
 //
@@ -97,6 +101,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /admin/api/settings", s.write(s.handleSaveSettings))
 
 	mux.HandleFunc("GET /admin/api/audit", s.read(s.handleAudit))
+
+	mux.HandleFunc(apiBase+"/", s.serveAPI)
 
 	mux.HandleFunc("GET /{token}", s.handleTokenGet)
 	mux.HandleFunc("POST /{token}", s.handleTokenPost)

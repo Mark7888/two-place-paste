@@ -328,6 +328,19 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, _ ses
 	writeJSON(w, http.StatusCreated, createdTokenJSON{tokenJSON: s.tokenView(tok, s.now()), URL: s.creationURL(tok.Value)})
 }
 
+// tokenByHandleOp finds the token a handle names, as an operation.
+func (s *Server) tokenByHandleOp(ctx context.Context, handle string) (store.Token, error) {
+	tok, err := s.tokenByHandle(ctx, handle)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return store.Token{}, notFound("That token no longer exists.")
+	case err != nil:
+		s.logger.ErrorContext(ctx, "read token", "error", err)
+		return store.Token{}, failed("The token could not be read.")
+	}
+	return tok, nil
+}
+
 // liveToken finds the unused, unexpired token a handle names: the only kind
 // with a link or a code to show.
 func (s *Server) liveToken(ctx context.Context, handle string) (store.Token, error) {

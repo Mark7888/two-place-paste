@@ -61,7 +61,7 @@ func writeOpError(w http.ResponseWriter, err error) {
 // actor is who is making a request, for the audit log: a signed-in admin
 // page, an API key, or the tpp command line.
 type actor struct {
-	// kind is "" for the admin page, "api_key" or "cli", as
+	// kind is "" for the admin page, actorAPIKey or actorCLI, as
 	// store.AuditEntry.Actor stores it.
 	kind string
 
@@ -72,6 +72,12 @@ type actor struct {
 	keyID   string
 	keyName string
 }
+
+// The actor kinds besides the admin page.
+const (
+	actorAPIKey = "api_key"
+	actorCLI    = "cli"
+)
 
 type actorCtxKey struct{}
 

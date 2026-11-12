@@ -33,6 +33,24 @@ var auditLabels = []struct{ action, label string }{
 	{"tag.delete", "Tag deleted"},
 	{"settings.update", "Settings changed"},
 	{"sweep", "Sweep requested"},
+	{"apikey.create", "API key created"},
+	{"apikey.revoke", "API key revoked"},
+	{"apikey.limited", "API key attempts rate limited"},
+}
+
+// actorLabel says who made an audited change, in words.
+func actorLabel(e store.AuditEntry) string {
+	switch e.Actor {
+	case actorAPIKey:
+		if e.ActorName == "" {
+			return "API key " + e.ActorID
+		}
+		return "API key “" + e.ActorName + "” (" + e.ActorID + ")"
+	case actorCLI:
+		return "Command line"
+	default:
+		return "Admin page"
+	}
 }
 
 // auditLabel names an action. One this build does not know, from a newer
@@ -54,6 +72,13 @@ type auditJSON struct {
 	Target string    `json:"target"`
 	Detail string    `json:"detail"`
 	IP     string    `json:"ip"`
+
+	// Actor is "" for the admin page, "api_key" or "cli", and ActorID and
+	// ActorName name the API key. By says the same in words.
+	Actor     string `json:"actor"`
+	ActorID   string `json:"actor_id"`
+	ActorName string `json:"actor_name"`
+	By        string `json:"by"`
 }
 
 // auditListJSON is the audit screen: one page of the log, how much the
@@ -81,7 +106,7 @@ var auditTable = table[auditJSON]{
 	},
 	defaultSort: "when",
 	fields: func(e auditJSON) []string {
-		return []string{e.Action, e.Label, e.Target, e.Detail, e.IP}
+		return []string{e.Action, e.Label, e.Target, e.Detail, e.IP, e.By}
 	},
 }
 
@@ -130,7 +155,10 @@ func (s *Server) auditListView(ctx context.Context, query url.Values) (auditList
 		if action != "" && e.Action != action {
 			continue
 		}
-		rows = append(rows, auditJSON{At: e.At.UTC(), Action: e.Action, Label: auditLabel(e.Action), Target: e.Target, Detail: e.Detail, IP: e.IP})
+		rows = append(rows, auditJSON{
+			At: e.At.UTC(), Action: e.Action, Label: auditLabel(e.Action), Target: e.Target, Detail: e.Detail, IP: e.IP,
+			Actor: e.Actor, ActorID: e.ActorID, ActorName: e.ActorName, By: actorLabel(e),
+		})
 	}
 	out := auditListJSON{
 		tablePage: auditTable.run(rows, query),

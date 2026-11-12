@@ -184,3 +184,63 @@ func TestSessionStoreExpiry(t *testing.T) {
 		t.Error("a destroyed session is still readable, want it gone")
 	}
 }
+
+func TestLimiterBlocked(t *testing.T) {
+	t.Parallel()
+	clk := newTestClock()
+	l := newLimiter(time.Minute, 2, time.Second, 100, clk.now)
+
+	if blocked, _ := l.blocked("192.0.2.1"); blocked {
+		t.Fatal("an unseen client is blocked")
+	}
+	for range 2 {
+		l.allow("192.0.2.1")
+	}
+	if blocked, scope := l.blocked("192.0.2.1"); !blocked || scope != "ip" {
+		t.Errorf("blocked() = %v, %q; want true, %q", blocked, scope, "ip")
+	}
+	// Asking does not spend: after the refill one attempt is there.
+	clk.advance(time.Minute)
+	for range 3 {
+		if blocked, _ := l.blocked("192.0.2.1"); blocked {
+			t.Fatal("blocked() after a refill = true; asking must not spend attempts")
+		}
+	}
+}
+
+func TestKeyedLimiter(t *testing.T) {
+	t.Parallel()
+	clk := newTestClock()
+	k := newKeyedLimiter(2, 3, clk.now)
+
+	tests := []struct {
+		advance       time.Duration
+		key           string
+		wantOK        bool
+		wantRemaining int
+	}{
+		{0, "a", true, 2},
+		{0, "a", true, 1},
+		{0, "a", true, 0},
+		{0, "a", false, 0},
+		{0, "b", true, 2},
+		{500 * time.Millisecond, "a", true, 0},
+		{0, "a", false, 0},
+	}
+	for i, tt := range tests {
+		clk.advance(tt.advance)
+		res := k.take(tt.key)
+		if res.ok != tt.wantOK || res.remaining != tt.wantRemaining || res.limit != 3 {
+			t.Errorf("take %d (%s) = ok %v, remaining %d, limit %d; want %v, %d, 3",
+				i+1, tt.key, res.ok, res.remaining, res.limit, tt.wantOK, tt.wantRemaining)
+		}
+		if !res.ok && res.retry <= 0 {
+			t.Errorf("take %d refused with retry %v, want a positive wait", i+1, res.retry)
+		}
+	}
+	// b refilled to full meanwhile, so this spends one: full again in half
+	// a second at two a second.
+	if res := k.take("b"); res.reset != 500*time.Millisecond {
+		t.Errorf("reset = %v, want 500ms for one spent at two a second", res.reset)
+	}
+}
