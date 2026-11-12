@@ -1876,8 +1876,7 @@
           },
           "tag": {
             "type": "string",
-            "description": "The group's tag",
-            "or empty when it has none.": null
+            "description": "The group's tag, or empty when it has none."
           },
           "created_at": {
             "type": "string",
@@ -2081,8 +2080,7 @@
           },
           "tag": {
             "type": "string",
-            "description": "The tag to put the group under",
-            "or empty for none. The tag must exist.": null
+            "description": "The tag to put the group under, or empty for none. The tag must exist."
           },
           "limit": {
             "$ref": "#/components/schemas/LimitChange"
@@ -2240,8 +2238,7 @@
           },
           "tag": {
             "type": "string",
-            "description": "The tag the group starts under",
-            "or empty.": null
+            "description": "The tag the group starts under, or empty."
           },
           "created_at": {
             "type": "string",
@@ -2449,8 +2446,7 @@
               "string",
               "null"
             ],
-            "description": "The API key's id",
-            "for `api_key`.": null
+            "description": "The API key's id, for `api_key`."
           },
           "key_name": {
             "type": [
@@ -2481,8 +2477,7 @@
           },
           "total": {
             "type": "integer",
-            "description": "Rows that match",
-            "across all pages.": null
+            "description": "Rows that match, across all pages."
           },
           "page": {
             "type": "integer"

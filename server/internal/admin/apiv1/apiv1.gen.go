@@ -573,7 +573,7 @@ func (e ListTokensParamsStatus) Valid() bool {
 
 // Actor Who made the change.
 type Actor struct {
-	// KeyId The API key's id
+	// KeyId The API key's id, for `api_key`.
 	KeyId *string `json:"key_id"`
 
 	// KeyName The API key's name when the change was made.
@@ -688,7 +688,7 @@ type Group struct {
 	// Store The group's store, or null when the relay has none.
 	Store *GroupStore `json:"store"`
 
-	// Tag The group's tag
+	// Tag The group's tag, or empty when it has none.
 	Tag string `json:"tag"`
 }
 
@@ -706,7 +706,7 @@ type GroupChange struct {
 	// e.g. to turn an override off. A size may not exceed the relay's total limit.
 	StoreLimit *LimitChange `json:"store_limit,omitempty"`
 
-	// Tag The tag to put the group under
+	// Tag The tag to put the group under, or empty for none. The tag must exist.
 	Tag *string `json:"tag,omitempty"`
 }
 
@@ -736,7 +736,7 @@ type GroupPage struct {
 	Size     int      `json:"size"`
 	Sort     string   `json:"sort"`
 
-	// Total Rows that match
+	// Total Rows that match, across all pages.
 	Total int `json:"total"`
 }
 
@@ -1037,7 +1037,7 @@ type Token struct {
 	Note   string      `json:"note"`
 	Status TokenStatus `json:"status"`
 
-	// Tag The tag the group starts under
+	// Tag The tag the group starts under, or empty.
 	Tag string `json:"tag"`
 }
 

@@ -914,7 +914,7 @@ components:
           description: Enough of the group's id to tell groups apart. It is not a credential.
           examples: [Qm9vYmFy]
         name: { type: string, examples: [Family] }
-        tag: { type: string, description: The group's tag, or empty when it has none. }
+        tag: { type: string, description: "The group's tag, or empty when it has none." }
         created_at: { type: string, format: date-time }
         device_count: { type: integer }
         last_seen:
@@ -993,7 +993,7 @@ components:
       minProperties: 1
       properties:
         name: { type: string, maxLength: 120 }
-        tag: { type: string, description: The tag to put the group under, or empty for none. The tag must exist. }
+        tag: { type: string, description: 'The tag to put the group under, or empty for none. The tag must exist.' }
         limit: { $ref: '#/components/schemas/LimitChange' }
         store: { type: boolean, description: Turns the group's store on or off. Turning it off keeps the items. }
         store_limit: { $ref: '#/components/schemas/LimitChange' }
@@ -1050,7 +1050,7 @@ components:
         handle: { type: string, examples: [Xq3vT0b9cJm2LwQe7sZk1A] }
         name: { type: string, examples: [Anna's laptop] }
         note: { type: string }
-        tag: { type: string, description: The tag the group starts under, or empty. }
+        tag: { type: string, description: 'The tag the group starts under, or empty.' }
         created_at: { type: string, format: date-time }
         status: { $ref: '#/components/schemas/TokenStatus' }
         expires_at: { type: [string, 'null'], format: date-time }
@@ -1125,7 +1125,7 @@ components:
           type: string
           description: '`admin` is a signed-in admin page, `api_key` a call to this API, `cli` the `tpp` command.'
           enum: [admin, api_key, cli]
-        key_id: { type: [string, 'null'], description: The API key's id, for `api_key`. }
+        key_id: { type: [string, 'null'], description: "The API key's id, for `api_key`." }
         key_name: { type: [string, 'null'], description: The API key's name when the change was made. }
 
     GroupPage:
@@ -1135,7 +1135,7 @@ components:
         items:
           type: array
           items: { $ref: '#/components/schemas/Group' }
-        total: { type: integer, description: Rows that match, across all pages. }
+        total: { type: integer, description: 'Rows that match, across all pages.' }
         page: { type: integer }
         size: { type: integer }
         sort: { type: string }
