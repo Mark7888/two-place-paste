@@ -1,0 +1,2628 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "TwoPlacePaste admin API",
+    "version": "1.0.0",
+    "summary": "Automate a TwoPlacePaste relay.",
+    "license": {
+      "name": "MPL-2.0",
+      "identifier": "MPL-2.0"
+    },
+    "description": "The admin API does over HTTP what the relay's [admin page](https://mark7888.github.io/two-place-paste/self-hosting/admin/)\ndoes in a browser: mint creation tokens, watch storage, manage groups, tags and\nsettings, and read the audit log. Like the admin page it never shows content —\nthe relay has none to show.\n\nThe guide, with examples, is [The admin API](https://mark7888.github.io/two-place-paste/self-hosting/api/).\n\n## Authentication\n\nEvery request but the two that return this description carries an API key:\n\n```http\nAuthorization: Bearer tpp_ak_xxxxxxxx_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n```\n\nKeys are created on the admin page's **API keys** screen, or on the relay's host\nwith `tpp apikey create`. The API cannot create, list or revoke keys. A key is\nshown once, when it is created; the relay keeps only a hash of it.\n\nA key has one or more scopes:\n\n| Scope | Allows |\n|---|---|\n| `read` | Every `GET`, except creation-token links and QR codes |\n| `tokens` | Listing, creating and revoking creation tokens, and their links and QR codes |\n| `admin` | Everything, including purging and deleting groups. Implies `read` and `tokens`. |\n\n## Rate limits\n\nEach key has its own budget, refilled continuously: by default 10 reads a second\nwith bursts of 60, and 2 changes a second with bursts of 10. Every authenticated\nresponse carries `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset`\n(seconds until the budget is full again). A request over the budget gets `429`\nwith `Retry-After`. Failed authentication is limited per client address as well.\n\n## Errors\n\nErrors are `application/problem+json` ([RFC 9457](https://www.rfc-editor.org/rfc/rfc9457))\nwith a stable `code` to branch on: `unauthorized`, `forbidden`, `not_found`,\n`invalid_request`, `conflict`, `rate_limited`, `unavailable` or `internal`. The\n`detail` sentence is for people and may change.\n\n## Names\n\nA group's id is the creation token that made it, which is a credential, so the\nAPI never shows one. Groups and tokens are named by a **handle** instead: an\nopaque string the relay derives from the id. A token and the group it created\nhave the same handle. Tags are named by their name.\n\n## Changes and versions\n\nWithin `/api/v1`, changes only add: new endpoints, new optional request fields,\nnew response fields and new error codes. Ignore fields you do not know. Anything\nthat would break a caller waits for `/api/v2`.\n\nDestructive calls — purging and deleting — happen at once. There is no\nconfirmation step and no undo.\n"
+  },
+  "externalDocs": {
+    "description": "The admin API guide",
+    "url": "https://mark7888.github.io/two-place-paste/self-hosting/api/"
+  },
+  "servers": [
+    {
+      "url": "https://tpp.example.com/api/v1",
+      "description": "Your relay's public base URL, followed by /api/v1"
+    }
+  ],
+  "security": [
+    {
+      "apiKey": [
+        "read"
+      ]
+    }
+  ],
+  "tags": [
+    {
+      "name": "Relay",
+      "description": "The dashboard's numbers, the relay's health and the blob sweep."
+    },
+    {
+      "name": "Groups",
+      "description": "Groups, their devices, storage and store. Groups are named by their handle."
+    },
+    {
+      "name": "Tags",
+      "description": "Tags group groups together and can carry storage limits for them."
+    },
+    {
+      "name": "Tokens",
+      "description": "Creation tokens. A token's URL creates one group; hand it to the person who\nwill set it up. Token lists never contain a URL.\n"
+    },
+    {
+      "name": "Settings",
+      "description": "Settings the relay keeps at runtime."
+    },
+    {
+      "name": "Audit",
+      "description": "The last 1000 admin actions, whoever made them."
+    },
+    {
+      "name": "Description",
+      "description": "This document, for tools that read OpenAPI."
+    }
+  ],
+  "paths": {
+    "/dashboard": {
+      "get": {
+        "tags": [
+          "Relay"
+        ],
+        "operationId": "getDashboard",
+        "summary": "Get the dashboard",
+        "description": "Counts and storage, as on the admin page's dashboard.",
+        "responses": {
+          "200": {
+            "description": "The dashboard.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Dashboard"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "Relay"
+        ],
+        "operationId": "getHealth",
+        "summary": "Get the relay's health",
+        "description": "The running build and whether Redis is set up the way the relay needs it\n(eviction policy and AOF).\n",
+        "responses": {
+          "200": {
+            "description": "The relay's health.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/sweep": {
+      "post": {
+        "tags": [
+          "Relay"
+        ],
+        "operationId": "requestSweep",
+        "summary": "Run a blob sweep now",
+        "description": "Queues a sweep of expired blobs. It runs in the background.",
+        "security": [
+          {
+            "apiKey": [
+              "admin"
+            ]
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The sweep was queued, or one was already waiting.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SweepResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "501": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/groups": {
+      "get": {
+        "tags": [
+          "Groups"
+        ],
+        "operationId": "listGroups",
+        "summary": "List groups",
+        "description": "One page of the groups, searched, filtered and sorted.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Q"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "The column to sort by. Defaults to `storage`.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "name",
+                "tag",
+                "devices",
+                "last_active",
+                "entries",
+                "oldest",
+                "storage",
+                "store"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Dir"
+          },
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/Size"
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "description": "Only the groups under this tag, or `-` for the untagged ones.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stale",
+            "in": "query",
+            "description": "Only the stale groups.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of groups.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/groups/{handle}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Handle"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Groups"
+        ],
+        "operationId": "getGroup",
+        "summary": "Get a group",
+        "description": "A group with its devices and its storage and store limits.",
+        "responses": {
+          "200": {
+            "description": "The group.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Groups"
+        ],
+        "operationId": "updateGroup",
+        "summary": "Change a group",
+        "description": "Changes only the fields given. Every field is checked before any is applied,\nso a request with one bad field changes nothing. A rename reaches the\ngroup's online devices at once.\n",
+        "security": [
+          {
+            "apiKey": [
+              "admin"
+            ]
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupChange"
+              },
+              "example": {
+                "name": "Family",
+                "tag": "home",
+                "limit": {
+                  "enabled": true,
+                  "bytes": 5368709120
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The group as changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "501": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Groups"
+        ],
+        "operationId": "deleteGroup",
+        "summary": "Delete a group",
+        "description": "Deletes the group, its devices and its entries, and empties its store.\nIts devices are disconnected at once and told the group was deleted.\n**There is no confirmation and no undo.**\n",
+        "security": [
+          {
+            "apiKey": [
+              "admin"
+            ]
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The group was deleted."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/groups/{handle}/purge": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Handle"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Groups"
+        ],
+        "operationId": "purgeGroupEntries",
+        "summary": "Purge a group's entries",
+        "description": "Deletes every clipboard entry of the group now, instead of when it\nexpires. The store is not touched. **There is no undo.**\n",
+        "security": [
+          {
+            "apiKey": [
+              "admin"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What the purge freed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurgeResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "501": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/groups/{handle}/store/purge": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Handle"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Groups"
+        ],
+        "operationId": "purgeGroupStore",
+        "summary": "Purge a group's store",
+        "description": "Deletes every item of the group's store, for every device. The store\ncloses at once and is emptied in the background; the switch and the\nlimits stay as they are. **There is no undo.**\n",
+        "security": [
+          {
+            "apiKey": [
+              "admin"
+            ]
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The purge was queued. The counts are what the store held.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorePurgeResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "501": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/tags": {
+      "get": {
+        "tags": [
+          "Tags"
+        ],
+        "operationId": "listTags",
+        "summary": "List tags",
+        "description": "One page of the tags, with the groups, devices and storage under each.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Q"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "The column to sort by. Defaults to `name`.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "name",
+                "groups",
+                "devices",
+                "storage",
+                "store",
+                "limit"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Dir"
+          },
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/Size"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of tags.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Tags"
+        ],
+        "operationId": "createTag",
+        "summary": "Create a tag",
+        "security": [
+          {
+            "apiKey": [
+              "admin"
+            ]
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewTag"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The new tag.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tag"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/tags/{name}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/TagName"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Tags"
+        ],
+        "operationId": "getTag",
+        "summary": "Get a tag",
+        "responses": {
+          "200": {
+            "description": "The tag.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tag"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Tags"
+        ],
+        "operationId": "updateTag",
+        "summary": "Change a tag's limits",
+        "description": "Changes the storage and store limits the tag gives its groups. A group's\nown limit, when on, still wins over its tag's.\n",
+        "security": [
+          {
+            "apiKey": [
+              "admin"
+            ]
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TagChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The tag as changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tag"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "501": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Tags"
+        ],
+        "operationId": "deleteTag",
+        "summary": "Delete a tag",
+        "description": "Its groups are left untagged and fall back to their own limits or the defaults.",
+        "security": [
+          {
+            "apiKey": [
+              "admin"
+            ]
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The tag was deleted."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/tokens": {
+      "get": {
+        "tags": [
+          "Tokens"
+        ],
+        "operationId": "listTokens",
+        "summary": "List creation tokens",
+        "security": [
+          {
+            "apiKey": [
+              "tokens"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Q"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "The column to sort by. Defaults to `created`.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "name",
+                "created",
+                "status",
+                "expires"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Dir"
+          },
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/Size"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only tokens in this state. `used` includes tokens whose group was deleted.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "unused",
+                "used",
+                "expired"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of tokens.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Tokens"
+        ],
+        "operationId": "createToken",
+        "summary": "Create a creation token",
+        "description": "Mints a token and returns its creation URL. Hand the URL to the person who\nwill create the group; opening it in the app creates the group.\n",
+        "security": [
+          {
+            "apiKey": [
+              "tokens"
+            ]
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewToken"
+              },
+              "example": {
+                "name": "Anna's laptop",
+                "note": "Set up on Friday",
+                "expires_in_days": 7
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The new token and its creation URL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/tokens/{handle}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Handle"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Tokens"
+        ],
+        "operationId": "getToken",
+        "summary": "Get a creation token",
+        "security": [
+          {
+            "apiKey": [
+              "tokens"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Token"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Tokens"
+        ],
+        "operationId": "revokeToken",
+        "summary": "Revoke a creation token",
+        "description": "Deletes an unused token, so its URL creates nothing. A token that already\ncreated a group cannot be revoked: delete the group instead.\n",
+        "security": [
+          {
+            "apiKey": [
+              "tokens"
+            ]
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The token was revoked."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/tokens/{handle}/link": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Handle"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Tokens"
+        ],
+        "operationId": "getTokenLink",
+        "summary": "Get a token's creation URL",
+        "description": "Only an unused, unexpired token has one.",
+        "security": [
+          {
+            "apiKey": [
+              "tokens"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The creation URL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenLink"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/tokens/{handle}/qr.png": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Handle"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Tokens"
+        ],
+        "operationId": "getTokenQR",
+        "summary": "Get a token's QR code",
+        "description": "The creation URL as a QR code, for a phone to scan. Only an unused, unexpired token has one.",
+        "security": [
+          {
+            "apiKey": [
+              "tokens"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A PNG image.",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "contentMediaType": "image/png"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/settings": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "operationId": "getSettings",
+        "summary": "Get the settings",
+        "responses": {
+          "200": {
+            "description": "The settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Settings"
+        ],
+        "operationId": "updateSettings",
+        "summary": "Change the settings",
+        "security": [
+          {
+            "apiKey": [
+              "admin"
+            ]
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The settings as saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/audit": {
+      "get": {
+        "tags": [
+          "Audit"
+        ],
+        "operationId": "listAudit",
+        "summary": "List audit entries",
+        "description": "One page of the audit log, newest first by default.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Q"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "The column to sort by. Defaults to `when`.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "when",
+                "action",
+                "target",
+                "ip"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Dir"
+          },
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/Size"
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "description": "Only entries of this action, e.g. `group.delete`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of the audit log.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/openapi.yaml": {
+      "get": {
+        "tags": [
+          "Description"
+        ],
+        "operationId": "getOpenAPIYAML",
+        "summary": "Get this description as YAML",
+        "description": "Needs no API key.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "This document.",
+            "content": {
+              "application/yaml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": [
+          "Description"
+        ],
+        "operationId": "getOpenAPIJSON",
+        "summary": "Get this description as JSON",
+        "description": "Needs no API key.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "This document.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "apiKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "tpp_ak_\u003cid\u003e_\u003csecret\u003e",
+        "description": "An API key from the admin page's **API keys** screen or `tpp apikey create`."
+      }
+    },
+    "parameters": {
+      "Handle": {
+        "name": "handle",
+        "in": "path",
+        "required": true,
+        "description": "The handle of a group or token.",
+        "schema": {
+          "type": "string",
+          "examples": [
+            "Xq3vT0b9cJm2LwQe7sZk1A"
+          ]
+        }
+      },
+      "TagName": {
+        "name": "name",
+        "in": "path",
+        "required": true,
+        "description": "The tag's name.",
+        "schema": {
+          "type": "string",
+          "examples": [
+            "family"
+          ]
+        }
+      },
+      "Q": {
+        "name": "q",
+        "in": "query",
+        "description": "Search words. A row matches when every word appears in one of its columns, ignoring case.",
+        "schema": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "Dir": {
+        "name": "dir",
+        "in": "query",
+        "description": "The sort direction. Each column has its own default.",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ]
+        }
+      },
+      "Page": {
+        "name": "page",
+        "in": "query",
+        "description": "The page, from 1. A page past the end gives the last page.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        }
+      },
+      "Size": {
+        "name": "size",
+        "in": "query",
+        "description": "Rows per page.",
+        "schema": {
+          "type": "integer",
+          "enum": [
+            25,
+            50,
+            100
+          ],
+          "default": 25
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "The request is not valid. `detail` says what to fix.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "The request has no valid API key, or the key has expired or was revoked.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The API key does not have the scope this call needs.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "There is no such group, tag or token.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "The change conflicts with what exists, e.g. a tag of that name or a token that was already used.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Too many requests. Wait the number of seconds in `Retry-After`.",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds to wait before trying again.",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Unavailable": {
+        "description": "This relay does not have the feature, e.g. it runs without a store.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Problem": {
+        "type": "object",
+        "description": "An error ([RFC 9457](https://www.rfc-editor.org/rfc/rfc9457)).",
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "detail"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Always `about:blank`; branch on `code` instead.",
+            "examples": [
+              "about:blank"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "description": "The HTTP status in words.",
+            "examples": [
+              "Not Found"
+            ]
+          },
+          "status": {
+            "type": "integer",
+            "examples": [
+              404
+            ]
+          },
+          "code": {
+            "type": "string",
+            "description": "What went wrong, stable across versions. New codes may be added.",
+            "enum": [
+              "unauthorized",
+              "forbidden",
+              "not_found",
+              "invalid_request",
+              "conflict",
+              "rate_limited",
+              "unavailable",
+              "internal"
+            ],
+            "examples": [
+              "not_found"
+            ]
+          },
+          "detail": {
+            "type": "string",
+            "description": "What went wrong, for people. It may change.",
+            "examples": [
+              "That group does not exist. It may have been deleted."
+            ]
+          }
+        }
+      },
+      "Limit": {
+        "type": "object",
+        "description": "A storage limit override. While `enabled` is false the override does not\ncount but `bytes` is kept. `bytes` 0 means no limit of its own.\n",
+        "required": [
+          "enabled",
+          "bytes"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "examples": [
+              5368709120
+            ]
+          }
+        }
+      },
+      "LimitChange": {
+        "type": "object",
+        "description": "A change to a limit override. Leave out `bytes` to keep the stored size,\ne.g. to turn an override off. A size may not exceed the relay's total limit.\n",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "examples": [
+              5368709120
+            ]
+          }
+        }
+      },
+      "LimitSettings": {
+        "type": "object",
+        "description": "A group's own override and what it falls back to.",
+        "required": [
+          "own",
+          "tag_bytes",
+          "default_bytes"
+        ],
+        "properties": {
+          "own": {
+            "$ref": "#/components/schemas/Limit"
+          },
+          "tag_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The limit of the group's tag, when the tag's override is on."
+          },
+          "default_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The relay's configured default. 0 is no limit."
+          }
+        }
+      },
+      "Dashboard": {
+        "type": "object",
+        "required": [
+          "groups",
+          "devices",
+          "unused_tokens",
+          "stale_groups",
+          "stale_after_days",
+          "storage",
+          "store",
+          "problems"
+        ],
+        "properties": {
+          "groups": {
+            "type": "integer"
+          },
+          "devices": {
+            "type": "integer"
+          },
+          "unused_tokens": {
+            "type": "integer",
+            "description": "Tokens that can still create a group."
+          },
+          "stale_groups": {
+            "type": "integer"
+          },
+          "stale_after_days": {
+            "type": "integer",
+            "description": "How long a group may go without a device connecting before it is stale."
+          },
+          "storage": {
+            "description": "Blob storage, or null when the relay does not account it.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Storage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "store": {
+            "description": "The store, or null when the relay has none.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StoreTotals"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "problems": {
+            "$ref": "#/components/schemas/Problems"
+          }
+        }
+      },
+      "Problems": {
+        "type": "array",
+        "description": "Parts that could not be read. The rest of the response is still valid.",
+        "items": {
+          "type": "string"
+        }
+      },
+      "Storage": {
+        "type": "object",
+        "required": [
+          "backend",
+          "location",
+          "used_bytes",
+          "limit_bytes",
+          "entries",
+          "group_limit_bytes",
+          "entry_max_bytes",
+          "inline_max_bytes",
+          "evictions",
+          "evicted_bytes",
+          "uploads",
+          "last_sweep"
+        ],
+        "properties": {
+          "backend": {
+            "type": "string",
+            "examples": [
+              "disk",
+              "s3"
+            ]
+          },
+          "location": {
+            "type": "string"
+          },
+          "used_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "limit_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The total limit. 0 is none."
+          },
+          "entries": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "group_limit_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The default per-group limit. 0 is none."
+          },
+          "entry_max_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "inline_max_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "evictions": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Entries evicted in the last day to stay under a limit."
+          },
+          "evicted_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "uploads": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Uploads"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_sweep": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LastSweep"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "Uploads": {
+        "type": "object",
+        "description": "Chunked uploads in progress.",
+        "required": [
+          "count",
+          "reserved_bytes"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "reserved_bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "LastSweep": {
+        "type": "object",
+        "required": [
+          "at",
+          "took_ms",
+          "error"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "took_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "StoreTotals": {
+        "type": "object",
+        "required": [
+          "used_bytes",
+          "items",
+          "groups_on",
+          "limit_bytes",
+          "group_limit_bytes",
+          "max_item_bytes",
+          "max_group_items"
+        ],
+        "properties": {
+          "used_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "items": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "groups_on": {
+            "type": "integer",
+            "description": "Groups with their store turned on."
+          },
+          "limit_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "group_limit_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "max_item_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "max_group_items": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "version",
+          "uptime_seconds",
+          "go_version",
+          "redis"
+        ],
+        "properties": {
+          "version": {
+            "type": "string",
+            "examples": [
+              "v1.4.0 (3f2a9c1)"
+            ]
+          },
+          "uptime_seconds": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "go_version": {
+            "type": "string",
+            "examples": [
+              "go1.26.0"
+            ]
+          },
+          "redis": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RedisHealth"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "RedisHealth": {
+        "type": "object",
+        "required": [
+          "policy",
+          "policy_state",
+          "policy_note",
+          "aof",
+          "aof_state",
+          "aof_note",
+          "memory",
+          "max_memory"
+        ],
+        "properties": {
+          "policy": {
+            "type": "string",
+            "examples": [
+              "volatile-lru"
+            ]
+          },
+          "policy_state": {
+            "$ref": "#/components/schemas/HealthState"
+          },
+          "policy_note": {
+            "type": "string"
+          },
+          "aof": {
+            "type": "string",
+            "examples": [
+              "yes"
+            ]
+          },
+          "aof_state": {
+            "$ref": "#/components/schemas/HealthState"
+          },
+          "aof_note": {
+            "type": "string"
+          },
+          "memory": {
+            "type": "string",
+            "examples": [
+              "12.30M"
+            ]
+          },
+          "max_memory": {
+            "type": "string",
+            "examples": [
+              "no limit"
+            ]
+          }
+        }
+      },
+      "HealthState": {
+        "type": "string",
+        "enum": [
+          "good",
+          "warn",
+          "bad",
+          "unknown"
+        ]
+      },
+      "SweepResult": {
+        "type": "object",
+        "required": [
+          "queued"
+        ],
+        "properties": {
+          "queued": {
+            "type": "boolean",
+            "description": "False when a sweep was already waiting to run."
+          }
+        }
+      },
+      "Group": {
+        "type": "object",
+        "required": [
+          "handle",
+          "short_id",
+          "name",
+          "tag",
+          "created_at",
+          "device_count",
+          "last_seen",
+          "stale",
+          "entries",
+          "oldest_entry",
+          "storage",
+          "store"
+        ],
+        "properties": {
+          "handle": {
+            "type": "string",
+            "examples": [
+              "Xq3vT0b9cJm2LwQe7sZk1A"
+            ]
+          },
+          "short_id": {
+            "type": "string",
+            "description": "Enough of the group's id to tell groups apart. It is not a credential.",
+            "examples": [
+              "Qm9vYmFy"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "examples": [
+              "Family"
+            ]
+          },
+          "tag": {
+            "type": "string",
+            "description": "The group's tag",
+            "or empty when it has none.": null
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "device_count": {
+            "type": "integer"
+          },
+          "last_seen": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When a device of the group last connected."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "No device has connected for longer than the stale threshold."
+          },
+          "entries": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Live clipboard entries."
+          },
+          "oldest_entry": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/GroupStorage"
+          },
+          "store": {
+            "description": "The group's store, or null when the relay has none.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GroupStore"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "GroupStorage": {
+        "type": "object",
+        "required": [
+          "used_bytes",
+          "limit_bytes",
+          "limit_source",
+          "over_limit"
+        ],
+        "properties": {
+          "used_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "limit_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The cap the group runs into, its own or the relay's total. 0 is none."
+          },
+          "limit_source": {
+            "$ref": "#/components/schemas/LimitSource"
+          },
+          "over_limit": {
+            "type": "boolean",
+            "description": "The group holds more than its limit, after the limit was lowered. Its next upload evicts down to it."
+          }
+        }
+      },
+      "GroupStore": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "emptying",
+          "used_bytes",
+          "used_items",
+          "limit_bytes",
+          "limit_source"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "emptying": {
+            "type": "boolean",
+            "description": "A purge or deletion is emptying the store; it is closed until then."
+          },
+          "used_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "used_items": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "limit_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "limit_source": {
+            "$ref": "#/components/schemas/LimitSource"
+          }
+        }
+      },
+      "LimitSource": {
+        "type": "string",
+        "description": "Where a group's limit comes from.",
+        "enum": [
+          "group",
+          "tag",
+          "default"
+        ]
+      },
+      "GroupDetail": {
+        "type": "object",
+        "required": [
+          "group",
+          "devices",
+          "limit",
+          "store_limit",
+          "problems"
+        ],
+        "properties": {
+          "group": {
+            "$ref": "#/components/schemas/Group"
+          },
+          "devices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Device"
+            }
+          },
+          "limit": {
+            "$ref": "#/components/schemas/LimitSettings"
+          },
+          "store_limit": {
+            "description": "The store limit settings, or null when the relay has no store.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LimitSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "problems": {
+            "$ref": "#/components/schemas/Problems"
+          }
+        }
+      },
+      "Device": {
+        "type": "object",
+        "required": [
+          "short_id",
+          "name",
+          "created_at",
+          "last_seen",
+          "online"
+        ],
+        "properties": {
+          "short_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "examples": [
+              "Anna's laptop"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_seen": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "online": {
+            "type": "boolean"
+          }
+        }
+      },
+      "GroupChange": {
+        "type": "object",
+        "description": "The fields to change. Leave out the ones to keep.",
+        "minProperties": 1,
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "tag": {
+            "type": "string",
+            "description": "The tag to put the group under",
+            "or empty for none. The tag must exist.": null
+          },
+          "limit": {
+            "$ref": "#/components/schemas/LimitChange"
+          },
+          "store": {
+            "type": "boolean",
+            "description": "Turns the group's store on or off. Turning it off keeps the items."
+          },
+          "store_limit": {
+            "$ref": "#/components/schemas/LimitChange"
+          }
+        }
+      },
+      "PurgeResult": {
+        "type": "object",
+        "required": [
+          "entries",
+          "bytes"
+        ],
+        "properties": {
+          "entries": {
+            "type": "integer"
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "StorePurgeResult": {
+        "type": "object",
+        "required": [
+          "items",
+          "bytes"
+        ],
+        "properties": {
+          "items": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "Tag": {
+        "type": "object",
+        "required": [
+          "name",
+          "created_at",
+          "groups",
+          "devices",
+          "used_bytes",
+          "limit",
+          "store_limit",
+          "store_bytes",
+          "store_groups_on"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "examples": [
+              "family"
+            ]
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "groups": {
+            "type": "integer"
+          },
+          "devices": {
+            "type": "integer"
+          },
+          "used_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Blob storage the tag's groups use together."
+          },
+          "limit": {
+            "$ref": "#/components/schemas/Limit"
+          },
+          "store_limit": {
+            "$ref": "#/components/schemas/Limit"
+          },
+          "store_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "store_groups_on": {
+            "type": "integer"
+          }
+        }
+      },
+      "NewTag": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "A letter or digit, then up to 39 letters, digits, spaces, dots, dashes or underscores.",
+            "maxLength": 40,
+            "examples": [
+              "family"
+            ]
+          }
+        }
+      },
+      "TagChange": {
+        "type": "object",
+        "minProperties": 1,
+        "properties": {
+          "limit": {
+            "$ref": "#/components/schemas/LimitChange"
+          },
+          "store_limit": {
+            "$ref": "#/components/schemas/LimitChange"
+          }
+        }
+      },
+      "Token": {
+        "type": "object",
+        "required": [
+          "handle",
+          "name",
+          "note",
+          "tag",
+          "created_at",
+          "status",
+          "expires_at",
+          "group_handle"
+        ],
+        "properties": {
+          "handle": {
+            "type": "string",
+            "examples": [
+              "Xq3vT0b9cJm2LwQe7sZk1A"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "examples": [
+              "Anna's laptop"
+            ]
+          },
+          "note": {
+            "type": "string"
+          },
+          "tag": {
+            "type": "string",
+            "description": "The tag the group starts under",
+            "or empty.": null
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TokenStatus"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "group_handle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The handle of the group the token created, while that group exists."
+          }
+        }
+      },
+      "TokenStatus": {
+        "type": "string",
+        "enum": [
+          "unused",
+          "used",
+          "expired",
+          "group_deleted"
+        ]
+      },
+      "NewToken": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "examples": [
+              "Anna's laptop"
+            ]
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "tag": {
+            "type": "string",
+            "description": "The tag the new group starts under. It must exist."
+          },
+          "expires_in_days": {
+            "type": "integer",
+            "description": "When the token stops working if unused. Leave out for never.",
+            "enum": [
+              1,
+              7,
+              30
+            ]
+          }
+        }
+      },
+      "CreatedToken": {
+        "type": "object",
+        "required": [
+          "token",
+          "url"
+        ],
+        "properties": {
+          "token": {
+            "$ref": "#/components/schemas/Token"
+          },
+          "url": {
+            "type": "string",
+            "description": "The creation URL. It is a credential until the group is created.",
+            "examples": [
+              "https://tpp.example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ]
+          }
+        }
+      },
+      "TokenLink": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "examples": [
+              "https://tpp.example.com/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ]
+          }
+        }
+      },
+      "Settings": {
+        "type": "object",
+        "required": [
+          "stale_after_days",
+          "default_stale_after_days",
+          "max_stale_after_days"
+        ],
+        "properties": {
+          "stale_after_days": {
+            "type": "integer",
+            "examples": [
+              90
+            ]
+          },
+          "default_stale_after_days": {
+            "type": "integer",
+            "examples": [
+              90
+            ]
+          },
+          "max_stale_after_days": {
+            "type": "integer",
+            "examples": [
+              3650
+            ]
+          }
+        }
+      },
+      "SettingsChange": {
+        "type": "object",
+        "required": [
+          "stale_after_days"
+        ],
+        "properties": {
+          "stale_after_days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3650,
+            "examples": [
+              60
+            ]
+          }
+        }
+      },
+      "AuditEntry": {
+        "type": "object",
+        "required": [
+          "at",
+          "action",
+          "label",
+          "target",
+          "detail",
+          "ip",
+          "actor"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "action": {
+            "type": "string",
+            "examples": [
+              "group.delete"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "examples": [
+              "Group deleted"
+            ]
+          },
+          "target": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Actor"
+          }
+        }
+      },
+      "Actor": {
+        "type": "object",
+        "description": "Who made the change.",
+        "required": [
+          "kind",
+          "key_id",
+          "key_name"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`admin` is a signed-in admin page, `api_key` a call to this API, `cli` the `tpp` command.",
+            "enum": [
+              "admin",
+              "api_key",
+              "cli"
+            ]
+          },
+          "key_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The API key's id",
+            "for `api_key`.": null
+          },
+          "key_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The API key's name when the change was made."
+          }
+        }
+      },
+      "GroupPage": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "size",
+          "sort",
+          "dir",
+          "problems"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Group"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows that match",
+            "across all pages.": null
+          },
+          "page": {
+            "type": "integer"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "sort": {
+            "type": "string"
+          },
+          "dir": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          },
+          "problems": {
+            "$ref": "#/components/schemas/Problems"
+          }
+        }
+      },
+      "TagPage": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "size",
+          "sort",
+          "dir",
+          "problems"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Tag"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "page": {
+            "type": "integer"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "sort": {
+            "type": "string"
+          },
+          "dir": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          },
+          "problems": {
+            "$ref": "#/components/schemas/Problems"
+          }
+        }
+      },
+      "TokenPage": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "size",
+          "sort",
+          "dir"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Token"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "page": {
+            "type": "integer"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "sort": {
+            "type": "string"
+          },
+          "dir": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          }
+        }
+      },
+      "AuditPage": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "size",
+          "sort",
+          "dir"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditEntry"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "page": {
+            "type": "integer"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "sort": {
+            "type": "string"
+          },
+          "dir": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

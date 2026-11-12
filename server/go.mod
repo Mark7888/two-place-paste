@@ -19,18 +19,24 @@ go 1.26.0
 //     to MinIO and AWS S3 alike, with a far smaller tree than aws-sdk-go-v2.
 //     Only the s3 backend uses it; a disk deployment never opens a
 //     connection with it.
+//   - oapi-codegen/runtime: parameter binding for the admin REST API's code,
+//     which oapi-codegen generates from /api/openapi.yaml
+//     (docs/internal/plans/admin-rest-api.md D21, D22). Apache-2.0; it brings
+//     only google/uuid and go-jsonmerge, both small.
 //
 // The workspace supplies pkg/tppclient (the generated protobuf bindings); it
 // is not a module dependency.
 require (
 	github.com/coder/websocket v1.8.15
 	github.com/minio/minio-go/v7 v7.4.1
+	github.com/oapi-codegen/runtime v1.9.0
 	github.com/redis/go-redis/v9 v9.22.0
 	google.golang.org/protobuf v1.36.12
 	rsc.io/qr v0.2.0
 )
 
 require (
+	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect

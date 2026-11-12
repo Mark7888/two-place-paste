@@ -1,0 +1,13 @@
+# oapi-codegen configuration for the relay's admin API server
+# (docs/internal/plans/admin-rest-api.md D21). Run through generate.sh, from
+# the output folder, so the generator finds the server's go.mod.
+package: apiv1
+output: apiv1.gen.go
+generate:
+  std-http-server: true
+  strict-server: true
+  models: true
+compatibility:
+  # Puts each operation's required scopes on the request context, where the
+  # relay's authentication reads them (D21).
+  enable-auth-scopes-on-context: true
