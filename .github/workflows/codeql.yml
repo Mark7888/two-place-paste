@@ -63,26 +63,26 @@ jobs:
       # The Java/Kotlin build: the same toolchain and steps as android.yml's
       # APK job, which explains each pin. Only compilation matters here, so it
       # builds the plain debug variant without bundling the JavaScript.
-      - if: matrix.build-mode == 'manual'
+      - if: matrix.language == 'java-kotlin'
         uses: actions/setup-node@v5
         with:
           node-version: "26"
           cache: npm
           cache-dependency-path: mobile/package-lock.json
 
-      - if: matrix.build-mode == 'manual'
+      - if: matrix.language == 'java-kotlin'
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
-      - if: matrix.build-mode == 'manual'
+      - if: matrix.language == 'java-kotlin'
         uses: android-actions/setup-android@v3
         with:
           packages: "platform-tools"
 
       - name: Install the SDK packages React Native pins
-        if: matrix.build-mode == 'manual'
+        if: matrix.language == 'java-kotlin'
         run: |
           sdkmanager --install \
             "platforms;android-37.0" \
@@ -91,17 +91,17 @@ jobs:
             "cmake;3.22.1"
 
       - name: Install the JavaScript dependencies
-        if: matrix.build-mode == 'manual'
+        if: matrix.language == 'java-kotlin'
         working-directory: mobile
         run: npm ci
 
-      - if: matrix.build-mode == 'manual'
+      - if: matrix.language == 'java-kotlin'
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.4.1"
 
       - name: Materialise the Gradle wrapper
-        if: matrix.build-mode == 'manual'
+        if: matrix.language == 'java-kotlin'
         working-directory: mobile/android
         run: gradle wrapper --gradle-version 9.4.1
 
@@ -109,7 +109,7 @@ jobs:
       # compiled while CodeQL watches: a task restored from a cache would be
       # skipped and its files left out of the database.
       - name: Build the debug APK
-        if: matrix.build-mode == 'manual'
+        if: matrix.language == 'java-kotlin'
         working-directory: mobile/android
         run: ./gradlew --no-daemon --no-build-cache assembleDebug
 
