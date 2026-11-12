@@ -1,0 +1,118 @@
+# CodeQL code scanning, as an advanced setup.
+#
+# This replaces GitHub's default setup, which turned Java/Kotlin on as soon as
+# the Android app had Kotlin sources and then failed on every run: Kotlin must
+# be compiled to be analysed, and default setup's autobuild only looks for a
+# Gradle, Maven or Ant project at the repository root. Ours lives in
+# mobile/android, has no committed wrapper and cannot configure before the
+# JavaScript dependencies are installed (see android.yml).
+#
+# Go, JavaScript/TypeScript and Actions are analysed exactly as default setup
+# did: the same build modes, the default query suite, on every push and pull
+# request to the default branch and once a week. Only Java/Kotlin differs, with
+# a manual build that mirrors android.yml.
+#
+# Default setup must be switched off in the repository settings for these
+# results to be accepted; GitHub rejects advanced-setup uploads while it is on.
+name: CodeQL
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    - cron: "27 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: go
+            build-mode: autobuild
+          - language: javascript-typescript
+            build-mode: none
+          - language: java-kotlin
+            build-mode: manual
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      # The Java/Kotlin build: the same toolchain and steps as android.yml's
+      # APK job, which explains each pin. Only compilation matters here, so it
+      # builds the plain debug variant without bundling the JavaScript.
+      - if: matrix.language == 'java-kotlin'
+        uses: actions/setup-node@v5
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - if: matrix.language == 'java-kotlin'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - if: matrix.language == 'java-kotlin'
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
+
+      - name: Install the SDK packages React Native pins
+        if: matrix.language == 'java-kotlin'
+        run: |
+          sdkmanager --install \
+            "platforms;android-37.0" \
+            "build-tools;37.0.0" \
+            "ndk;27.1.12297006" \
+            "cmake;3.22.1"
+
+      - name: Install the JavaScript dependencies
+        if: matrix.language == 'java-kotlin'
+        working-directory: mobile
+        run: npm ci
+
+      - if: matrix.language == 'java-kotlin'
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.4.1"
+
+      - name: Materialise the Gradle wrapper
+        if: matrix.language == 'java-kotlin'
+        working-directory: mobile/android
+        run: gradle wrapper --gradle-version 9.4.1
+
+      # --no-build-cache makes sure every Kotlin and Java source is actually
+      # compiled while CodeQL watches: a task restored from a cache would be
+      # skipped and its files left out of the database.
+      - name: Build the debug APK
+        if: matrix.language == 'java-kotlin'
+        working-directory: mobile/android
+        run: ./gradlew --no-daemon --no-build-cache assembleDebug
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
