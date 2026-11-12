@@ -43,6 +43,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 		"/admin/tags",
 		"/admin/tokens",
 		"/admin/audit",
+		"/admin/api-keys",
 		"/admin/settings",
 	} {
 		mux.HandleFunc("GET "+p, s.handlePage(true))
@@ -101,6 +102,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /admin/api/settings", s.write(s.handleSaveSettings))
 
 	mux.HandleFunc("GET /admin/api/audit", s.read(s.handleAudit))
+
+	mux.HandleFunc("GET /admin/api/api-keys", s.read(s.handleAPIKeys))
+	mux.HandleFunc("POST /admin/api/api-keys", s.write(s.handleCreateAPIKey))
+	mux.HandleFunc("DELETE /admin/api/api-keys/{id}", s.write(s.handleRevokeAPIKey))
 
 	mux.HandleFunc(apiBase+"/", s.serveAPI)
 

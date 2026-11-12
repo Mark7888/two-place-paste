@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { Layout } from "./components/Layout";
 import { Notice } from "./components/Notice";
+import { ApiKeysPage } from "./pages/ApiKeysPage";
 import { AuditPage } from "./pages/AuditPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { GroupConfirmPage } from "./pages/GroupConfirmPage";
@@ -31,6 +32,7 @@ const routes: { path: string; render: (params: Record<string, string>) => ReactN
   { path: "/admin/tags", render: () => <TagsPage /> },
   { path: "/admin/tokens", render: () => <TokensPage /> },
   { path: "/admin/audit", render: () => <AuditPage /> },
+  { path: "/admin/api-keys", render: () => <ApiKeysPage /> },
   { path: "/admin/settings", render: () => <SettingsPage /> },
 ];
 

@@ -248,6 +248,13 @@ export interface AuditEntry {
   target: string;
   detail: string;
   ip: string;
+  /** actor is who did it: "" for these screens, "api_key" for the REST API,
+   *  "cli" for the tpp command. actor_id and actor_name name the API key. */
+  actor: "" | "api_key" | "cli";
+  actor_id: string;
+  actor_name: string;
+  /** by says who did it, in words. */
+  by: string;
 }
 
 export interface AuditLog extends TablePage<AuditEntry> {
@@ -255,4 +262,45 @@ export interface AuditLog extends TablePage<AuditEntry> {
   kept: number;
   /** actions are the kinds of entry the filter offers. */
   actions: { action: string; label: string }[];
+}
+
+/** ApiScope is what an API key may do on the REST API under /api/v1/. */
+export type ApiScope = "read" | "tokens" | "admin";
+
+/** ApiKey is one key of the REST API, as the API keys screen lists it. The
+ *  key itself is shown once, when it is created, and never again. */
+export interface ApiKey {
+  /** id is the public part of the key, which names it in the audit log. */
+  id: string;
+  name: string;
+  scopes: ApiScope[];
+  created_at: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  last_used_ip: string;
+  /** created_by is "admin" (these screens) or "cli" (tpp apikey create). */
+  created_by: string;
+  status: "active" | "expired";
+}
+
+export interface ApiKeyList extends TablePage<ApiKey> {
+  /** max is how many keys the relay keeps, and count how many it has. */
+  max: number;
+  count: number;
+  scopes: ApiScope[];
+  /** expiry_days are the lifetimes a key can have; 0 is never. */
+  expiry_days: number[];
+  default_expiry_days: number;
+}
+
+export interface NewApiKey {
+  name: string;
+  scopes: ApiScope[];
+  expiry_days: number;
+}
+
+/** CreatedApiKey is a key just created: the one response with the key. */
+export interface CreatedApiKey {
+  key: string;
+  api_key: ApiKey;
 }

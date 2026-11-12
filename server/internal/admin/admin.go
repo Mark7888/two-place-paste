@@ -1,5 +1,6 @@
 // Package admin is the operator-facing surface: the login-protected admin
-// screens, and the creation-token endpoint clients POST to (SPEC §3.1, §4.4).
+// screens, the creation-token endpoint clients POST to (SPEC §3.1, §4.4), and
+// the public admin REST API under /api/v1/ (apiv1.go).
 //
 // The screens are a React app (server/ui), built into server/web/admin and
 // embedded in the binary. This package serves it and the JSON API under
@@ -11,16 +12,21 @@
 // Redis. A page per group renames it, tags it, sets its storage limit, lists
 // its devices, and purges or deletes it; the tag screen groups groups and
 // gives a whole tag a storage limit; the token screen mints, lists and revokes
-// creation tokens; the settings screen holds runtime settings; and the audit
-// screen lists what admins did (docs/internal/plans/admin-group-management.md).
+// creation tokens; the API keys screen does the same for the REST API's keys;
+// the settings screen holds runtime settings; and the audit screen lists what
+// admins did (docs/internal/plans/admin-group-management.md,
+// admin-rest-api.md).
 // There is no content access, and none can be added: the server holds only
 // ciphertext (SPEC §2.3), and nothing here shows an entry id, a content type or
 // a filename.
 //
-// Two routes are public and both are attack surface:
+// Three routes are public and all are attack surface:
 //
 //   - /admin/api/login is reachable by anyone, so it is rate limited per IP
 //     and globally, and a lockout is logged.
+//   - /api/v1/ is reachable by anyone and answers only with an API key.
+//     Failed attempts are rate limited per IP and globally, and a lockout is
+//     logged, like the login's.
 //   - /<token> is the creation endpoint. GET returns 404 so that a crawler or
 //     a link preview can never burn a token; only POST consumes one
 //     (SPEC §3.1).
