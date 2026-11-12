@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"net/http"
@@ -33,27 +34,34 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request, _ sessio
 	writeJSON(w, http.StatusOK, s.settingsView(s.settings(r.Context())))
 }
 
+// saveSettings stores the settings. staleDays is a float so that 1.5 is
+// refused with the same message as 0.
+func (s *Server) saveSettings(ctx context.Context, staleDays float64) (store.Settings, error) {
+	n := staleDays
+	if n != math.Trunc(n) || n < 1 || n > maxStaleDays {
+		return store.Settings{}, invalid(fmt.Sprintf("Enter a whole number of days from 1 to %d.", maxStaleDays))
+	}
+	st := store.Settings{StaleAfter: time.Duration(n) * 24 * time.Hour}
+	if err := s.store.PutSettings(ctx, st); err != nil {
+		s.logger.ErrorContext(ctx, "save settings", "error", err)
+		return store.Settings{}, failed("The settings could not be saved.")
+	}
+	s.auditCtx(ctx, "settings.update", "", "stale after "+days(st.StaleAfter))
+	return st, nil
+}
+
 // handleSaveSettings stores the settings and returns them as saved.
 func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request, _ session) {
-	// A float rather than an int, so that 1.5 is refused with the same
-	// message as 0 rather than as a request that could not be read.
 	var req struct {
 		StaleDays float64 `json:"stale_days"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	n := req.StaleDays
-	if n != math.Trunc(n) || n < 1 || n > maxStaleDays {
-		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("Enter a whole number of days from 1 to %d.", maxStaleDays))
+	st, err := s.saveSettings(r.Context(), req.StaleDays)
+	if err != nil {
+		writeOpError(w, err)
 		return
 	}
-	st := store.Settings{StaleAfter: time.Duration(n) * 24 * time.Hour}
-	if err := s.store.PutSettings(r.Context(), st); err != nil {
-		s.logger.ErrorContext(r.Context(), "save settings", "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "The settings could not be saved.")
-		return
-	}
-	s.audit(r, "settings.update", "", "stale after "+days(st.StaleAfter))
 	writeJSON(w, http.StatusOK, s.settingsView(st))
 }

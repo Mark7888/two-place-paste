@@ -20,6 +20,7 @@ const csrfHeader = "X-CSRF-Token"
 type apiHandler func(w http.ResponseWriter, r *http.Request, sess session)
 
 // read wraps an endpoint that only reads: it needs a session and nothing more.
+// The request's actor is the admin page, for the audit log.
 func (s *Server) read(h apiHandler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sess, ok := s.session(r)
@@ -27,6 +28,7 @@ func (s *Server) read(h apiHandler) http.HandlerFunc {
 			writeJSONError(w, http.StatusUnauthorized, "Your session has ended. Sign in again.")
 			return
 		}
+		r = r.WithContext(withActor(r.Context(), actor{ip: clientIP(r)}))
 		h(w, r, sess)
 	}
 }

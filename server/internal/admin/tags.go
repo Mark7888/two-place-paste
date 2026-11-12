@@ -1,10 +1,13 @@
 package admin
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
+	"time"
 
 	"github.com/Mark7888/two-place-paste/server/internal/store"
 )
@@ -12,6 +15,7 @@ import (
 // tagJSON is one row of the tag screen.
 type tagJSON struct {
 	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
 	Groups    int       `json:"groups"`
 	Devices   int       `json:"devices"`
 	UsedBytes int64     `json:"used_bytes"`
@@ -70,17 +74,14 @@ var tagTable = table[tagJSON]{
 	tie:         func(a, b tagJSON) int { return byText(a.Name, b.Name) },
 }
 
-// handleTags returns one page of the tag screen: each tag with the groups,
-// devices, storage and store under it.
-func (s *Server) handleTags(w http.ResponseWriter, r *http.Request, _ session) {
-	ctx := r.Context()
+// tagRows builds every tag's row: the groups, devices, storage and store
+// under it. Parts that cannot be read are added to probs.
+func (s *Server) tagRows(ctx context.Context, probs *problems) ([]tagJSON, error) {
 	tags, err := s.store.ListTags(ctx)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "list tags", "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "The tags could not be loaded.")
-		return
+		return nil, failed("The tags could not be loaded.")
 	}
-	probs := s.problems(ctx, "tags")
 	groups, err := s.store.ListGroups(ctx)
 	if err != nil {
 		probs.add("the groups", err)
@@ -90,6 +91,7 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request, _ session) {
 	for _, t := range tags {
 		rows = append(rows, tagJSON{
 			Name:       t.Name,
+			CreatedAt:  t.CreatedAt.UTC(),
 			Limit:      limitJSON{Enabled: t.Limit.Enabled, Bytes: t.Limit.Bytes},
 			StoreLimit: limitJSON{Enabled: t.StoreLimit.Enabled, Bytes: t.StoreLimit.Bytes},
 		})
@@ -121,9 +123,18 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request, _ session) {
 			}
 		}
 	}
+	return rows, nil
+}
 
+// tagListView builds one page of the tag screen.
+func (s *Server) tagListView(ctx context.Context, query url.Values) (tagsJSON, error) {
+	probs := s.problems(ctx, "tags")
+	rows, err := s.tagRows(ctx, probs)
+	if err != nil {
+		return tagsJSON{}, err
+	}
 	v := tagsJSON{
-		tablePage:         tagTable.run(rows, r.URL.Query()),
+		tablePage:         tagTable.run(rows, query),
 		DefaultLimitBytes: s.dashboard.GroupLimit,
 		TotalLimitBytes:   s.dashboard.TotalLimit,
 		Problems:          probs.list,
@@ -134,7 +145,35 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request, _ session) {
 		v.DefaultStoreLimitBytes = cfg.MaxGroupBytes
 		v.TotalStoreLimitBytes = cfg.MaxTotalBytes
 	}
+	return v, nil
+}
+
+// handleTags returns one page of the tag screen.
+func (s *Server) handleTags(w http.ResponseWriter, r *http.Request, _ session) {
+	v, err := s.tagListView(r.Context(), r.URL.Query())
+	if err != nil {
+		writeOpError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+// createTag adds a tag and returns its name as stored.
+func (s *Server) createTag(ctx context.Context, raw string) (string, error) {
+	name, ok := validTagName(raw)
+	if !ok {
+		return "", invalid(fmt.Sprintf("A tag name starts with a letter or digit and has at most %d letters, digits, spaces, dots, dashes or underscores.", maxTagNameLen))
+	}
+	_, err := s.store.CreateTag(ctx, name)
+	switch {
+	case errors.Is(err, store.ErrTagExists):
+		return "", conflict("There is already a tag called “" + name + "”.")
+	case err != nil:
+		s.logger.ErrorContext(ctx, "create tag", "error", err)
+		return "", failed("The tag could not be created.")
+	}
+	s.auditCtx(ctx, "tag.create", name, "")
+	return name, nil
 }
 
 // handleCreateTag adds a tag.
@@ -145,24 +184,69 @@ func (s *Server) handleCreateTag(w http.ResponseWriter, r *http.Request, _ sessi
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	name, ok := validTagName(req.Name)
-	if !ok {
-		writeJSONError(w, http.StatusBadRequest,
-			fmt.Sprintf("A tag name starts with a letter or digit and has at most %d letters, digits, spaces, dots, dashes or underscores.", maxTagNameLen))
+	name, err := s.createTag(r.Context(), req.Name)
+	if err != nil {
+		writeOpError(w, err)
 		return
 	}
-	_, err := s.store.CreateTag(r.Context(), name)
-	switch {
-	case errors.Is(err, store.ErrTagExists):
-		writeJSONError(w, http.StatusConflict, "There is already a tag called “"+name+"”.")
-		return
-	case err != nil:
-		s.logger.ErrorContext(r.Context(), "create tag", "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "The tag could not be created.")
-		return
-	}
-	s.audit(r, "tag.create", name, "")
 	writeJSON(w, http.StatusCreated, map[string]string{"name": name})
+}
+
+// tagChange is a change to a tag's limits. A nil field is left as it is.
+type tagChange struct {
+	Limit      *limitChange
+	StoreLimit *limitChange
+}
+
+// updateTag checks a change to a tag's limits, then applies it: the storage
+// limit to every group under the tag, the store limit as the store next
+// resolves it.
+func (s *Server) updateTag(ctx context.Context, name string, c tagChange) error {
+	if c.StoreLimit != nil && s.storeSvc == nil {
+		return unavailable("This server has no store.")
+	}
+	t, err := s.store.GetTag(ctx, name)
+	if errors.Is(err, store.ErrNotFound) {
+		return notFound("That tag no longer exists.")
+	}
+	if err != nil {
+		s.logger.ErrorContext(ctx, "read tag", "error", err)
+		return failed("The tag could not be read.")
+	}
+	var limit, storeLimit store.LimitOverride
+	if c.Limit != nil {
+		if limit, err = s.checkLimit(*c.Limit, t.Limit); err != nil {
+			return err
+		}
+	}
+	if c.StoreLimit != nil {
+		if storeLimit, err = s.checkStoreLimit(*c.StoreLimit, t.StoreLimit); err != nil {
+			return err
+		}
+	}
+
+	if c.Limit != nil {
+		if err := s.store.SetTagLimit(ctx, name, limit); err != nil {
+			s.logger.ErrorContext(ctx, "set tag storage limit", "error", err)
+			return failed("The limit could not be saved.")
+		}
+		if err := s.SyncStorageLimits(ctx); err != nil {
+			s.logger.ErrorContext(ctx, "apply storage limits", "error", err)
+			return failed("The limit was saved but could not be applied yet. It will be at the next restart.")
+		}
+		s.auditCtx(ctx, "tag.limit", name, limitAuditText(limit))
+	}
+	if c.StoreLimit != nil {
+		if err := s.store.SetTagStoreLimit(ctx, name, storeLimit); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return notFound("That tag no longer exists.")
+			}
+			s.logger.ErrorContext(ctx, "set tag store limit", "error", err)
+			return failed("The limit could not be saved.")
+		}
+		s.auditCtx(ctx, "tag.storelimit", name, limitAuditText(storeLimit))
+	}
+	return nil
 }
 
 // handleSetTagLimit stores a tag's storage limit override and applies it to
@@ -172,55 +256,40 @@ func (s *Server) handleSetTagLimit(w http.ResponseWriter, r *http.Request, _ ses
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	ctx := r.Context()
-	name := r.PathValue("name")
-	t, err := s.store.GetTag(ctx, name)
-	if errors.Is(err, store.ErrNotFound) {
-		writeJSONError(w, http.StatusNotFound, "That tag no longer exists.")
-		return
+	c, err := sizeChange(req, "“5 GiB”, “500 MB”")
+	if err == nil {
+		err = s.updateTag(r.Context(), r.PathValue("name"), tagChange{Limit: &c})
 	}
 	if err != nil {
-		s.logger.ErrorContext(ctx, "read tag", "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "The tag could not be read.")
+		writeOpError(w, err)
 		return
 	}
-	limit, msg := s.parseLimit(req, t.Limit)
-	if msg != "" {
-		writeJSONError(w, http.StatusBadRequest, msg)
-		return
-	}
-	if err := s.store.SetTagLimit(ctx, name, limit); err != nil {
-		s.logger.ErrorContext(ctx, "set tag storage limit", "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "The limit could not be saved.")
-		return
-	}
-	if err := s.SyncStorageLimits(ctx); err != nil {
-		s.logger.ErrorContext(ctx, "apply storage limits", "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "The limit was saved but could not be applied yet. It will be at the next restart.")
-		return
-	}
-	s.audit(r, "tag.limit", name, limitAuditText(limit))
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleDeleteTag removes a tag. Its groups are left untagged and fall back
-// to their own limit or the default.
-func (s *Server) handleDeleteTag(w http.ResponseWriter, r *http.Request, _ session) {
-	ctx := r.Context()
-	name := r.PathValue("name")
+// deleteTag removes a tag. Its groups are left untagged and fall back to
+// their own limit or the default.
+func (s *Server) deleteTag(ctx context.Context, name string) error {
 	err := s.store.DeleteTag(ctx, name)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		writeJSONError(w, http.StatusNotFound, "That tag no longer exists.")
-		return
+		return notFound("That tag no longer exists.")
 	case err != nil:
 		s.logger.ErrorContext(ctx, "delete tag", "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "The tag could not be deleted.")
-		return
+		return failed("The tag could not be deleted.")
 	}
 	if err := s.SyncStorageLimits(ctx); err != nil {
 		s.logger.ErrorContext(ctx, "apply storage limits", "error", err)
 	}
-	s.audit(r, "tag.delete", name, "")
+	s.auditCtx(ctx, "tag.delete", name, "")
+	return nil
+}
+
+// handleDeleteTag removes a tag.
+func (s *Server) handleDeleteTag(w http.ResponseWriter, r *http.Request, _ session) {
+	if err := s.deleteTag(r.Context(), r.PathValue("name")); err != nil {
+		writeOpError(w, err)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }

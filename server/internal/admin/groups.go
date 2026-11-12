@@ -156,24 +156,52 @@ func validTagName(raw string) (string, bool) {
 	return name, true
 }
 
-// parseLimit reads a storage limit change: the checkbox and the size. An
-// empty size keeps the stored bytes, so unticking the box does not demand a
-// value; a size is checked against the total limit. On failure it returns the
-// message to show.
-func (s *Server) parseLimit(req limitRequest, current store.LimitOverride) (store.LimitOverride, string) {
-	out := store.LimitOverride{Bytes: current.Bytes, Enabled: req.Enabled}
-	raw := strings.TrimSpace(req.Size)
-	if raw != "" {
+// limitChange is a change to a limit override: the checkbox, and the size
+// when one was given. A nil size keeps the stored bytes, so unticking the box
+// does not demand a value.
+type limitChange struct {
+	Enabled bool
+	Bytes   *int64
+}
+
+// sizeChange reads a limit change as the admin page sends it: the checkbox
+// and the size as typed. example is how the error message suggests a size.
+func sizeChange(req limitRequest, example string) (limitChange, error) {
+	c := limitChange{Enabled: req.Enabled}
+	if raw := strings.TrimSpace(req.Size); raw != "" {
 		n, err := config.ParseByteSize(raw)
 		if err != nil || n < 0 {
-			return current, "That is not a size. Use e.g. “5 GiB”, “500 MB” or 0 for no limit of its own."
+			return c, invalid("That is not a size. Use e.g. " + example + " or 0 for no limit of its own.")
 		}
-		out.Bytes = n
+		c.Bytes = &n
 	}
-	if out.Enabled && s.dashboard.TotalLimit > 0 && out.Bytes > s.dashboard.TotalLimit {
-		return current, fmt.Sprintf("The limit cannot be above the server's total limit of %s.", humanBytes(s.dashboard.TotalLimit))
+	return c, nil
+}
+
+// checkLimit applies a storage limit change to the current override, and
+// checks it against the total limit.
+func (s *Server) checkLimit(c limitChange, current store.LimitOverride) (store.LimitOverride, error) {
+	return checkOverride(c, current, s.dashboard.TotalLimit, "The limit cannot be above the server's total limit of %s.")
+}
+
+// checkStoreLimit is checkLimit for a store limit, checked against the
+// relay's total store limit instead of the blob one.
+func (s *Server) checkStoreLimit(c limitChange, current store.LimitOverride) (store.LimitOverride, error) {
+	return checkOverride(c, current, s.storeSvc.Config().MaxTotalBytes, "The limit cannot be above the server's total store limit of %s.")
+}
+
+func checkOverride(c limitChange, current store.LimitOverride, total int64, tooBig string) (store.LimitOverride, error) {
+	out := store.LimitOverride{Bytes: current.Bytes, Enabled: c.Enabled}
+	if c.Bytes != nil {
+		if *c.Bytes < 0 {
+			return current, invalid("A size cannot be negative.")
+		}
+		out.Bytes = *c.Bytes
 	}
-	return out, ""
+	if out.Enabled && total > 0 && out.Bytes > total {
+		return current, invalid(fmt.Sprintf(tooBig, humanBytes(total)))
+	}
+	return out, nil
 }
 
 // groupDetailJSON is the group page. Like the dashboard it holds counts,
@@ -207,13 +235,8 @@ type deviceJSON struct {
 	Online    bool       `json:"online"`
 }
 
-// handleGroup returns one group's page.
-func (s *Server) handleGroup(w http.ResponseWriter, r *http.Request, _ session) {
-	ctx := r.Context()
-	g, err := s.groupByHandle(ctx, r.PathValue("handle"))
-	if !s.groupFound(w, r, g.ID, err, "read group") {
-		return
-	}
+// groupDetailView builds one group's page.
+func (s *Server) groupDetailView(ctx context.Context, g store.Group) groupDetailJSON {
 	probs := s.problems(ctx, "group page")
 	tags, err := s.tagMap(ctx)
 	if err != nil {
@@ -255,10 +278,162 @@ func (s *Server) handleGroup(w http.ResponseWriter, r *http.Request, _ session) 
 		})
 	}
 	v.Problems = probs.list
-	writeJSON(w, http.StatusOK, v)
+	return v
 }
 
-// handleRenameGroup sets a group's display name and tells its devices.
+// handleGroup returns one group's page.
+func (s *Server) handleGroup(w http.ResponseWriter, r *http.Request, _ session) {
+	g, err := s.findGroup(r.Context(), r.PathValue("handle"))
+	if err != nil {
+		writeOpError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.groupDetailView(r.Context(), g))
+}
+
+// findGroup finds the group a handle names, as an operation.
+func (s *Server) findGroup(ctx context.Context, handle string) (store.Group, error) {
+	g, err := s.groupByHandle(ctx, handle)
+	if err != nil {
+		return store.Group{}, s.groupErr(ctx, "", err, "read group")
+	}
+	return g, nil
+}
+
+// groupErr turns a store error from reading or editing a group into an
+// operation error.
+func (s *Server) groupErr(ctx context.Context, id string, err error, what string) error {
+	if errors.Is(err, store.ErrNotFound) {
+		return notFound("That group does not exist. It may have been deleted.")
+	}
+	s.logger.ErrorContext(ctx, what, "group_id", id, "error", err)
+	return failed("The change could not be saved.")
+}
+
+// groupChange is a change to a group. A nil field is left as it is.
+type groupChange struct {
+	Name       *string
+	Tag        *string
+	Limit      *limitChange
+	Store      *bool
+	StoreLimit *limitChange
+}
+
+// updateGroup checks every field of a change, then applies them one by one.
+// A change with one bad field changes nothing. Each applied field is its own
+// audit entry, as it is when the admin page changes one at a time.
+func (s *Server) updateGroup(ctx context.Context, g store.Group, c groupChange) error {
+	var (
+		name       string
+		limit      store.LimitOverride
+		storeLimit store.LimitOverride
+		err        error
+	)
+	if c.Name != nil {
+		var ok bool
+		if name, ok = validName(*c.Name, maxGroupNameLen); !ok {
+			return invalid(fmt.Sprintf("Give the group a name of at most %d characters.", maxGroupNameLen))
+		}
+	}
+	if c.Tag != nil && *c.Tag != "" {
+		if _, err := s.store.GetTag(ctx, *c.Tag); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return invalid("That tag no longer exists.")
+			}
+			s.logger.ErrorContext(ctx, "read tag", "error", err)
+			return failed("The tag could not be read.")
+		}
+	}
+	if c.Limit != nil {
+		if limit, err = s.checkLimit(*c.Limit, g.Limit); err != nil {
+			return err
+		}
+	}
+	if (c.Store != nil || c.StoreLimit != nil) && s.storeSvc == nil {
+		return unavailable("This server has no store.")
+	}
+	if c.StoreLimit != nil {
+		if storeLimit, err = s.checkStoreLimit(*c.StoreLimit, g.StoreLimit); err != nil {
+			return err
+		}
+	}
+
+	if c.Name != nil {
+		if err := s.renameGroup(ctx, g, name); err != nil {
+			return err
+		}
+	}
+	if c.Tag != nil {
+		if err := s.setGroupTag(ctx, g, *c.Tag); err != nil {
+			return err
+		}
+	}
+	if c.Limit != nil {
+		if err := s.setGroupLimit(ctx, g, limit); err != nil {
+			return err
+		}
+	}
+	if c.Store != nil {
+		if err := s.setGroupStore(ctx, g, *c.Store); err != nil {
+			return err
+		}
+	}
+	if c.StoreLimit != nil {
+		if err := s.setGroupStoreLimit(ctx, g, storeLimit); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// renameGroup sets a group's display name and tells its devices.
+func (s *Server) renameGroup(ctx context.Context, g store.Group, name string) error {
+	if err := s.store.RenameGroup(ctx, g.ID, name); err != nil {
+		return s.groupErr(ctx, g.ID, err, "rename group")
+	}
+	if s.live != nil {
+		s.live.AnnounceRename(ctx, g.ID, name)
+	}
+	s.auditCtx(ctx, "group.rename", groupLabel(g), "to "+name)
+	return nil
+}
+
+// setGroupTag puts a group under a tag, or under none.
+func (s *Server) setGroupTag(ctx context.Context, g store.Group, tag string) error {
+	err := s.store.SetGroupTag(ctx, g.ID, tag)
+	if errors.Is(err, store.ErrNotFound) {
+		// The group was found a moment ago, so it is the tag that is gone.
+		return invalid("That tag no longer exists.")
+	}
+	if err != nil {
+		return s.groupErr(ctx, g.ID, err, "set group tag")
+	}
+	if err := s.applyGroupLimit(ctx, g.ID); err != nil {
+		s.logger.ErrorContext(ctx, "apply storage limit", "group_id", g.ID, "error", err)
+	}
+	detail := "untagged"
+	if tag != "" {
+		detail = "tagged " + tag
+	}
+	s.auditCtx(ctx, "group.tag", groupLabel(g), detail)
+	return nil
+}
+
+// setGroupLimit stores a group's own storage limit override and applies
+// whatever limit now wins.
+func (s *Server) setGroupLimit(ctx context.Context, g store.Group, limit store.LimitOverride) error {
+	if err := s.store.SetGroupLimit(ctx, g.ID, limit); err != nil {
+		return s.groupErr(ctx, g.ID, err, "set group storage limit")
+	}
+	if err := s.applyGroupLimit(ctx, g.ID); err != nil {
+		s.logger.ErrorContext(ctx, "apply storage limit", "group_id", g.ID, "error", err)
+		return failed("The limit was saved but could not be applied yet. It will be at the next restart.")
+	}
+	s.auditCtx(ctx, "group.limit", groupLabel(g), limitAuditText(limit))
+	return nil
+}
+
+// handleRenameGroup sets a group's display name.
 func (s *Server) handleRenameGroup(w http.ResponseWriter, r *http.Request, _ session) {
 	var req struct {
 		Name string `json:"name"`
@@ -266,25 +441,7 @@ func (s *Server) handleRenameGroup(w http.ResponseWriter, r *http.Request, _ ses
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	name, ok := validName(req.Name, maxGroupNameLen)
-	if !ok {
-		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("Give the group a name of at most %d characters.", maxGroupNameLen))
-		return
-	}
-	ctx := r.Context()
-	before, err := s.groupByHandle(ctx, r.PathValue("handle"))
-	id := before.ID
-	if err == nil {
-		err = s.store.RenameGroup(ctx, id, name)
-	}
-	if !s.groupFound(w, r, id, err, "rename group") {
-		return
-	}
-	if s.live != nil {
-		s.live.AnnounceRename(ctx, id, name)
-	}
-	s.audit(r, "group.rename", groupLabel(before), "to "+name)
-	w.WriteHeader(http.StatusNoContent)
+	s.changeGroup(w, r, groupChange{Name: &req.Name})
 }
 
 // handleSetGroupTag puts a group under a tag, or under none.
@@ -295,57 +452,35 @@ func (s *Server) handleSetGroupTag(w http.ResponseWriter, r *http.Request, _ ses
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	ctx := r.Context()
-	g, err := s.groupByHandle(ctx, r.PathValue("handle"))
-	id := g.ID
-	if err == nil {
-		err = s.store.SetGroupTag(ctx, id, req.Tag)
-	}
-	if errors.Is(err, store.ErrNotFound) && g.ID != "" {
-		writeJSONError(w, http.StatusBadRequest, "That tag no longer exists.")
-		return
-	}
-	if !s.groupFound(w, r, id, err, "set group tag") {
-		return
-	}
-	if err := s.applyGroupLimit(ctx, id); err != nil {
-		s.logger.ErrorContext(ctx, "apply storage limit", "group_id", id, "error", err)
-	}
-	detail := "untagged"
-	if req.Tag != "" {
-		detail = "tagged " + req.Tag
-	}
-	s.audit(r, "group.tag", groupLabel(g), detail)
-	w.WriteHeader(http.StatusNoContent)
+	s.changeGroup(w, r, groupChange{Tag: &req.Tag})
 }
 
-// handleSetGroupLimit stores a group's own storage limit override and applies
-// whatever limit now wins.
+// handleSetGroupLimit stores a group's own storage limit override.
 func (s *Server) handleSetGroupLimit(w http.ResponseWriter, r *http.Request, _ session) {
 	var req limitRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	c, err := sizeChange(req, "“5 GiB”, “500 MB”")
+	if err != nil {
+		writeOpError(w, err)
+		return
+	}
+	s.changeGroup(w, r, groupChange{Limit: &c})
+}
+
+// changeGroup applies one change from the admin page to the group the path
+// names.
+func (s *Server) changeGroup(w http.ResponseWriter, r *http.Request, c groupChange) {
 	ctx := r.Context()
-	g, err := s.groupByHandle(ctx, r.PathValue("handle"))
-	id := g.ID
-	if !s.groupFound(w, r, id, err, "read group") {
+	g, err := s.findGroup(ctx, r.PathValue("handle"))
+	if err == nil {
+		err = s.updateGroup(ctx, g, c)
+	}
+	if err != nil {
+		writeOpError(w, err)
 		return
 	}
-	limit, msg := s.parseLimit(req, g.Limit)
-	if msg != "" {
-		writeJSONError(w, http.StatusBadRequest, msg)
-		return
-	}
-	if !s.groupFound(w, r, id, s.store.SetGroupLimit(ctx, id, limit), "set group storage limit") {
-		return
-	}
-	if err := s.applyGroupLimit(ctx, id); err != nil {
-		s.logger.ErrorContext(ctx, "apply storage limit", "group_id", id, "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "The limit was saved but could not be applied yet. It will be at the next restart.")
-		return
-	}
-	s.audit(r, "group.limit", groupLabel(g), limitAuditText(limit))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -356,69 +491,69 @@ func limitAuditText(l store.LimitOverride) string {
 	return "own limit " + limitText(l.Bytes)
 }
 
-// groupFound turns a store error from reading or editing a group into a
-// response, and reports whether the caller should carry on.
-func (s *Server) groupFound(w http.ResponseWriter, r *http.Request, id string, err error, what string) bool {
-	switch {
-	case err == nil:
-		return true
-	case errors.Is(err, store.ErrNotFound):
-		writeJSONError(w, http.StatusNotFound, "That group does not exist. It may have been deleted.")
-	default:
-		s.logger.ErrorContext(r.Context(), what, "group_id", id, "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "The change could not be saved.")
-	}
-	return false
-}
-
 // purgeJSON is what a purge freed.
 type purgeJSON struct {
 	Entries int   `json:"entries"`
 	Bytes   int64 `json:"bytes"`
 }
 
-// handlePurgeGroup deletes a group's entries now.
-func (s *Server) handlePurgeGroup(w http.ResponseWriter, r *http.Request, _ session) {
-	ctx := r.Context()
+// purgeGroup deletes a group's entries now.
+func (s *Server) purgeGroup(ctx context.Context, handle string) (purgeJSON, error) {
 	if s.purger == nil {
-		writeJSONError(w, http.StatusNotImplemented, "Purging is not available on this server.")
-		return
+		return purgeJSON{}, unavailable("Purging is not available on this server.")
 	}
-	g, err := s.groupByHandle(ctx, r.PathValue("handle"))
-	id := g.ID
-	if !s.groupFound(w, r, id, err, "read group") {
-		return
-	}
-	res, err := s.purger.PurgeGroup(ctx, id)
+	g, err := s.findGroup(ctx, handle)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "purge group", "group_id", id, "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "The purge did not finish. Some entries may be left; try again.")
-		return
+		return purgeJSON{}, err
 	}
-	s.audit(r, "group.purge", groupLabel(g), fmt.Sprintf("%d entries, %s", res.Entries, humanBytes(res.Bytes)))
-	writeJSON(w, http.StatusOK, purgeJSON{Entries: res.Entries, Bytes: res.Bytes})
+	res, err := s.purger.PurgeGroup(ctx, g.ID)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "purge group", "group_id", g.ID, "error", err)
+		return purgeJSON{}, failed("The purge did not finish. Some entries may be left; try again.")
+	}
+	s.auditCtx(ctx, "group.purge", groupLabel(g), fmt.Sprintf("%d entries, %s", res.Entries, humanBytes(res.Bytes)))
+	return purgeJSON{Entries: res.Entries, Bytes: res.Bytes}, nil
 }
 
-// handleDeleteGroup deletes one group. Groups are deleted one at a time, from
-// their own page: each deletion cuts a set of devices off for good, so each
-// is a decision about one group.
-func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request, _ session) {
-	g, err := s.groupByHandle(r.Context(), r.PathValue("handle"))
+// handlePurgeGroup deletes a group's entries now.
+func (s *Server) handlePurgeGroup(w http.ResponseWriter, r *http.Request, _ session) {
+	res, err := s.purgeGroup(r.Context(), r.PathValue("handle"))
+	if err != nil {
+		writeOpError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// deleteGroupByHandle deletes the group a handle names and returns its name.
+// Groups are deleted one at a time: each deletion cuts a set of devices off
+// for good, so each is a decision about one group.
+func (s *Server) deleteGroupByHandle(ctx context.Context, handle string) (string, error) {
+	g, err := s.groupByHandle(ctx, handle)
 	var name string
 	switch {
 	case err == nil:
-		name, err = s.deleteGroup(r, g.ID)
+		name, err = s.deleteGroup(ctx, g.ID)
 	case !errors.Is(err, store.ErrNotFound):
-		s.logger.ErrorContext(r.Context(), "find group to delete", "error", err)
+		s.logger.ErrorContext(ctx, "find group to delete", "error", err)
 	}
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		writeJSONError(w, http.StatusNotFound, "Nothing was deleted: that group no longer exists.")
+		return "", notFound("Nothing was deleted: that group no longer exists.")
 	case err != nil:
-		writeJSONError(w, http.StatusInternalServerError, "The group could not be deleted. Check the server log.")
-	default:
-		writeJSON(w, http.StatusOK, map[string]string{"name": name})
+		return "", failed("The group could not be deleted. Check the server log.")
 	}
+	return name, nil
+}
+
+// handleDeleteGroup deletes one group, from its own page.
+func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request, _ session) {
+	name, err := s.deleteGroupByHandle(r.Context(), r.PathValue("handle"))
+	if err != nil {
+		writeOpError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"name": name})
 }
 
 // deleteGroup removes a group: the persistent zone first, which is what cuts
@@ -428,8 +563,7 @@ func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request, _ ses
 // 24 hours anyway.
 //
 // It returns the deleted group's name.
-func (s *Server) deleteGroup(r *http.Request, id string) (string, error) {
-	ctx := r.Context()
+func (s *Server) deleteGroup(ctx context.Context, id string) (string, error) {
 	del, err := s.store.DeleteGroup(ctx, id)
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
@@ -464,7 +598,7 @@ func (s *Server) deleteGroup(r *http.Request, id string) (string, error) {
 	}
 	s.logger.InfoContext(ctx, "group deleted by admin",
 		slog.String("group_id", id), slog.Int("devices", len(del.DeviceIDs)))
-	s.audit(r, "group.delete", groupLabel(del.Group), detail)
+	s.auditCtx(ctx, "group.delete", groupLabel(del.Group), detail)
 	return del.Group.Name, nil
 }
 
