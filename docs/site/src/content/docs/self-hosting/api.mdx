@@ -1,0 +1,179 @@
+---
+title: The admin API
+description: Automate your relay over HTTP with API keys — create tokens, watch storage, manage groups.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+import { Image } from 'astro:assets';
+import keys from '../../../assets/screenshots/admin-api-keys.webp';
+
+The admin API does over HTTP what the [admin page](/two-place-paste/self-hosting/admin/) does in a
+browser, for scripts and automation: mint creation tokens from an onboarding script, feed storage
+numbers to monitoring, clean up stale groups from a scheduled job. Like the admin page, it never
+shows content — the relay has none to show.
+
+It lives at `https://tpp.example.com/api/v1/` and answers JSON. Every endpoint, with its fields and
+an example request, is in the **[API reference](/two-place-paste/api/)** (the **API docs** button
+at the top of every page).
+
+## Create an API key
+
+Every request carries an API key. Keys are made in one of two places — never through the API
+itself, so a leaked key cannot make itself a successor.
+
+**On the admin page**
+
+<Steps>
+
+1. Open **API keys**. Type a name that says what the key is for, choose its
+   [scopes](#scopes) and when it expires: in 30 days, 90 days (the default), a year, or never.
+2. Press **Create key**. The key opens in a dialog: **Copy** it now. It is shown this once; the
+   relay keeps only a hash of it, so nobody can show it to you again.
+
+</Steps>
+
+<Image src={keys} alt="The API keys screen with a new key shown once in a dialog" class="screenshot" />
+
+**On the relay's host**, with the `tpp` command, which reads the same configuration as the relay
+and needs no restart of it:
+
+```sh
+# Docker Compose
+docker compose exec tpp tpp apikey create --name "Backup script" --scope read --expires 90
+# From source
+./tpp apikey create --name "Backup script" --scope read,tokens --expires never
+```
+
+The key is the only thing printed on standard output, so `KEY=$(tpp apikey create …)` works.
+`tpp apikey list` shows every key without its secret, and `tpp apikey revoke ID` revokes one.
+
+A relay holds at most 50 keys. A key looks like `tpp_ak_xxxxxxxx_xxxx…`: the eight characters after
+`tpp_ak_` are its public **id**, which names it in lists and the audit log; the rest is the secret.
+The fixed `tpp_ak_` start lets secret scanners, such as GitHub's, spot a key that was pasted
+somewhere it should not be.
+
+## Scopes
+
+| Scope | Allows |
+|---|---|
+| `read` | Every `GET`: dashboard, health, groups, tags, settings and the audit log. Not creation-token links or QR codes. |
+| `tokens` | Listing, creating and revoking creation tokens, and their links and QR codes. |
+| `admin` | Everything, including purging and deleting groups. Includes `read` and `tokens`. |
+
+Give each key the least it needs: a monitoring check needs `read`, an onboarding script `tokens`.
+A token's link is a credential — it creates a group — so `read` alone does not get it.
+
+## Use it
+
+Send the key in the `Authorization` header:
+
+```sh
+export TPP_API_KEY=tpp_ak_xxxxxxxx_…
+curl -H "Authorization: Bearer $TPP_API_KEY" https://tpp.example.com/api/v1/dashboard
+```
+
+Create a creation token and print its link:
+
+```sh
+curl -H "Authorization: Bearer $TPP_API_KEY" -H "Content-Type: application/json" \
+  -d '{"name": "Anna", "expires_in_days": 7}' \
+  https://tpp.example.com/api/v1/tokens
+```
+
+List the stale groups, then rename and tag one by its handle:
+
+```sh
+curl -H "Authorization: Bearer $TPP_API_KEY" "https://tpp.example.com/api/v1/groups?stale=true"
+curl -X PATCH -H "Authorization: Bearer $TPP_API_KEY" -H "Content-Type: application/json" \
+  -d '{"name": "Family", "tag": "home"}' \
+  https://tpp.example.com/api/v1/groups/Xq3vT0b9cJm2LwQe7sZk1A
+```
+
+- **Handles.** Groups and tokens are named by a **handle**, an opaque string, never by their id: a
+  group's id is the token that created it, which is a credential. A token and the group it created
+  have the same handle. Tags are named by their name.
+- **Lists** take `q` (search words), `sort`, `dir`, `page` and `size` (25, 50 or 100), and answer
+  with `items`, `total`, `page`, `size`, `sort` and `dir` — the same search and paging as the admin
+  page's lists.
+- **Changes** to a group, a tag or the settings are a `PATCH` with only the fields to change. Every
+  field is checked before any is applied, so a request with one bad field changes nothing.
+
+<Aside type="caution" title="No confirmation">
+	Purging and deleting through the API happen at once. There is no confirmation page and no undo,
+	so keep `admin` keys for jobs that need them.
+</Aside>
+
+## Rate limits
+
+Each key has its own budget, refilled continuously: by default 10 reads a second with bursts of
+60, and 2 changes a second with bursts of 10. Change them with `TPP_API_READ_RATE`,
+`TPP_API_READ_BURST`, `TPP_API_WRITE_RATE` and `TPP_API_WRITE_BURST`
+([Configuration](/two-place-paste/self-hosting/configuration/#server)).
+
+Every answer to a key carries its budget:
+
+| Header | Meaning |
+|---|---|
+| `RateLimit-Limit` | The budget's size. |
+| `RateLimit-Remaining` | What is left of it. |
+| `RateLimit-Reset` | Seconds until it is full again. |
+
+Over the budget, a request gets `429 Too Many Requests` with `Retry-After`: wait that many seconds.
+Requests without a valid key are limited per address as well, and the address that runs out is
+recorded in the audit log.
+
+## Errors
+
+An error is JSON in the [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) shape, with a stable
+`code` to branch on:
+
+```json
+{
+  "type": "about:blank",
+  "title": "Not Found",
+  "status": 404,
+  "code": "not_found",
+  "detail": "That group does not exist. It may have been deleted."
+}
+```
+
+| Code | Status | Meaning |
+|---|---|---|
+| `unauthorized` | 401 | No key, or a wrong, expired or revoked one. |
+| `forbidden` | 403 | The key lacks the scope the call needs. |
+| `invalid_request` | 400 | A field is not valid; `detail` says which. |
+| `not_found` | 404 | No such group, tag, token or endpoint. |
+| `conflict` | 409 | E.g. a tag of that name exists, or a used token cannot be revoked. |
+| `rate_limited` | 429 | Over the budget; see `Retry-After`. |
+| `unavailable` | 501 | The relay lacks the feature, e.g. it has no store. |
+| `internal` | 500 | Something failed on the relay; its log says what. |
+
+`detail` is for people and may change between versions; `code` will not.
+
+## Expiry, revocation and the audit log
+
+- A key stops working the moment it expires or is revoked — **Revoke** on the **API keys**
+  screen, or `tpp apikey revoke`. An expired key stays listed, marked expired, until you
+  **Remove** it.
+- To rotate a key, create the new one, switch the job over, then revoke the old one.
+- **Last used** on the **API keys** screen shows when and from where each key was last used
+  (updated at most once a minute).
+- Every change made with a key is in the [audit log](/two-place-paste/self-hosting/admin/#audit-log),
+  with the key's name and id in its **By** column. Reads are not recorded.
+
+## Versions
+
+The `v1` in the path is a promise: within `/api/v1`, changes only add — new endpoints, new
+optional fields, new response fields, new error codes. Ignore fields you do not know. Anything
+that would break a script waits for `/api/v2`.
+
+The relay serves its API description at `/api/v1/openapi.yaml` and `/api/v1/openapi.json`,
+without a key, for tools that read OpenAPI — Postman, Bruno, or a client generator. It describes
+endpoints only and holds nothing about your relay.
+
+<Aside>
+	The API answers scripts and servers, not web pages: it reads no cookie and answers no
+	cross-origin request, so a page in a browser cannot call it with someone's key. Behind your
+	reverse proxy it needs nothing extra — keep passing the `Authorization` header through, as
+	proxies do by default. See [Reverse proxy](/two-place-paste/self-hosting/reverse-proxy/).
+</Aside>

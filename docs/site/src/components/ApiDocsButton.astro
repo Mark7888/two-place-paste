@@ -1,0 +1,32 @@
+---
+// Starlight's social links, with an "API docs" button before them: the admin
+// REST API reference is a destination of its own, not a page in the guides.
+// On a phone Starlight moves this into the menu, where the button stays.
+import Default from '@astrojs/starlight/components/SocialIcons.astro';
+
+const href = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/api/`;
+const current = Astro.url.pathname.startsWith(href);
+---
+
+<a class="api-docs" href={href} aria-current={current ? 'page' : undefined}>API docs</a>
+<Default />
+
+<style>
+	.api-docs {
+		display: inline-flex;
+		align-items: center;
+		padding: 0.2rem 0.75rem;
+		font-size: var(--sl-text-sm);
+		font-weight: 600;
+		white-space: nowrap;
+		color: var(--sl-color-white);
+		text-decoration: none;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 999px;
+	}
+	.api-docs:hover,
+	.api-docs[aria-current='page'] {
+		border-color: var(--sl-color-accent);
+		color: var(--sl-color-accent-high);
+	}
+</style>
