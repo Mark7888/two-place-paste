@@ -1,0 +1,47 @@
+# Admin API CI: the relay's server code is generated from api/openapi.yaml
+# and committed, so CI fails if regenerating it produces a diff
+# (docs/internal/plans/admin-rest-api.md D24). The generator also validates
+# the description, so a malformed one fails here too.
+name: API
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "api/**"
+      - "server/internal/admin/apiv1/**"
+      - ".github/workflows/api.yml"
+  pull_request:
+    paths:
+      - "api/**"
+      - "server/internal/admin/apiv1/**"
+      - ".github/workflows/api.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: api-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  regenerate:
+    name: generated output is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: api/tools/go.mod
+          cache-dependency-path: api/tools/go.sum
+
+      - name: Vet the generator tools
+        working-directory: api/tools
+        env:
+          GOWORK: "off"
+        run: go vet ./...
+
+      - name: make api-check
+        run: make api-check
