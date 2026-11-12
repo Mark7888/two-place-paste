@@ -83,11 +83,14 @@ export default defineConfig({
 						'self-hosting/configuration',
 						'self-hosting/admin',
 						'self-hosting/api',
-						apiReference,
 						'self-hosting/blob-storage',
 						'self-hosting/operations',
 					],
 				},
+				// The generated reference is a group of its own pages, so it is a
+				// section of its own: nested in "Run your own server" it would be a
+				// second heading inside that section.
+				apiReference,
 				{
 					label: 'Reference',
 					items: ['security', 'faq'],

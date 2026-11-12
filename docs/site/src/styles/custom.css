@@ -25,3 +25,14 @@
 	text-align: center;
 	margin-top: 0.5rem;
 }
+
+/* Starlight styles every sidebar group label as a section heading, nested or
+   not. Only the generated API reference nests groups (one per kind of
+   endpoint), and there a heading-sized label inside a section reads as a
+   second section. Nested labels take the size of the links beside them,
+   kept semibold so they still read as groups. */
+.sidebar-content ul ul .group-label .large {
+	font-size: var(--sl-text-sm);
+	font-weight: 600;
+	color: var(--sl-color-gray-2);
+}

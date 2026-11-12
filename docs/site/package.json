@@ -21,6 +21,9 @@
   "overrides": {
     "postcss-nested": {
       "postcss-selector-parser": "~7.1.6"
+    },
+    "httpsnippet": {
+      "form-data": "~4.0.6"
     }
   }
 }
