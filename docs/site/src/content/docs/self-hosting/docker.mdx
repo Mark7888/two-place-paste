@@ -114,6 +114,14 @@ and no build — just a `docker-compose.yml` and a `.env`.
 | `beta` | The newest build of the main branch — the server side of the apps' Beta channel. |
 | `sha-abc1234` | The build of one commit. Deleted a week after it was built. |
 
+<Aside type="caution" title="Run a release in production">
+	Use `latest` or a release tag for a relay people rely on, and keep `beta` (and `sha-…`
+	builds) for testing. The apps are built so that a newer app works with an older relay: anyone
+	on the apps' Beta channel can use a relay that runs a release. The other way round is not
+	promised. A `beta` relay may need something that no released app has yet, and then apps on the
+	Stable channel stop working with it until a release catches up.
+</Aside>
+
 ## Upgrading
 
 ```sh
