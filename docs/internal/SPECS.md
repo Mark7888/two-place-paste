@@ -649,9 +649,13 @@ The app only waits for the answer before using a feature that depends on a capab
    `ERROR_CODE_CLIENT_OUTDATED`. The connection stays open and everything else keeps
    working. This is the preferred way to retire a behaviour.
 2. **The connection.** An app below `min` is refused at the upgrade with HTTP **426
-   Upgrade Required** and a JSON body `{"protocol_min": 2, "protocol_max": 3}`. A plain
-   `GET` of the same URL answers the same, because a React Native WebSocket does not
-   expose the status of a refused upgrade and the app asks again that way.
+   Upgrade Required**, `Content-Type: application/json` and the body
+   `{"error": "client_outdated", "protocol_min": 2, "protocol_max": 3}`. A plain `GET` of
+   the same URL answers the same, because a React Native WebSocket does not expose the
+   status of a refused upgrade and the app asks again that way. **The body is what
+   identifies the refusal, not the status:** the WebSocket library answers 426 to any
+   request that is not an upgrade, so a plain `GET` from an app the relay accepts also
+   gets a 426, without that body.
 
 Either way the app tells the user to update it and **never** reports a revocation: its
 credential is intact. After a refused connection it retries rarely (hourly, or when

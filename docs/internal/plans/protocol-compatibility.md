@@ -126,9 +126,11 @@ There are two places to refuse, from mild to severe:
    client's version cannot make correctly any more") already fits.
 2. **The connection.** If the level is below `min`, the relay refuses the
    upgrade with **426 Upgrade Required** and a small JSON body
-   `{"protocol_min":2,"protocol_max":3}`. The Go core reads it directly.
-   Android's existing plain-GET probe (`probeRefusal`) hits the same URL and
-   gets the same 426, so it can treat it as definite, as it does 410. Either
+   `{"error":"client_outdated","protocol_min":2,"protocol_max":3}`. The Go
+   core reads it directly. Android's existing plain-GET probe
+   (`probeRefusal`) hits the same URL and gets the same answer, so it can
+   treat it as definite, as it does 410. The body is what counts, not the
+   status: the WebSocket library answers 426 to every plain GET. Either
    app then stops redialling on the normal backoff, shows *update the app*,
    and tries again hourly or when the user asks. **Never** report it as
    revoked.
