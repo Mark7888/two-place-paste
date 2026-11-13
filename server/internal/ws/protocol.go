@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+
+	tppv1 "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1"
 )
 
 // The protocol levels this relay speaks (SPEC §5.3). A level is a single
@@ -40,6 +42,25 @@ func protocolLevel(r *http.Request) (uint32, error) {
 	}
 	return uint32(n), nil
 }
+
+// handleHello states the protocol levels and capabilities this relay
+// supports (SPEC §5.3). Nothing in the answer is specific to a group or a
+// device, which is why it is legal on an unauthenticated connection.
+func (s *Server) handleHello(env *tppv1.Envelope) ([]byte, error) {
+	var req tppv1.HelloRequest
+	if err := decode(env, &req); err != nil {
+		return nil, wireErrf(tppv1.ErrorCode_ERROR_CODE_INVALID_ARGUMENT, "payload could not be decoded")
+	}
+	return encode(env.GetId(), tppv1.MessageType_MESSAGE_TYPE_HELLO_RESPONSE, &tppv1.HelloResponse{
+		ProtocolMin:  s.protocolMin.Load(),
+		ProtocolMax:  ProtocolMax,
+		Capabilities: capabilities,
+	})
+}
+
+// capabilities are the features this relay offers beyond its protocol level.
+// None exist yet; a feature an app has to check for adds its Capability here.
+var capabilities []tppv1.Capability
 
 // outdatedBody is the body of a refusal for age. An app recognises the
 // refusal by it, not by the status: the WebSocket library answers 426 to any

@@ -172,3 +172,33 @@ func assertOutdated(t *testing.T, resp *http.Response) {
 		t.Errorf("body = %+v, want client_outdated, min 2, max %d", body, ws.ProtocolMax)
 	}
 }
+
+func TestHelloStatesTheRelaysLevels(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	laptop, _ := h.createGroup(t, "laptop")
+
+	tests := []struct {
+		name string
+		c    *client
+	}{
+		{name: "authenticated", c: laptop},
+		// A device about to pair has no identity yet and needs the answer most.
+		{name: "unauthenticated", c: h.dial(t, "")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.c.send("hello", tppv1.MessageType_MESSAGE_TYPE_HELLO_REQUEST, &tppv1.HelloRequest{})
+			var got tppv1.HelloResponse
+			env := tt.c.await(tppv1.MessageType_MESSAGE_TYPE_HELLO_RESPONSE, &got)
+			if env.GetId() != "hello" {
+				t.Errorf("response id = %q, want %q", env.GetId(), "hello")
+			}
+			if got.GetProtocolMin() != ws.ProtocolMin || got.GetProtocolMax() != ws.ProtocolMax {
+				t.Errorf("HelloResponse = [%d, %d], want [%d, %d]",
+					got.GetProtocolMin(), got.GetProtocolMax(), ws.ProtocolMin, ws.ProtocolMax)
+			}
+		})
+	}
+}

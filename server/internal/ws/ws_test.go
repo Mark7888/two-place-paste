@@ -411,14 +411,14 @@ func TestProtocolEndToEnd(t *testing.T) {
 	}
 }
 
-func TestUnauthenticatedConnectionIsLimitedToThreeFrames(t *testing.T) {
+func TestUnauthenticatedConnectionIsLimited(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
 	c := h.dial(t, "")
 
-	// Everything but group creation, pairing-join and offer minting needs an
-	// identity. Accepting an offer is on this list deliberately: it hands over
+	// Everything but group creation, pairing-join, offer minting and Hello
+	// needs an identity. Accepting an offer is on this list deliberately: it hands over
 	// the group key, so it is the one half of the joiner-emitted flow that a
 	// connection with nothing to prove may not send.
 	for _, typ := range []tppv1.MessageType{
