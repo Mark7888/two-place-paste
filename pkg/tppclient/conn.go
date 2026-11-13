@@ -56,12 +56,21 @@ const (
 // dial without one.
 func dialConn(ctx context.Context, endpoint string, httpClient *http.Client) (*conn, error) {
 	ws, resp, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{HTTPClient: httpClient})
+	var outdated *OutdatedError
+	if err != nil {
+		// Read before the body is closed: a refusal for age is told apart
+		// from any other 426 only by its body (SPEC §5.3).
+		outdated, _ = refusalForAge(resp)
+	}
 	if resp != nil && resp.Body != nil {
 		// A refused upgrade still carries a body; a successful one has nothing
 		// left to read.
 		_ = resp.Body.Close()
 	}
 	if err != nil {
+		if outdated != nil {
+			return nil, fmt.Errorf("tppclient: connect to the relay: %w", outdated)
+		}
 		if resp != nil {
 			// The status is how a revoked device learns its record is gone:
 			// the relay refuses the upgrade with 401 (SPEC §3.3 step 5).

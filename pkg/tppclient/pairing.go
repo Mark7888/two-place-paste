@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
 	tppv1 "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1"
@@ -313,6 +314,11 @@ func EncodePairingOffer(o *tppv1.PairingOffer) (string, error) {
 //     implementation that chose to wrap one. Reaching here means the bare
 //     reading produced nothing usable, so there is nothing to be ambiguous
 //     with.
+//  4. Only when no reading works: a wrapper holding a member this build does
+//     not know is a code from a newer app, and ErrCodeFromNewerApp says so
+//     instead of calling the code invalid (SPEC §5.3). A new kind of code is
+//     always a new member, emitted wrapped, so its bare reading has no URL or
+//     token and step 2 cannot mistake it for an invitation.
 func DecodeCode(s string) (*tppv1.PairingCode, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(trimPayload(StripCodeEnvelope(s)))
 	if err != nil {
@@ -332,6 +338,9 @@ func DecodeCode(s string) (*tppv1.PairingCode, error) {
 
 	if wrappedOK && validInvite(wrapped.GetInvite()) {
 		return &wrapped, nil
+	}
+	if wrappedOK && wrapped.GetCode() == nil && hasNewerMember(wrapped.ProtoReflect().GetUnknown()) {
+		return nil, ErrCodeFromNewerApp
 	}
 	return nil, fmt.Errorf("tppclient: the pairing code is neither an invitation nor an offer")
 }
@@ -423,4 +432,33 @@ func trimPayload(s string) string {
 		}
 	}
 	return string(out)
+}
+
+// hasNewerMember reports whether the unknown fields of a decoded PairingCode
+// hold a length-delimited field above the members this build knows: the shape
+// of a new kind of code. Anything else, such as stray bytes that happened to
+// decode, is not taken as one.
+func hasNewerMember(unknown []byte) bool {
+	var known protowire.Number
+	fields := (&tppv1.PairingCode{}).ProtoReflect().Descriptor().Fields()
+	for i := range fields.Len() {
+		known = max(known, fields.Get(i).Number())
+	}
+	found := false
+	for len(unknown) > 0 {
+		num, typ, n := protowire.ConsumeTag(unknown)
+		if n < 0 {
+			return false
+		}
+		unknown = unknown[n:]
+		if num > known && typ == protowire.BytesType {
+			found = true
+		}
+		m := protowire.ConsumeFieldValue(num, typ, unknown)
+		if m < 0 {
+			return false
+		}
+		unknown = unknown[m:]
+	}
+	return found
 }
