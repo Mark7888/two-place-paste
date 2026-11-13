@@ -60,6 +60,10 @@ type conn struct {
 	deviceID string
 	groupID  string
 
+	// protocolLevel is the level the app stated when it connected (SPEC
+	// §5.3). It is set before the connection serves and never changes.
+	protocolLevel uint32
+
 	// offers are the pairing offers minted on this connection and not yet
 	// answered. A joiner holds its socket open waiting for PairingComplete,
 	// and it has no device identity to be reached by, so the offer code is

@@ -21,12 +21,15 @@ import (
 // dispatch routes one decoded envelope to its handler and returns the frame to
 // send back, if any.
 //
-// Only three message types are legal without a device identity: they are the
-// three ways a device acquires one (SPEC §3.1, §3.2, and the joiner-emitted
-// direction of docs/internal/plans/joiner-emitted-pairing.md). Everything else needs an
-// authenticated connection.
+// Four message types are legal without a device identity. Three are the ways
+// a device acquires one (SPEC §3.1, §3.2, and the joiner-emitted direction of
+// docs/internal/plans/joiner-emitted-pairing.md); the fourth, HelloRequest,
+// only asks what the relay supports, which a device about to pair needs to
+// know (SPEC §5.3). Everything else needs an authenticated connection.
 func (s *Server) dispatch(ctx context.Context, c *conn, env *tppv1.Envelope) ([]byte, error) {
 	switch env.GetType() {
+	case tppv1.MessageType_MESSAGE_TYPE_HELLO_REQUEST:
+		return s.handleHello(env)
 	case tppv1.MessageType_MESSAGE_TYPE_CREATE_GROUP_REQUEST:
 		return s.handleCreateGroup(ctx, c, env)
 	case tppv1.MessageType_MESSAGE_TYPE_PAIRING_JOIN_REQUEST:

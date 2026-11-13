@@ -16,6 +16,13 @@ A restart only drops WebSocket connections — devices reconnect on their own �
 which are kept in memory. Shutdown is graceful: the relay stops accepting connections, gives
 requests in flight 15 seconds, and exits.
 
+**Upgrading and the apps.** A relay release keeps working with the apps released before it
+wherever it can, and newer apps always work with an older relay. On the rare occasion a release
+can no longer serve an old app, for instance after a security fix, it tells that app to update:
+the app says so instead of failing in silence, and its records on the relay are untouched. Apps
+on the Stable channel are only ever asked to update to a version that has already been released,
+as long as the relay runs a release too (see [Image tags](/two-place-paste/self-hosting/docker/#image-tags)).
+
 **Logs** go to stderr as JSON at `TPP_LOG_LEVEL`. They contain group and device ids, epochs, sizes
 and timestamps — and by design never clipboard content, content types, filenames, keys, tokens or
 session cookies.

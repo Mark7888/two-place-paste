@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -123,9 +124,20 @@ type client struct {
 func (h *harness) dial(t *testing.T, deviceID string) *client {
 	t.Helper()
 
-	url := h.url
+	query := url.Values{}
 	if deviceID != "" {
-		url += "?device_id=" + deviceID
+		query.Set("device_id", deviceID)
+	}
+	return h.dialQuery(t, query)
+}
+
+// dialQuery connects with the given query parameters on the WebSocket URL.
+func (h *harness) dialQuery(t *testing.T, query url.Values) *client {
+	t.Helper()
+
+	url := h.url
+	if len(query) > 0 {
+		url += "?" + query.Encode()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -399,14 +411,14 @@ func TestProtocolEndToEnd(t *testing.T) {
 	}
 }
 
-func TestUnauthenticatedConnectionIsLimitedToThreeFrames(t *testing.T) {
+func TestUnauthenticatedConnectionIsLimited(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
 	c := h.dial(t, "")
 
-	// Everything but group creation, pairing-join and offer minting needs an
-	// identity. Accepting an offer is on this list deliberately: it hands over
+	// Everything but group creation, pairing-join, offer minting and Hello
+	// needs an identity. Accepting an offer is on this list deliberately: it hands over
 	// the group key, so it is the one half of the joiner-emitted flow that a
 	// connection with nothing to prove may not send.
 	for _, typ := range []tppv1.MessageType{

@@ -221,6 +221,11 @@ type Device struct {
 
 	// LastSeen is the zero time until the device first connects.
 	LastSeen time.Time
+
+	// ProtocolLevel is the protocol level the device last connected with
+	// (SPEC §5.3). Zero means none is recorded yet: the device has not
+	// connected since its relay started recording levels.
+	ProtocolLevel uint32
 }
 
 // NewDevice describes a device being added to a group.
@@ -411,8 +416,9 @@ type Store interface {
 	// DeleteOffer removes an offer. Best-effort: the record carries a TTL.
 	DeleteOffer(ctx context.Context, code string) error
 
-	// TouchLastSeen records that a device connected.
-	TouchLastSeen(ctx context.Context, deviceID string) error
+	// TouchLastSeen records that a device connected, and the protocol level
+	// it connected with (SPEC §5.3).
+	TouchLastSeen(ctx context.Context, deviceID string, protocolLevel uint32) error
 
 	// ListGroups returns every group, oldest first. Groups are found through
 	// the token index, since every group was a token first (SPEC §3.1).

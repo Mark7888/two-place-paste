@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -85,6 +86,11 @@ type Server struct {
 	now                 func() time.Time
 	operatorURL         string
 
+	// protocolMin is ProtocolMin. It is a field only so tests can raise it
+	// while connections are being served: there is no setting to change it
+	// (SPEC §5.3).
+	protocolMin atomic.Uint32
+
 	// afterPairingNotice runs once the join notice has been queued for the
 	// inviter. Only tests set it, to drive the inviter's reply at the exact
 	// point where the joiner used to be unroutable.
@@ -108,6 +114,7 @@ func New(st Store, en Entries, opts Options) *Server {
 		now:                 opts.Now,
 		operatorURL:         opts.OperatorURL,
 	}
+	s.protocolMin.Store(ProtocolMin)
 	if s.logger == nil {
 		s.logger = slog.Default()
 	}
@@ -136,11 +143,22 @@ func New(st Store, en Entries, opts Options) *Server {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	level, err := protocolLevel(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Before the device lookup: an app too old to speak to this relay is
+	// told so whatever its record says, and it costs the store nothing.
+	if level < s.protocolMin.Load() {
+		s.refuseOutdated(w)
+		return
+	}
+
 	// Identity is established before the upgrade, so an unknown device never
 	// gets a socket at all.
 	var device store.Device
 	if deviceID := r.URL.Query().Get("device_id"); deviceID != "" {
-		var err error
 		device, err = s.store.GetDevice(ctx, deviceID)
 		if errors.Is(err, store.ErrNotFound) {
 			// A device whose group the admin deleted is told so, for as long
@@ -176,6 +194,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sock.SetReadLimit(s.entries.FrameMaxBytes() + frameOverhead)
 
 	c := newConn(sock, s.logger)
+	c.protocolLevel = level
 	defer func() {
 		s.hub.unregister(c)
 		c.closeWith(websocket.StatusNormalClosure, "")
@@ -202,6 +221,12 @@ const GroupDeletedCloseCode websocket.StatusCode = 4410
 // is for the admin UI's device list.
 func (s *Server) OnlineDevices(groupID string) map[string]bool {
 	return s.hub.online(groupID)
+}
+
+// OnlineLevels reports the protocol level each connected device of a group
+// stated on its socket (SPEC §5.3), for the admin UI's device list.
+func (s *Server) OnlineLevels(groupID string) map[string]uint32 {
+	return s.hub.onlineLevels(groupID)
 }
 
 // CloseGroup closes every socket of a group the admin has just deleted, with
@@ -231,7 +256,7 @@ func (s *Server) AnnounceRename(ctx context.Context, groupID, name string) {
 // onAuthenticated runs the per-connection work that follows a successful
 // identity check.
 func (s *Server) onAuthenticated(ctx context.Context, c *conn, device store.Device) {
-	if err := s.store.TouchLastSeen(ctx, device.ID); err != nil {
+	if err := s.store.TouchLastSeen(ctx, device.ID, c.protocolLevel); err != nil {
 		s.logger.WarnContext(ctx, "recording last seen failed",
 			slog.String("device_id", device.ID), slog.Any("error", err))
 	}

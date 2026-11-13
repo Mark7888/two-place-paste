@@ -11,9 +11,16 @@
 // A connection establishes its device identity at connect time, from the
 // `device_id` query parameter, and keeps it for the life of the socket. Three
 // frames — CreateGroupRequest, PairingJoinRequest and PairingOfferRequest — are
-// legal without an identity, because they are how a device gets one; every
+// legal without an identity, because they are how a device gets one. So is
+// HelloRequest, which only asks what the relay supports (SPEC §5.3). Every
 // other frame from an unauthenticated connection is answered with
 // ERROR_CODE_UNAUTHENTICATED.
+//
+// # Protocol levels
+//
+// The app states its protocol level in the `proto` query parameter; none
+// means level 1. An app below ProtocolMin is refused before the upgrade with
+// 426 and a JSON body (SPEC §5.3), and the level is recorded on the device.
 //
 // PairingOfferRequest is the only one of the three that hands out something
 // before the sender has proved anything, so it is the only one this package
@@ -62,7 +69,7 @@ type Store interface {
 	GetOffer(ctx context.Context, code string) (store.PairingOffer, error)
 	AcceptOffer(ctx context.Context, code, groupID string, publicKey, wrappedGroupKey []byte) (store.PairingOffer, store.Device, error)
 	DeleteOffer(ctx context.Context, code string) error
-	TouchLastSeen(ctx context.Context, deviceID string) error
+	TouchLastSeen(ctx context.Context, deviceID string, protocolLevel uint32) error
 	DeviceTombstoned(ctx context.Context, deviceID string) (bool, error)
 }
 

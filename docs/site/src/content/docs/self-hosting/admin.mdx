@@ -149,9 +149,17 @@ marked **on**, **off** or **emptying** — and lets you:
 - Put it under a **Tag**, or under none.
 - Give it its own **Storage limit** (see below).
 - Turn its [**Store**](#the-store) on or off, and give the store its own limit.
-- See its **Devices**: name, when each was paired, when it was last seen, and whether it is online
-  now. Devices are added by pairing and removed from another device of the group, which re-keys
-  it. The relay cannot re-key, so the admin page cannot remove a single device.
+- See its **Devices**: name, when each was paired, when it was last seen, its **Protocol** level,
+  and whether it is online now. Devices are added by pairing and removed from another device of
+  the group, which re-keys it. The relay cannot re-key, so the admin page cannot remove a single
+  device.
+
+  The protocol level is the version of the wire protocol the device's app speaks: its open
+  connection's while it is online, otherwise the one it last connected with. **Older app** marks a
+  device that works but misses what newer levels added; **update needed** marks one this relay no
+  longer accepts until its app is updated. A device that has not connected since the relay began
+  recording levels shows *not known yet*. See
+  [Updates](/two-place-paste/install/updates/).
 
 ### The store
 

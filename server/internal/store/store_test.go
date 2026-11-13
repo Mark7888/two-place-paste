@@ -170,7 +170,11 @@ func TestCreateGroupWithDevice(t *testing.T) {
 			t.Errorf("GetWrappedKey() = {Epoch:%d Key:%q}, want {Epoch:1 Key:%q}", key.Epoch, key.Key, "wrapped-1")
 		}
 
-		if err := s.TouchLastSeen(ctx, created.Device.ID); err != nil {
+		if dev.ProtocolLevel != 0 {
+			t.Errorf("GetDevice().ProtocolLevel = %d, want 0 for a device that never connected", dev.ProtocolLevel)
+		}
+
+		if err := s.TouchLastSeen(ctx, created.Device.ID, 2); err != nil {
 			t.Fatalf("TouchLastSeen() error = %v", err)
 		}
 		dev, err = s.GetDevice(ctx, created.Device.ID)
@@ -180,12 +184,15 @@ func TestCreateGroupWithDevice(t *testing.T) {
 		if dev.LastSeen.IsZero() {
 			t.Errorf("GetDevice().LastSeen is zero after TouchLastSeen()")
 		}
+		if dev.ProtocolLevel != 2 {
+			t.Errorf("GetDevice().ProtocolLevel = %d, want 2", dev.ProtocolLevel)
+		}
 
 		// A revoked device must not be resurrected by its own reconnect.
 		if err := s.RemoveDevice(ctx, created.Group.ID, created.Device.ID); err != nil {
 			t.Fatalf("RemoveDevice() error = %v", err)
 		}
-		if err := s.TouchLastSeen(ctx, created.Device.ID); !errors.Is(err, store.ErrNotFound) {
+		if err := s.TouchLastSeen(ctx, created.Device.ID, 1); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("TouchLastSeen(removed) error = %v, want %v", err, store.ErrNotFound)
 		}
 		if _, err := s.GetWrappedKey(ctx, created.Device.ID); !errors.Is(err, store.ErrNotFound) {

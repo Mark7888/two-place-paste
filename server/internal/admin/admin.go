@@ -106,8 +106,16 @@ type Store interface {
 // and telling a group's devices that it was renamed or deleted.
 type Live interface {
 	OnlineDevices(groupID string) map[string]bool
+	// OnlineLevels is the protocol level each connected device stated on its
+	// socket (SPEC §5.3).
+	OnlineLevels(groupID string) map[string]uint32
 	AnnounceRename(ctx context.Context, groupID, name string)
 	CloseGroup(groupID string)
+}
+
+// ProtocolRange is the lowest and highest protocol level the relay accepts.
+type ProtocolRange struct {
+	Min, Max uint32
 }
 
 // Purger deletes every entry of a group now.
@@ -196,6 +204,10 @@ type Options struct {
 	// shown on the health card with a button that opens it. Empty when none
 	// is set.
 	OperatorURL string
+
+	// Protocol is the range of protocol levels the relay accepts (SPEC
+	// §5.3), so the device list can mark a device on an older level.
+	Protocol ProtocolRange
 
 	// SessionTTL bounds a session's lifetime.
 	SessionTTL time.Duration
@@ -361,6 +373,7 @@ type Server struct {
 	dashboard Dashboard
 
 	live        Live
+	protocol    ProtocolRange
 	purger      Purger
 	limits      GroupLimits
 	storeSvc    StoreService
@@ -453,6 +466,7 @@ func New(st Store, opts Options) (*Server, error) {
 		version:       opts.Version,
 		startedAt:     startedAt,
 		operatorURL:   opts.OperatorURL,
+		protocol:      opts.Protocol,
 		logger:        logger,
 		now:           now,
 		baseURL:       base,
