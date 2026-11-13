@@ -29,6 +29,12 @@ export enum MessageType {
   MESSAGE_TYPE_UNSPECIFIED = 0,
   /** MESSAGE_TYPE_ERROR - Errors. */
   MESSAGE_TYPE_ERROR = 1,
+  /**
+   * MESSAGE_TYPE_HELLO_REQUEST - Protocol levels and relay capabilities (SPEC §5.3). Legal on an
+   * unauthenticated connection.
+   */
+  MESSAGE_TYPE_HELLO_REQUEST = 2,
+  MESSAGE_TYPE_HELLO_RESPONSE = 3,
   /** MESSAGE_TYPE_CREATE_GROUP_REQUEST - Group creation (SPEC §3.1). */
   MESSAGE_TYPE_CREATE_GROUP_REQUEST = 10,
   MESSAGE_TYPE_CREATE_GROUP_RESPONSE = 11,
@@ -119,6 +125,12 @@ export function messageTypeFromJSON(object: any): MessageType {
     case 1:
     case "MESSAGE_TYPE_ERROR":
       return MessageType.MESSAGE_TYPE_ERROR;
+    case 2:
+    case "MESSAGE_TYPE_HELLO_REQUEST":
+      return MessageType.MESSAGE_TYPE_HELLO_REQUEST;
+    case 3:
+    case "MESSAGE_TYPE_HELLO_RESPONSE":
+      return MessageType.MESSAGE_TYPE_HELLO_RESPONSE;
     case 10:
     case "MESSAGE_TYPE_CREATE_GROUP_REQUEST":
       return MessageType.MESSAGE_TYPE_CREATE_GROUP_REQUEST;
@@ -315,6 +327,10 @@ export function messageTypeToJSON(object: MessageType): string {
       return "MESSAGE_TYPE_UNSPECIFIED";
     case MessageType.MESSAGE_TYPE_ERROR:
       return "MESSAGE_TYPE_ERROR";
+    case MessageType.MESSAGE_TYPE_HELLO_REQUEST:
+      return "MESSAGE_TYPE_HELLO_REQUEST";
+    case MessageType.MESSAGE_TYPE_HELLO_RESPONSE:
+      return "MESSAGE_TYPE_HELLO_RESPONSE";
     case MessageType.MESSAGE_TYPE_CREATE_GROUP_REQUEST:
       return "MESSAGE_TYPE_CREATE_GROUP_REQUEST";
     case MessageType.MESSAGE_TYPE_CREATE_GROUP_RESPONSE:

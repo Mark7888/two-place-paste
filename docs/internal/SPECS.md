@@ -607,6 +607,73 @@ on blobs.
 Push notification delivery (FCM / UnifiedPush / other) is **out of scope for MVP** and
 remains an open design question — see §9.
 
+### 5.3 Versions and compatibility
+
+Apps and relays upgrade independently: a relay operator upgrades on their own schedule,
+the desktop app updates itself, and the Android app is updated by hand. The protocol
+therefore promises:
+
+| App | Relay | Promise |
+|---|---|---|
+| newer | older | Always works. The app learns what the relay offers and does without the rest. |
+| older | newer | Works across released versions. A change that cannot stay compatible ships only in a release, and the older app is told plainly to update. |
+| older | `beta` build | Not promised: production relays run releases. |
+
+Almost every change stays compatible in both directions. A new relay feature is
+announced as a **capability**, and an app checks for it before using it. A change that
+cannot stay compatible raises the **protocol level**. That is rare and deliberate.
+
+**Protocol level.** A single integer per build, independent of the app or relay
+version: Stable, Beta, Nightly and local builds of the same code share it. Level 1 is
+the protocol as it stood before this section, and every build that predates it.
+
+- The app states its level as the `proto` query parameter of the WebSocket URL
+  (`/ws?device_id=…&proto=2`), on authenticated and unauthenticated connections alike.
+  A missing parameter means level 1. It is on the URL rather than in a frame so the
+  relay can act on it before the upgrade.
+- The relay accepts levels `[min, max]`. `min` is built into the relay and has no
+  setting to lower it: a break exists for a reason, usually security. It rises only in
+  a release.
+- The relay records the last level each device connected with, next to its last-seen
+  time. That number is all it learns: no app version and no platform.
+
+**Hello.** An app sends `HelloRequest` on every connection, alongside its first other
+requests; it is legal before the connection has a device identity. `HelloResponse`
+carries the relay's `[min, max]` and its capabilities. A relay that predates it answers
+`ERROR_CODE_UNSUPPORTED_MESSAGE`, which the app reads as level 1 with no capabilities.
+The app only waits for the answer before using a feature that depends on a capability.
+
+**Refusing an older app.** From the mildest to the most severe:
+
+1. **One request.** A request the connection's level may no longer make is answered
+   `ERROR_CODE_CLIENT_OUTDATED`. The connection stays open and everything else keeps
+   working. This is the preferred way to retire a behaviour.
+2. **The connection.** An app below `min` is refused at the upgrade with HTTP **426
+   Upgrade Required**, `Content-Type: application/json` and the body
+   `{"error": "client_outdated", "protocol_min": 2, "protocol_max": 3}`. A plain `GET` of
+   the same URL answers the same, because a React Native WebSocket does not expose the
+   status of a refused upgrade and the app asks again that way. **The body is what
+   identifies the refusal, not the status:** the WebSocket library answers 426 to any
+   request that is not an upgrade, so a plain `GET` from an app the relay accepts also
+   gets a 426, without that body.
+
+Either way the app tells the user to update it and **never** reports a revocation: its
+credential is intact. After a refused connection it retries rarely (hourly, or when
+the user asks or the app has updated), not on the normal reconnect backoff. Builds that
+predate this section send no `proto` and cannot read a 426, which is why breaking the
+connection itself should be the rarest change of all.
+
+**An older relay.** When the relay lacks a capability the user is trying to use, or
+its `max` is below what the app needs, the app says that the relay needs updating and
+keeps everything else working. The user usually cannot update the relay, so the
+message names the operator's website when the group has one (§4.4).
+
+**Pairing codes** travel between devices without the relay, so the relay cannot speak
+for them. A new kind of code is a new member of `PairingCode` and is always emitted
+wrapped. An app that cannot read a code as any kind it knows, but finds a field it does
+not know in it, says the code was made by a newer version of the app rather than
+calling it invalid.
+
 ---
 
 ## 6. Sync semantics

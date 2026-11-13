@@ -39,6 +39,10 @@ const (
 	MessageType_MESSAGE_TYPE_UNSPECIFIED MessageType = 0
 	// Errors.
 	MessageType_MESSAGE_TYPE_ERROR MessageType = 1
+	// Protocol levels and relay capabilities (SPEC §5.3). Legal on an
+	// unauthenticated connection.
+	MessageType_MESSAGE_TYPE_HELLO_REQUEST  MessageType = 2
+	MessageType_MESSAGE_TYPE_HELLO_RESPONSE MessageType = 3
 	// Group creation (SPEC §3.1).
 	MessageType_MESSAGE_TYPE_CREATE_GROUP_REQUEST  MessageType = 10
 	MessageType_MESSAGE_TYPE_CREATE_GROUP_RESPONSE MessageType = 11
@@ -121,6 +125,8 @@ var (
 	MessageType_name = map[int32]string{
 		0:  "MESSAGE_TYPE_UNSPECIFIED",
 		1:  "MESSAGE_TYPE_ERROR",
+		2:  "MESSAGE_TYPE_HELLO_REQUEST",
+		3:  "MESSAGE_TYPE_HELLO_RESPONSE",
 		10: "MESSAGE_TYPE_CREATE_GROUP_REQUEST",
 		11: "MESSAGE_TYPE_CREATE_GROUP_RESPONSE",
 		20: "MESSAGE_TYPE_PAIRING_START_REQUEST",
@@ -186,6 +192,8 @@ var (
 	MessageType_value = map[string]int32{
 		"MESSAGE_TYPE_UNSPECIFIED":                  0,
 		"MESSAGE_TYPE_ERROR":                        1,
+		"MESSAGE_TYPE_HELLO_REQUEST":                2,
+		"MESSAGE_TYPE_HELLO_RESPONSE":               3,
 		"MESSAGE_TYPE_CREATE_GROUP_REQUEST":         10,
 		"MESSAGE_TYPE_CREATE_GROUP_RESPONSE":        11,
 		"MESSAGE_TYPE_PAIRING_START_REQUEST":        20,
@@ -353,10 +361,12 @@ const file_tpp_v1_envelope_proto_rawDesc = "" +
 	"\bEnvelope\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
 	"\x04type\x18\x02 \x01(\x0e2\x13.tpp.v1.MessageTypeR\x04type\x12\x18\n" +
-	"\apayload\x18\x03 \x01(\fR\apayload*\xae\x13\n" +
+	"\apayload\x18\x03 \x01(\fR\apayload*\xef\x13\n" +
 	"\vMessageType\x12\x1c\n" +
 	"\x18MESSAGE_TYPE_UNSPECIFIED\x10\x00\x12\x16\n" +
-	"\x12MESSAGE_TYPE_ERROR\x10\x01\x12%\n" +
+	"\x12MESSAGE_TYPE_ERROR\x10\x01\x12\x1e\n" +
+	"\x1aMESSAGE_TYPE_HELLO_REQUEST\x10\x02\x12\x1f\n" +
+	"\x1bMESSAGE_TYPE_HELLO_RESPONSE\x10\x03\x12%\n" +
 	"!MESSAGE_TYPE_CREATE_GROUP_REQUEST\x10\n" +
 	"\x12&\n" +
 	"\"MESSAGE_TYPE_CREATE_GROUP_RESPONSE\x10\v\x12&\n" +

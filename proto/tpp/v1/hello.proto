@@ -1,0 +1,56 @@
+// Protocol levels and relay capabilities (SPEC §5.3).
+//
+// Apps and relays upgrade independently, so each needs to learn what the other
+// can do. Almost every change stays compatible: the relay lists it as a
+// Capability and an app checks for it before using it. A change that cannot
+// stay compatible raises the protocol level instead, which is rare and
+// deliberate.
+syntax = "proto3";
+
+package tpp.v1;
+
+option go_package = "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1;tppv1";
+
+// HelloRequest asks the relay which protocol levels and capabilities it
+// supports. An app sends it on every socket, authenticated or not: a device
+// that is about to pair has no credential yet and needs the answer most.
+//
+// The app's own level is not in here. It travels as the `proto` parameter of
+// the WebSocket URL, so that the relay can act on it before the upgrade
+// (SPEC §5.3).
+//
+// A relay that predates this message answers ERROR_CODE_UNSUPPORTED_MESSAGE,
+// as it does for any type it does not know. That answer is definite and means
+// protocol level 1 with no capabilities, which is why this is a request and
+// not a frame the relay pushes: an app would otherwise have to guess how long
+// to wait for something an old relay never sends.
+message HelloRequest {}
+
+// HelloResponse states what the relay supports.
+//
+// None of it is secret: it is answered on unauthenticated sockets too, and
+// names no group, device or setting.
+message HelloResponse {
+  // The lowest protocol level the relay still accepts. An app below it is
+  // refused at the upgrade (SPEC §5.3), so an app that gets this far is at or
+  // above it.
+  uint32 protocol_min = 1;
+
+  // The highest protocol level the relay speaks. An app above it talks to the
+  // relay at this level, and does without what the higher levels added.
+  uint32 protocol_max = 2;
+
+  // The features this relay offers beyond its protocol level. An app checks
+  // for one before using the feature. A value the app does not know is
+  // ignored.
+  repeated Capability capabilities = 3;
+}
+
+// Capability names a relay feature an app has to check for.
+//
+// Numbers are permanent. A capability is never removed while a relay still
+// offers the feature, and never given new meaning; a new feature gets a new
+// number.
+enum Capability {
+  CAPABILITY_UNSPECIFIED = 0;
+}

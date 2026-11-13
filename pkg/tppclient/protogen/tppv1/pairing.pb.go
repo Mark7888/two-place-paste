@@ -566,6 +566,14 @@ func (x *PairingOffer) GetDeviceName() string {
 //
 // Clients decode PairingCode first and fall back to a bare PairingPayload, so
 // a code shown by a build that predates this message still pairs.
+//
+// A new kind of code is always a new member of the oneof below, never a change
+// to an existing one, and is always emitted wrapped. Read as a bare
+// PairingPayload it then has no server_url or pairing_token, so no build
+// mistakes it for an invitation. A client that cannot read a code as any kind
+// it knows, and whose PairingCode reading holds a field it does not know, is
+// looking at a code from a newer app: it tells the user to update this app
+// rather than calling the code invalid (SPEC §5.3).
 type PairingCode struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Code:
