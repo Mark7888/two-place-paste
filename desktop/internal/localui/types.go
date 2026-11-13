@@ -71,7 +71,65 @@ type Status struct {
 	// MultiGroup mirrors the setting, so the shell can show or hide the
 	// Groups tab without asking for the settings.
 	MultiGroup bool `json:"multi_group"`
+
+	// OperatorURL is the link to the relay operator's website, with the
+	// group's id already added (SPEC §4.4), or empty when the relay names
+	// none. It is the active group's relay's: switching groups clears it
+	// until the new relay says.
+	OperatorURL string `json:"operator_url,omitempty"`
+
+	// Space is what the out-of-space banners and popups show.
+	Space SpaceView `json:"space"`
 }
+
+// SpaceView is the active group's room on the relay, as far as the user has
+// to hear about it (SPEC §7.2). Sizes and counts only.
+type SpaceView struct {
+	// StoreNearlyFull asks for the banner that the store is almost full: at
+	// least 90% of its bytes or items. False once the user closed the banner,
+	// until the store changes again while still that full, and always while
+	// the banners are hidden.
+	StoreNearlyFull bool `json:"store_nearly_full"`
+
+	// The store's usage the banner names. Zero while it is off or unread.
+	StoreUsedBytes int64 `json:"store_used_bytes"`
+	StoreMaxBytes  int64 `json:"store_max_bytes"`
+	StoreUsedItems int64 `json:"store_used_items"`
+	StoreMaxItems  int64 `json:"store_max_items"`
+
+	// Evicted is how many history entries the relay removed early, to make
+	// room, since the user last closed that banner. Zero while the banners
+	// are hidden.
+	Evicted int `json:"evicted"`
+
+	// Failure is the last upload or save the relay refused for lack of room,
+	// for the popup, until the user closes it: one of the Space* constants,
+	// or empty. It is shown whatever the banner setting says.
+	Failure string `json:"failure,omitempty"`
+}
+
+// Space failures, as SpaceView.Failure names them.
+const (
+	// SpaceStoreFull: the group's store has no room for the item. Deleting
+	// items helps; so does more room from the operator.
+	SpaceStoreFull = "store_full"
+
+	// SpaceRelayStoreFull: the group's store had room but the relay's total
+	// store limit did not. Only the operator can fix it.
+	SpaceRelayStoreFull = "relay_store_full"
+
+	// SpaceRelayFull: the relay could not take a history upload. History
+	// evicts old entries to make room, so this is the relay itself — its
+	// disk, or uploads still in progress — and usually passes.
+	SpaceRelayFull = "relay_full"
+)
+
+// Space banners and the popup, as DismissSpace names them.
+const (
+	SpaceBannerStore   = "store"
+	SpaceBannerEvicted = "evicted"
+	SpaceBannerFailure = "failure"
+)
 
 // GroupsView is the Groups tab's model: the active group and the parked
 // ones (/spec/crypto.md §10.1). It never carries a group id: those are
@@ -393,6 +451,9 @@ type SettingsView struct {
 	// the Groups tab.
 	MultiGroup bool `json:"multi_group"`
 
+	// HideSpaceBanners is whether the out-of-space banners are hidden.
+	HideSpaceBanners bool `json:"hide_space_banners"`
+
 	// RestartRequired is true when a saved port differs from the one this
 	// process is listening on: the service binds once, at startup.
 	RestartRequired bool `json:"restart_required"`
@@ -588,6 +649,9 @@ type SettingsPatch struct {
 	// group; it only hides the tab.
 	MultiGroup *bool `json:"multi_group"`
 
+	// HideSpaceBanners hides or shows the out-of-space banners.
+	HideSpaceBanners *bool `json:"hide_space_banners"`
+
 	// Detectors replaces the list of built-in detectors that are on.
 	Detectors *[]string `json:"detectors"`
 
@@ -659,6 +723,10 @@ const (
 	// EventGroupName says the group's display name was learned or changed;
 	// Name carries it.
 	EventGroupName = "group_name"
+
+	// EventSpace says something the out-of-space banners or popup show
+	// changed (Status.Space, Status.OperatorURL).
+	EventSpace = "space"
 
 	// EventStore says the store changed: an item was saved, edited or
 	// deleted, here or on another device, or the admin turned the store on

@@ -35,12 +35,21 @@ func (f *fakeRelay) takeStoreFailure() error {
 func (f *fakeRelay) StoreLimits(context.Context) (tppclient.StoreLimits, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.limits != nil {
+		return *f.limits, nil
+	}
 	st := f.storeLocked()
 	if !st.enabled {
 		return tppclient.StoreLimits{}, nil
 	}
 	return tppclient.StoreLimits{Enabled: true, MaxBytes: 1 << 20, AvailableBytes: 1 << 19, MaxItems: 100,
 		UsedItems: int64(len(st.items)), MaxItemBytes: 1 << 19}, nil
+}
+
+func (f *fakeRelay) OperatorLink() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.operatorLink
 }
 
 func (f *fakeRelay) ListStore(context.Context) (tppclient.StoreListing, error) {

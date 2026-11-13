@@ -194,6 +194,22 @@ body {
 
 .rail svg { flex: none; }
 
+/* The relay operator's website, at the foot of the rail: it is the relay's,
+   not a section of this app. */
+.rail .rail-link {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-top: auto;
+  padding: 0.55rem 0.7rem;
+  color: var(--muted);
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+}
+.rail .rail-link:hover { background: var(--surface-sunken); color: var(--ink); }
+.rail .rail-link .text { display: flex; flex-direction: column; min-width: 0; font-weight: 550; line-height: 1.25; }
+.rail .rail-link small { font-weight: 400; font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 main.content {
   grid-area: main;
   overflow-y: auto;
@@ -225,6 +241,8 @@ main.content {
 
   .rail button { width: auto; flex: 1 0 auto; justify-content: center; padding: 0.5rem 0.7rem; }
   .rail button span { display: none; }
+  .rail .rail-link { margin-top: 0; margin-left: auto; flex: none; }
+  .rail .rail-link .text { display: none; }
   main.content { padding: 1.25rem 1rem 3rem; }
 }
 
@@ -372,6 +390,26 @@ button.action.solid-danger { color: #fff; background: var(--danger); border-colo
 
 button.action.quiet { background: none; border-color: transparent; color: var(--muted); }
 button.action.quiet:hover:not(:disabled) { color: var(--ink); background: var(--surface-sunken); }
+
+/* A link drawn as an action: it opens somewhere else, the operator's website,
+   rather than doing something here. */
+a.action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 2.25rem;
+  padding: 0 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: none;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+a.action:hover { background: var(--surface-sunken); }
+a.action.quiet { background: none; border-color: transparent; color: inherit; text-decoration: underline; }
+a.action.quiet:hover { background: var(--surface-sunken); }
 
 button.action.small { height: 1.9rem; padding: 0 0.6rem; font-size: 0.82rem; }
 
@@ -749,6 +787,10 @@ button.action.choice .choice-why {
 
 /* A notice with an action at its end, e.g. Dismiss. */
 .notice .grow { flex: 1; }
+.notice.space { align-items: center; }
+.notice.space svg { margin-top: 0; }
+.notice.space > a.action { flex: none; height: 1.9rem; padding: 0 0.5rem; }
+.notice.space > .icon-button { flex: none; color: inherit; }
 .notice > button { flex: none; align-self: center; }
 
 /* A one-line notice with a close button at its end: the text and icon sit in

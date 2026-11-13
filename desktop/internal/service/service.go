@@ -108,13 +108,17 @@ type CommitResolver interface {
 // Service is the desktop shell: it answers the UI, drives the clipboard, and
 // owns the sync direction decision of SPEC §6.
 type Service struct {
-	clip      clipboard.Clipboard
-	watcher   *clipboard.Watcher
-	auto      autostart.Manager
-	updates   Preferences
-	hub       *hub
-	store     *storeState
-	incoming  chan tppclient.EntryMeta
+	clip     clipboard.Clipboard
+	watcher  *clipboard.Watcher
+	auto     autostart.Manager
+	updates  Preferences
+	hub      *hub
+	store    *storeState
+	incoming chan tppclient.EntryMeta
+
+	// space is what the out-of-space banners and popup show (space.go). It
+	// is guarded by mu.
+	space     spaceState
 	logger    *slog.Logger
 	now       func() time.Time
 	configDir string
@@ -314,6 +318,10 @@ func (s *Service) ClientHandlers() tppclient.Handlers {
 			// On its own goroutine: this runs before the client's read loop
 			// starts, and the request needs that loop to see its answer.
 			s.catchUps.Go(func() { s.catchUp(context.Background()) })
+			// The store's fullness, for its banner: asked on every connect,
+			// as an edit made elsewhere while this device was away is not
+			// replayed.
+			s.refreshSpaceLater()
 		},
 		OnDisconnected: func(err error) {
 			msg := ""
@@ -334,6 +342,7 @@ func (s *Service) ClientHandlers() tppclient.Handlers {
 		},
 		OnEntryAdded: s.announce,
 		OnEntryEvicted: func(entryID string) {
+			s.noteEvicted()
 			s.hub.publish(localui.Event{Kind: localui.EventEvicted, EntryID: entryID})
 		},
 		OnProgress: func(p tppclient.Progress) {
@@ -369,6 +378,9 @@ func (s *Service) ClientHandlers() tppclient.Handlers {
 		OnGroupName: func(name string) {
 			s.activityChanged()
 			s.hub.publish(localui.Event{Kind: localui.EventGroupName, Name: name})
+		},
+		OnOperatorURL: func(string) {
+			s.hub.publish(localui.Event{Kind: localui.EventSpace})
 		},
 	}
 	s.storeHandlers(&h)
@@ -415,6 +427,7 @@ func (s *Service) Status(ctx context.Context) localui.Status {
 	}
 	pause := s.pauseViewLocked()
 	multiGroup := s.settings.MultiGroup
+	space := s.spaceViewLocked()
 	s.mu.Unlock()
 
 	st := localui.Status{
@@ -429,6 +442,7 @@ func (s *Service) Status(ctx context.Context) localui.Status {
 		LastError:     lastErr,
 		Keystore:      s.backend,
 		Clipboard:     s.clipboardView(ctx),
+		Space:         space,
 	}
 	if relay == nil {
 		return st
@@ -441,6 +455,7 @@ func (s *Service) Status(ctx context.Context) localui.Status {
 	st.ServerURL = state.ServerURL
 	if st.InGroup {
 		st.GroupName = state.GroupName
+		st.OperatorURL = relay.OperatorLink()
 	}
 	if !st.InGroup || !connected {
 		return st
@@ -598,6 +613,7 @@ func (s *Service) upload(ctx context.Context, relay Relay, planID string) (local
 	})
 	if err != nil {
 		s.endUpload(nil)
+		s.noteUploadFailure(err)
 		return localui.SyncResult{}, s.relayError("upload the clipboard", err)
 	}
 	s.endUpload(&meta)
@@ -1216,6 +1232,7 @@ func (s *Service) resetGroupState() {
 	s.latestID, s.latestKnown = "", false
 	s.plans = map[string]*plan{}
 	s.offerPlans = map[string]*offerPlan{}
+	s.space = spaceState{}
 	s.mu.Unlock()
 	s.store.clear()
 }
@@ -1256,6 +1273,7 @@ func (s *Service) settingsView(set config.Settings) localui.SettingsView {
 		NightlyCommit:        set.NightlyCommit,
 		SetupDone:            set.SetupDone,
 		MultiGroup:           set.MultiGroup,
+		HideSpaceBanners:     set.HideSpaceBanners,
 		RestartRequired:      set.ListenPort() != s.listenPort(),
 		DetectSensitive:      set.SensitiveDetection(),
 		Detectors:            detectorViews(set.EnabledDetectors()),
@@ -1321,6 +1339,9 @@ func (s *Service) UpdateSettings(ctx context.Context, p localui.SettingsPatch) (
 	}
 	if p.MultiGroup != nil {
 		next.MultiGroup = *p.MultiGroup
+	}
+	if p.HideSpaceBanners != nil {
+		next.HideSpaceBanners = *p.HideSpaceBanners
 	}
 	if p.NightlyCommit != nil {
 		commit := strings.ToLower(strings.TrimSpace(*p.NightlyCommit))
@@ -1396,7 +1417,7 @@ func (s *Service) UpdateSettings(ctx context.Context, p localui.SettingsPatch) (
 		"auto_upload_max_bytes", next.AutoUploadLimit(), "auto_download_max_bytes", next.AutoDownloadLimit(),
 		"update_channel", next.Channel(), "auto_update", next.AutoUpdate,
 		"detect_sensitive", next.SensitiveDetection(), "detectors", len(next.EnabledDetectors()),
-		"filters", len(next.Filters), "multi_group", next.MultiGroup)
+		"filters", len(next.Filters), "multi_group", next.MultiGroup, "hide_space_banners", next.HideSpaceBanners)
 	s.hub.publish(localui.Event{Kind: localui.EventSettings})
 	return s.settingsView(next), nil
 }
@@ -1462,6 +1483,7 @@ func (s *Service) onClipboardChange(ctx context.Context, c clipboard.Content, at
 			return // shutting down
 		}
 		s.logger.WarnContext(ctx, "auto-upload of a clipboard change failed", "error", err)
+		s.noteUploadFailure(err)
 		s.noteSkipped(localui.SkippedView{
 			Direction: "upload", Bytes: int64(len(c.Body)),
 			Message: fmt.Sprintf("Automatic upload of %s failed: %s. Use Upload to try again.",

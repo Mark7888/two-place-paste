@@ -41,6 +41,11 @@ type API interface {
 	// DismissSkipped clears the skipped-transfer notice (Status.Skipped).
 	DismissSkipped(ctx context.Context)
 
+	// DismissSpace closes one out-of-space banner or the popup
+	// (Status.Space), named by a SpaceBanner* constant, until it is next
+	// triggered. An unknown name is an error.
+	DismissSpace(ctx context.Context, banner string) error
+
 	// History lists entry metadata. It is only ever pulled, never pushed.
 	History(ctx context.Context, q HistoryQuery) (HistoryPage, error)
 

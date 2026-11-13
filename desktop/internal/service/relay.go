@@ -103,6 +103,10 @@ type Relay interface {
 
 	// The store (SPEC §6b).
 	StoreLimits(ctx context.Context) (tppclient.StoreLimits, error)
+
+	// OperatorLink is the link to the relay operator's website, with the
+	// group's id added, or "" when the relay names none (SPEC §4.4).
+	OperatorLink() string
 	ListStore(ctx context.Context) (tppclient.StoreListing, error)
 	SaveToStore(ctx context.Context, item tppclient.Item, d tppclient.StoreDetails) (tppclient.StoreItem, error)
 	FetchStoreItem(ctx context.Context, it tppclient.StoreItem) (tppclient.Item, error)

@@ -48,6 +48,11 @@ type fakeRelay struct {
 	store      *fakeStore
 	storeLists int
 
+	// limits, when set, is what StoreLimits reports instead of the store's
+	// own; operatorLink is what OperatorLink reports.
+	limits       *tppclient.StoreLimits
+	operatorLink string
+
 	// putGate and getGate, when set, hold PutEntry and GetEntry until they
 	// are closed or the call's context ends: a transfer still in flight.
 	putGate chan struct{}

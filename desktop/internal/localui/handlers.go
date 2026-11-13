@@ -45,6 +45,20 @@ func (s *Server) handleDismissSkipped(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.api.Status(r.Context()))
 }
 
+func (s *Server) handleDismissSpace(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Banner string `json:"banner"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if err := s.api.DismissSpace(r.Context(), body.Banner); err != nil {
+		s.fail(w, r, "close the notice", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.api.Status(r.Context()))
+}
+
 func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	var body SyncRequest
 	if !decode(w, r, &body) {

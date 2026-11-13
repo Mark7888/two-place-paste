@@ -65,6 +65,10 @@ func (s *stubAPI) Status(context.Context) Status {
 }
 
 func (s *stubAPI) DismissSkipped(context.Context) { s.record("dismiss-skipped") }
+func (s *stubAPI) DismissSpace(_ context.Context, banner string) error {
+	s.record("dismiss-space " + banner)
+	return nil
+}
 
 func (s *stubAPI) Sync(context.Context, SyncRequest) (SyncResult, error) {
 	s.record("sync")
@@ -272,6 +276,7 @@ func TestOriginIsValidatedOnEveryRequest(t *testing.T) {
 		{"GET", "/api/status", ""},
 		{"POST", "/api/sync", `{"direction":"upload"}`},
 		{"DELETE", "/api/skipped", ""},
+		{"POST", "/api/space/dismiss", `{"banner":"store"}`},
 		{"POST", "/api/pause", `{"paused":true}`},
 		{"POST", "/api/clipboard/reveal", `{}`},
 		{"POST", "/api/filters/test", `{"text":"x"}`},

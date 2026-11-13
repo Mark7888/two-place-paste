@@ -1,0 +1,53 @@
+---
+title: Running out of space
+description: The desktop app's out-of-space notices, and the link to the relay operator's website.
+---
+
+import { Image } from 'astro:assets';
+import banner from '../../../assets/screenshots/desktop-space-banner.webp';
+import popup from '../../../assets/screenshots/desktop-space-popup.webp';
+
+Your group's room on the relay is set by whoever runs it. The desktop app tells you when it is
+running low, and how to get more.
+
+## Operator website
+
+If the relay's operator has a website, the bottom of the sidebar has **Open operator website**,
+with the site's address underneath. Every notice on this page offers the same button. It opens the
+site in your browser with your group's id added to the address (`?group_id=…`), so the operator
+can tell which group you are in — for example, to give that group more room.
+
+The link belongs to the relay of the group you are using. After you switch to
+[another group](/two-place-paste/guides/groups/), it is the new group's relay's, or gone if that
+relay names no website.
+
+## Banners
+
+Two banners at the top of the app are advice: nothing has failed yet.
+
+- **Your store is almost full** — the group's [store](/two-place-paste/guides/store/) holds 90% or
+  more of its size or item limit. Delete items you no longer need, or ask your relay operator for
+  more room.
+- **History is full** — the relay removed older [history](/two-place-paste/guides/history/)
+  entries before their 24 hours were up, to make room for new ones. It says how many.
+
+<Image src={banner} alt="The Store tab with a banner saying the store is almost full, an Open operator website button, and the link at the bottom of the sidebar" class="screenshot" />
+
+**×** closes a banner until the next time it applies: the next entry removed early, or the next
+save or delete that leaves the store still that full. To stop them altogether, turn on **Hide
+out-of-space banners** in [Settings](/two-place-paste/guides/settings/#behaviour).
+
+## When a save or upload is refused
+
+A refusal is shown in a window, whatever the banner setting says, until you close it:
+
+| Title | What happened |
+|---|---|
+| **The store is full** | The item did not fit in the group's store. Delete some items, or ask your relay operator for more room. |
+| **The relay's storage is full** | The group's store had room, but the relay's storage for every group's store together did not. Only the operator can fix this. |
+| **The relay can't store this right now** | The relay could not take a clipboard upload. History makes room by removing old entries, so this is the relay itself — its disk, or other uploads still in progress — and usually passes. Try again later; if it keeps happening for a few minutes, contact your relay operator. |
+
+<Image src={popup} alt="A window titled The store is full, with Open operator website and OK buttons" class="screenshot" />
+
+The window also appears for an automatic upload that was refused while the app was closed, the
+next time you open it.

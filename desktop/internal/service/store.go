@@ -80,15 +80,20 @@ func (s *Service) storeHandlers(h *tppclient.Handlers) {
 		}
 		s.hub.publish(localui.Event{Kind: localui.EventStore})
 	}
-	h.OnStoreItemAdded = put
+	h.OnStoreItemAdded = func(it tppclient.StoreItem) {
+		put(it)
+		s.refreshSpaceLater()
+	}
 	h.OnStoreItemUpdated = put
 	h.OnStoreItemDeleted = func(itemID string) {
 		s.store.index.Remove(itemID)
 		s.hub.publish(localui.Event{Kind: localui.EventStore})
+		s.refreshSpaceLater()
 	}
 	h.OnStoreState = func(bool) {
 		s.store.invalidate()
 		s.hub.publish(localui.Event{Kind: localui.EventStore})
+		s.refreshSpaceLater()
 	}
 }
 
@@ -333,10 +338,14 @@ func (s *Service) saveToStore(ctx context.Context, relay Relay, item tppclient.I
 	s.beginUpload()
 	saved, err := relay.SaveToStore(ctx, item, tppclient.StoreDetails{Name: d.Name, Description: d.Description, Tags: d.Tags})
 	s.endUpload(nil)
+	if errors.Is(err, tppclient.ErrQuotaExceeded) {
+		s.noteStoreFull(ctx, relay)
+	}
 	if err != nil {
 		return localui.StoreItemView{}, s.storeError("save to the store", err)
 	}
 	s.store.index.Put(saved)
+	s.refreshSpace(ctx)
 	s.logger.InfoContext(ctx, "saved to the store", "item_id", saved.ID, "bytes", saved.BlobSize)
 	s.hub.publish(localui.Event{Kind: localui.EventStore})
 	return s.itemView(saved), nil
@@ -405,6 +414,7 @@ func (s *Service) DeleteStoreItem(ctx context.Context, itemID string) error {
 	s.store.mu.Unlock()
 	s.logger.InfoContext(ctx, "deleted from the store", "item_id", itemID)
 	s.hub.publish(localui.Event{Kind: localui.EventStore})
+	s.refreshSpace(ctx)
 	return nil
 }
 
@@ -511,7 +521,7 @@ func (s *Service) storeError(op string, err error) error {
 		return localui.Errorf(http.StatusConflict, err, "the store is turned off for this group")
 	case errors.Is(err, tppclient.ErrQuotaExceeded):
 		return localui.Errorf(http.StatusInsufficientStorage, err,
-			"the store is full: delete some items, or ask the server admin for more room")
+			"the store is full: delete some items, or ask your relay operator for more room")
 	case errors.Is(err, tppclient.ErrTooLarge):
 		return localui.Errorf(http.StatusRequestEntityTooLarge, err, "that is larger than the store accepts")
 	case errors.Is(err, tppclient.ErrStoreUnreadable):

@@ -122,6 +122,38 @@ export interface Status {
   suggested_direction: Direction;
   /** multi_group mirrors the "Keep several groups" setting: it shows the Groups tab. */
   multi_group: boolean;
+  /**
+   * The link to the relay operator's website, with the group's id already
+   * added, or absent when the relay names none. It is the active group's
+   * relay's, and is gone right after a group switch until the new relay says.
+   */
+  operator_url?: string;
+  /** What the out-of-space banners and popup show. */
+  space: SpaceView;
+}
+
+/** A refusal for lack of room, for the popup. */
+export type SpaceFailure = "store_full" | "relay_store_full" | "relay_full";
+
+/** One of the out-of-space banners, or the popup, as api.dismissSpace names it. */
+export type SpaceBanner = "store" | "evicted" | "failure";
+
+/**
+ * SpaceView is the active group's room on the relay as the user has to hear
+ * about it. The service has already applied the user's closes and the "Hide
+ * out-of-space banners" setting: a true or non-zero field is a banner to show.
+ */
+export interface SpaceView {
+  /** The store is at least 90% full, by bytes or items. */
+  store_nearly_full: boolean;
+  store_used_bytes: number;
+  store_max_bytes: number;
+  store_used_items: number;
+  store_max_items: number;
+  /** History entries the relay removed early to make room, since the banner was closed. */
+  evicted: number;
+  /** The last upload or save refused for lack of room, until the popup is closed. */
+  failure?: SpaceFailure;
 }
 
 /**
@@ -242,6 +274,8 @@ export interface SettingsView {
   setup_done: boolean;
   /** multi_group is whether this device keeps several groups. Off by default. */
   multi_group: boolean;
+  /** hide_space_banners hides the out-of-space banners (not the popup). Off by default. */
+  hide_space_banners: boolean;
   restart_required: boolean;
   detect_sensitive: boolean;
   detectors: DetectorView[];
@@ -353,6 +387,7 @@ export interface SettingsPatch {
   detect_sensitive?: boolean;
   setup_done?: boolean;
   multi_group?: boolean;
+  hide_space_banners?: boolean;
   detectors?: string[];
   filters?: FilterView[];
 }
@@ -671,6 +706,7 @@ export const api = {
     request<FilterImportPlan>("POST", "/api/filters/import/preview", draft),
   testFilters: (t: FilterTest) => request<{ matches: FilterMatch[] }>("POST", "/api/filters/test", t),
   dismissSkipped: () => request<Status>("DELETE", "/api/skipped"),
+  dismissSpace: (banner: SpaceBanner) => request<Status>("POST", "/api/space/dismiss", { banner }),
   history: (before?: string) =>
     request<HistoryPage>(
       "GET",
