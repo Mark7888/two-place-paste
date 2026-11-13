@@ -67,7 +67,6 @@ export default defineConfig({
 						'guides/sensitive-content',
 						'guides/history',
 						'guides/store',
-						'guides/out-of-space',
 						'guides/devices',
 						'guides/groups',
 						'guides/settings',
