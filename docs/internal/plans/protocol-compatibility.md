@@ -44,8 +44,10 @@ upgrades, and frames flow. Neither side knows the other's version.
 Two things follow. A break in the *connection step* would make today's apps
 report a revocation that never happened. A break in *one kind of request*,
 answered with `ERROR_CODE_CLIENT_OUTDATED` on an open socket, is handled
-almost gracefully already. The pairing change is the second kind, which is
-why it can land gently.
+almost gracefully already. The pairing change turned out to be the first kind:
+it changes key changes too, so it refuses old apps at the connection (§4), and
+the machinery below is what makes that refusal say *update* rather than
+*revoked*.
 
 How the user updates:
 - **Desktop:** the signed auto-updater (Stable/Beta/Nightly, about every 6
@@ -121,8 +123,8 @@ There are two places to refuse, from mild to severe:
 
 1. **One request.** The relay answers a request the app's level may no
    longer make with `ERROR_CODE_CLIENT_OUTDATED`. The socket stays open and
-   everything else keeps working. This is what the pairing change uses.
-   No new error code is needed: code 14's meaning ("the request is one this
+   everything else keeps working. This is the preferred way to retire one
+   behaviour. No new error code is needed: code 14's meaning ("the request is one this
    client's version cannot make correctly any more") already fits.
 2. **The connection.** If the level is below `min`, the relay refuses the
    upgrade with **426 Upgrade Required** and a small JSON body
@@ -139,8 +141,8 @@ There are two places to refuse, from mild to severe:
    above 1, they get the 426 and react as the table in §2 says: the desktop
    retries with a generic error, and Android says *probably revoked*. Nothing
    can fix that for builds already installed. It is the reason connection
-   breaks should be the rarest of all, and why the pairing change does not
-   need one.
+   breaks should be the rarest of all. The pairing change is one (§4), and it
+   ships a while after this machinery so that few such builds remain.
 
 ### 3.5 A relay that is too old
 
@@ -184,35 +186,32 @@ screens handle.
 
 ## 4. The pairing change, at level 2
 
-The hardening changes how new devices pair; devices already in a group are
-not affected. So the relay **does not** raise `min`. It refuses only the
-pairing requests from level-1 sockets:
+The pairing change is Phase 2 of `relay-trust-hardening.md`. It is a **full break**,
+not a per-request one: besides how new devices pair, it changes how every key change
+is wrapped (keys that prove which device sent them, and a certificate for every
+device). An old app cannot open a key made that way, and an old app's key change would
+carry nothing a new app accepts. There is no mix of old and new devices in which
+everything keeps working, so everything is updated together.
 
-- `PairingStartRequest`, `PairingJoinRequest`, `PairingWrappedKeyUpload`,
-  `PairingOfferRequest`, `PairingOfferAcceptRequest`, or whichever of them
-  the change replaces;
-- answered with `ERROR_CODE_CLIENT_OUTDATED`.
+The relay that ships it:
+- speaks level 2 only: **`min` and `max` both become 2** in the same Stable release;
+- advertises the new pairing capability in `HelloResponse`;
+- refuses every level-1 app at the connection (§3.4 item 2): **426** with the
+  `client_outdated` body.
 
-It also advertises the new pairing capability in `HelloResponse`.
+| App | Relay | Result |
+|---|---|---|
+| new | new | Works, fully checked. |
+| old, with protocol levels | new | Refused at the connection. The app says *the relay needs a newer version of this app* with **Check for updates**, retries hourly, and connects as before once updated: its group and keys are untouched. |
+| old, from before protocol levels | new | Refused at the connection, but it cannot read the 426 (§3.4): the desktop retries with a generic error, Android says *probably revoked*. Its keys are still intact; updating the app fixes it. |
+| new | old (or one claiming to be) | Pairing and key changes are refused on the device: the relay lacks the capability (§6). Sync, history and the store keep working until the relay is updated. |
 
-| Member (shows or accepts the code) | Joiner | Relay | Result |
-|---|---|---|---|
-| new | new | new | new pairing |
-| old | any | new | member's pairing request refused: *update this app* |
-| any | old | new | joiner's request refused: *update this app* (an old joiner may fail earlier, decoding the new code; see §3.6) |
-| new | new | old | see §6 |
-| old | old | old | old pairing, as today |
+Order for an operator: update the relay, and every app at the same time. Once the relay
+is updated, apps that are not stop syncing until they are; that is the point of the
+break, and the 426 is what makes it say so instead of failing silently.
 
-Sync, history, store, rekey and revocation are unchanged at every
-combination: an old device that is already paired keeps working with a new
-relay.
-
-Today's apps predate §3.7, so on a new relay their pairing fails with:
-- desktop: *the service could not start pairing*;
-- Android: *The server needs a newer version of this app.*
-
-That is acceptable for the people currently using the app, who can be asked
-to update directly.
+The row of apps from before protocol levels is why the Phase 2 release should come a
+while after the release that shipped levels, so that few such apps are still in use.
 
 ## 5. Order of work
 
@@ -229,35 +228,31 @@ to update directly.
      updates*.
    - Android: the same messages.
    - Docs site: troubleshooting entries for each message.
-2. **The pairing change** at level 2, its capability and the per-request
-   refusal (§4), in one Stable release with both apps.
+2. **The pairing change** at level 2, its capability and the connection-level
+   refusal of every level-1 app (§4), in one Stable release with both apps.
 
 Step 1 can ship in the same release as step 2. Today's apps gain nothing
 from it shipping earlier, because they predate it either way. What step 1
 buys is the *next* break, so it must not be skipped.
 
-## 6. Open question — a new app on an old relay, when pairing
+## 6. A new app on an old relay, when pairing
 
-§1 promises that a newer app works with an older relay. For pairing, the
-only way to keep that promise is to **fall back to the old pairing**, and
-that undoes the hardening: anyone who can make the relay look old (or who
-runs an old relay) would get the weaker scheme. Whether that is acceptable
-depends on what the change protects against:
+§1 promises that a newer app works with an older relay. For pairing and key changes the
+only way to keep that promise would be to **fall back to the old scheme**, and that
+undoes the hardening: anyone who can make the relay look old (or who runs an old relay)
+would get the weaker scheme. The change protects against the relay itself, so a
+fallback defeats it.
 
-- If it protects against the **relay itself** or the network, fallback
-  defeats it. A new app should refuse to pair through an old relay
-  (*update the relay to pair new devices*) while sync keeps working.
-- If it protects against something an old relay cannot be used for, fallback
-  may be fine for a transition period.
-
-The recommendation is **no fallback**: pairing is the one place §1's promise
-gives way, and the message says why.
+**Decided: no fallback.** A new app pairs and changes keys only when the relay
+advertises the pairing capability, and otherwise says the relay needs updating. Sync,
+history and the store keep working. This is the one place §1's promise gives way, and
+the message says why.
 
 ## 7. Tests
 
 - Relay: `proto=` absent, 1, 2, garbage; 426 body; `Hello` on authenticated
-  and unauthenticated sockets; level-1 pairing requests refused, level-2
-  allowed; last-seen level stored.
+  and unauthenticated sockets; last-seen level stored. At level 2: every
+  level-1 connection refused with the 426 body, level 2 allowed.
 - Go core and TS client: `Hello` from a relay that predates it
   (`UNSUPPORTED_MESSAGE` → level 1); 426 → `ErrClientOutdated` and **not**
   revoked; Android's probe on 426; unknown-code decoding.

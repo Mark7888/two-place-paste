@@ -211,7 +211,6 @@ byte-identical.
 | `RekeyRequest` | `device_certs` for every remaining device at the new epoch; `revoked_device_id` may be empty (§4.5) |
 | `WrappedKeyAvailable` | `sender_device_id` |
 | new `PairingJoinReject` | the inviter turns a join down; the relay deletes the keyless device |
-| `Device` (roster row) | `protocol_level`: the level the device last connected with, which the relay already stores (SPEC §5.3) |
 | `Capability` | `CAPABILITY_PAIRING_V2 = 1`, advertised in `HelloResponse` by a relay that speaks this phase |
 
 The relay stores certs and proofs as opaque bytes and hands them back. It enforces
@@ -253,17 +252,17 @@ contracts"). Every addition is a new protobuf field or message, so nothing crash
 contact. What decides who may do what is the protocol level of SPEC §5.3: level 1 is
 every app before this phase, level 2 is a Phase 2 app.
 
-**The relay, at level 2**
-- `ProtocolMax` is 2 and `HelloResponse` advertises `CAPABILITY_PAIRING_V2`.
-- `ProtocolMin` stays 1 at first, so an old device already in a group keeps
-  connecting and syncing.
-- From a level-1 socket it refuses, with `ERROR_CODE_CLIENT_OUTDATED`, every request
-  that would admit a device or change the key: `PairingStartRequest`,
-  `PairingJoinRequest`, `PairingWrappedKeyUpload`, `PairingOfferRequest`,
-  `PairingOfferAcceptRequest` and `RekeyRequest`. Protocol-compatibility §4 refuses only
-  the pairing requests; rekeys join them here because a level-1 rekey would wrap
-  version-`0x01` keys and no certs, which Phase 2 devices refuse (§4.3), stranding
-  them.
+**The relay, at level 2** — a full break, released with both apps
+(`protocol-compatibility.md` §4):
+- `ProtocolMin` and `ProtocolMax` both become 2, and `HelloResponse` advertises
+  `CAPABILITY_PAIRING_V2`.
+- Every level-1 app is refused at the connection with 426 and the `client_outdated`
+  body of SPEC §5.3. It cannot pair, and it cannot change keys either: a level-1
+  rekey would wrap version-`0x01` keys with no certs, which Phase 2 devices refuse
+  (§4.3), and a level-2 rekey wraps keys a level-1 app cannot open. No mix of old and
+  new devices keeps working, so everything is updated together, and the 426 makes the
+  old apps say so: *the relay needs a newer version of this app*, with
+  **Check for updates** on the desktop.
 
 **A Phase 2 app**
 - Sends `proto=2` and `HelloRequest` on every socket, as SPEC §5.3 already has it do.
@@ -280,17 +279,14 @@ every app before this phase, level 2 is a Phase 2 app.
 | Situation | Result |
 |---|---|
 | Phase 2 relay, Phase 2 apps | Works, fully checked. |
-| Old relay, or one that claims to be | No capability: pairing and rekeys are refused on the device, with the message above. Everything else keeps working. |
-| Old app pairing or rekeying through a Phase 2 relay | The relay answers `CLIENT_OUTDATED`; the app says to update (apps since protocol levels shipped show *the relay needs a newer version of this app*). |
-| Phase 2 app and an old app pairing, either direction, through an old relay | Refused by the Phase 2 side: no capability, and the old app sends no proof anyway. |
-| Old app already in the group | Keeps syncing at the current epoch. The next rekey, by a Phase 2 device, wraps a key it cannot open, so it falls behind. Before that rekey the app lists the devices whose `protocol_level` is 1 and warns that they will stop syncing until they are updated and paired again. The level is what the relay reports: a courtesy for the warning, never a check. |
+| Old app, Phase 2 relay | Refused at the connection: *update this app*. Its group and keys are untouched, so once updated it connects as before and picks up a key change it missed the way an offline device does: the wrapped key waits for it, if the device that changed the key confirmed it by fingerprint (§4.5). Apps from before protocol levels cannot read the 426 and show a generic error (Android: *probably revoked*); updating fixes them the same way. |
+| Phase 2 app, old relay (or one claiming to be) | No capability: pairing and rekeys are refused on the device with *the relay needs updating*. Sync, history and the store keep working. |
+| Phase 2 app and an old app pairing through an old relay | Refused by the Phase 2 side: no capability, and the old app sends no proof anyway. |
 | New code read by an old app | The old app cannot read the new kind of code (protocol-compatibility §3.6) and says to update; one that predates that says the code is invalid. |
 
-**Later: raising the minimum.** A Stable release after Phase 2 raises `ProtocolMin` to
-2. From then on a level-1 app is refused at the connection with 426 and the body of
-SPEC §5.3, and apps since protocol levels shipped say *update this app* instead of
-falling behind silently. Apps from before levels misreport the 426 (protocol-
-compatibility §3.4), which is why this waits for a release, not the Phase 2 one.
+Order for an operator: update the relay and every app together. The Phase 2 release
+should come a while after the release that shipped protocol levels, so that few apps
+from before them are still in use.
 
 None of the relay's refusals protect against a hostile relay, which can simply not make
 them. They keep an honest deployment consistent and tell people what to update. The
@@ -324,13 +320,14 @@ the Phase 2 protocol in the same PR, so no build on `master` speaks only half of
 1. **Spec and proto** — `spec/crypto.md` 1.6 (§4.1 here), the reference generator in
    `spec/vectors/gen` and the new vectors, SPEC §2.1 and §3.2–§3.3, the roster row of
    §11.4 changed from "mitigated at the UI level" to what this phase guarantees,
-   SPEC §5.3 (level 2 and `CAPABILITY_PAIRING_V2`); the fields of §4.2, with
+   SPEC §5.3 (level 2, `CAPABILITY_PAIRING_V2`, and the one exception to "a newer app
+   always works with an older relay": no pairing or key change without the
+   capability); the fields of §4.2, with
    `make proto` and both generated trees.
 2. **Implementation** — after 1 is merged:
    - Server: store and return certs and proofs, rekey without a revocation,
-     `PairingJoinReject`, `protocol_level` in the roster; `ProtocolMax` 2, the
-     capability, and the level-1 refusals of §4.4. Tests against Redis, including a
-     level-1 socket refused for each pairing request and `RekeyRequest`.
+     `PairingJoinReject`; `ProtocolMin` and `ProtocolMax` 2 and the capability (§4.4).
+     Tests against Redis, including a level-1 connection refused with the 426 body.
    - Go and TypeScript clients: `proto=2`; wrap v2, proofs and certs against the
      vectors; the rules of §4.3 with no version-0x01 path left in either client; the
      capability check of §4.4; tests that an old relay, a relay that leaves the
@@ -338,15 +335,11 @@ the Phase 2 protocol in the same PR, so no build on `master` speaks only half of
      make pairing and rekeys fail rather than fall back; the interop test in both
      pairing directions and across a rekey.
    - Desktop and Android: the "not verified" banner, unverified rows, the rekey notice,
-     the warning about level-1 devices before a rekey, the "relay needs updating"
-     message, and Verify devices (§4.5).
+     the "relay needs updating" message, and Verify devices (§4.5).
    - Docs site for all of it.
 
-A Stable release follows 2, with both apps. This PR is large (most of the estimate
-in §6); it is reviewed in one go, commit by commit.
-
-3. **Later Stable release** — `ProtocolMin` 2 (§4.4), once Phase 2 apps have been out
-   long enough.
+A Stable release follows 2, with the relay and both apps together (§4.4). This PR is
+large (most of the estimate in §6); it is reviewed in one go, commit by commit.
 
 ## 5. What stays out of scope
 
