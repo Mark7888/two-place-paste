@@ -249,6 +249,7 @@ func serve(args []string) error {
 		},
 		Logger:    logger,
 		Live:      wsSrv,
+		Protocol:  admin.ProtocolRange{Min: ws.ProtocolMin, Max: ws.ProtocolMax},
 		Purger:    entrySvc,
 		Limits:    ledger,
 		Store:     storeSvc,

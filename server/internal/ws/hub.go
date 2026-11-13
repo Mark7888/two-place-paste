@@ -187,6 +187,20 @@ func (h *Hub) online(groupID string) map[string]bool {
 	return out
 }
 
+// onlineLevels reports the protocol level of each device of a group that holds
+// a socket right now (SPEC §5.3).
+func (h *Hub) onlineLevels(groupID string) map[string]uint32 {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	out := make(map[string]uint32, len(h.groups[groupID]))
+	for c := range h.groups[groupID] {
+		if deviceID, _ := c.identity(); deviceID != "" {
+			out[deviceID] = c.protocolLevel
+		}
+	}
+	return out
+}
+
 // closeGroup closes every connection of a group and reports how many.
 func (h *Hub) closeGroup(groupID string, status websocket.StatusCode, reason string) int {
 	h.mu.RLock()

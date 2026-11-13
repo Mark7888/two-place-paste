@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { api, type Device, type GroupDetail, type GroupStore, type LimitChange } from "../api";
+import { api, type Device, type GroupDetail, type GroupStore, type LimitChange, type ProtocolRange } from "../api";
 import { Badge, GroupBadges, StoreBadge } from "../components/Badge";
 import { SectionHead, StatCard } from "../components/Card";
 import { useLimitForm } from "../components/LimitFields";
@@ -380,7 +380,28 @@ function StoreSection({
   );
 }
 
-const deviceColumns: Column<Device>[] = [
+/**
+ * protocolCell shows a device's protocol level, and whether it is behind the
+ * relay: below the minimum it can no longer connect until its app is updated;
+ * below the maximum it works, without what the newer levels added.
+ */
+function protocolCell(d: Device, relay: ProtocolRange) {
+  if (d.protocol_level === null) {
+    return <span className="muted">not known yet</span>;
+  }
+  return (
+    <>
+      level {d.protocol_level}{" "}
+      {d.protocol_level < relay.min ? (
+        <Badge kind="bad">update needed</Badge>
+      ) : d.protocol_level < relay.max ? (
+        <Badge kind="warn">older app</Badge>
+      ) : null}
+    </>
+  );
+}
+
+const deviceColumns = (relay: ProtocolRange): Column<Device>[] => [
   {
     key: "name",
     header: "Device",
@@ -408,6 +429,12 @@ const deviceColumns: Column<Device>[] = [
     render: (d) => ago(Date.now(), d.last_seen, "never"),
   },
   {
+    key: "protocol",
+    header: "Protocol",
+    sortValue: (d) => d.protocol_level ?? 0,
+    render: (d) => protocolCell(d, relay),
+  },
+  {
     key: "status",
     header: "Status",
     firstDir: "desc",
@@ -425,7 +452,7 @@ function Devices({ data }: { data: GroupDetail }) {
       <SmartTable<Device>
         caption="Devices"
         rows={data.devices}
-        columns={deviceColumns}
+        columns={deviceColumns(data.protocol)}
         rowKey={(d) => d.short_id + d.created_at}
         defaultSort={{ key: "paired", dir: "asc" }}
         emptyText="This group has no devices left."
@@ -433,7 +460,9 @@ function Devices({ data }: { data: GroupDetail }) {
       {data.devices.length > 0 && (
         <p className="hint spaced">
           Devices are added by pairing and removed from another device of the group, which re-keys it. The server
-          cannot re-key, so it cannot remove one.
+          cannot re-key, so it cannot remove one. Protocol is the version of the wire protocol the device&rsquo;s app
+          speaks, as of its open connection or its last one; this relay accepts levels {data.protocol.min} to{" "}
+          {data.protocol.max}.
         </p>
       )}
     </>

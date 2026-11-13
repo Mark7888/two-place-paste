@@ -223,6 +223,12 @@ func (s *Server) OnlineDevices(groupID string) map[string]bool {
 	return s.hub.online(groupID)
 }
 
+// OnlineLevels reports the protocol level each connected device of a group
+// stated on its socket (SPEC §5.3), for the admin UI's device list.
+func (s *Server) OnlineLevels(groupID string) map[string]uint32 {
+	return s.hub.onlineLevels(groupID)
+}
+
 // CloseGroup closes every socket of a group the admin has just deleted, with
 // GroupDeletedCloseCode. The store has already deleted the devices, so a
 // reconnect is refused with 410.

@@ -302,7 +302,16 @@ type groupDetailJSON struct {
 
 	CanPurge bool `json:"can_purge"`
 
+	// Protocol is the range of protocol levels the relay accepts (SPEC
+	// §5.3), for marking devices on an older level.
+	Protocol protocolJSON `json:"protocol"`
+
 	Problems []string `json:"problems"`
+}
+
+type protocolJSON struct {
+	Min uint32 `json:"min"`
+	Max uint32 `json:"max"`
 }
 
 type deviceJSON struct {
@@ -311,6 +320,11 @@ type deviceJSON struct {
 	CreatedAt time.Time  `json:"created_at"`
 	LastSeen  *time.Time `json:"last_seen"`
 	Online    bool       `json:"online"`
+
+	// ProtocolLevel is the level the device speaks: its open socket's when it
+	// is online, else the last one it connected with. Nil when none is known
+	// yet: the device has not connected since the relay began recording.
+	ProtocolLevel *uint32 `json:"protocol_level"`
 }
 
 // groupDetailView builds one group's page.
@@ -332,6 +346,7 @@ func (s *Server) groupDetailView(ctx context.Context, g store.Group) groupDetail
 		MinLimitBytes:     s.minLimit(),
 		Tags:              make([]string, 0, len(tags)),
 		CanPurge:          s.purger != nil,
+		Protocol:          protocolJSON{Min: s.protocol.Min, Max: s.protocol.Max},
 	}
 	if t, ok := tags[g.Tag]; ok && t.Limit.Enabled {
 		b := t.Limit.Bytes
@@ -343,17 +358,22 @@ func (s *Server) groupDetailView(ctx context.Context, g store.Group) groupDetail
 	}
 	slices.Sort(v.Tags)
 
-	var online map[string]bool
+	var (
+		online map[string]bool
+		levels map[string]uint32
+	)
 	if s.live != nil {
 		online = s.live.OnlineDevices(g.ID)
+		levels = s.live.OnlineLevels(g.ID)
 	}
 	for _, d := range devices {
 		v.Devices = append(v.Devices, deviceJSON{
-			ShortID:   shortID(d.ID),
-			Name:      d.Name,
-			CreatedAt: d.CreatedAt.UTC(),
-			LastSeen:  timeOrNil(d.LastSeen),
-			Online:    online[d.ID],
+			ShortID:       shortID(d.ID),
+			Name:          d.Name,
+			CreatedAt:     d.CreatedAt.UTC(),
+			LastSeen:      timeOrNil(d.LastSeen),
+			Online:        online[d.ID],
+			ProtocolLevel: deviceLevel(d, levels),
 		})
 	}
 	v.Problems = probs.list
@@ -704,4 +724,17 @@ func plural[N ~int | ~int64](n N, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// deviceLevel is the protocol level to show for a device: its open socket's,
+// else the last one it connected with, else none.
+func deviceLevel(d store.Device, live map[string]uint32) *uint32 {
+	level, ok := live[d.ID]
+	if !ok || level == 0 {
+		level = d.ProtocolLevel
+	}
+	if level == 0 {
+		return nil
+	}
+	return &level
 }
