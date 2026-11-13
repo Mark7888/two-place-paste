@@ -14,6 +14,12 @@ func (s *Server) WaitingOffers() int {
 	return len(s.hub.offers)
 }
 
+// SetProtocolMin raises the lowest protocol level the server accepts. The
+// shipped minimum is 1, so without it the refusal path could not be reached.
+func (s *Server) SetProtocolMin(level uint32) {
+	s.protocolMin.Store(level)
+}
+
 // SetAfterPairingNotice installs a hook that runs on the joiner's goroutine
 // immediately after the join notice has been queued for the inviter. It lets a
 // test occupy the window in which the inviter can answer, without sleeping.

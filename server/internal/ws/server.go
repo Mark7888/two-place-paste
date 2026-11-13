@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -85,6 +86,11 @@ type Server struct {
 	now                 func() time.Time
 	operatorURL         string
 
+	// protocolMin is ProtocolMin. It is a field only so tests can raise it
+	// while connections are being served: there is no setting to change it
+	// (SPEC §5.3).
+	protocolMin atomic.Uint32
+
 	// afterPairingNotice runs once the join notice has been queued for the
 	// inviter. Only tests set it, to drive the inviter's reply at the exact
 	// point where the joiner used to be unroutable.
@@ -108,6 +114,7 @@ func New(st Store, en Entries, opts Options) *Server {
 		now:                 opts.Now,
 		operatorURL:         opts.OperatorURL,
 	}
+	s.protocolMin.Store(ProtocolMin)
 	if s.logger == nil {
 		s.logger = slog.Default()
 	}
@@ -139,6 +146,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	level, err := protocolLevel(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Before the device lookup: an app too old to speak to this relay is
+	// told so whatever its record says, and it costs the store nothing.
+	if level < s.protocolMin.Load() {
+		s.refuseOutdated(w)
 		return
 	}
 

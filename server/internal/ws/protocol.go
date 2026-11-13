@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -38,4 +39,34 @@ func protocolLevel(r *http.Request) (uint32, error) {
 		return 0, errBadProtocolLevel
 	}
 	return uint32(n), nil
+}
+
+// outdatedBody is the body of a refusal for age. An app recognises the
+// refusal by it, not by the status: the WebSocket library answers 426 to any
+// request that is not an upgrade, so a plain GET from an app the relay
+// accepts gets a 426 too.
+type outdatedBody struct {
+	Error       string `json:"error"`
+	ProtocolMin uint32 `json:"protocol_min"`
+	ProtocolMax uint32 `json:"protocol_max"`
+}
+
+// refuseOutdated answers an app below the relay's minimum level (SPEC §5.3).
+// A plain GET of the endpoint gets the same answer as an upgrade, because a
+// React Native WebSocket cannot read the status of a refused upgrade and asks
+// again that way.
+func (s *Server) refuseOutdated(w http.ResponseWriter) {
+	body, err := json.Marshal(outdatedBody{
+		Error:       "client_outdated",
+		ProtocolMin: s.protocolMin.Load(),
+		ProtocolMax: ProtocolMax,
+	})
+	if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusUpgradeRequired)
+	_, _ = w.Write(body)
 }
