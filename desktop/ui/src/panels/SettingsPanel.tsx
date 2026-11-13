@@ -192,21 +192,6 @@ export function SettingsPanel({
           <label className="toggle">
             <input
               type="checkbox"
-              checked={settings.hide_space_banners}
-              onChange={(e) => void patch({ hide_space_banners: e.target.checked })}
-            />
-            <span className="text">
-              <strong>Hide out-of-space banners</strong>
-              <span className="why">
-                Stops the banners that say the store is almost full or that history removed older entries
-                to make room. A save or upload the relay refuses for lack of room is still shown. Off by
-                default.
-              </span>
-            </span>
-          </label>
-          <label className="toggle">
-            <input
-              type="checkbox"
               checked={settings.autostart}
               disabled={!settings.autostart_supported}
               onChange={(e) => void patch({ autostart: e.target.checked })}
@@ -350,6 +335,27 @@ export function SettingsPanel({
       </section>
 
       <UpdatesSection settings={settings} onPatch={patch} lastEvent={lastEvent} />
+
+      <section className="group">
+        <h2>Miscellaneous</h2>
+        <div className="list">
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={settings.hide_space_banners}
+              onChange={(e) => void patch({ hide_space_banners: e.target.checked })}
+            />
+            <span className="text">
+              <strong>Hide out-of-space banners</strong>
+              <span className="why">
+                Stops the banners that say the store is almost full or that history removed older entries
+                to make room. A save or upload the relay refuses for lack of room is still shown. Off by
+                default.
+              </span>
+            </span>
+          </label>
+        </div>
+      </section>
 
       <section className="group">
         <h2>Group</h2>
