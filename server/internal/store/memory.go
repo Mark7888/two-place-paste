@@ -518,7 +518,7 @@ func (m *MemoryStore) DeleteOffer(_ context.Context, code string) error {
 }
 
 // TouchLastSeen implements Store.
-func (m *MemoryStore) TouchLastSeen(_ context.Context, deviceID string) error {
+func (m *MemoryStore) TouchLastSeen(_ context.Context, deviceID string, protocolLevel uint32) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -527,6 +527,7 @@ func (m *MemoryStore) TouchLastSeen(_ context.Context, deviceID string) error {
 		return ErrNotFound
 	}
 	dev.LastSeen = m.now()
+	dev.ProtocolLevel = protocolLevel
 	m.devices[deviceID] = dev
 	return nil
 }

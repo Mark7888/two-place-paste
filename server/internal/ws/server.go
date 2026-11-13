@@ -136,11 +136,16 @@ func New(st Store, en Entries, opts Options) *Server {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	level, err := protocolLevel(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	// Identity is established before the upgrade, so an unknown device never
 	// gets a socket at all.
 	var device store.Device
 	if deviceID := r.URL.Query().Get("device_id"); deviceID != "" {
-		var err error
 		device, err = s.store.GetDevice(ctx, deviceID)
 		if errors.Is(err, store.ErrNotFound) {
 			// A device whose group the admin deleted is told so, for as long
@@ -176,6 +181,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sock.SetReadLimit(s.entries.FrameMaxBytes() + frameOverhead)
 
 	c := newConn(sock, s.logger)
+	c.protocolLevel = level
 	defer func() {
 		s.hub.unregister(c)
 		c.closeWith(websocket.StatusNormalClosure, "")
@@ -231,7 +237,7 @@ func (s *Server) AnnounceRename(ctx context.Context, groupID, name string) {
 // onAuthenticated runs the per-connection work that follows a successful
 // identity check.
 func (s *Server) onAuthenticated(ctx context.Context, c *conn, device store.Device) {
-	if err := s.store.TouchLastSeen(ctx, device.ID); err != nil {
+	if err := s.store.TouchLastSeen(ctx, device.ID, c.protocolLevel); err != nil {
 		s.logger.WarnContext(ctx, "recording last seen failed",
 			slog.String("device_id", device.ID), slog.Any("error", err))
 	}

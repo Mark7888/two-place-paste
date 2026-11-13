@@ -361,6 +361,9 @@ func (s *RedisStore) GetDevice(ctx context.Context, deviceID string) (Device, er
 		PublicKey: []byte(fields["pubkey"]),
 		CreatedAt: msTime(fields["created_at"]),
 		LastSeen:  msTime(fields["last_seen"]),
+		// Absent on a record no connection has touched since levels were
+		// recorded; that reads as zero, "not recorded".
+		ProtocolLevel: parseLevel(fields["protocol_level"]),
 	}, nil
 }
 
@@ -607,7 +610,7 @@ func (s *RedisStore) DeleteOffer(ctx context.Context, code string) error {
 }
 
 // TouchLastSeen implements Store.
-func (s *RedisStore) TouchLastSeen(ctx context.Context, deviceID string) error {
+func (s *RedisStore) TouchLastSeen(ctx context.Context, deviceID string, protocolLevel uint32) error {
 	// HSet on a missing hash would create a device record with only this
 	// field, so the write is conditional on the record still existing: a
 	// revoked device must not be resurrected by its own reconnect.
@@ -618,10 +621,24 @@ func (s *RedisStore) TouchLastSeen(ctx context.Context, deviceID string) error {
 	if n == 0 {
 		return ErrNotFound
 	}
-	if err := s.rdb.HSet(ctx, deviceKey(deviceID), "last_seen", msString(s.now())).Err(); err != nil {
+	if err := s.rdb.HSet(ctx, deviceKey(deviceID),
+		"last_seen", msString(s.now()),
+		"protocol_level", strconv.FormatUint(uint64(protocolLevel), 10),
+	).Err(); err != nil {
 		return fmt.Errorf("touch last seen of device %s: %w", deviceID, err)
 	}
 	return nil
+}
+
+// parseLevel reads a stored protocol level. Anything unreadable is zero, "not
+// recorded": the field is informational, and a bad value must not make the
+// device itself unreadable.
+func parseLevel(s string) uint32 {
+	n, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return 0
+	}
+	return uint32(n)
 }
 
 // msString renders a timestamp as unix milliseconds, UTC

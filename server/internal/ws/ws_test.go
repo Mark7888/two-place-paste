@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -123,9 +124,20 @@ type client struct {
 func (h *harness) dial(t *testing.T, deviceID string) *client {
 	t.Helper()
 
-	url := h.url
+	query := url.Values{}
 	if deviceID != "" {
-		url += "?device_id=" + deviceID
+		query.Set("device_id", deviceID)
+	}
+	return h.dialQuery(t, query)
+}
+
+// dialQuery connects with the given query parameters on the WebSocket URL.
+func (h *harness) dialQuery(t *testing.T, query url.Values) *client {
+	t.Helper()
+
+	url := h.url
+	if len(query) > 0 {
+		url += "?" + query.Encode()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

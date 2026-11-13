@@ -62,7 +62,7 @@ type Store interface {
 	GetOffer(ctx context.Context, code string) (store.PairingOffer, error)
 	AcceptOffer(ctx context.Context, code, groupID string, publicKey, wrappedGroupKey []byte) (store.PairingOffer, store.Device, error)
 	DeleteOffer(ctx context.Context, code string) error
-	TouchLastSeen(ctx context.Context, deviceID string) error
+	TouchLastSeen(ctx context.Context, deviceID string, protocolLevel uint32) error
 	DeviceTombstoned(ctx context.Context, deviceID string) (bool, error)
 }
 
