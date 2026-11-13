@@ -56,6 +56,7 @@ import { StoreScreen } from './screens/StoreScreen';
 import { SetupScreen } from './screens/SetupScreen';
 import { SyncScreen } from './screens/SyncScreen';
 import { colors, styles } from './theme';
+import { SpaceNotices } from './SpaceNotices';
 
 type Tab = 'sync' | 'history' | 'store' | 'devices' | 'groups' | 'pairing' | 'settings';
 
@@ -134,6 +135,8 @@ function Shell(): React.JSX.Element {
           <Text style={styles.demoBannerText}>Demo — nothing leaves this phone</Text>
         </View>
       )}
+      {/* Over every tab: running out of room is news wherever the user is. */}
+      <SpaceNotices />
       <View style={{ flex: 1 }}>
         <Screen />
       </View>

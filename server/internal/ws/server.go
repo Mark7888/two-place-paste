@@ -62,6 +62,10 @@ type Options struct {
 	// Items is the store (SPEC §4.6). Without it every store request is
 	// answered as unknown, as by a relay that predates the store.
 	Items StoreItems
+
+	// OperatorURL is the relay operator's website, sent to every group in
+	// GroupInfoResponse (SPEC §4.4). Empty sends none.
+	OperatorURL string
 }
 
 // Server is the WebSocket transport and its protocol handlers.
@@ -79,6 +83,7 @@ type Server struct {
 	originPatterns      []string
 	pingInterval        time.Duration
 	now                 func() time.Time
+	operatorURL         string
 
 	// afterPairingNotice runs once the join notice has been queued for the
 	// inviter. Only tests set it, to drive the inviter's reply at the exact
@@ -101,6 +106,7 @@ func New(st Store, en Entries, opts Options) *Server {
 		originPatterns:      opts.OriginPatterns,
 		pingInterval:        opts.PingInterval,
 		now:                 opts.Now,
+		operatorURL:         opts.OperatorURL,
 	}
 	if s.logger == nil {
 		s.logger = slog.Default()

@@ -30,6 +30,8 @@ export const colors = {
   dangerSoft: 'rgba(242, 112, 90, 0.14)',
   ok: '#5bc98d',
   okSoft: 'rgba(91, 201, 141, 0.14)',
+  warn: '#e8b04b',
+  warnSoft: 'rgba(232, 176, 75, 0.14)',
   scrim: 'rgba(4, 7, 10, 0.72)',
 };
 

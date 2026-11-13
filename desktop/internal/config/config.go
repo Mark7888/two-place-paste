@@ -109,6 +109,12 @@ type Settings struct {
 	// active one stays active and the parked ones stay in the keystore.
 	MultiGroup bool `json:"multi_group"`
 
+	// HideSpaceBanners hides the out-of-space banners: the store being nearly
+	// full and history entries removed early to make room. Those are advice
+	// and nothing failed. A refused upload or save is still shown, as a
+	// popup. Off by default.
+	HideSpaceBanners bool `json:"hide_space_banners,omitempty"`
+
 	// SetupDone records that the first-run setup in the UI was finished. Until
 	// it is, an unpaired install opens the setup wizard over the app.
 	SetupDone bool `json:"setup_done"`

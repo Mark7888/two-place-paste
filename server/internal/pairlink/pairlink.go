@@ -24,10 +24,13 @@
 package pairlink
 
 import (
+	"bytes"
 	"fmt"
+	"html"
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/url"
 
 	webpair "github.com/Mark7888/two-place-paste/server/web/pair"
 )
@@ -35,6 +38,10 @@ import (
 // Server serves the hand-off page.
 type Server struct {
 	logger *slog.Logger
+
+	// operator is the footer line naming the relay operator's website,
+	// already escaped, or empty when there is none.
+	operator string
 }
 
 // New builds a Server. A nil logger means slog.Default.
@@ -43,6 +50,29 @@ func New(logger *slog.Logger) *Server {
 		logger = slog.Default()
 	}
 	return &Server{logger: logger}
+}
+
+// operatorMarker is where page.html takes the operator's footer line.
+const operatorMarker = "<!--operator-->"
+
+// WithOperatorURL adds a footer line to the page that names the relay
+// operator's website and links to it (SPEC §4.4): someone who scanned a
+// pairing code without the app learns who runs the relay they are about to
+// trust. The link is the plain URL. The page cannot know the group — the
+// code is in the fragment — so no group id is added. An empty URL adds
+// nothing; config has already refused anything but an absolute http(s) URL.
+func (s *Server) WithOperatorURL(u string) *Server {
+	if u == "" {
+		s.operator = ""
+		return s
+	}
+	host := u
+	if p, err := url.Parse(u); err == nil && p.Host != "" {
+		host = p.Hostname()
+	}
+	s.operator = `<p>This relay is run by ` + html.EscapeString(host) +
+		` · <a href="` + html.EscapeString(u) + `" rel="noopener noreferrer">Open operator website</a></p>`
+	return s
 }
 
 // Register implements httpapi.Registrar.
@@ -81,7 +111,7 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 	// The page is the same bytes for everyone; what makes a visit unique is
 	// the fragment, which is not part of the response.
 	h.Set("Cache-Control", "no-store")
-	_, _ = w.Write(body)
+	_, _ = w.Write(bytes.Replace(body, []byte(operatorMarker), []byte(s.operator), 1))
 }
 
 func (s *Server) asset(name, contentType string) http.HandlerFunc {

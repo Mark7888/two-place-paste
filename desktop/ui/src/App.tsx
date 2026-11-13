@@ -13,6 +13,7 @@ import { Icon, type IconName } from "./components/Icon";
 import { PauseNotice } from "./components/PauseNotice";
 import { SessionLostDialog } from "./components/SessionLostDialog";
 import { SetupWizard } from "./components/SetupWizard";
+import { SpaceNotices, operatorHost } from "./components/SpaceNotices";
 import { bytes } from "./format";
 import { SyncPanel } from "./panels/SyncPanel";
 import { HistoryPanel } from "./panels/HistoryPanel";
@@ -227,6 +228,21 @@ export function App() {
             <span>{t.label}</span>
           </button>
         ))}
+        {status?.operator_url ? (
+          <a
+            className="rail-link"
+            href={status.operator_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`Open operator website (${operatorHost(status.operator_url)})`}
+          >
+            <Icon name="external" size={18} />
+            <span className="text">
+              Open operator website
+              <small>{operatorHost(status.operator_url)}</small>
+            </span>
+          </a>
+        ) : null}
       </nav>
 
       <main className="content">
@@ -277,6 +293,18 @@ export function App() {
                 Dismiss
               </button>
             </div>
+          ) : null}
+          {status ? (
+            <SpaceNotices
+              space={status.space}
+              operatorUrl={status.operator_url}
+              onDismiss={(banner) => {
+                void api
+                  .dismissSpace(banner)
+                  .then(setStatus)
+                  .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+              }}
+            />
           ) : null}
           {transfer ? (
             <div className="transfer" role="status">

@@ -17,6 +17,10 @@ type healthJSON struct {
 	UptimeSeconds int64  `json:"uptime_seconds"`
 	GoVersion     string `json:"go_version"`
 
+	// OperatorURL is the operator's website as configured, without a group
+	// id: the admin opens it as is. Empty when none is set.
+	OperatorURL string `json:"operator_url"`
+
 	// Redis is nil when no Redis client is wired.
 	Redis *redisHealthJSON `json:"redis"`
 }
@@ -42,6 +46,7 @@ func (s *Server) health(ctx context.Context, now time.Time) *healthJSON {
 		Version:       s.version,
 		UptimeSeconds: int64(now.Sub(s.startedAt) / time.Second),
 		GoVersion:     runtime.Version(),
+		OperatorURL:   s.operatorURL,
 	}
 	if v.Version == "" {
 		v.Version = "unknown"

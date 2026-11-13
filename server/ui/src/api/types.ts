@@ -79,6 +79,9 @@ export interface Health {
   version: string;
   uptime_seconds: number;
   go_version: string;
+  /** The operator's website (TPP_RELAY_OPERATOR_URL) as configured, or empty
+   *  when none is set. The admin opens it as is, without a group id. */
+  operator_url: string;
   redis: {
     policy: string;
     policy_state: HealthState;

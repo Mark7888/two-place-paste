@@ -29,6 +29,7 @@ Sizes take a plain byte count or a unit: `500MB`, `5GiB`, `1.5GiB`.
 | `TPP_API_READ_RATE`, `TPP_API_READ_BURST` | `10`, `60` | Each [admin API](/two-place-paste/self-hosting/api/) key's budget for reads (`GET`): requests a second, refilled continuously, and how many it may spend at once. |
 | `TPP_API_WRITE_RATE`, `TPP_API_WRITE_BURST` | `2`, `10` | The same for every other request: creating, changing, purging and deleting. |
 | `TPP_SOURCE_URL` | `https://github.com/Mark7888/two-place-paste` | Where the **Source code** link on the admin and pairing pages points. If you run a modified relay for other people, set it to your version's source — see [License](/two-place-paste/self-hosting/overview/#license). |
+| `TPP_RELAY_OPERATOR_URL` | unset | Your website, where people can ask for more room. The apps link to it with `?group_id=<the group's id>` added. |
 
 ## Redis
 

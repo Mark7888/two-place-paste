@@ -425,7 +425,8 @@ func (s *Server) handlePairingOfferAccept(ctx context.Context, env *tppv1.Envelo
 }
 
 // handleGroupInfo returns the group's display name, as the server admin set
-// it. It is admin-chosen display text, not clipboard content (SPEC §2.3).
+// it, and the operator's website. Both are chosen by whoever runs the relay,
+// not clipboard content (SPEC §2.3, §4.4).
 func (s *Server) handleGroupInfo(ctx context.Context, env *tppv1.Envelope, groupID string) ([]byte, error) {
 	group, err := s.store.GetGroup(ctx, groupID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -435,7 +436,8 @@ func (s *Server) handleGroupInfo(ctx context.Context, env *tppv1.Envelope, group
 		return nil, fmt.Errorf("read group info: %w", err)
 	}
 	return encode(env.GetId(), tppv1.MessageType_MESSAGE_TYPE_GROUP_INFO_RESPONSE, &tppv1.GroupInfoResponse{
-		Name: group.Name,
+		Name:        group.Name,
+		OperatorUrl: s.operatorURL,
 	})
 }
 

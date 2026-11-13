@@ -230,12 +230,14 @@ func serve(args []string) error {
 	sweeper.Also("sweep the store", storeSvc.Sweep)
 
 	wsSrv = ws.New(persistent, entrySvc, ws.Options{
-		Logger:     logger,
-		PairingTTL: config.PairingTokenTTL,
-		Items:      storeSvc,
+		Logger:      logger,
+		PairingTTL:  config.PairingTokenTTL,
+		Items:       storeSvc,
+		OperatorURL: cfg.OperatorURL,
 	})
 	adminSrv, err := admin.New(persistent, admin.Options{
 		PublicBaseURL: cfg.PublicBaseURL,
+		OperatorURL:   cfg.OperatorURL,
 		SessionTTL:    cfg.Admin.SessionTTL,
 		Password:      cfg.Admin.Password,
 		PasswordHash:  cfg.Admin.PasswordHash,
@@ -279,7 +281,7 @@ func serve(args []string) error {
 	// The pairing hand-off page: three static files behind "GET /pair", which
 	// is what a scanned pairing link lands on (SPEC §3.2). It holds no state
 	// and never sees a code — the code is in the fragment.
-	pairSrv := pairlink.New(logger)
+	pairSrv := pairlink.New(logger).WithOperatorURL(cfg.OperatorURL)
 
 	// The "Source code" link on the admin and pairing pages (AGPL-3.0 §13).
 	sourceSrv := sourcelink.New(cfg.SourceURL)

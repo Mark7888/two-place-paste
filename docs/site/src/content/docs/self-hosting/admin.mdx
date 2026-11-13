@@ -116,7 +116,7 @@ that should share a clipboard).
 - **Health**: the relay's version and uptime, and how Redis is set up. Redis must run with
   `maxmemory-policy volatile-lru` and AOF on (see [Docker](/two-place-paste/self-hosting/docker/));
   the card marks anything else, because `allkeys-lru` or no AOF can silently lose groups. A managed
-  Redis that refuses `CONFIG GET` shows **unknown**.
+  Redis that refuses `CONFIG GET` shows **unknown**. It also links to `TPP_RELAY_OPERATOR_URL`.
 - **Storage**: the backend and its limits, and when the last cleanup sweep ran. **Sweep now** runs
   one straight away.
 

@@ -93,3 +93,43 @@ func TestGroupNameAndDeletion(t *testing.T) {
 	}
 	waitFor(t, "the offline copy to hear its group was deleted", laterDeleted.Load)
 }
+
+// TestOperatorURL: a device learns the operator's website the relay is
+// configured with, and links to it with its group's id added (SPEC §4.4).
+func TestOperatorURL(t *testing.T) {
+	const site = "https://tpp.example.com/something?lang=en"
+	relay := startRelay(t, "TPP_RELAY_OPERATOR_URL="+site)
+	ctx := testContext(t)
+
+	urls := make(chan string, 4)
+	desktop, store := newClient(t, "desktop", tppclient.Options{
+		Handlers: tppclient.Handlers{OnOperatorURL: func(u string) { urls <- u }},
+	})
+	if got := desktop.OperatorLink(); got != "" {
+		t.Errorf("OperatorLink() before joining = %q, want none", got)
+	}
+	if err := desktop.CreateGroup(ctx, relay.creationURL(t, "Anna")); err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	if err := desktop.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	select {
+	case got := <-urls:
+		if got != site {
+			t.Errorf("OnOperatorURL(%q), want %q", got, site)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the client never learned the operator's website")
+	}
+	if got := desktop.OperatorURL(); got != site {
+		t.Errorf("OperatorURL() = %q, want %q", got, site)
+	}
+	saved, err := tppclient.LoadState(store, "")
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if want := site + "&group_id=" + saved.GroupID; desktop.OperatorLink() != want {
+		t.Errorf("OperatorLink() = %q, want %q", desktop.OperatorLink(), want)
+	}
+}

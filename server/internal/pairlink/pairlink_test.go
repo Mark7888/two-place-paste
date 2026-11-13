@@ -116,3 +116,52 @@ func TestPageLinksToSource(t *testing.T) {
 		t.Error("the pairing page has no link to /source")
 	}
 }
+
+// TestPageOperatorLine: with an operator URL the footer names its host and
+// links to it as is, with no group id, since the page cannot know the group;
+// without one there is no line at all. The URL is escaped into the page.
+func TestPageOperatorLine(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name, url string
+		want      []string
+		wantNot   []string
+	}{
+		{
+			name:    "none",
+			wantNot: []string{"Open operator website", "<!--operator-->", "run by"},
+		},
+		{
+			name: "set",
+			url:  "https://tpp.example.com/something?a=1&b=2",
+			want: []string{
+				"This relay is run by tpp.example.com",
+				`href="https://tpp.example.com/something?a=1&amp;b=2"`,
+				`rel="noopener noreferrer"`,
+				"Open operator website",
+			},
+			wantNot: []string{"group_id", "<!--operator-->"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(httpapi.New(pairlink.New(nil).WithOperatorURL(tt.url)))
+			t.Cleanup(srv.Close)
+			_, body := get(t, srv, "/pair")
+			for _, w := range tt.want {
+				if !strings.Contains(body, w) {
+					t.Errorf("page does not contain %q", w)
+				}
+			}
+			for _, w := range tt.wantNot {
+				if strings.Contains(body, w) {
+					t.Errorf("page contains %q", w)
+				}
+			}
+			if !strings.Contains(body, `href="/source"`) {
+				t.Error("the pairing page lost its link to /source")
+			}
+		})
+	}
+}

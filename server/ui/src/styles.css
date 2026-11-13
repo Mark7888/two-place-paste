@@ -337,7 +337,7 @@ button.link {
 
 button.link:hover { color: var(--fg); background: var(--line-soft); filter: none; }
 
-button.small { height: 2.1rem; padding: 0 0.7rem; font-size: 0.85rem; }
+button.small, a.button.small { height: 2.1rem; padding: 0 0.7rem; font-size: 0.85rem; }
 
 button.danger {
   color: var(--error);
@@ -1094,7 +1094,7 @@ button.link-button:active { transform: none; }
 
   /* Fingers, not pointers: every control at least 44px tall. */
   button, a.button { min-height: 2.75rem; }
-  button.small { min-height: 2.75rem; padding: 0 0.85rem; font-size: 0.9rem; }
+  button.small, a.button.small { min-height: 2.75rem; padding: 0 0.85rem; font-size: 0.9rem; }
   .affix { height: 2.4rem; min-height: 0; }
   .table-search .clear { width: 2.4rem; height: 2.4rem; min-height: 0; }
   .pager button { min-width: 2.75rem; }
