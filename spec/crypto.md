@@ -489,7 +489,7 @@ and uses only the active group's.
 |---|---|
 | Entry epoch **equals** the client's epoch | Decrypt normally. |
 | Entry epoch is **older** | **Skip silently** (SPEC §3.3). No error to the user, no retry, no attempt to keep old keys around. Such entries expire within 24 hours. |
-| Entry epoch is **newer** | The client is behind a rekey. It MUST fetch its new wrapped key, unwrap it (§4.4), install the new epoch, and only then decrypt. If no wrapped key is available, skip the entry. |
+| Entry epoch is **newer** | The client is behind a rekey. It MUST fetch its new wrapped key, unwrap it (§4.4), check it (§7.1), install the new epoch, and only then decrypt. If no wrapped key is available, skip the entry. |
 | Decryption fails at the client's own epoch | Report it. This is corruption or tampering, not a normal condition. |
 
 A client MUST NOT retain group keys from previous epochs in order to read older
@@ -504,6 +504,50 @@ an older epoch.
 
 **Local clipboard is never touched by a rekey** (SPEC §3.3): installing a new
 epoch is a key operation only.
+
+### 7.1 Checking a new epoch's key
+
+A wrapped key (§4) proves only that it was made *for* this device. The device's
+public key is no secret, so anyone — the relay included — can wrap a key of their
+own choosing to it at any epoch. A client that installed every key it was handed
+would let a relay move it onto a key the relay knows.
+
+What the relay cannot make is a store link (§7a.2): `link[E]` seals the store key
+of `E-1`, so making one takes the group key of `E-1`. A client therefore MUST NOT
+install a group key for an epoch `E` above its current epoch `C` until the links
+chain it back to the key it already holds:
+
+```
+1. store_key[E] = StoreKey(candidate_group_key, E)                  (§7a.1)
+2. for e = E down to C+1:
+       store_key[e-1] = open link[e] with store_key[e]                (§7a.2)
+3. accept only if store_key[C] == StoreKey(current_group_key, C)
+```
+
+- The links come from the relay (SPEC §6b). A link that is missing, will not open,
+  or ends at a different key fails the check.
+- The comparison in step 3 is constant-time.
+- On failure the client keeps its current epoch, does not install the key, and
+  tells the user that the relay offered a key it could not verify. When the
+  relay offers the key again, such as on the next connect, the client checks it
+  again from the start; it never installs a key that has not passed. A device
+  whose every later epoch fails has to leave the group and pair again, which
+  loses nothing, because a new device starts empty and reads the store from its
+  new epoch.
+- A client that skipped several epochs walks every link between them; one check
+  covers them all.
+- The relay serves the links whether or not the group's store is turned on
+  (SPEC §4.6). A relay that does not hand them over — one without
+  `StoreLinksRequest`, which predates the store, or one from before this rule,
+  which refuses them while the store is off — cannot pass the check, and a
+  client refuses every new epoch on it rather than install a key it cannot
+  verify. A relay can claim to be either, so "no links" is never read as
+  "nothing to check".
+
+This check does not cover a device's **first** key, the one pairing hands it: it
+has no earlier key to chain to (§11.4). Nor does it stop a device revoked at `E`,
+which held the key of `E-1`, from making a link the check accepts; with the relay's
+help it can forge a new epoch for the devices it was revoked from (§11.4).
 
 ---
 
@@ -716,6 +760,7 @@ Mapping this document onto the group lifecycle in SPEC §3:
 | §3.2 joiner-emitted step 4 — member accepts | wrap the current group key at the current epoch | §4.2 |
 | §3.3 step 3 — rekey | generate a new group key at epoch+1, wrap once per remaining device, seal the store link | §4.1, §4.2, §7a.2 |
 | §3.3 step 4 — atomic upload | all wrapped keys in one request; the server applies them or none | server-side, Phase 3a |
+| §3.3 — a remaining device picks up the new key | unwrap, walk the store links back to its current key, install | §4.4, §7.1, §7a.2 |
 | §6 — put an entry | choose the entry id, frame, derive content key, seal | §5.3, §6, §5.1, §5.2 |
 | §6 — read an entry | epoch check, open, decode | §7, §5.4, §6 |
 | §6b — save a store item | seal a container, wrap its keys, seal the record | §7a.4, §7a.3, §7a.5 |
@@ -919,8 +964,19 @@ dependency this profile requires is `golang.org/x/crypto/chacha20poly1305`.
   it can drop them, and clients have no way to detect that.
 - **A malicious server lying about the device roster.** A revoking device wraps
   the new key to the public keys the server hands it (SPEC §3.3 step 1). SPEC
-  §3.3 step 2 mitigates this at the UI level — the user confirms a named list of
-  devices before the rekey — not cryptographically.
+  §3.3 step 2 mitigates this at the UI level — the user confirms a list of
+  devices, each with its name and the fingerprint of its public key, before the
+  rekey — not cryptographically.
+- **A malicious server choosing a joining device's key.** A joining device's
+  public key is no secret, so the server can wrap a key of its own to it, and the
+  joiner cannot tell who wrapped the key it receives. The member that hands the
+  key over is protected (SPEC §3.2: the user confirms the joiner's name and
+  fingerprint first); the joiner is not, and §7.1 has no earlier key to check
+  this first one against.
+- **A revoked device working with the server.** It held the key of the epoch it
+  was revoked from, so it can make a link that passes §7.1 for a key of its own,
+  and the server can hand that key to the remaining devices instead of the real
+  one.
 - **Compromise of a device.** It holds the group key and can read everything in
   the group until revoked and re-keyed.
 - **Store items saved before a revocation.** The revoked device held their keys
@@ -953,3 +1009,4 @@ cannot be confused on the wire.
 | 1.2 | §8: two rows for joiner-emitted pairing, where the code travels from the device without a group key to a member, and a note that the wrap target may be learned from either side's out-of-band code. The wrap is §4.2 exactly as it stands: no byte layout, domain-separation string, derivation or primitive changed, the profile is still `tpp-crypto-v1`, the version byte is still `0x01`, and every vector in `spec/vectors/` is byte-identical. It lands with the `PairingOffer` message types that make the other direction expressible. |
 | 1.3 | Additions only, for the store (SPEC §6b): §5.5.1 header version 2, §7a store keys, links, item keys and the metadata record, a note in §7, rows in §1, §2.3, §8 and §11.4, and three vector suites. No existing byte layout, domain-separation string, derivation or primitive changed, so the profile is still `tpp-crypto-v1` and the version byte is still `0x01`: the header has carried its own version byte since §5.5 so that it could grow this way, and the new strings name new purposes. Every existing vector is byte-identical except two failure vectors: `header-decode-unknown-version` now uses `0xff`, because `0x02` is a version now, and `header-wrong-length` says "neither 297 nor 553 bytes". A v1.2 reader rejects a v2 header and shows the entry's type as unknown, the behaviour §5.5 already specified. |
 | 1.4 | §10.1: how an installation keeps several groups, one active and the others parked, and a note in §7 that the one `(epoch, group_key)` pair is per group. No byte layout, domain-separation string, derivation or primitive changed, so the profile is still `tpp-crypto-v1`, the version byte is still `0x01` and every vector in `spec/vectors/` is byte-identical. It states storage rules for a client feature and has nothing on the wire. |
+| 1.5 | §7.1: a client checks a new epoch's key against the store links before it installs it, and refuses it when they are missing; the relay serves the links whether or not the store is on. Two rows in §11.4: the relay choosing a joining device's key, and a revoked device working with the relay; the roster row names the fingerprint the user confirms. No byte layout, domain-separation string, derivation or primitive changed — the check opens links exactly as §7a.6 already does — so the profile is still `tpp-crypto-v1`, the version byte is still `0x01` and every vector in `spec/vectors/` is byte-identical. |
