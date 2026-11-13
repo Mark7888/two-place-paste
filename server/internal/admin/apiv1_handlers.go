@@ -193,10 +193,16 @@ func (a apiServer) groupDetail(ctx context.Context, g store.Group) apiv1.GroupDe
 			DefaultBytes: st.DefaultLimitBytes,
 		}
 	}
+	out.Protocol = apiv1.ProtocolRange{Min: int64(v.Protocol.Min), Max: int64(v.Protocol.Max)}
 	for _, d := range v.Devices {
-		out.Devices = append(out.Devices, apiv1.Device{
+		dev := apiv1.Device{
 			ShortId: d.ShortID, Name: d.Name, CreatedAt: d.CreatedAt, LastSeen: d.LastSeen, Online: d.Online,
-		})
+		}
+		if d.ProtocolLevel != nil {
+			level := int64(*d.ProtocolLevel)
+			dev.ProtocolLevel = &level
+		}
+		out.Devices = append(out.Devices, dev)
 	}
 	return out
 }

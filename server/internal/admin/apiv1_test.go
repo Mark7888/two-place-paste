@@ -528,3 +528,62 @@ func TestAPINeverLogsAKey(t *testing.T) {
 		t.Errorf("the log holds key material:\n%s", out)
 	}
 }
+
+// TestAPIGroupShowsProtocolLevels: the public API reports each device's
+// protocol level and the relay's range exactly as the admin page does
+// (SPEC §5.3).
+func TestAPIGroupShowsProtocolLevels(t *testing.T) {
+	t.Parallel()
+	live := newFakeLive()
+	f := newFixtureWithOptions(t, "https://tpp.example.com", func(o *admin.Options) {
+		o.Live = live
+		o.Protocol = admin.ProtocolRange{Min: 1, Max: 2}
+	})
+	key := f.newKey("admin")
+	ctx := context.Background()
+
+	tok, err := f.store.CreateToken(ctx, "Family")
+	if err != nil {
+		t.Fatalf("CreateToken() error = %v", err)
+	}
+	created, err := f.store.CreateGroup(ctx, tok.Value, store.NewDevice{Name: "laptop", PublicKey: []byte("pk"), WrappedGroupKey: []byte("wk")})
+	if err != nil {
+		t.Fatalf("CreateGroup() error = %v", err)
+	}
+	path := "/api/v1/groups/" + admin.HandleOf(tok.Value)
+
+	read := func() apiv1.GroupDetail {
+		t.Helper()
+		resp := f.api(key, "", http.MethodGet, path, nil)
+		wantStatus(t, resp, http.StatusOK)
+		var got apiv1.GroupDetail
+		if err := json.Unmarshal([]byte(readBody(t, resp)), &got); err != nil {
+			t.Fatalf("decode group: %v", err)
+		}
+		return got
+	}
+
+	// Never connected since levels were recorded: null.
+	got := read()
+	if got.Protocol.Min != 1 || got.Protocol.Max != 2 {
+		t.Errorf("protocol = %+v, want [1, 2]", got.Protocol)
+	}
+	if len(got.Devices) != 1 || got.Devices[0].ProtocolLevel != nil {
+		t.Fatalf("devices = %+v, want one with no level", got.Devices)
+	}
+
+	// Last connected at level 1, now online at level 2.
+	if err := f.store.TouchLastSeen(ctx, created.Device.ID, 1); err != nil {
+		t.Fatalf("TouchLastSeen() error = %v", err)
+	}
+	if got := read().Devices[0].ProtocolLevel; got == nil || *got != 1 {
+		t.Errorf("offline protocol_level = %v, want 1", got)
+	}
+	live.mu.Lock()
+	live.online[created.Device.ID] = true
+	live.levels[created.Device.ID] = 2
+	live.mu.Unlock()
+	if got := read().Devices[0].ProtocolLevel; got == nil || *got != 2 {
+		t.Errorf("online protocol_level = %v, want 2", got)
+	}
+}

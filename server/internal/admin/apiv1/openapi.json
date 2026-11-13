@@ -2001,6 +2001,7 @@
         "required": [
           "group",
           "devices",
+          "protocol",
           "limit",
           "store_limit",
           "problems"
@@ -2014,6 +2015,9 @@
             "items": {
               "$ref": "#/components/schemas/Device"
             }
+          },
+          "protocol": {
+            "$ref": "#/components/schemas/ProtocolRange"
           },
           "limit": {
             "$ref": "#/components/schemas/LimitSettings"
@@ -2041,7 +2045,8 @@
           "name",
           "created_at",
           "last_seen",
-          "online"
+          "online",
+          "protocol_level"
         ],
         "properties": {
           "short_id": {
@@ -2066,6 +2071,44 @@
           },
           "online": {
             "type": "boolean"
+          },
+          "protocol_level": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 1,
+            "description": "The protocol level the device's app speaks: its open connection's while it is online, otherwise the one it last connected with. Null when the device has not connected since the relay began recording levels. Compare it with the group detail's `protocol` range.",
+            "examples": [
+              1
+            ]
+          }
+        }
+      },
+      "ProtocolRange": {
+        "type": "object",
+        "description": "The protocol levels this relay accepts. A device below `min` cannot connect until its app is updated; one below `max` works without what the newer levels added.",
+        "required": [
+          "min",
+          "max"
+        ],
+        "properties": {
+          "min": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "examples": [
+              1
+            ]
+          },
+          "max": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "examples": [
+              1
+            ]
           }
         }
       },

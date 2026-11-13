@@ -653,9 +653,14 @@ type Device struct {
 	LastSeen  *time.Time `json:"last_seen"`
 
 	// Name Examples: Anna's laptop
-	Name    string `json:"name"`
-	Online  bool   `json:"online"`
-	ShortId string `json:"short_id"`
+	Name   string `json:"name"`
+	Online bool   `json:"online"`
+
+	// ProtocolLevel The protocol level the device's app speaks: its open connection's while it is online, otherwise the one it last connected with. Null when the device has not connected since the relay began recording levels. Compare it with the group detail's `protocol` range.
+	//
+	// Examples: 1
+	ProtocolLevel *int64 `json:"protocol_level"`
+	ShortId       string `json:"short_id"`
 }
 
 // Group defines model for Group.
@@ -720,6 +725,9 @@ type GroupDetail struct {
 
 	// Problems Parts that could not be read. The rest of the response is still valid.
 	Problems Problems `json:"problems"`
+
+	// Protocol The protocol levels this relay accepts. A device below `min` cannot connect until its app is updated; one below `max` works without what the newer levels added.
+	Protocol ProtocolRange `json:"protocol"`
 
 	// StoreLimit The store limit settings, or null when the relay has no store.
 	StoreLimit *LimitSettings `json:"store_limit"`
@@ -879,6 +887,15 @@ type ProblemCode string
 
 // Problems Parts that could not be read. The rest of the response is still valid.
 type Problems = []string
+
+// ProtocolRange The protocol levels this relay accepts. A device below `min` cannot connect until its app is updated; one below `max` works without what the newer levels added.
+type ProtocolRange struct {
+	// Max Examples: 1
+	Max int64 `json:"max"`
+
+	// Min Examples: 1
+	Min int64 `json:"min"`
+}
 
 // PurgeResult defines model for PurgeResult.
 type PurgeResult struct {
