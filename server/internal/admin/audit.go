@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/Mark7888/two-place-paste/server/internal/store"
@@ -32,6 +33,24 @@ var auditLabels = []struct{ action, label string }{
 	{"tag.delete", "Tag deleted"},
 	{"settings.update", "Settings changed"},
 	{"sweep", "Sweep requested"},
+	{"apikey.create", "API key created"},
+	{"apikey.revoke", "API key revoked"},
+	{"apikey.limited", "API key attempts rate limited"},
+}
+
+// actorLabel says who made an audited change, in words.
+func actorLabel(e store.AuditEntry) string {
+	switch e.Actor {
+	case actorAPIKey:
+		if e.ActorName == "" {
+			return "API key " + e.ActorID
+		}
+		return "API key “" + e.ActorName + "” (" + e.ActorID + ")"
+	case actorCLI:
+		return "Command line"
+	default:
+		return "Admin page"
+	}
 }
 
 // auditLabel names an action. One this build does not know, from a newer
@@ -53,6 +72,13 @@ type auditJSON struct {
 	Target string    `json:"target"`
 	Detail string    `json:"detail"`
 	IP     string    `json:"ip"`
+
+	// Actor is "" for the admin page, "api_key" or "cli", and ActorID and
+	// ActorName name the API key. By says the same in words.
+	Actor     string `json:"actor"`
+	ActorID   string `json:"actor_id"`
+	ActorName string `json:"actor_name"`
+	By        string `json:"by"`
 }
 
 // auditListJSON is the audit screen: one page of the log, how much the
@@ -80,43 +106,59 @@ var auditTable = table[auditJSON]{
 	},
 	defaultSort: "when",
 	fields: func(e auditJSON) []string {
-		return []string{e.Action, e.Label, e.Target, e.Detail, e.IP}
+		return []string{e.Action, e.Label, e.Target, e.Detail, e.IP, e.By}
 	},
 }
 
-// audit records an admin action. The entry holds names, counts and the
-// client address — never a token value, a password or a cookie. A failure
-// to record is logged and does not undo the action.
+// audit records an admin action by the request's actor. The entry holds
+// names, counts, the client address and the actor — never a token value, a
+// password, a cookie or an API key. A failure to record is logged and does
+// not undo the action.
+//
+// A request without an actor is a sign-in or sign-out on the admin page,
+// which happens before or outside a session.
 func (s *Server) audit(r *http.Request, action, target, detail string) {
-	s.auditCtx(r.Context(), clientIP(r), action, target, detail)
+	a, ok := actorFrom(r.Context())
+	if !ok {
+		a = actor{ip: clientIP(r)}
+	}
+	s.record(r.Context(), a, action, target, detail)
 }
 
-func (s *Server) auditCtx(ctx context.Context, ip, action, target, detail string) {
+// auditCtx records an action by the actor ctx carries.
+func (s *Server) auditCtx(ctx context.Context, action, target, detail string) {
+	a, _ := actorFrom(ctx)
+	s.record(ctx, a, action, target, detail)
+}
+
+func (s *Server) record(ctx context.Context, a actor, action, target, detail string) {
 	err := s.store.AppendAudit(context.WithoutCancel(ctx), store.AuditEntry{
-		At: s.now(), Action: action, Target: target, Detail: detail, IP: ip,
+		At: s.now(), Action: action, Target: target, Detail: detail, IP: a.ip,
+		Actor: a.kind, ActorID: a.keyID, ActorName: a.keyName,
 	})
 	if err != nil {
 		s.logger.WarnContext(ctx, "record audit entry", "action", action, "error", err)
 	}
 }
 
-// handleAudit returns one page of the audit log. Beyond the list parameters
-// it takes ?action=name to show one kind of entry.
-func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, _ session) {
-	entries, err := s.store.ListAudit(r.Context(), store.AuditLimit)
+// auditListView builds one page of the audit log. Beyond the list
+// parameters it takes action=name to show one kind of entry.
+func (s *Server) auditListView(ctx context.Context, query url.Values) (auditListJSON, error) {
+	entries, err := s.store.ListAudit(ctx, store.AuditLimit)
 	if err != nil {
-		s.logger.ErrorContext(r.Context(), "list audit entries", "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "The audit log could not be loaded.")
-		return
+		s.logger.ErrorContext(ctx, "list audit entries", "error", err)
+		return auditListJSON{}, failed("The audit log could not be loaded.")
 	}
-	query := r.URL.Query()
 	action := query.Get("action")
 	rows := make([]auditJSON, 0, len(entries))
 	for _, e := range entries {
 		if action != "" && e.Action != action {
 			continue
 		}
-		rows = append(rows, auditJSON{At: e.At.UTC(), Action: e.Action, Label: auditLabel(e.Action), Target: e.Target, Detail: e.Detail, IP: e.IP})
+		rows = append(rows, auditJSON{
+			At: e.At.UTC(), Action: e.Action, Label: auditLabel(e.Action), Target: e.Target, Detail: e.Detail, IP: e.IP,
+			Actor: e.Actor, ActorID: e.ActorID, ActorName: e.ActorName, By: actorLabel(e),
+		})
 	}
 	out := auditListJSON{
 		tablePage: auditTable.run(rows, query),
@@ -125,6 +167,16 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, _ session) 
 	}
 	for _, l := range auditLabels {
 		out.Actions = append(out.Actions, auditActionJSON{Action: l.action, Label: l.label})
+	}
+	return out, nil
+}
+
+// handleAudit returns one page of the audit log.
+func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request, _ session) {
+	out, err := s.auditListView(r.Context(), r.URL.Query())
+	if err != nil {
+		writeOpError(w, err)
+		return
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -135,13 +187,22 @@ type sweepResultJSON struct {
 	Queued bool `json:"queued"`
 }
 
-// handleSweep asks for a blob sweep now.
-func (s *Server) handleSweep(w http.ResponseWriter, r *http.Request, _ session) {
+// sweepNow asks for a blob sweep now and reports whether one was queued.
+func (s *Server) sweepNow(ctx context.Context) (bool, error) {
 	if s.sweep == nil {
-		writeJSONError(w, http.StatusNotImplemented, "Sweeping is not available on this server.")
-		return
+		return false, unavailable("Sweeping is not available on this server.")
 	}
 	queued := s.sweep()
-	s.audit(r, "sweep", "", "")
+	s.auditCtx(ctx, "sweep", "", "")
+	return queued, nil
+}
+
+// handleSweep asks for a blob sweep now.
+func (s *Server) handleSweep(w http.ResponseWriter, r *http.Request, _ session) {
+	queued, err := s.sweepNow(r.Context())
+	if err != nil {
+		writeOpError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, sweepResultJSON{Queued: queued})
 }

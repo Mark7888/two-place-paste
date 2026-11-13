@@ -1,5 +1,6 @@
 // Package admin is the operator-facing surface: the login-protected admin
-// screens, and the creation-token endpoint clients POST to (SPEC §3.1, §4.4).
+// screens, the creation-token endpoint clients POST to (SPEC §3.1, §4.4), and
+// the public admin REST API under /api/v1/ (apiv1.go).
 //
 // The screens are a React app (server/ui), built into server/web/admin and
 // embedded in the binary. This package serves it and the JSON API under
@@ -11,16 +12,21 @@
 // Redis. A page per group renames it, tags it, sets its storage limit, lists
 // its devices, and purges or deletes it; the tag screen groups groups and
 // gives a whole tag a storage limit; the token screen mints, lists and revokes
-// creation tokens; the settings screen holds runtime settings; and the audit
-// screen lists what admins did (docs/internal/plans/admin-group-management.md).
+// creation tokens; the API keys screen does the same for the REST API's keys;
+// the settings screen holds runtime settings; and the audit screen lists what
+// admins did (docs/internal/plans/admin-group-management.md,
+// admin-rest-api.md).
 // There is no content access, and none can be added: the server holds only
 // ciphertext (SPEC §2.3), and nothing here shows an entry id, a content type or
 // a filename.
 //
-// Two routes are public and both are attack surface:
+// Three routes are public and all are attack surface:
 //
 //   - /admin/api/login is reachable by anyone, so it is rate limited per IP
 //     and globally, and a lockout is logged.
+//   - /api/v1/ is reachable by anyone and answers only with an API key.
+//     Failed attempts are rate limited per IP and globally, and a lockout is
+//     logged, like the login's.
 //   - /<token> is the creation endpoint. GET returns 404 so that a crawler or
 //     a link preview can never burn a token; only POST consumes one
 //     (SPEC §3.1).
@@ -32,6 +38,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -134,6 +141,22 @@ const (
 	defaultGlobalLoginRate  = time.Second * 2
 	defaultGlobalLoginBurst = 30
 
+	// defaultAPIFailureRate and defaultAPIFailureBurst bound failed API
+	// authentications from one IP, and the global pair from everyone
+	// (docs/internal/plans/admin-rest-api.md D11). A key cannot be guessed;
+	// these keep a misconfigured script or a scanner from filling the log.
+	defaultAPIFailureRate        = 6 * time.Second
+	defaultAPIFailureBurst       = 10
+	defaultGlobalAPIFailureRate  = time.Second
+	defaultGlobalAPIFailureBurst = 60
+
+	// The public API description is a small static file; these only keep
+	// one client from fetching it in a loop (D19).
+	defaultSpecFetchRate        = 6 * time.Second
+	defaultSpecFetchBurst       = 10
+	defaultGlobalSpecFetchRate  = 100 * time.Millisecond
+	defaultGlobalSpecFetchBurst = 100
+
 	// sessionCookieName is scoped to /admin, so it is never sent to the
 	// creation-token endpoint or the WebSocket transport.
 	sessionCookieName = "tpp_admin_session"
@@ -222,10 +245,58 @@ type Options struct {
 	// StartedAt is when the server started, for its uptime.
 	StartedAt time.Time
 
+	// APIKeys holds the admin REST API's keys. Nil means the store's own,
+	// when it keeps them; without any, the API answers every request 401.
+	APIKeys APIKeyStore
+
+	// APIRates is each API key's request budget. Zero fields take the
+	// defaults (docs/internal/plans/admin-rest-api.md D11).
+	APIRates APIRates
+
 	// Assets is the built admin UI: index.html, assets/ and the favicons.
 	// Nil means the build embedded in the binary (server/web/admin); tests
 	// set it so that they do not depend on a UI build.
 	Assets fs.FS
+}
+
+// APIKeyStore is the store of API keys (store.APIKeys), declared at the
+// consumer.
+type APIKeyStore interface {
+	store.APIKeys
+}
+
+// APIRates is each API key's request budget: requests a second, refilled
+// continuously, and the burst a key may spend at once. Reads are GET and
+// HEAD; everything else is a write.
+type APIRates struct {
+	ReadPerSecond  int
+	ReadBurst      int
+	WritePerSecond int
+	WriteBurst     int
+}
+
+// The default API budgets (D11).
+const (
+	DefaultAPIReadPerSecond  = 10
+	DefaultAPIReadBurst      = 60
+	DefaultAPIWritePerSecond = 2
+	DefaultAPIWriteBurst     = 10
+)
+
+func (r APIRates) withDefaults() APIRates {
+	if r.ReadPerSecond <= 0 {
+		r.ReadPerSecond = DefaultAPIReadPerSecond
+	}
+	if r.ReadBurst <= 0 {
+		r.ReadBurst = DefaultAPIReadBurst
+	}
+	if r.WritePerSecond <= 0 {
+		r.WritePerSecond = DefaultAPIWritePerSecond
+	}
+	if r.WriteBurst <= 0 {
+		r.WriteBurst = DefaultAPIWriteBurst
+	}
+	return r
 }
 
 // Dashboard wires the dashboard to the storage subsystems. Every field is
@@ -299,6 +370,14 @@ type Server struct {
 	logins   *limiter
 	ui       uiAssets
 
+	// The admin REST API (apiv1.go).
+	apiKeys     APIKeyStore
+	apiReads    *keyedLimiter
+	apiWrites   *keyedLimiter
+	apiFailures *limiter
+	specFetches *limiter
+	apiHandler  http.Handler
+
 	// secureCookies mirrors the public base URL's scheme. SPEC §4.4 requires
 	// Secure, and a deployment always terminates TLS in front of the server
 	// (SPEC §4.1) — but a plain-http base URL is the local-development case,
@@ -350,8 +429,13 @@ func New(st Store, opts Options) (*Server, error) {
 	if startedAt.IsZero() {
 		startedAt = now()
 	}
+	keys := opts.APIKeys
+	if keys == nil {
+		keys, _ = st.(APIKeyStore)
+	}
+	rates := opts.APIRates.withDefaults()
 
-	return &Server{
+	s := &Server{
 		store:         st,
 		dashboard:     opts.Dashboard,
 		live:          opts.Live,
@@ -370,7 +454,15 @@ func New(st Store, opts Options) (*Server, error) {
 		logins:        newLimiter(defaultLoginRate, defaultLoginBurst, defaultGlobalLoginRate, defaultGlobalLoginBurst, now),
 		ui:            ui,
 		secureCookies: u.Scheme == "https",
-	}, nil
+
+		apiKeys:     keys,
+		apiReads:    newKeyedLimiter(rates.ReadPerSecond, rates.ReadBurst, now),
+		apiWrites:   newKeyedLimiter(rates.WritePerSecond, rates.WriteBurst, now),
+		apiFailures: newLimiter(defaultAPIFailureRate, defaultAPIFailureBurst, defaultGlobalAPIFailureRate, defaultGlobalAPIFailureBurst, now),
+		specFetches: newLimiter(defaultSpecFetchRate, defaultSpecFetchBurst, defaultGlobalSpecFetchRate, defaultGlobalSpecFetchBurst, now),
+	}
+	s.apiHandler = s.newAPIHandler()
+	return s, nil
 }
 
 // creationURL is the URL an admin hands a user for a given token (SPEC §3.1

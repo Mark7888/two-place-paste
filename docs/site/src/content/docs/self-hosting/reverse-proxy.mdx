@@ -99,6 +99,7 @@ Then sign in at `https://tpp.example.com/admin/`.
 | `/healthz` | Health check. Returns `ok`. |
 | `/ws` | The devices' WebSocket. |
 | `/admin/` | The [admin page](/two-place-paste/self-hosting/admin/): dashboard, groups and their stores, tags, creation tokens, audit log and settings. Its own API is under `/admin/api/`. |
+| `/api/v1/` | The [admin API](/two-place-paste/self-hosting/api/), for scripts with an API key. `/api/v1/openapi.yaml` and `/api/v1/openapi.json` describe it and need no key. |
 | `/admin/version.json` | Which build of the admin page the relay serves. An open admin page polls it to offer an update. |
 | `/pair` | The page a pairing link opens on a device without the app. |
 | `/source` | Redirects to the relay's source code (`TPP_SOURCE_URL`). |

@@ -19,6 +19,10 @@ const (
 	settingsKey   = "settings"
 	auditKey      = "audit"
 
+	// API keys for the admin REST API (apikeys.go).
+	apiKeyPrefix   = "apikey:"
+	apiKeyIndexKey = "apikeys"
+
 	// tombstonePrefix marks a device whose group the admin deleted. It is the
 	// third kind of key here with a TTL; losing one early only means the
 	// device is told it was revoked instead of why.
@@ -48,6 +52,7 @@ func pairingKey(token string) string   { return pairingPrefix + token }
 func offerKey(code string) string      { return offerPrefix + code }
 func tagKey(name string) string        { return tagPrefix + name }
 func tombstoneKey(id string) string    { return tombstonePrefix + id }
+func apiKeyKey(id string) string       { return apiKeyPrefix + id }
 func storeUsageKeyOf(id string) string { return groupPrefix + id + storeUsageSuffix }
 func storeIndexKey(id string) string   { return groupPrefix + id + storeIndexSuffix }
 func storeItemKey(id string) string    { return storeItemPrefix + id }

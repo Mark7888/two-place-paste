@@ -71,6 +71,8 @@ func run(args []string) error {
 		return serve(args)
 	case "gc":
 		return runGC(args)
+	case "apikey":
+		return runAPIKey(args)
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return nil
@@ -92,6 +94,9 @@ Commands:
   gc --rebuild-accounting
                      recompute the storage limits' bookkeeping from the
                      entries in Redis; never deletes a blob
+  apikey create|list|revoke
+                     manage the admin REST API's keys; run
+                     "tpp apikey help" for the flags
 
 Configuration comes from .env and the process environment; see
 deploy/.env.example and
@@ -234,15 +239,21 @@ func serve(args []string) error {
 		SessionTTL:    cfg.Admin.SessionTTL,
 		Password:      cfg.Admin.Password,
 		PasswordHash:  cfg.Admin.PasswordHash,
-		Logger:        logger,
-		Live:          wsSrv,
-		Purger:        entrySvc,
-		Limits:        ledger,
-		Store:         storeSvc,
-		Sweep:         sweeper.Trigger,
-		Redis:         rdb,
-		Version:       buildVersion(),
-		StartedAt:     time.Now().UTC(),
+		APIRates: admin.APIRates{
+			ReadPerSecond:  cfg.Admin.API.ReadPerSecond,
+			ReadBurst:      cfg.Admin.API.ReadBurst,
+			WritePerSecond: cfg.Admin.API.WritePerSecond,
+			WriteBurst:     cfg.Admin.API.WriteBurst,
+		},
+		Logger:    logger,
+		Live:      wsSrv,
+		Purger:    entrySvc,
+		Limits:    ledger,
+		Store:     storeSvc,
+		Sweep:     sweeper.Trigger,
+		Redis:     rdb,
+		Version:   buildVersion(),
+		StartedAt: time.Now().UTC(),
 		Dashboard: admin.Dashboard{
 			Ledger:         ledger,
 			Entries:        ephemeral,

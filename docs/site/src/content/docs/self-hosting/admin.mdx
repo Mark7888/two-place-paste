@@ -16,8 +16,8 @@ names, sizes and counts — never content, because the relay has none to show.
 The page is a web app built into the relay itself, so it needs JavaScript in the browser. It loads
 nothing from anywhere but the relay, and it talks to the relay only through `/admin/api/`.
 
-The header links to six screens: **Dashboard**, **Groups**, **Tags**, **Tokens**, **Audit log**
-and **Settings**. Each group also has a page of its own, reached from **Groups**. On a phone the
+The header links to seven screens: **Dashboard**, **Groups**, **Tags**, **Tokens**, **Audit log**,
+**API keys** and **Settings**. Each group also has a page of its own, reached from **Groups**. On a phone the
 screens are behind the **Menu** button, and lists show one card per row; tap a group's card to
 open it.
 
@@ -52,7 +52,7 @@ part, with the same admin screens, shows no bar.
 
 ## Lists: search, sort and pages
 
-The lists on **Groups**, **Tags**, **Tokens** and **Audit log** work the same way:
+The lists on **Groups**, **Tags**, **Tokens**, **Audit log** and **API keys** work the same way:
 
 - **Search** with the box above the list. It ignores case, and every word you type must appear
   somewhere in the row, so `anna laptop` finds a group named “Anna” with a device called
@@ -221,6 +221,15 @@ A tag can also carry a **store limit** for its groups' [stores](#the-store), in 
 limit, except that nothing is ever evicted. A tag cannot turn a store on; that is decided on each
 group's page.
 
+## API keys
+
+**API keys** creates, lists and revokes the keys of the [admin API](/two-place-paste/self-hosting/api/),
+which lets scripts do over HTTP what these screens do. Give a key a name, its scopes (`read`,
+`tokens` or `admin`) and when it expires, and press **Create key**: the key is shown once, in a
+dialog, and never again. The list shows each key's scopes, its id, when it expires and when and
+from where it was last used; **Revoke** stops a key at once. Keys made on the relay's host with
+`tpp apikey create` appear here too. See [The admin API](/two-place-paste/self-hosting/api/).
+
 ## Settings
 
 **Settings** holds what can change without a restart. Today that is the **stale threshold**: how
@@ -229,11 +238,13 @@ stale. The default is 90 days.
 
 ## Audit log
 
-**Audit log** lists the last 1,000 things done on these screens, newest first: sign-ins (and failed
+**Audit log** lists the last 1,000 things admins did, newest first: sign-ins (and failed
 or rate-limited ones), tokens created and revoked, groups renamed, tagged, limited, purged and
-deleted, stores turned on, off or limited, tags and settings changed, and sweeps requested — with the time and the address it came
-from. It names groups and tokens, and never holds a token value, a password or a key. Search it
-by action, name, detail or address, or pick one kind of entry with **Action**.
+deleted, stores turned on, off or limited, tags and settings changed, sweeps requested, and API
+keys created, revoked or locked out — with the time and the address it came from. **By** says who:
+the **Admin page**, an **API key** by its name and id, or the **Command line** (`tpp apikey`). It
+names groups, tokens and keys, and never holds a token value, a password or a key. Search it by
+action, name, detail, address or who, or pick one kind of entry with **Action**.
 
 <Aside>
 	Sign-ins are rate-limited per IP address, and the audit log records the address. Both need your

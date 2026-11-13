@@ -23,12 +23,14 @@ const columns: Column<AuditEntry>[] = [
   { key: "action", header: "Action", className: "name", render: (e) => e.label },
   { key: "target", header: "On", render: (e) => e.target || <Dash /> },
   { key: "detail", header: "Details", sortable: false, className: "wide", render: (e) => e.detail || <Dash /> },
+  { key: "by", header: "By", sortable: false, render: (e) => e.by || "Admin page" },
   { key: "ip", header: "From", render: (e) => (e.ip ? <code>{e.ip}</code> : <Dash />) },
 ];
 
-/** AuditPage lists what was done on these screens, newest first, searchable
- *  and narrowed to one kind of entry (?action=name). It records names and
- *  counts, never a token, password or key. */
+/** AuditPage lists what admins did, and who (these screens, an API key or
+ *  the tpp command), newest first, searchable and narrowed to one kind of
+ *  entry (?action=name). It records names and counts, never a token, password
+ *  or key. */
 export function AuditPage() {
   useDocumentTitle("Audit log");
   const [params, setParams] = useSearchParams();
@@ -39,8 +41,9 @@ export function AuditPage() {
     <>
       <h1>Audit log</h1>
       <p className="lede">
-        What was done on these screens, newest first: sign-ins, tokens, groups, tags and settings. The server keeps the
-        last {meta?.kept ?? 1000} entries. It records names and counts, never a token, password or key.
+        What admins did, newest first — on these screens, through the REST API with an API key, or with the tpp
+        command: sign-ins, tokens, groups, tags, settings and API keys. The server keeps the last {meta?.kept ?? 1000}{" "}
+        entries. It records names and counts, never a token, password or key.
       </p>
       <SmartTable<AuditEntry, AuditLog>
         id="audit"

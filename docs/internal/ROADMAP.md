@@ -977,6 +977,20 @@ change. Plan, decisions and what was built differently are in
 
 ---
 
+## Relay feature — admin REST API with API keys
+
+✅ **Done** (one PR). A public, versioned REST API under `/api/v1/` for scripts and
+automation, doing what the admin screens do. It is described by `api/openapi.yaml`
+(OpenAPI 3.1, MPL-2.0), from which oapi-codegen generates the relay's server code
+(`make api`, checked by `make api-check` in CI), and from which the docs site renders its
+API reference. Scoped, expiring API keys are created on a new **API keys** screen or with
+`tpp apikey`, never through the API; each key has its own rate limit, and failed
+authentication is limited per address. The audit log now records who acted: the admin
+page, an API key or the command line. Plan and decisions are in
+[`docs/internal/plans/admin-rest-api.md`](plans/admin-rest-api.md).
+
+---
+
 ## Deferred backlog — do not let agents start these
 
 | Item | Spec ref |

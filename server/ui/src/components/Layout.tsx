@@ -11,6 +11,7 @@ const screens = [
   { to: "/admin/tags", label: "Tags", current: (p: string) => p === "/admin/tags" },
   { to: "/admin/tokens", label: "Tokens", current: (p: string) => p === "/admin/tokens" },
   { to: "/admin/audit", label: "Audit log", current: (p: string) => p === "/admin/audit" },
+  { to: "/admin/api-keys", label: "API keys", current: (p: string) => p === "/admin/api-keys" },
   { to: "/admin/settings", label: "Settings", current: (p: string) => p === "/admin/settings" },
 ];
 

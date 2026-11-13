@@ -15,7 +15,8 @@ later**.
 
 The MPL-2.0 part includes the Android app (`mobile/`), the desktop app
 (`desktop/`), the Go client core (`pkg/tppclient/`), the wire schema
-(`proto/`), the crypto spec and test vectors (`spec/`), the deployment files
+(`proto/`), the admin API description (`api/`), the crypto spec and test
+vectors (`spec/`), the deployment files
 (`deploy/`), the scripts and the documentation.
 
 `pkg/tppclient/LICENSE` is the same MPL-2.0 text as the root `LICENSE`. It is
@@ -32,6 +33,9 @@ pkg.go.dev only looks inside a module's folder for its license.
 - **Everything else is MPL** so the apps can be published in app stores (the
   Apple App Store's terms are incompatible with the GPL family), and so other
   projects can build compatible clients on the wire schema and the client core.
+  The admin API description (`api/openapi.yaml`) is MPL for the same reason:
+  anyone can build or generate a client for the relay's admin API under any
+  licence.
   MPL is still copyleft per file: changes to these files have to be shared when
   the software is distributed.
 
@@ -52,7 +56,13 @@ can tell it apart from the official one.
 ## Third-party code
 
 Dependencies keep their own licenses. Generated and vendored code follows the
-license of the folder it is generated into.
+license of the folder it is generated into, with one exception: the relay
+embeds the admin API description, and Go can only embed files inside its own
+module, so `make api` copies `api/openapi.yaml` verbatim into
+`server/internal/admin/apiv1/` (as `openapi.yaml`, and as `openapi.json`, the
+same document in JSON). Those two copies stay MPL-2.0. The Go code generated
+from the description there (`apiv1.gen.go`) is AGPL-3.0-or-later like the rest
+of the relay, just as the relay binary that includes `pkg/tppclient` is.
 
 Most of those licenses (MIT, BSD, ISC, Apache-2.0) ask that a binary
 distribution carry their copyright notices and license texts. Every build does

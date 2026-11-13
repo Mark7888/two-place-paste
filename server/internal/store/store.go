@@ -159,6 +159,14 @@ type AuditEntry struct {
 	Target string    `json:"target,omitempty"`
 	Detail string    `json:"detail,omitempty"`
 	IP     string    `json:"ip,omitempty"`
+
+	// Actor is who made the change: empty for a signed-in admin page (every
+	// entry from before there was anyone else reads that way), "api_key" for
+	// the admin REST API, "cli" for the tpp command. ActorID and ActorName
+	// name the API key: its public id and its name at the time.
+	Actor     string `json:"actor,omitempty"`
+	ActorID   string `json:"actor_id,omitempty"`
+	ActorName string `json:"actor_name,omitempty"`
 }
 
 // DeletedGroup is what DeleteGroup removed, for the caller to finish the job

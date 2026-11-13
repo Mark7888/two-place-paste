@@ -2,11 +2,9 @@ package admin
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 
-	"github.com/Mark7888/two-place-paste/server/internal/config"
 	"github.com/Mark7888/two-place-paste/server/internal/items"
 	"github.com/Mark7888/two-place-paste/server/internal/store"
 )
@@ -68,11 +66,12 @@ type groupStoreJSON struct {
 // storeRowJSON is a group's store on the groups list: whether it is on, and
 // how much it holds against the cap it runs into.
 type storeRowJSON struct {
-	Enabled    bool  `json:"enabled"`
-	Emptying   bool  `json:"emptying"`
-	UsedBytes  int64 `json:"used_bytes"`
-	UsedItems  int64 `json:"used_items"`
-	LimitBytes int64 `json:"limit_bytes"`
+	Enabled     bool   `json:"enabled"`
+	Emptying    bool   `json:"emptying"`
+	UsedBytes   int64  `json:"used_bytes"`
+	UsedItems   int64  `json:"used_items"`
+	LimitBytes  int64  `json:"limit_bytes"`
+	LimitSource string `json:"limit_source"`
 }
 
 // storeRow builds a group's store cell for the groups list, or nil when the
@@ -83,8 +82,9 @@ func (s *Server) storeRow(ctx context.Context, g store.Group, tags map[string]st
 	}
 	limit := s.storeSvc.GroupLimit(g, tagOf(g, tags))
 	v := &storeRowJSON{
-		Enabled:    g.StoreEnabled,
-		LimitBytes: storeShown(limit.Bytes, s.storeSvc.Config().MaxTotalBytes),
+		Enabled:     g.StoreEnabled,
+		LimitBytes:  storeShown(limit.Bytes, s.storeSvc.Config().MaxTotalBytes),
+		LimitSource: limit.Source,
 	}
 	if u, err := s.store.StoreUsage(ctx, g.ID); err != nil {
 		probs.add("the store usage of "+g.Name, err)
@@ -152,8 +152,42 @@ func storeShown(group, total int64) int64 {
 	return group
 }
 
-// handleSetGroupStore turns a group's store on or off, and tells its online
+// setGroupStore turns a group's store on or off, and tells its online
 // devices. Turning it off keeps every item.
+func (s *Server) setGroupStore(ctx context.Context, g store.Group, enabled bool) error {
+	if s.storeSvc == nil {
+		return unavailable("This server has no store.")
+	}
+	if err := s.store.SetGroupStore(ctx, g.ID, enabled); err != nil {
+		return s.groupErr(ctx, g.ID, err, "set group store")
+	}
+	// A store being emptied stays closed; its devices hear when it opens.
+	if emptying, _ := s.storeSvc.Reclaiming(ctx, g.ID); !emptying {
+		if a, ok := s.live.(storeAnnouncer); ok {
+			a.AnnounceStoreState(ctx, g.ID, enabled)
+		}
+	}
+	detail := "turned on"
+	if !enabled {
+		detail = "turned off"
+		if u, err := s.store.StoreUsage(ctx, g.ID); err == nil {
+			detail += fmt.Sprintf(", %d %s kept (%s)", u.Items, plural(u.Items, "item", "items"), humanBytes(u.Bytes))
+		}
+	}
+	s.auditCtx(ctx, "group.store", groupLabel(g), detail)
+	return nil
+}
+
+// setGroupStoreLimit stores a group's own store limit override.
+func (s *Server) setGroupStoreLimit(ctx context.Context, g store.Group, limit store.LimitOverride) error {
+	if err := s.store.SetGroupStoreLimit(ctx, g.ID, limit); err != nil {
+		return s.groupErr(ctx, g.ID, err, "set group store limit")
+	}
+	s.auditCtx(ctx, "group.storelimit", groupLabel(g), limitAuditText(limit))
+	return nil
+}
+
+// handleSetGroupStore turns a group's store on or off.
 func (s *Server) handleSetGroupStore(w http.ResponseWriter, r *http.Request, _ session) {
 	if s.storeSvc == nil {
 		writeJSONError(w, http.StatusNotImplemented, "This server has no store.")
@@ -165,31 +199,11 @@ func (s *Server) handleSetGroupStore(w http.ResponseWriter, r *http.Request, _ s
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	ctx := r.Context()
-	g, err := s.groupByHandle(ctx, r.PathValue("handle"))
-	id := g.ID
-	if err == nil {
-		err = s.store.SetGroupStore(ctx, id, req.Enabled)
-	}
-	if !s.groupFound(w, r, id, err, "set group store") {
-		return
-	}
-	// A store being emptied stays closed; its devices hear when it opens.
-	if emptying, _ := s.storeSvc.Reclaiming(ctx, id); !emptying {
-		if a, ok := s.live.(storeAnnouncer); ok {
-			a.AnnounceStoreState(ctx, id, req.Enabled)
-		}
-	}
-	detail := "turned on"
-	if !req.Enabled {
-		detail = "turned off"
-		if u, err := s.store.StoreUsage(ctx, id); err == nil {
-			detail += fmt.Sprintf(", %d %s kept (%s)", u.Items, plural(u.Items, "item", "items"), humanBytes(u.Bytes))
-		}
-	}
-	s.audit(r, "group.store", groupLabel(g), detail)
-	w.WriteHeader(http.StatusNoContent)
+	s.changeGroup(w, r, groupChange{Store: &req.Enabled})
 }
+
+// storeSizeExample is how a store limit's error message suggests a size.
+const storeSizeExample = "“100 MiB”, “1 GB”"
 
 // handleSetGroupStoreLimit stores a group's own store limit override.
 func (s *Server) handleSetGroupStoreLimit(w http.ResponseWriter, r *http.Request, _ session) {
@@ -201,22 +215,12 @@ func (s *Server) handleSetGroupStoreLimit(w http.ResponseWriter, r *http.Request
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	ctx := r.Context()
-	g, err := s.groupByHandle(ctx, r.PathValue("handle"))
-	id := g.ID
-	if !s.groupFound(w, r, id, err, "read group") {
+	c, err := sizeChange(req, storeSizeExample)
+	if err != nil {
+		writeOpError(w, err)
 		return
 	}
-	limit, msg := s.parseStoreLimit(req, g.StoreLimit)
-	if msg != "" {
-		writeJSONError(w, http.StatusBadRequest, msg)
-		return
-	}
-	if !s.groupFound(w, r, id, s.store.SetGroupStoreLimit(ctx, id, limit), "set group store limit") {
-		return
-	}
-	s.audit(r, "group.storelimit", groupLabel(g), limitAuditText(limit))
-	w.WriteHeader(http.StatusNoContent)
+	s.changeGroup(w, r, groupChange{StoreLimit: &c})
 }
 
 // handleSetTagStoreLimit stores a tag's store limit override.
@@ -229,51 +233,15 @@ func (s *Server) handleSetTagStoreLimit(w http.ResponseWriter, r *http.Request, 
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	ctx := r.Context()
-	name := r.PathValue("name")
-	t, err := s.store.GetTag(ctx, name)
-	if errors.Is(err, store.ErrNotFound) {
-		writeJSONError(w, http.StatusNotFound, "That tag no longer exists.")
-		return
+	c, err := sizeChange(req, storeSizeExample)
+	if err == nil {
+		err = s.updateTag(r.Context(), r.PathValue("name"), tagChange{StoreLimit: &c})
 	}
 	if err != nil {
-		s.logger.ErrorContext(ctx, "read tag", "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "The tag could not be read.")
+		writeOpError(w, err)
 		return
 	}
-	limit, msg := s.parseStoreLimit(req, t.StoreLimit)
-	if msg != "" {
-		writeJSONError(w, http.StatusBadRequest, msg)
-		return
-	}
-	if err := s.store.SetTagStoreLimit(ctx, name, limit); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeJSONError(w, http.StatusNotFound, "That tag no longer exists.")
-			return
-		}
-		s.logger.ErrorContext(ctx, "set tag store limit", "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "The limit could not be saved.")
-		return
-	}
-	s.audit(r, "tag.storelimit", name, limitAuditText(limit))
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// parseStoreLimit is parseLimit for a store limit, checked against the
-// relay's total store limit instead of the blob one.
-func (s *Server) parseStoreLimit(req limitRequest, current store.LimitOverride) (store.LimitOverride, string) {
-	out := store.LimitOverride{Bytes: current.Bytes, Enabled: req.Enabled}
-	if raw := req.Size; raw != "" {
-		n, err := config.ParseByteSize(raw)
-		if err != nil || n < 0 {
-			return current, "That is not a size. Use e.g. “100 MiB”, “1 GB” or 0 for no limit of its own."
-		}
-		out.Bytes = n
-	}
-	if total := s.storeSvc.Config().MaxTotalBytes; out.Enabled && total > 0 && out.Bytes > total {
-		return current, fmt.Sprintf("The limit cannot be above the server's total store limit of %s.", humanBytes(total))
-	}
-	return out, ""
 }
 
 // storeTotalsJSON is the store card of the dashboard.
@@ -316,29 +284,35 @@ func (s *Server) storeTotals(ctx context.Context, groups []store.Group, probs *p
 	return v
 }
 
-// handlePurgeGroupStore deletes every item of a group's store, for every
-// device. The request only queues the work: the store closes at once and is
-// emptied in the background, so a store of any size answers immediately.
-// The switch and the limits stay as they are.
-func (s *Server) handlePurgeGroupStore(w http.ResponseWriter, r *http.Request, _ session) {
+// purgeGroupStore deletes every item of a group's store, for every device,
+// and returns what the store held. It only queues the work: the store closes
+// at once and is emptied in the background, so a store of any size answers
+// immediately. The switch and the limits stay as they are.
+func (s *Server) purgeGroupStore(ctx context.Context, handle string) (store.ItemUsage, error) {
 	if s.storeSvc == nil {
-		writeJSONError(w, http.StatusNotImplemented, "This server has no store.")
-		return
+		return store.ItemUsage{}, unavailable("This server has no store.")
 	}
-	ctx := r.Context()
-	g, err := s.groupByHandle(ctx, r.PathValue("handle"))
-	id := g.ID
-	var before store.ItemUsage
+	g, err := s.findGroup(ctx, handle)
+	if err != nil {
+		return store.ItemUsage{}, err
+	}
+	before, err := s.store.StoreUsage(ctx, g.ID)
 	if err == nil {
-		before, err = s.store.StoreUsage(ctx, id)
+		err = s.storeSvc.Purge(ctx, g.ID)
 	}
-	if err == nil {
-		err = s.storeSvc.Purge(ctx, id)
+	if err != nil {
+		return store.ItemUsage{}, s.groupErr(ctx, g.ID, err, "purge group store")
 	}
-	if !s.groupFound(w, r, id, err, "purge group store") {
-		return
-	}
-	s.audit(r, "group.storepurge", groupLabel(g),
+	s.auditCtx(ctx, "group.storepurge", groupLabel(g),
 		fmt.Sprintf("%d %s (%s)", before.Items, plural(before.Items, "item", "items"), humanBytes(before.Bytes)))
+	return before, nil
+}
+
+// handlePurgeGroupStore empties a group's store.
+func (s *Server) handlePurgeGroupStore(w http.ResponseWriter, r *http.Request, _ session) {
+	if _, err := s.purgeGroupStore(r.Context(), r.PathValue("handle")); err != nil {
+		writeOpError(w, err)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }

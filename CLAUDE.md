@@ -16,6 +16,7 @@ Default branch: `master`.
 | `desktop/` | Go module: the tray service `tppdesktop`, a shell around `pkg/tppclient` — clipboard, tray, autostart, auto-updater, and a `127.0.0.1` HTTP server (`internal/localui`) that serves the React UI in `desktop/ui/` (Vite + TS, embedded from `internal/localui/dist`). |
 | `mobile/` | React Native Android app (TypeScript). `src/core` = crypto + protocol, **no React Native imports**; `src/platform` = per-OS files (`*.android.ts` / `*.ios.ts`); `src/app` = screens and session; `src/protocol/gen` = generated protobuf (do not edit). |
 | `proto/` | Protobuf wire schema `tpp.v1` (shared contract). |
+| `api/` | OpenAPI description of the relay's public admin REST API (`/api/v1/`, shared contract, MPL-2.0); `make api` generates `server/internal/admin/apiv1` from it. Generator pinned in `api/tools/`. |
 | `spec/` | `crypto.md` (crypto profile) and `vectors/` — JSON test vectors both Go and TS clients must pass. |
 | `deploy/` | Dockerfile, `docker-compose.yml`, `redis.conf`, `.env.example`. |
 | `scripts/` | CI shell scripts (version, manifest, beta publish, GHCR cleanup), each with a `*_test.sh`. |
@@ -36,6 +37,7 @@ make build test lint      # every Go module (test runs with -race)
 make fmt / make fmt-check # gofumpt / gofmt
 make tidy                 # go mod tidy + go work sync
 make proto                # regenerate Go + TS bindings (no protoc needed)
+make api                  # regenerate the admin REST API code from api/openapi.yaml
 make proto-check          # fail if committed generated code is stale
 make run-server           # needs Redis; reads server/.env
 make help
@@ -125,12 +127,15 @@ the existing tone. Line endings are LF everywhere (`.gitattributes`).
 
 ## Shared contracts and generated code
 
-- `proto/**`, `spec/**`, `go.work`, the root `Makefile`, `.golangci.yml`,
+- `proto/**`, `api/**`, `spec/**`, `go.work`, the root `Makefile`, `.golangci.yml`,
   CI workflows and the licensing files (next section) are shared contracts: change them in a small, dedicated PR,
   not mixed into feature work.
 - After editing `proto/`, run `make proto` and commit the regenerated
   `pkg/tppclient/protogen` and `mobile/src/protocol/gen`. Never hand-edit
   generated files. Enum numbers in the schema are permanent.
+- After editing `api/openapi.yaml`, run `make api` and commit
+  `server/internal/admin/apiv1` (`make api-check` fails on a stale copy).
+  Within `/api/v1` changes only add; breaking ones wait for `/api/v2`.
 - A wire change must land in the server and every client together (see
   `docs/internal/plans/` for how past cross-cutting changes were done).
 - No binary blobs beyond the existing icons/screenshots (e.g. the Gradle
@@ -146,6 +151,7 @@ Copyright (C) 2026 Mark Licsauer. The repository is split between two licenses;
 | Everything by default (root `LICENSE`) | MPL-2.0 |
 | `server/` (`server/LICENSE`) | AGPL-3.0-or-later |
 | `pkg/tppclient/` (`pkg/tppclient/LICENSE`, a copy of the root text so pkg.go.dev detects it) | MPL-2.0 |
+| `api/` (the admin API description), and its verbatim copies `server/internal/admin/apiv1/openapi.{yaml,json}` | MPL-2.0 |
 | The name, logo and app icon: the artwork in `assets/icon/` and every icon generated from it | Not licensed |
 
 - The server is AGPL to protect the hosted service; everything else is MPL so

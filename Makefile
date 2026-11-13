@@ -101,6 +101,23 @@ proto-check: ## Fail if regenerating protobuf bindings changes any committed fil
 	fi
 
 ## ---------------------------------------------------------------------------
+## Admin API (docs/internal/plans/admin-rest-api.md)
+## ---------------------------------------------------------------------------
+
+.PHONY: api
+api: ## Regenerate the relay's admin API code from api/openapi.yaml
+	@./api/generate.sh
+
+.PHONY: api-check
+api-check: ## Fail if regenerating the admin API code changes any committed file
+	@$(MAKE) api
+	@if [ -n "$$(git status --porcelain -- api server/internal/admin/apiv1)" ]; then \
+		echo "generated admin API code is stale; run 'make api' and commit the result" >&2; \
+		git --no-pager diff --stat -- api server/internal/admin/apiv1; \
+		exit 1; \
+	fi
+
+## ---------------------------------------------------------------------------
 ## Running
 ## ---------------------------------------------------------------------------
 

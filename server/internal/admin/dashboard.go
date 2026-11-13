@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -167,7 +168,11 @@ func (p *problems) add(what string, err error) {
 // handleDashboard returns the dashboard (SPEC §4.4): the summary cards, the
 // health card and storage. The groups are on their own screen.
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, _ session) {
-	ctx := r.Context()
+	writeJSON(w, http.StatusOK, s.dashboardView(r.Context()))
+}
+
+// dashboardView builds the dashboard.
+func (s *Server) dashboardView(ctx context.Context) dashboardJSON {
 	d := s.dashboard
 	now := s.now()
 	probs := s.problems(ctx, "dashboard")
@@ -199,7 +204,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request, _ sessi
 		view.Store = s.storeTotals(ctx, groups, probs)
 	}
 	view.Problems = probs.list
-	writeJSON(w, http.StatusOK, view)
+	return view
 }
 
 func (s *Server) unusedTokens(ctx context.Context, now time.Time, probs *problems) int {
@@ -252,13 +257,16 @@ var groupTable = table[groupItem]{
 	},
 }
 
-// handleGroupList returns one page of the groups screen. Beyond the list
-// parameters it takes ?tag=name (or ?tag=- for the untagged groups) and
-// ?stale=1.
+// handleGroupList returns one page of the groups screen.
 func (s *Server) handleGroupList(w http.ResponseWriter, r *http.Request, _ session) {
-	ctx := r.Context()
+	writeJSON(w, http.StatusOK, s.groupListView(r.Context(), r.URL.Query()))
+}
+
+// groupListView builds one page of the groups screen. Beyond the list
+// parameters it takes tag=name (or tag=- for the untagged groups) and
+// stale=1.
+func (s *Server) groupListView(ctx context.Context, query url.Values) groupsJSON {
 	now := s.now()
-	query := r.URL.Query()
 	filter := query.Get("tag")
 	staleOnly := query.Get("stale") == "1"
 	probs := s.problems(ctx, "groups")
@@ -275,8 +283,7 @@ func (s *Server) handleGroupList(w http.ResponseWriter, r *http.Request, _ sessi
 		probs.add("the groups", err)
 		view.tablePage = mapPage(groupTable.run(nil, query), groupItem.json)
 		view.Problems = probs.list
-		writeJSON(w, http.StatusOK, view)
-		return
+		return view
 	}
 	tags, err := s.tagMap(ctx)
 	if err != nil {
@@ -323,7 +330,7 @@ func (s *Server) handleGroupList(w http.ResponseWriter, r *http.Request, _ sessi
 
 	view.tablePage = mapPage(groupTable.run(items, query), groupItem.json)
 	view.Problems = probs.list
-	writeJSON(w, http.StatusOK, view)
+	return view
 }
 
 func usedBytes(g groupJSON) int64 {

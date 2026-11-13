@@ -74,6 +74,10 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.LogLevel != slog.LevelInfo {
 		t.Errorf("LogLevel = %s, want info", cfg.LogLevel)
 	}
+	wantAPI := APIRates{ReadPerSecond: 10, ReadBurst: 60, WritePerSecond: 2, WriteBurst: 10}
+	if cfg.Admin.API != wantAPI {
+		t.Errorf("Admin.API = %+v, want %+v", cfg.Admin.API, wantAPI)
+	}
 	if cfg.Admin.UsesHash() {
 		t.Error("Admin.UsesHash() = true, want false for a plaintext password")
 	}
@@ -222,6 +226,11 @@ func TestLoadValidationErrors(t *testing.T) {
 			name:    "bad duration",
 			env:     map[string]string{"ADMIN_PASSWORD": "pw", "TPP_PUBLIC_BASE_URL": "https://x.example", "TPP_BLOB_SWEEP_INTERVAL": "ten minutes"},
 			wantErr: "is not a duration",
+		},
+		{
+			name:    "zero API rate",
+			env:     map[string]string{"ADMIN_PASSWORD": "pw", "TPP_PUBLIC_BASE_URL": "https://x.example", "TPP_API_WRITE_RATE": "0"},
+			wantErr: "TPP_API_WRITE_RATE must be a positive whole number, got 0",
 		},
 		{
 			name:    "bad log level",

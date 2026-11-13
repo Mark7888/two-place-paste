@@ -404,8 +404,10 @@ Every list (groups, tags, tokens, the audit log) is searched, sorted and paged b
 server, and its view is kept in the URL. A token is named in the UI — in rows, URLs and
 requests — by an opaque handle derived from it, never by its value, and so is a group,
 whose id is its token; a token's creation URL is sent only when the admin asks for it.
-- **Audit log** — the last 1000 admin actions and sign-ins, with time and client
-  address. It never holds a token value, a password, a cookie or a key.
+- **Audit log** — the last 1000 admin actions and sign-ins, with time, client
+  address and who made them: the admin page, an API key (by id and name) or the `tpp`
+  command. It never holds a token value, a password, a cookie or a key.
+- **API keys** — create, list and revoke the keys of the admin REST API (below).
 
 No content access, by construction.
 
@@ -414,6 +416,24 @@ No content access, by construction.
 - Rate limiting on the login endpoint. This UI is publicly reachable.
 - Each token rendered as a QR code containing the full `https://host/<token>` URL, so
   first-device onboarding is a scan rather than typing a URL on a phone keyboard.
+
+**Admin REST API** (docs/internal/plans/admin-rest-api.md): everything the screens do
+but sign-in, under `/api/v1/`, described by `/api/openapi.yaml` (OpenAPI 3.1) and generated
+from it.
+- Authenticated only by `Authorization: Bearer tpp_ak_<id>_<secret>`; no cookie is read, and
+  no CORS preflight is answered. The relay stores the SHA-256 of a key, never the key, and
+  shows a key once, at creation. Keys carry no Redis TTL (§4.2): expiry is a field.
+- Scopes `read`, `tokens` (creation tokens, their links and QR codes) and `admin`
+  (everything; implies the other two). At most 50 keys, each with a required expiry of
+  30, 90 or 365 days or never.
+- Keys are created and revoked only on the admin screens or with `tpp apikey`, never
+  through the API, so a key cannot mint or reveal another.
+- A token bucket per key for reads and for writes (`TPP_API_*`), and a fixed per-IP and
+  global limit on failed authentication, whose lockout is logged and audited.
+- Groups and tokens are named by handle, as on the screens. Errors are
+  `application/problem+json` with a stable `code`. Within `/api/v1` changes only add.
+- `/api/v1/openapi.yaml` and `.json` are public: they describe endpoints and hold nothing
+  about the relay.
 
 **Password handling:** MVP reads a plaintext password from `.env`. The config loader
 should accept a hash if one is supplied, so moving to hashed storage is a config

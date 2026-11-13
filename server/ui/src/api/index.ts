@@ -2,10 +2,12 @@
 // lists the same routes).
 import { request } from "./client";
 import type {
+  CreatedApiKey,
   CreatedToken,
   Dashboard,
   GroupDetail,
   LimitChange,
+  NewApiKey,
   NewToken,
   Session,
   Settings,
@@ -51,5 +53,8 @@ export const api = {
 
   settings: (signal?: AbortSignal) => request<Settings>("GET", "/settings", undefined, signal),
   saveSettings: (staleDays: number) => request<Settings>("PUT", "/settings", { stale_days: staleDays }),
+
+  createApiKey: (key: NewApiKey) => request<CreatedApiKey>("POST", "/api-keys", key),
+  revokeApiKey: (id: string) => request<void>("DELETE", `/api-keys/${seg(id)}`),
 
 };

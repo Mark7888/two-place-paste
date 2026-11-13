@@ -31,6 +31,7 @@ type MemoryStore struct {
 
 	tags       map[string]Tag
 	tombstones map[string]time.Time
+	apiKeys    map[string]APIKey
 	settings   *Settings
 	audit      []AuditEntry
 
@@ -60,6 +61,7 @@ func NewMemoryStore() *MemoryStore {
 
 		tags:       make(map[string]Tag),
 		tombstones: make(map[string]time.Time),
+		apiKeys:    make(map[string]APIKey),
 
 		storeUsage: make(map[string]ItemUsage),
 		storeItems: make(map[string]Item),

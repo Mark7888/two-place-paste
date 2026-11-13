@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -9,7 +10,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -200,16 +203,14 @@ func (s *Server) tokenView(t store.Token, now time.Time) tokenJSON {
 	return v
 }
 
-// handleTokens returns one page of the creation tokens (SPEC §4.4). Beyond
-// the list parameters it takes ?status=unused|used|expired; "used" includes
+// tokenListView builds one page of the creation tokens (SPEC §4.4). Beyond
+// the list parameters it takes status=unused|used|expired; "used" includes
 // tokens whose group has since been deleted.
-func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request, _ session) {
-	ctx := r.Context()
+func (s *Server) tokenListView(ctx context.Context, query url.Values) (tokensJSON, error) {
 	tokens, err := s.store.ListTokens(ctx)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "list tokens", "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "The token list could not be loaded.")
-		return
+		return tokensJSON{}, failed("The token list could not be loaded.")
 	}
 	out := tokensJSON{Tags: []string{}}
 	if tags, err := s.store.ListTags(ctx); err == nil {
@@ -219,7 +220,6 @@ func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request, _ session)
 		slices.Sort(out.Tags)
 	}
 
-	query := r.URL.Query()
 	status := query.Get("status")
 	now := s.now()
 	items := make([]tokenItem, 0, len(tokens))
@@ -238,13 +238,69 @@ func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request, _ session)
 		items = append(items, tokenItem{row: row, value: t.Value})
 	}
 	out.tablePage = mapPage(tokenTable.run(items, query), tokenItem.json)
+	return out, nil
+}
+
+// handleTokens returns one page of the creation tokens.
+func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request, _ session) {
+	out, err := s.tokenListView(r.Context(), r.URL.Query())
+	if err != nil {
+		writeOpError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleCreateToken mints a creation token (SPEC §3.1 step 1) and returns it
-// with its creation URL, so the screen can show its code straight away. The
-// URL travels in this response body only — never in a URL, where a credential
-// would end up in the browser's history and in every access log on the way.
+// tokenRequest is a creation token to mint.
+type tokenRequest struct {
+	Name string
+	Note string
+	Tag  string
+
+	// ExpiresDays is 1, 7 or 30, or 0 for a token that never expires.
+	ExpiresDays int
+}
+
+// createToken mints a creation token (SPEC §3.1 step 1).
+func (s *Server) createToken(ctx context.Context, req tokenRequest) (store.Token, error) {
+	name, ok := validName(req.Name, maxTokenNameLen)
+	if !ok {
+		return store.Token{}, invalid("Give the token a name so you can tell it apart later.")
+	}
+	note := strings.TrimSpace(req.Note)
+	if len(note) > maxNoteLen {
+		return store.Token{}, invalid(fmt.Sprintf("Keep the note under %d characters.", maxNoteLen))
+	}
+	if req.Tag != "" {
+		if _, err := s.store.GetTag(ctx, req.Tag); err != nil {
+			return store.Token{}, invalid("That tag no longer exists.")
+		}
+	}
+	var expires time.Time
+	switch req.ExpiresDays {
+	case 0:
+	case 1, 7, 30:
+		expires = s.now().Add(time.Duration(req.ExpiresDays) * 24 * time.Hour)
+	default:
+		return store.Token{}, invalid("Choose when the token expires from the list.")
+	}
+
+	tok, err := s.store.CreateTokenWith(ctx, store.NewToken{Name: name, Note: note, Tag: req.Tag, ExpiresAt: expires})
+	if err != nil {
+		s.logger.ErrorContext(ctx, "create token", "error", err)
+		return store.Token{}, failed("The token could not be created.")
+	}
+	// The token value itself is a credential and is never logged
+	// (docs/internal/conventions.md §2).
+	s.logger.InfoContext(ctx, "creation token issued", slog.String("token_name", tok.Name))
+	s.auditCtx(ctx, "token.create", tok.Name, expiryText(tok.ExpiresAt))
+	return tok, nil
+}
+
+// handleCreateToken mints a creation token and returns it with its creation
+// URL, so the screen can show its code straight away. The URL travels in
+// this response body only — never in a URL, where a credential would end up
+// in the browser's history and in every access log on the way.
 func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, _ session) {
 	var req struct {
 		Name    string `json:"name"`
@@ -255,139 +311,131 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request, _ ses
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	name, ok := validName(req.Name, maxTokenNameLen)
-	if !ok {
-		writeJSONError(w, http.StatusBadRequest, "Give the token a name so you can tell it apart later.")
-		return
-	}
-	note := strings.TrimSpace(req.Note)
-	if len(note) > maxNoteLen {
-		writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("Keep the note under %d characters.", maxNoteLen))
-		return
-	}
-	if req.Tag != "" {
-		if _, err := s.store.GetTag(r.Context(), req.Tag); err != nil {
-			writeJSONError(w, http.StatusBadRequest, "That tag no longer exists.")
-			return
-		}
-	}
-	var expires time.Time
+	var days int
 	switch req.Expires {
 	case "", "never":
-	case "1":
-		expires = s.now().Add(24 * time.Hour)
-	case "7":
-		expires = s.now().Add(7 * 24 * time.Hour)
-	case "30":
-		expires = s.now().Add(30 * 24 * time.Hour)
+	case "1", "7", "30":
+		days, _ = strconv.Atoi(req.Expires)
 	default:
 		writeJSONError(w, http.StatusBadRequest, "Choose when the token expires from the list.")
 		return
 	}
-
-	tok, err := s.store.CreateTokenWith(r.Context(), store.NewToken{Name: name, Note: note, Tag: req.Tag, ExpiresAt: expires})
+	tok, err := s.createToken(r.Context(), tokenRequest{Name: req.Name, Note: req.Note, Tag: req.Tag, ExpiresDays: days})
 	if err != nil {
-		s.logger.ErrorContext(r.Context(), "create token", "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "The token could not be created.")
+		writeOpError(w, err)
 		return
 	}
-	// The token value itself is a credential and is never logged
-	// (docs/internal/conventions.md §2).
-	s.logger.InfoContext(r.Context(), "creation token issued", slog.String("token_name", tok.Name))
-	s.audit(r, "token.create", tok.Name, expiryText(tok.ExpiresAt))
 	writeJSON(w, http.StatusCreated, createdTokenJSON{tokenJSON: s.tokenView(tok, s.now()), URL: s.creationURL(tok.Value)})
 }
 
+// tokenByHandleOp finds the token a handle names, as an operation.
+func (s *Server) tokenByHandleOp(ctx context.Context, handle string) (store.Token, error) {
+	tok, err := s.tokenByHandle(ctx, handle)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return store.Token{}, notFound("That token no longer exists.")
+	case err != nil:
+		s.logger.ErrorContext(ctx, "read token", "error", err)
+		return store.Token{}, failed("The token could not be read.")
+	}
+	return tok, nil
+}
+
 // liveToken finds the unused, unexpired token a handle names: the only kind
-// with a link or a code to show. On false a response has already been written.
-func (s *Server) liveToken(w http.ResponseWriter, r *http.Request) (store.Token, bool) {
-	tok, err := s.tokenByHandle(r.Context(), r.PathValue("handle"))
+// with a link or a code to show.
+func (s *Server) liveToken(ctx context.Context, handle string) (store.Token, error) {
+	tok, err := s.tokenByHandle(ctx, handle)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		s.logger.ErrorContext(r.Context(), "read token", "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "The token could not be read.")
-		return store.Token{}, false
+		s.logger.ErrorContext(ctx, "read token", "error", err)
+		return store.Token{}, failed("The token could not be read.")
 	}
 	if err != nil || tok.Used || tok.Expired(s.now()) {
 		// A consumed or expired token creates nothing; handing out its link
 		// would only invite someone to try.
-		writeJSONError(w, http.StatusNotFound, "That token has no link any more: it was used, revoked or has expired.")
-		return store.Token{}, false
+		return store.Token{}, notFound("That token has no link any more: it was used, revoked or has expired.")
 	}
-	return tok, true
+	return tok, nil
 }
 
 // handleTokenLink returns an unused token's creation URL, for "Copy link" and
 // "Show code". Asking for it is a deliberate act, one token at a time, so a
 // screen of twenty tokens holds none of their credentials.
 func (s *Server) handleTokenLink(w http.ResponseWriter, r *http.Request, _ session) {
-	tok, ok := s.liveToken(w, r)
-	if !ok {
+	tok, err := s.liveToken(r.Context(), r.PathValue("handle"))
+	if err != nil {
+		writeOpError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"url": s.creationURL(tok.Value)})
 }
 
-// handleRevokeToken deletes an unused creation token, so the URL that was
-// handed out for it stops working. A used token is refused with a message
-// rather than deleted: its group already exists, and removing the record
-// would only hide which token created it.
-func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request, _ session) {
-	tok, err := s.tokenByHandle(r.Context(), r.PathValue("handle"))
+// revokeToken deletes an unused creation token, so the URL that was handed
+// out for it stops working. A used token is refused rather than deleted: its
+// group already exists, and removing the record would only hide which token
+// created it.
+func (s *Server) revokeToken(ctx context.Context, handle string) error {
+	tok, err := s.tokenByHandle(ctx, handle)
 	if err == nil {
-		err = s.store.RevokeToken(r.Context(), tok.Value)
+		err = s.store.RevokeToken(ctx, tok.Value)
 	}
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		writeJSONError(w, http.StatusNotFound, "That token no longer exists.")
-		return
+		return notFound("That token no longer exists.")
 	case errors.Is(err, store.ErrTokenConsumed):
-		writeJSONError(w, http.StatusConflict, "That token has already created a group, so there is nothing to revoke.")
-		return
+		return conflict("That token has already created a group, so there is nothing to revoke.")
 	case err != nil:
-		s.logger.ErrorContext(r.Context(), "revoke token", "error", err)
-		writeJSONError(w, http.StatusInternalServerError, "The token could not be revoked.")
-		return
+		s.logger.ErrorContext(ctx, "revoke token", "error", err)
+		return failed("The token could not be revoked.")
 	}
 	// Logged by name only: the value is a credential (docs/internal/conventions.md §2).
-	s.logger.InfoContext(r.Context(), "creation token revoked", slog.String("token_name", tok.Name))
-	s.audit(r, "token.revoke", tok.Name, "")
+	s.logger.InfoContext(ctx, "creation token revoked", slog.String("token_name", tok.Name))
+	s.auditCtx(ctx, "token.revoke", tok.Name, "")
+	return nil
+}
+
+// handleRevokeToken revokes an unused creation token.
+func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request, _ session) {
+	if err := s.revokeToken(r.Context(), r.PathValue("handle")); err != nil {
+		writeOpError(w, err)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleTokenQR renders a token's creation URL as a QR code, so first-device
+// tokenQR renders a live token's creation URL as a QR code, so first-device
 // onboarding is a scan rather than typing a URL on a phone (SPEC §4.4).
+func (s *Server) tokenQR(ctx context.Context, handle string) ([]byte, error) {
+	tok, err := s.liveToken(ctx, handle)
+	if err != nil {
+		return nil, err
+	}
+	code, err := qr.Encode(s.creationURL(tok.Value), qr.M)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "encode token qr", "error", err)
+		return nil, failed("The code could not be drawn.")
+	}
+	return code.PNG(), nil
+}
+
+// handleTokenQR serves a token's QR code to the admin page's <img>.
 func (s *Server) handleTokenQR(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.session(r); !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	tok, err := s.tokenByHandle(r.Context(), r.PathValue("handle"))
-	if errors.Is(err, store.ErrNotFound) {
-		http.NotFound(w, r)
-		return
-	}
+	png, err := s.tokenQR(r.Context(), r.PathValue("handle"))
 	if err != nil {
-		s.logger.ErrorContext(r.Context(), "read token", "error", err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-	if tok.Used || tok.Expired(s.now()) {
-		// A consumed or expired token creates nothing; rendering it as a
-		// scannable code would only invite someone to try.
-		http.NotFound(w, r)
-		return
-	}
-
-	code, err := qr.Encode(s.creationURL(tok.Value), qr.M)
-	if err != nil {
-		s.logger.ErrorContext(r.Context(), "encode token qr", "error", err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		if asOpError(err).status == http.StatusNotFound {
+			http.NotFound(w, r)
+		} else {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+		}
 		return
 	}
 	w.Header().Set("Content-Type", "image/png")
 	// The image encodes a live credential: no cache, no proxy copy.
 	w.Header().Set("Cache-Control", "no-store, private")
-	_, _ = w.Write(code.PNG())
+	_, _ = w.Write(png)
 }
 
 // createGroupRequest is the body of POST /<token> (SPEC §3.1 step 4). Keys are

@@ -1183,3 +1183,21 @@ footer { padding-bottom: max(2.5rem, env(safe-area-inset-bottom)); }
   .update-actions { width: 100%; }
   .update-actions button { flex: 1; }
 }
+
+/* The API keys screen: the scope checkboxes, one per line with what each
+   allows, and the example request in the new key's dialog. */
+fieldset.scopes { border: 0; padding: 0; margin: 0; display: grid; gap: 0.45rem; min-width: 0; }
+fieldset.scopes legend { padding: 0; margin-bottom: 0.35rem; font-weight: 600; font-size: 0.92rem; }
+fieldset.scopes label.check { align-items: flex-start; font-weight: 400; }
+fieldset.scopes label.check input { margin-top: 0.15rem; flex: none; }
+.dialog-body.start { align-items: stretch; }
+.dialog-body.start .copied { margin-top: -0.6rem; }
+pre.example {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.82rem;
+  background: var(--line-soft);
+  border-radius: var(--radius-sm);
+}
