@@ -26,21 +26,45 @@ type limitInfo struct {
 
 	// Source is "group", "tag" or "default".
 	Source string
+
+	// Raised is true when the chosen limit was below one entry and Bytes is
+	// minLimit instead (see raiseLimit).
+	Raised bool
 }
 
 // set reports whether the limit replaces the ledger's default.
 func (l limitInfo) set() bool { return l.Source != "default" }
 
+// minLimit is the smallest storage limit a group may have: one entry of the
+// largest size. A smaller one would refuse such an entry however much the
+// group evicts, which is a misconfiguration rather than a policy (SPEC §4.3).
+// Zero when the cap is unknown, as in tests that leave it out.
+func (s *Server) minLimit() int64 { return s.dashboard.EntryMaxBytes }
+
+// raiseLimit lifts a limit below floor to floor. Zero is no limit and stays.
+// The parsers refuse such a limit; this catches one saved before they did, or
+// one a later, larger cap has outgrown, without anyone having to edit it.
+func raiseLimit(bytes, floor int64) (int64, bool) {
+	if bytes > 0 && bytes < floor {
+		return floor, true
+	}
+	return bytes, false
+}
+
 // effectiveLimit resolves default < tag < group: the first enabled override
-// wins, counting from the group.
+// wins, counting from the group. A limit below one entry is raised to it.
 func (s *Server) effectiveLimit(g store.Group, tags map[string]store.Tag) limitInfo {
-	if g.Limit.Enabled {
-		return limitInfo{Bytes: g.Limit.Bytes, Source: "group"}
+	var l limitInfo
+	switch {
+	case g.Limit.Enabled:
+		l = limitInfo{Bytes: g.Limit.Bytes, Source: "group"}
+	case g.Tag != "" && tags[g.Tag].Limit.Enabled:
+		l = limitInfo{Bytes: tags[g.Tag].Limit.Bytes, Source: "tag"}
+	default:
+		l = limitInfo{Bytes: s.dashboard.GroupLimit, Source: "default"}
 	}
-	if t, ok := tags[g.Tag]; ok && g.Tag != "" && t.Limit.Enabled {
-		return limitInfo{Bytes: t.Limit.Bytes, Source: "tag"}
-	}
-	return limitInfo{Bytes: s.dashboard.GroupLimit, Source: "default"}
+	l.Bytes, l.Raised = raiseLimit(l.Bytes, s.minLimit())
+	return l
 }
 
 // shownLimit is the cap a group actually runs into: its own limit, or the
@@ -99,7 +123,41 @@ func (s *Server) SyncStorageLimits(ctx context.Context) error {
 	if err := s.applyLimits(ctx, groups, tags); err != nil {
 		return fmt.Errorf("sync storage limits: %w", err)
 	}
+	s.warnRaisedLimits(ctx, groups, tags)
 	return nil
+}
+
+// warnRaisedLimits logs, once at startup, every stored limit that is below one
+// entry or one store item and is therefore applied as that floor instead. The
+// admin screens say so too, beside the limit.
+func (s *Server) warnRaisedLimits(ctx context.Context, groups []store.Group, tags map[string]store.Tag) {
+	var storeFloor int64
+	if s.storeSvc != nil {
+		storeFloor = s.storeSvc.Config().MinLimitBytes()
+	}
+	warn := func(kind, attr, id string, chosen, floor int64) {
+		if _, raised := raiseLimit(chosen, floor); raised {
+			s.logger.WarnContext(ctx, "storage limit below the smallest allowed, applying the smallest instead",
+				slog.String("limit", kind), slog.String(attr, id),
+				slog.Int64("chosen_bytes", chosen), slog.Int64("applied_bytes", floor))
+		}
+	}
+	for _, t := range tags {
+		if t.Limit.Enabled {
+			warn("blob", "tag", t.Name, t.Limit.Bytes, s.minLimit())
+		}
+		if t.StoreLimit.Enabled {
+			warn("store", "tag", t.Name, t.StoreLimit.Bytes, storeFloor)
+		}
+	}
+	for _, g := range groups {
+		if g.Limit.Enabled {
+			warn("blob", "group_id", g.ID, g.Limit.Bytes, s.minLimit())
+		}
+		if g.StoreLimit.Enabled {
+			warn("store", "group_id", g.ID, g.StoreLimit.Bytes, storeFloor)
+		}
+	}
 }
 
 // applyGroupLimit re-resolves one group's limit after an edit to it.
@@ -179,18 +237,31 @@ func sizeChange(req limitRequest, example string) (limitChange, error) {
 }
 
 // checkLimit applies a storage limit change to the current override, and
-// checks it against the total limit.
+// checks it against the total limit and one entry.
 func (s *Server) checkLimit(c limitChange, current store.LimitOverride) (store.LimitOverride, error) {
-	return checkOverride(c, current, s.dashboard.TotalLimit, "The limit cannot be above the server's total limit of %s.")
+	floor := s.minLimit()
+	return checkOverride(c, current, s.dashboard.TotalLimit, floor,
+		"The limit cannot be above the server's total limit of %s.",
+		fmt.Sprintf("The limit cannot be below the largest entry the relay accepts (%s). Use 0 for no limit of its own.", humanBytes(floor)))
 }
 
 // checkStoreLimit is checkLimit for a store limit, checked against the
-// relay's total store limit instead of the blob one.
+// relay's total store limit instead of the blob one, and one item with its
+// record instead of one entry.
 func (s *Server) checkStoreLimit(c limitChange, current store.LimitOverride) (store.LimitOverride, error) {
-	return checkOverride(c, current, s.storeSvc.Config().MaxTotalBytes, "The limit cannot be above the server's total store limit of %s.")
+	cfg := s.storeSvc.Config()
+	floor := cfg.MinLimitBytes()
+	// Spelled out: humanBytes would round the record away and show the
+	// floor as the item cap, which is then refused.
+	tooSmall := fmt.Sprintf("The limit cannot be below what the largest item takes: %s plus its %s record, %d bytes in all. Use 0 for no limit of its own.",
+		humanBytes(cfg.MaxItemBytes), humanBytes(floor-cfg.MaxItemBytes), floor)
+	return checkOverride(c, current, cfg.MaxTotalBytes, floor, "The limit cannot be above the server's total store limit of %s.", tooSmall)
 }
 
-func checkOverride(c limitChange, current store.LimitOverride, total int64, tooBig string) (store.LimitOverride, error) {
+// checkOverride applies c to current. An override that is on must not be
+// above total, and unless it is zero (no limit of its own), not below floor
+// (SPEC §4.3, §4.6). tooBig takes the total; tooSmall is shown as is.
+func checkOverride(c limitChange, current store.LimitOverride, total, floor int64, tooBig, tooSmall string) (store.LimitOverride, error) {
 	out := store.LimitOverride{Bytes: current.Bytes, Enabled: c.Enabled}
 	if c.Bytes != nil {
 		if *c.Bytes < 0 {
@@ -200,6 +271,9 @@ func checkOverride(c limitChange, current store.LimitOverride, total int64, tooB
 	}
 	if out.Enabled && total > 0 && out.Bytes > total {
 		return current, invalid(fmt.Sprintf(tooBig, humanBytes(total)))
+	}
+	if out.Enabled && out.Bytes > 0 && out.Bytes < floor {
+		return current, invalid(tooSmall)
 	}
 	return out, nil
 }
@@ -215,6 +289,10 @@ type groupDetailJSON struct {
 	OwnLimit          limitJSON `json:"own_limit"`
 	TagLimitBytes     *int64    `json:"tag_limit_bytes"`
 	DefaultLimitBytes int64     `json:"default_limit_bytes"`
+
+	// MinLimitBytes is the smallest limit the group may be given: one entry
+	// of the largest size. Zero when unknown.
+	MinLimitBytes int64 `json:"min_limit_bytes"`
 
 	// Tags are the tags the group can be put under.
 	Tags []string `json:"tags"`
@@ -251,6 +329,7 @@ func (s *Server) groupDetailView(ctx context.Context, g store.Group) groupDetail
 		Devices:           make([]deviceJSON, 0, len(devices)),
 		OwnLimit:          limitJSON{Enabled: g.Limit.Enabled, Bytes: g.Limit.Bytes},
 		DefaultLimitBytes: s.dashboard.GroupLimit,
+		MinLimitBytes:     s.minLimit(),
 		Tags:              make([]string, 0, len(tags)),
 		CanPurge:          s.purger != nil,
 	}

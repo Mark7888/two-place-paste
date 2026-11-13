@@ -13,7 +13,9 @@ import (
 	"github.com/Mark7888/two-place-paste/server/internal/store"
 )
 
-var adminStoreConfig = items.Config{MaxTotalBytes: 1 << 30, MaxGroupBytes: 100 << 20, MaxItemBytes: 50 << 20, MaxGroupItems: 1000}
+// adminStoreConfig takes items of up to 5 MiB, so the 10 and 20 MiB limits
+// below are above the floor of one item and its record.
+var adminStoreConfig = items.Config{MaxTotalBytes: 1 << 30, MaxGroupBytes: 100 << 20, MaxItemBytes: 5 << 20, MaxGroupItems: 1000}
 
 // storeFixture is an admin server with the store service and a fake
 // transport wired in.
@@ -66,8 +68,10 @@ type storeSection struct {
 		Enabled bool  `json:"enabled"`
 		Bytes   int64 `json:"bytes"`
 	} `json:"own_limit"`
-	MaxItems     int64 `json:"max_items"`
-	MaxItemBytes int64 `json:"max_item_bytes"`
+	MaxItems      int64 `json:"max_items"`
+	MaxItemBytes  int64 `json:"max_item_bytes"`
+	LimitRaised   bool  `json:"limit_raised"`
+	MinLimitBytes int64 `json:"min_limit_bytes"`
 }
 
 func (f *storeFixture) section(t *testing.T, c *http.Client, id string) *storeSection {
@@ -98,7 +102,7 @@ func TestGroupStoreSwitchAndLimits(t *testing.T) {
 	base := "/admin/api/groups/" + admin.HandleOf(id)
 
 	got := f.section(t, c, id)
-	if got.Enabled || got.LimitBytes != 100<<20 || got.LimitSource != "default" || got.MaxItems != 1000 || got.MaxItemBytes != 50<<20 {
+	if got.Enabled || got.LimitBytes != 100<<20 || got.LimitSource != "default" || got.MaxItems != 1000 || got.MaxItemBytes != 5<<20 || got.MinLimitBytes != 5<<20+items.RecordBytes || got.LimitRaised {
 		t.Errorf("store section = %+v, want off with the 100 MiB default", got)
 	}
 
@@ -126,12 +130,27 @@ func TestGroupStoreSwitchAndLimits(t *testing.T) {
 	}
 
 	for name, body := range map[string]map[string]any{
-		"above the total": {"enabled": true, "size": "2 GiB"},
-		"not a size":      {"enabled": true, "size": "lots"},
+		"above the total":             {"enabled": true, "size": "2 GiB"},
+		"not a size":                  {"enabled": true, "size": "lots"},
+		"below one item":              {"enabled": true, "size": "1 MiB"},
+		"one item without its record": {"enabled": true, "size": "5 MiB"},
 	} {
 		if resp := f.call(c, csrf, http.MethodPut, base+"/store-limit", body); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s: status = %d, want %d", name, resp.StatusCode, http.StatusBadRequest)
 		}
+	}
+	if resp := f.call(c, csrf, http.MethodPut, "/admin/api/tags/work/store-limit", map[string]any{"enabled": true, "size": "4 MiB"}); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("tag below one item: status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+	// One that a smaller item cap once allowed is applied as the floor.
+	if err := f.store.SetGroupStoreLimit(ctx, id, store.LimitOverride{Enabled: true, Bytes: 1 << 20}); err != nil {
+		t.Fatalf("SetGroupStoreLimit() error = %v", err)
+	}
+	if got := f.section(t, c, id); got.LimitBytes != 5<<20+items.RecordBytes || !got.LimitRaised {
+		t.Errorf("store section with a stored limit below one item = %+v, want it raised to one item", got)
+	}
+	if err := f.store.SetGroupStoreLimit(ctx, id, store.LimitOverride{Enabled: true, Bytes: 20 << 20}); err != nil {
+		t.Fatalf("SetGroupStoreLimit() error = %v", err)
 	}
 
 	wantStatus(t, f.call(c, csrf, http.MethodPut, base+"/store", map[string]bool{"enabled": false}), http.StatusNoContent)

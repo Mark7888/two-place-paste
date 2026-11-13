@@ -109,6 +109,9 @@ export interface Group {
   /** The cap the group runs into; zero means none. */
   limit_bytes: number;
   limit_source: LimitSource;
+  /** True when the limit chosen for the group is below one entry, so
+   *  limit_bytes is that floor instead. */
+  limit_raised: boolean;
   /** Null when blob storage is not accounted. */
   usage: { used_bytes: number; over_limit: boolean } | null;
   /** Only on the groups list, and only when the relay has a store. */
@@ -152,6 +155,9 @@ export interface GroupDetail {
   own_limit: Limit;
   tag_limit_bytes: number | null;
   default_limit_bytes: number;
+  /** The smallest limit the group may be given: one entry of the largest
+   *  size. Zero when unknown. */
+  min_limit_bytes: number;
   tags: string[];
   can_purge: boolean;
   /** Null when the relay has no store. */
@@ -170,6 +176,11 @@ export interface GroupStore {
   /** The cap the store runs into; zero means none. */
   limit_bytes: number;
   limit_source: LimitSource;
+  /** True when the limit chosen for the store is below one item, so
+   *  limit_bytes is that floor instead. */
+  limit_raised: boolean;
+  /** The smallest store limit: one item of the largest size and its record. */
+  min_limit_bytes: number;
   own_limit: Limit;
   tag_limit_bytes: number | null;
   default_limit_bytes: number;
@@ -184,6 +195,10 @@ export interface Tag {
   used_bytes: number;
   limit: Limit;
   store_limit: Limit;
+  /** True when the tag's limit is on and below the smallest allowed, so its
+   *  groups get that floor instead. */
+  limit_raised: boolean;
+  store_limit_raised: boolean;
   /** What the stores of the tag's groups hold together, and how many of
    *  those groups have their store on. */
   store_bytes: number;
@@ -193,9 +208,13 @@ export interface Tag {
 export interface TagList extends TablePage<Tag> {
   default_limit_bytes: number;
   total_limit_bytes: number;
+  /** The smallest limit a tag may set: one entry. Zero when unknown. */
+  min_limit_bytes: number;
   has_store: boolean;
   default_store_limit_bytes: number;
   total_store_limit_bytes: number;
+  /** The smallest store limit: one item of the largest size and its record. */
+  min_store_limit_bytes: number;
   problems: string[];
 }
 

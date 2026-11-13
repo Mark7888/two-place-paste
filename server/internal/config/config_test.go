@@ -2,6 +2,7 @@ package config
 
 import (
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -486,7 +487,8 @@ func TestLoadS3Errors(t *testing.T) {
 }
 
 // TestLoadStore: the store limits are read as byte sizes, the item cap
-// follows the entry cap unless set, and nonsense is refused.
+// follows the entry cap unless set — cut down to what the store limits hold —
+// and nonsense is refused.
 func TestLoadStore(t *testing.T) {
 	t.Parallel()
 
@@ -499,26 +501,72 @@ func TestLoadStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	want := StoreConfig{MaxTotalBytes: 2 << 30, MaxGroupBytes: 10 << 20, MaxItemBytes: 20 << 20, MaxGroupItems: 50}
+	// The 20 MiB entry cap does not fit a 10 MiB store, so the item cap is
+	// what one item may take there besides its record.
+	want := StoreConfig{MaxTotalBytes: 2 << 30, MaxGroupBytes: 10 << 20, MaxItemBytes: 10<<20 - StoreItemRecordBytes, MaxGroupItems: 50}
 	if cfg.Store != want {
 		t.Errorf("Store = %+v, want %+v", cfg.Store, want)
 	}
+	if got := cfg.Store.MinLimitBytes(); got != 10<<20 {
+		t.Errorf("MinLimitBytes() = %d, want %d", got, 10<<20)
+	}
 
 	tests := []struct {
-		name, key, value, wantErr string
+		name    string
+		env     map[string]string
+		wantErr string
 	}{
-		{"negative group limit", "TPP_STORE_MAX_GROUP_BYTES", "-1", "TPP_STORE_MAX_GROUP_BYTES must not be negative"},
-		{"no items", "TPP_STORE_MAX_GROUP_ITEMS", "0", "TPP_STORE_MAX_GROUP_ITEMS must be at least 1"},
-		{"negative item cap", "TPP_STORE_MAX_ITEM_BYTES", "-5", "TPP_STORE_MAX_ITEM_BYTES must be positive"},
+		{"negative group limit", map[string]string{"TPP_STORE_MAX_GROUP_BYTES": "-1"}, "TPP_STORE_MAX_GROUP_BYTES must not be negative"},
+		{"no items", map[string]string{"TPP_STORE_MAX_GROUP_ITEMS": "0"}, "TPP_STORE_MAX_GROUP_ITEMS must be at least 1"},
+		{"negative item cap", map[string]string{"TPP_STORE_MAX_ITEM_BYTES": "-5"}, "TPP_STORE_MAX_ITEM_BYTES must be positive"},
+		{
+			"group limit below one item",
+			map[string]string{"TPP_STORE_MAX_ITEM_BYTES": "20MiB", "TPP_STORE_MAX_GROUP_BYTES": "10MiB"},
+			"TPP_STORE_MAX_GROUP_BYTES (10485760) must be 0 (unlimited) or at least TPP_STORE_MAX_ITEM_BYTES plus one item's record",
+		},
+		{
+			"total limit below one item",
+			map[string]string{"TPP_STORE_MAX_ITEM_BYTES": "20MiB", "TPP_STORE_MAX_TOTAL_BYTES": "20MiB"},
+			"TPP_STORE_MAX_TOTAL_BYTES (20971520) must be 0 (unlimited) or at least TPP_STORE_MAX_ITEM_BYTES plus one item's record",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			env := minimalEnv()
-			env[tt.key] = tt.value
+			maps.Copy(env, tt.env)
 			_, err := Load(Options{DotenvPath: filepath.Join(t.TempDir(), "absent.env"), Lookup: lookupFrom(env)})
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("Load() error = %v, want it to contain %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestDefaultStoreItemBytes: the default item cap is the entry cap, cut to
+// fit one item and its record within each store limit that is set.
+func TestDefaultStoreItemBytes(t *testing.T) {
+	t.Parallel()
+
+	const entryMax = 50 << 20
+	tests := []struct {
+		name   string
+		limits []int64
+		want   int64
+	}{
+		{"no limits", []int64{0, 0}, entryMax},
+		{"limits above the entry cap", []int64{100 << 20, 1 << 30}, entryMax},
+		{"group limit exactly one entry and record", []int64{entryMax + StoreItemRecordBytes, 0}, entryMax},
+		{"group limit below", []int64{10 << 20, 0}, 10<<20 - StoreItemRecordBytes},
+		{"total limit below", []int64{0, 20 << 20}, 20<<20 - StoreItemRecordBytes},
+		{"smallest wins", []int64{30 << 20, 20 << 20}, 20<<20 - StoreItemRecordBytes},
+		{"limit too small for any item is left to Validate", []int64{100, 0}, entryMax},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := defaultStoreItemBytes(entryMax, tt.limits...); got != tt.want {
+				t.Errorf("defaultStoreItemBytes() = %d, want %d", got, tt.want)
 			}
 		})
 	}

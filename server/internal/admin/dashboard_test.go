@@ -37,15 +37,16 @@ func newDashboardFixture(t *testing.T, limits quota.Limits) *dashboardFixture {
 		Quota:          d.ledger,
 	})
 	d.fixture = newFixtureWithDashboard(t, "https://tpp.example.com", admin.Dashboard{
-		Ledger:         d.ledger,
-		Entries:        ephemeral,
-		SweepStatus:    func() blob.SweepStatus { return d.sweep },
-		Uploads:        func() (int, int64) { return 2, 30 << 20 },
-		Backend:        "s3",
-		Location:       "http://minio:9000/tpp/",
-		TotalLimit:     limits.TotalBytes,
-		GroupLimit:     limits.GroupBytes,
-		EntryMaxBytes:  1 << 20,
+		Ledger:      d.ledger,
+		Entries:     ephemeral,
+		SweepStatus: func() blob.SweepStatus { return d.sweep },
+		Uploads:     func() (int, int64) { return 2, 30 << 20 },
+		Backend:     "s3",
+		Location:    "http://minio:9000/tpp/",
+		TotalLimit:  limits.TotalBytes,
+		GroupLimit:  limits.GroupBytes,
+		// Below Ben's 40 KiB limit, which would otherwise be raised to it.
+		EntryMaxBytes:  32 << 10,
 		InlineMaxBytes: 1024,
 	})
 	return d
@@ -152,7 +153,7 @@ func TestDashboard(t *testing.T) {
 	if st.Evictions != 1 || st.EvictedBytes != 20<<10 {
 		t.Errorf("evictions = %d (%d bytes), want ben-1: 1 (20 KiB)", st.Evictions, st.EvictedBytes)
 	}
-	if st.Backend != "s3" || st.Location != "http://minio:9000/tpp/" || st.GroupLimitBytes != 40<<10 || st.EntryMaxBytes != 1<<20 || st.InlineMaxBytes != 1024 {
+	if st.Backend != "s3" || st.Location != "http://minio:9000/tpp/" || st.GroupLimitBytes != 40<<10 || st.EntryMaxBytes != 32<<10 || st.InlineMaxBytes != 1024 {
 		t.Errorf("storage settings = %+v", st)
 	}
 	if st.LastSweep == nil || !st.LastSweep.At.Equal(d.sweep.At) || st.LastSweep.TookMS != 3 || st.LastSweep.Error != "" {
@@ -209,9 +210,11 @@ type failingLedger struct{}
 func (failingLedger) Usage(context.Context) (quota.Usage, error) {
 	return quota.Usage{}, errors.New("down")
 }
+
 func (failingLedger) GroupUsage(context.Context, string) (quota.Usage, error) {
 	return quota.Usage{}, errors.New("down")
 }
+
 func (failingLedger) Evictions(context.Context) (quota.Evictions, error) {
 	return quota.Evictions{}, errors.New("down")
 }
