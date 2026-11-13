@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -373,12 +374,16 @@ func TestJoinNoticeNeedsAnOpenInvitation(t *testing.T) {
 }
 
 // TestRejectedJoinGetsNoKey: a request turned down wraps nothing, and the
-// invitation's Wait says so. An expired invitation admits nobody either.
+// invitation's Wait says so. An invitation is timed on the device's clock,
+// not the relay's, and once that has run out it admits nobody either.
 func TestRejectedJoinGetsNoKey(t *testing.T) {
 	t.Parallel()
 	ctx := testContextInternal(t)
 
 	c := newOfflineClient(t, 1)
+	// The device's clock, which an invitation's lifetime is timed on.
+	var skew atomic.Int64
+	c.now = func() time.Time { return time.Now().Add(time.Duration(skew.Load())) }
 	relay := newHostileRelay(t)
 	requests := make(chan *JoinRequest, 4)
 	names := make(chan string, 4)
@@ -402,14 +407,27 @@ func TestRejectedJoinGetsNoKey(t *testing.T) {
 		t.Error("Confirm after Reject succeeded")
 	}
 
-	// An invitation whose token has expired.
+	// A relay whose clock is behind this device's reports an expiry already
+	// past here. The invitation is timed on this device's clock, so it is
+	// still open.
 	relay.mu.Lock()
-	relay.expiresAt = time.Now().Add(-time.Minute)
+	relay.expiresAt = time.Now().Add(-time.Hour)
 	relay.mu.Unlock()
+	skewed, err := c.StartPairing(ctx)
+	if err != nil {
+		t.Fatalf("StartPairing: %v", err)
+	}
+	relay.push(ctx, tppv1.MessageType_MESSAGE_TYPE_PAIRING_JOIN_NOTICE, &tppv1.PairingJoinNotice{
+		PairingToken: skewed.Token, DeviceId: "skewed", DevicePublicKey: bytes.Repeat([]byte{9}, 32),
+	})
+	(<-requests).Reject()
+
+	// An invitation open longer than a token lives, on this device's clock.
 	stale, err := c.StartPairing(ctx)
 	if err != nil {
 		t.Fatalf("StartPairing: %v", err)
 	}
+	skew.Store(int64(invitationOpenFor + time.Second))
 	relay.push(ctx, tppv1.MessageType_MESSAGE_TYPE_PAIRING_JOIN_NOTICE, &tppv1.PairingJoinNotice{
 		PairingToken: stale.Token, DeviceId: "late", DevicePublicKey: bytes.Repeat([]byte{9}, 32),
 	})

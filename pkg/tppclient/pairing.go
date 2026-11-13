@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,11 @@ type Invitation struct {
 	Payload   string
 	Token     string
 	ExpiresAt time.Time
+
+	// openUntil is when this client stops acting on joins for it, on its own
+	// clock (invitationOpenFor). ExpiresAt is on the relay's clock, and a
+	// device whose clock runs ahead of it would otherwise ignore every join.
+	openUntil time.Time
 
 	// claimed is set, under the client's mutex, once a join has been reported
 	// for this token: one invitation admits one device, and a second notice
@@ -92,7 +98,8 @@ type JoinRequest struct {
 	// identifies the device.
 	Fingerprint string
 
-	// ExpiresAt is when the invitation's token expires. The relay refuses the
+	// ExpiresAt is when the invitation stops being open, on this device's
+	// clock: the relay's token runs out about then too. The relay refuses the
 	// key after that, so a dialog still open then has nothing to confirm.
 	ExpiresAt time.Time
 
@@ -113,6 +120,16 @@ func (r *JoinRequest) Confirm(ctx context.Context) (Device, error) {
 	r.done = true
 	r.mu.Unlock()
 	c := r.client
+
+	// The invitation may have ended since the request was shown: expired, or
+	// this device switched or left its group, so the key on hand may not be
+	// the group it was for.
+	c.mu.Lock()
+	open := slices.Contains(c.invitations, r.inv)
+	c.mu.Unlock()
+	if !open {
+		return Device{}, fmt.Errorf("tppclient: that pairing is no longer open; show a new code: %w", ErrJoinRejected)
+	}
 
 	state := c.State()
 	if !state.InGroup() {
@@ -163,6 +180,11 @@ func (r *JoinRequest) Reject() {
 	r.client.endInvitation(r.inv, nil)
 }
 
+// invitationOpenFor is how long an invitation this client showed stays open
+// for a join, timed on its own clock: the relay's pairing token lifetime
+// (SPEC §3.2).
+const invitationOpenFor = 5 * time.Minute
+
 // StartPairing mints a pairing token and returns the payload to show
 // (SPEC §3.2 step 1).
 //
@@ -203,6 +225,7 @@ func (c *Client) StartPairing(ctx context.Context) (*Invitation, error) {
 		Payload:   payload,
 		Token:     resp.GetPairingToken(),
 		ExpiresAt: msToTime(resp.GetExpiresAtUnixMs()),
+		openUntil: c.now().Add(invitationOpenFor),
 		requests:  make(chan *JoinRequest, 1),
 		joined:    make(chan Device, 1),
 	}
@@ -226,7 +249,7 @@ func (c *Client) onJoinNotice(notice *tppv1.PairingJoinNotice) {
 	var inv *Invitation
 	open := c.invitations[:0]
 	for _, i := range c.invitations {
-		if !i.ExpiresAt.After(now) {
+		if !i.openUntil.After(now) {
 			continue // expired: the relay refuses its key anyway
 		}
 		open = append(open, i)
@@ -251,7 +274,7 @@ func (c *Client) onJoinNotice(notice *tppv1.PairingJoinNotice) {
 		DeviceName:  notice.GetDeviceName(),
 		PublicKey:   notice.GetDevicePublicKey(),
 		Fingerprint: Fingerprint(notice.GetDevicePublicKey()),
-		ExpiresAt:   inv.ExpiresAt,
+		ExpiresAt:   inv.openUntil,
 		client:      c,
 		inv:         inv,
 	}
