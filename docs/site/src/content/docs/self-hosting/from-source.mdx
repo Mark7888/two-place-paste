@@ -5,14 +5,6 @@ description: Build the relay yourself — as a Docker image or as a plain binary
 
 import { Tabs, TabItem, Steps, Aside } from '@astrojs/starlight/components';
 
-<Aside type="caution">
-	A fresh clone is the `master` branch, the same code as the `beta` image. For a relay people
-	rely on, build a release instead: run `git checkout v1.2.3` (the newest tag on the
-	[releases page](https://github.com/Mark7888/two-place-paste/releases)) after cloning. A relay
-	built from `master` may need something that no released app has yet, and then apps on the
-	Stable channel stop working with it. See [Image tags](/two-place-paste/self-hosting/docker/#image-tags).
-</Aside>
-
 <Tabs>
 <TabItem label="Docker image" icon="seti:docker">
 
