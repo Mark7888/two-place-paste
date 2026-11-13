@@ -24,13 +24,17 @@ import (
 type fakeLive struct {
 	mu      sync.Mutex
 	online  map[string]bool
+	levels  map[string]uint32
 	renamed map[string]string
 	closed  []string
 	store   map[string]bool
 }
 
 func newFakeLive() *fakeLive {
-	return &fakeLive{online: make(map[string]bool), renamed: make(map[string]string), store: make(map[string]bool)}
+	return &fakeLive{
+		online: make(map[string]bool), levels: make(map[string]uint32),
+		renamed: make(map[string]string), store: make(map[string]bool),
+	}
 }
 
 func (l *fakeLive) OnlineDevices(string) map[string]bool {
@@ -38,6 +42,16 @@ func (l *fakeLive) OnlineDevices(string) map[string]bool {
 	defer l.mu.Unlock()
 	out := make(map[string]bool, len(l.online))
 	for k, v := range l.online {
+		out[k] = v
+	}
+	return out
+}
+
+func (l *fakeLive) OnlineLevels(string) map[string]uint32 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make(map[string]uint32, len(l.levels))
+	for k, v := range l.levels {
 		out[k] = v
 	}
 	return out
@@ -126,6 +140,7 @@ func newGroupFixture(t *testing.T, limits quota.Limits, rds admin.RedisInfo) *gr
 		o.Redis = rds
 		o.Version = "v9.9.9 (abc123)"
 		o.OperatorURL = "https://tpp.example.com/help"
+		o.Protocol = admin.ProtocolRange{Min: 1, Max: 2}
 	})
 	return g
 }
@@ -931,5 +946,63 @@ func TestAuditNeverHoldsSecrets(t *testing.T) {
 	}
 	if !strings.Contains(page, `"kept":1000`) || !strings.Contains(page, `"target":"Dora"`) {
 		t.Errorf("audit page = %s, want the kept count and the new token's name", page)
+	}
+}
+
+// TestGroupPageShowsProtocolLevels: each device's protocol level is its open
+// socket's while it is online, else the last one it connected with, and none
+// before it has connected since levels were recorded (SPEC §5.3).
+func TestGroupPageShowsProtocolLevels(t *testing.T) {
+	t.Parallel()
+	g := newGroupFixture(t, quota.Limits{}, nil)
+	ctx := context.Background()
+	id, laptop := g.group(t, "Anna")
+	phone, err := g.store.AddDevice(ctx, id, store.NewDevice{Name: "phone", PublicKey: []byte("pk2")})
+	if err != nil {
+		t.Fatalf("AddDevice() error = %v", err)
+	}
+	if _, err := g.store.AddDevice(ctx, id, store.NewDevice{Name: "tablet", PublicKey: []byte("pk3")}); err != nil {
+		t.Fatalf("AddDevice() error = %v", err)
+	}
+	// The laptop connected at level 1 before and is online at level 2 now;
+	// the phone was last seen at level 1; the tablet never connected.
+	for _, dev := range []string{laptop, phone.ID} {
+		if err := g.store.TouchLastSeen(ctx, dev, 1); err != nil {
+			t.Fatalf("TouchLastSeen() error = %v", err)
+		}
+	}
+	g.live.mu.Lock()
+	g.live.online[laptop] = true
+	g.live.levels[laptop] = 2
+	g.live.mu.Unlock()
+
+	c := g.client()
+	g.login(c)
+	type page struct {
+		Protocol struct {
+			Min uint32 `json:"min"`
+			Max uint32 `json:"max"`
+		} `json:"protocol"`
+		Devices []struct {
+			Name          string  `json:"name"`
+			ProtocolLevel *uint32 `json:"protocol_level"`
+		} `json:"devices"`
+	}
+	got := readJSON[page](t, g.get(c, "/admin/api/groups/"+admin.HandleOf(id)))
+	if got.Protocol.Min != 1 || got.Protocol.Max != 2 {
+		t.Errorf("protocol = %+v, want [1, 2]", got.Protocol)
+	}
+	want := map[string]uint32{"Anna's laptop": 2, "phone": 1, "tablet": 0}
+	for _, d := range got.Devices {
+		var level uint32
+		if d.ProtocolLevel != nil {
+			level = *d.ProtocolLevel
+		}
+		if level != want[d.Name] {
+			t.Errorf("%s protocol_level = %d, want %d (0 meaning none)", d.Name, level, want[d.Name])
+		}
+	}
+	if len(got.Devices) != len(want) {
+		t.Errorf("%d devices, want %d", len(got.Devices), len(want))
 	}
 }

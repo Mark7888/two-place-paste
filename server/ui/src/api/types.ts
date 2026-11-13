@@ -150,11 +150,24 @@ export interface Device {
   created_at: string;
   last_seen: string | null;
   online: boolean;
+  /**
+   * The protocol level the device speaks: its open socket's while online,
+   * else the last one it connected with. Null before it has connected since
+   * the relay began recording levels.
+   */
+  protocol_level: number | null;
+}
+
+/** ProtocolRange is the lowest and highest protocol level the relay accepts. */
+export interface ProtocolRange {
+  min: number;
+  max: number;
 }
 
 export interface GroupDetail {
   group: Group;
   devices: Device[];
+  protocol: ProtocolRange;
   own_limit: Limit;
   tag_limit_bytes: number | null;
   default_limit_bytes: number;
