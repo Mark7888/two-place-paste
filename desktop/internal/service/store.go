@@ -526,8 +526,6 @@ func (s *Service) storeError(op string, err error) error {
 		return localui.Errorf(http.StatusRequestEntityTooLarge, err, "that is larger than the store accepts")
 	case errors.Is(err, tppclient.ErrStoreUnreadable):
 		return localui.Errorf(http.StatusUnprocessableEntity, err, "that item could not be decrypted on this device")
-	case errors.Is(err, tppclient.ErrClientOutdated):
-		return localui.Errorf(http.StatusUpgradeRequired, err, "the server needs a newer version of this app")
 	case errors.Is(err, tppcrypto.ErrMalformed):
 		return localui.Errorf(http.StatusBadRequest, err,
 			"check the details: a name is required, and each field has a length limit")

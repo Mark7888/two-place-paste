@@ -143,7 +143,11 @@ type Service struct {
 	// groupDeleted is set with revoked when the server admin deleted the
 	// group, which the UI words differently from a revocation.
 	groupDeleted bool
-	lastApplied  time.Time
+
+	// outdated is set while the relay refuses this build for its age (SPEC
+	// §5.3). Unlike revoked it ends: the next connection clears it.
+	outdated    bool
+	lastApplied time.Time
 
 	// downloads counts downloads in flight, manual and automatic, for the
 	// tray's icon; uploads, below, does the same for uploads.
@@ -375,6 +379,17 @@ func (s *Service) ClientHandlers() tppclient.Handlers {
 				Message: groupDeletedMessage,
 			})
 		},
+		OnClientOutdated: func() {
+			s.mu.Lock()
+			s.outdated, s.connected = true, false
+			s.lastError = clientOutdatedMessage
+			s.mu.Unlock()
+			s.activityChanged()
+			s.hub.publish(localui.Event{
+				Kind:    localui.EventClientOutdated,
+				Message: clientOutdatedMessage,
+			})
+		},
 		OnGroupName: func(name string) {
 			s.activityChanged()
 			s.hub.publish(localui.Event{Kind: localui.EventGroupName, Name: name})
@@ -394,6 +409,15 @@ const (
 	groupDeletedMessage = "the server admin deleted this device's group; create a new group or pair with another device"
 )
 
+// The relay and this build no longer fitting (SPEC §5.3). Neither loses the
+// group: the first ends when the app is updated, the others when the relay
+// is, or with a code from an app as new as this one.
+const (
+	clientOutdatedMessage = "the relay needs a newer version of TwoPlacePaste; update this app to keep syncing"
+	relayOutdatedMessage  = "the relay is too old for this; ask its operator to update it"
+	newerCodeMessage      = "that code was made by a newer version of TwoPlacePaste; update this app to use it"
+)
+
 // Subscribe implements localui.API.
 func (s *Service) Subscribe() (<-chan localui.Event, func()) { return s.hub.subscribe() }
 
@@ -404,6 +428,7 @@ func (s *Service) setConnected(on bool, msg string) {
 	if on {
 		s.revoked = false
 		s.groupDeleted = false
+		s.outdated = false
 		s.everConnected = true
 	}
 	s.mu.Unlock()
@@ -414,7 +439,7 @@ func (s *Service) setConnected(on bool, msg string) {
 func (s *Service) Status(ctx context.Context) localui.Status {
 	s.mu.Lock()
 	relay, connected, revoked, lastSync, lastErr := s.relay, s.connected, s.revoked, s.lastSync, s.lastError
-	groupDeleted := s.groupDeleted
+	groupDeleted, outdated := s.groupDeleted, s.outdated
 	var skipped *localui.SkippedView
 	if s.skipped != nil {
 		v := *s.skipped // a copy: the UI must not see it change under it
@@ -438,6 +463,7 @@ func (s *Service) Status(ctx context.Context) localui.Status {
 		Connected:     connected,
 		Revoked:       revoked,
 		GroupDeleted:  groupDeleted,
+		Outdated:      outdated,
 		LastSync:      localui.Optional(lastSync),
 		LastError:     lastErr,
 		Keystore:      s.backend,
@@ -1226,6 +1252,7 @@ func (s *Service) resetGroupState() {
 	s.connected = false
 	s.revoked = false
 	s.groupDeleted = false
+	s.outdated = false
 	s.everConnected = false
 	s.lastError = ""
 	s.lastSync = time.Time{}
@@ -1892,6 +1919,14 @@ func (s *Service) relayError(op string, err error) error {
 		return localui.Errorf(http.StatusForbidden, err, groupDeletedMessage)
 	case errors.Is(err, tppclient.ErrRevoked), errors.Is(err, tppclient.ErrUnauthenticated):
 		return localui.Errorf(http.StatusForbidden, err, revokedMessage)
+	case errors.Is(err, tppclient.ErrClientOutdated):
+		// Before the generic cases: a refusal for age is neither an outage
+		// nor a revocation, and pairing meets it as often as syncing does.
+		return localui.Errorf(http.StatusUpgradeRequired, err, clientOutdatedMessage)
+	case errors.Is(err, tppclient.ErrRelayOutdated):
+		return localui.Errorf(http.StatusNotImplemented, err, relayOutdatedMessage)
+	case errors.Is(err, tppclient.ErrCodeFromNewerApp):
+		return localui.Errorf(http.StatusBadRequest, err, newerCodeMessage)
 	case errors.Is(err, tppclient.ErrEpochConflict):
 		return localui.Errorf(http.StatusConflict, err,
 			"another device changed the group key first; refresh and try again")
