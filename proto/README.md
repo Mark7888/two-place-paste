@@ -28,6 +28,7 @@ leaves every other message in this package untouched. That is the reason SPEC
 |---|---|
 | `tpp/v1/envelope.proto` | `Envelope`, `MessageType` |
 | `tpp/v1/error.proto` | `Error`, `ErrorCode` |
+| `tpp/v1/hello.proto` | protocol levels and relay capabilities (SPEC §5.3) |
 | `tpp/v1/group.proto` | group creation, device roster, rekey (SPEC §3.1, §3.3) |
 | `tpp/v1/pairing.proto` | pairing exchange and the QR/paste payload (SPEC §3.2) |
 | `tpp/v1/entry.proto` | put / latest / history / fetch (SPEC §4.3, §6) |
@@ -41,8 +42,11 @@ Conventions inside the schema:
   neither can accidentally involve local time (docs/internal/conventions.md §6).
 - **Key material** is always `bytes` and always opaque to the server. Algorithms
   and byte layouts are pinned by `/spec/crypto.md` (Phase 2), never here.
-- **Enum numbers are permanent.** Renumbering an `ErrorCode` or a `MessageType`
-  breaks clients that upgrade independently of the server.
+- **Enum numbers are permanent.** Renumbering an `ErrorCode`, a `MessageType` or
+  a `Capability` breaks clients that upgrade independently of the server.
+- **Compatible by default.** A new relay feature an app has to check for gets a
+  `Capability`; only a change that cannot stay compatible raises the protocol
+  level (SPEC §5.3).
 - Nothing in the schema carries a content type, a filename or a plaintext
   length. Those live inside the ciphertext, which is what makes SPEC §2.3
   ("the server does not see content type") structural rather than aspirational.
@@ -51,10 +55,11 @@ Conventions inside the schema:
 
 **Connection authentication frames.** SPEC §5 gives a connection a device
 identity, but the proof a device presents depends on decisions Phase 2 has not
-made yet (`/spec/crypto.md`). Inventing a `HelloRequest` here would pin a crypto
-choice from the wrong phase. Phase 3c raises a `contract-change` issue once the
-crypto spec exists; only `CreateGroupRequest` and `PairingJoinRequest` are legal
-on an unauthenticated connection, and that is already stated in their comments.
+made yet (`/spec/crypto.md`). Inventing one here would pin a crypto choice from
+the wrong phase. Phase 3c raises a `contract-change` issue once the crypto spec
+exists. The messages legal on an unauthenticated connection say so in their
+comments. `HelloRequest` is one of them, and it is not authentication: it only
+asks the relay which protocol levels and capabilities it supports (SPEC §5.3).
 
 **Anything resembling pin, favourite or extend-TTL.** `EntryMeta.expires_at` is
 fixed at write time. The blob garbage collector depends entirely on entry

@@ -57,6 +57,8 @@ const (
 	// Rate limited. The caller backs off and retries.
 	ErrorCode_ERROR_CODE_RATE_LIMITED ErrorCode = 9
 	// Envelope.type is unknown to this peer, or is not legal in this direction.
+	// A relay that predates HelloRequest answers it with this code, which an
+	// app reads as protocol level 1 with no capabilities (SPEC §5.3).
 	ErrorCode_ERROR_CODE_UNSUPPORTED_MESSAGE ErrorCode = 10
 	// Server-side failure. The caller may retry; nothing about the cause is
 	// disclosed beyond this code.
@@ -75,8 +77,10 @@ const (
 	ErrorCode_ERROR_CODE_STORE_DISABLED ErrorCode = 13
 	// The request is one this client's version cannot make correctly any more.
 	// A RekeyRequest without store_link, for a group that has store items, gets
-	// this: applying it would leave every item unreadable (SPEC §3.3). The
-	// client tells the user to update the app.
+	// this: applying it would leave every item unreadable (SPEC §3.3). So does
+	// any request the connection's protocol level may no longer make, while the
+	// rest of the connection keeps working (SPEC §5.3). The client tells the
+	// user to update the app, and never treats it as a revocation.
 	ErrorCode_ERROR_CODE_CLIENT_OUTDATED ErrorCode = 14
 	// StoreUpdateMetaRequest.expected_meta_rev is not the item's current
 	// revision: another device edited it first. The caller lists the item
