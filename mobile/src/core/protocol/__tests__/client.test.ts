@@ -8,10 +8,20 @@ import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 
 import { concat, fromUTF8, toHex, u8, utf8 } from '../../bytes';
-import { HEADER_CONTAINER_SIZE, HEADER_V2_CONTAINER_SIZE, openStoreLink, storeKey } from '../../crypto';
-import { Client, type ExternalBody } from '../client';
+import {
+  HEADER_CONTAINER_SIZE,
+  HEADER_V2_CONTAINER_SIZE,
+  generateDeviceKey,
+  generateGroupKey,
+  openStoreLink,
+  sealStoreLink,
+  storeKey,
+  wrap,
+} from '../../crypto';
+import { Client, type ExternalBody, type Handlers } from '../client';
 import type { SocketFactory } from '../connection';
 import { Envelope, MessageType } from '../../../protocol/gen/tpp/v1/envelope';
+import { ErrorCode } from '../../../protocol/gen/tpp/v1/error';
 import { TppError, describe as describeError } from '../errors';
 import { classifyCode, decodePairingPayload, fingerprint } from '../pairing';
 import { FakeRelay, MemoryStore } from '../../demo';
@@ -29,22 +39,30 @@ afterEach(() => {
   }
 });
 
-async function open(relay: FakeRelay, store: MemoryStore, name: string): Promise<Client> {
+async function open(relay: FakeRelay, store: MemoryStore, name: string, handlers?: Handlers): Promise<Client> {
   const client = await Client.open({
     store,
     deviceName: name,
     socketFactory: relay.factory,
     healthCheck: async () => false,
     deviceStatus: relay.deviceStatus,
+    handlers,
   });
   opened.push(client);
   return client;
 }
 
-/** pair runs SPEC §3.2 end to end between two clients of one relay. */
+/**
+ * pair runs SPEC §3.2 end to end between two clients of one relay, with the
+ * inviter's user confirming the fingerprint the joiner shows.
+ */
 async function pair(inviter: Client, joiner: Client): Promise<void> {
   const invitation = await inviter.startPairing();
-  await joiner.joinPairing(invitation.payload);
+  const joining = joiner.joinPairing(invitation.payload);
+  const request = await invitation.request;
+  expect(request.fingerprint).toBe(fingerprint(joiner.publicKey));
+  await request.confirm();
+  await joining;
   await invitation.joined;
 }
 
@@ -104,7 +122,9 @@ describe('pairing (SPEC §3.2)', () => {
     // What a QR scanner hands back, and what a paste can carry: the same
     // string with whitespace and padding around it.
     const joiner = await open(relay, new MemoryStore(), 'phone');
-    await joiner.joinPairing(`  ${invitation.payload}==\n`);
+    const joining = joiner.joinPairing(`  ${invitation.payload}==\n`);
+    await (await invitation.request).confirm();
+    await joining;
     expect(joiner.inGroup).toBe(true);
   });
 
@@ -830,3 +850,137 @@ describe('what the client refuses locally', () => {
 
 /** settle lets queued microtasks and the timers around them run. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+describe('a relay that lies (SPEC §3.2 step 4, spec/crypto.md §7.1)', () => {
+  /** twoDevices is a laptop and a phone in one group, both online at epoch 1. */
+  async function twoDevices(handlers?: Handlers): Promise<{ relay: FakeRelay; laptop: Client; phone: Client }> {
+    const relay = new FakeRelay();
+    const laptop = await open(relay, new MemoryStore(), 'laptop', handlers);
+    await laptop.createGroup(relay.creationURL);
+    const phone = await open(relay, new MemoryStore(), 'phone');
+    await pair(laptop, phone);
+    return { relay, laptop, phone };
+  }
+
+  /** offered resolves with what the client did with the next key it was offered. */
+  function offered(relay: FakeRelay, store: MemoryStore, name: string) {
+    let settleOutcome: (outcome: { installed?: bigint; refused?: TppError }) => void = () => {};
+    const outcome = new Promise<{ installed?: bigint; refused?: TppError }>((resolve) => {
+      settleOutcome = resolve;
+    });
+    const client = Client.open({
+      store,
+      deviceName: name,
+      socketFactory: relay.factory,
+      healthCheck: async () => false,
+      deviceStatus: relay.deviceStatus,
+      handlers: {
+        onEpoch: (epoch) => settleOutcome({ installed: epoch }),
+        onKeyRefused: (_epoch, err) => settleOutcome({ refused: err }),
+      },
+    });
+    return { client, outcome };
+  }
+
+  test.each([
+    ['links it sealed itself', null, true],
+    ['no link into the new epoch', null, false],
+    ['no links at all: a relay that predates the store', ErrorCode.ERROR_CODE_UNSUPPORTED_MESSAGE, false],
+    ['no links while the store is off: a v1.2 relay', ErrorCode.ERROR_CODE_STORE_DISABLED, false],
+  ])('a key the relay made is refused, with %s', async (_name, refuseLinks, forgeLink) => {
+    const relay = new FakeRelay();
+    const laptopStore = new MemoryStore();
+    const laptop = await open(relay, laptopStore, 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const before = laptop.snapshot().groupKey;
+    laptop.disconnect();
+
+    const forged = generateGroupKey();
+    if (forgeLink) {
+      relay.storeLinks.set(2n, sealStoreLink(storeKey(forged, 2n), storeKey(generateGroupKey(), 1n), 2n));
+    }
+    relay.refuseLinks = refuseLinks;
+
+    const { client, outcome } = offered(relay, laptopStore, 'laptop');
+    const reopened = await client;
+    opened.push(reopened);
+    await reopened.connect();
+    relay.pushWrappedKey(reopened.deviceId, 2n, wrap(forged, reopened.publicKey, 2n));
+
+    const got = await outcome;
+    expect(got.installed).toBeUndefined();
+    expect(got.refused?.kind).toBe('unverified-key');
+    expect(reopened.epoch).toBe(1n);
+    expect(reopened.snapshot().groupKey).toEqual(before);
+  });
+
+  test('an honest rekey still goes through, across two epochs at once', async () => {
+    const relay = new FakeRelay();
+    const laptop = await open(relay, new MemoryStore(), 'laptop');
+    await laptop.createGroup(relay.creationURL);
+    const tabletStore = new MemoryStore();
+    const tablet = await open(relay, tabletStore, 'tablet');
+    await pair(laptop, tablet);
+    for (const name of ['phone', 'watch']) {
+      const other = await open(relay, new MemoryStore(), name);
+      await pair(laptop, other);
+    }
+    tablet.disconnect();
+
+    const roster = await laptop.devices();
+    for (const name of ['phone', 'watch']) {
+      const target = roster.devices.find((d) => d.name === name);
+      await (await laptop.prepareRevoke(target?.id ?? '')).confirm();
+    }
+    expect(laptop.epoch).toBe(3n);
+
+    const { client, outcome } = offered(relay, tabletStore, 'tablet');
+    const reopened = await client;
+    opened.push(reopened);
+    await reopened.connect();
+    expect(await outcome).toEqual({ installed: 3n });
+    expect(reopened.snapshot().groupKey).toEqual(laptop.snapshot().groupKey);
+  });
+
+  test('a join nobody asked for becomes no request, and wraps nothing', async () => {
+    const requests: string[] = [];
+    let renamed: () => void = () => {};
+    const settledRename = new Promise<void>((resolve) => {
+      renamed = resolve;
+    });
+    const { relay, laptop } = await twoDevices({
+      onJoinRequest: (r) => requests.push(r.deviceName),
+      onGroupName: (name) => {
+        if (name === 'settled') renamed();
+      },
+    });
+    requests.length = 0; // the phone's own pairing above was asked for
+    const uploadsBefore = relay.keyHandovers;
+
+    relay.pushJoinNotice(laptop.deviceId, 'never-minted', 'intruder', generateDeviceKey());
+    // Events run in order: once a rename pushed after the notice is seen, the
+    // notice has been handled.
+    relay.rename('settled');
+    await settledRename;
+    expect(requests).toEqual([]);
+    expect(relay.keyHandovers).toBe(uploadsBefore);
+  });
+
+  test('one invitation admits one device, and a turned-down one gets nothing', async () => {
+    const { relay, laptop } = await twoDevices();
+    const invitation = await laptop.startPairing();
+    const joinerKey = generateDeviceKey();
+
+    relay.pushJoinNotice(laptop.deviceId, invitation.token, 'phone 2', joinerKey);
+    relay.pushJoinNotice(laptop.deviceId, invitation.token, 'phone 3', joinerKey);
+    const request = await invitation.request;
+    expect(request.deviceName).toBe('phone 2');
+    expect(request.fingerprint).toBe(fingerprint(joinerKey));
+
+    const uploadsBefore = relay.keyHandovers;
+    request.reject();
+    await expect(invitation.joined).rejects.toMatchObject({ kind: 'join-rejected' });
+    await expect(request.confirm()).rejects.toThrow(/already been answered/);
+    expect(relay.keyHandovers).toBe(uploadsBefore);
+  });
+});

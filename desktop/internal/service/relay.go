@@ -149,6 +149,42 @@ type OfferAcceptance interface {
 	Confirm(ctx context.Context) (tppclient.Device, error)
 }
 
+// JoinRequest is a device asking to join with one of this device's
+// invitations, waiting for the user's consent (SPEC §3.2 step 4). Its public
+// key came through the relay, so nothing is wrapped until Confirm.
+type JoinRequest interface {
+	// DeviceName is what the joining device calls itself. It proves nothing.
+	DeviceName() string
+
+	// Fingerprint is the joining device's public key, for the user to compare
+	// with what that device shows.
+	Fingerprint() string
+
+	// ExpiresAt is when the invitation runs out.
+	ExpiresAt() time.Time
+
+	// Confirm hands the device the group key.
+	Confirm(ctx context.Context) (tppclient.Device, error)
+
+	// Reject turns the device down.
+	Reject()
+}
+
+type clientJoinRequest struct{ r *tppclient.JoinRequest }
+
+func (j clientJoinRequest) DeviceName() string   { return j.r.DeviceName }
+func (j clientJoinRequest) Fingerprint() string  { return j.r.Fingerprint }
+func (j clientJoinRequest) ExpiresAt() time.Time { return j.r.ExpiresAt }
+func (j clientJoinRequest) Reject()              { j.r.Reject() }
+
+func (j clientJoinRequest) Confirm(ctx context.Context) (tppclient.Device, error) {
+	device, err := j.r.Confirm(ctx)
+	if err != nil {
+		return tppclient.Device{}, fmt.Errorf("service: admit the joining device: %w", err)
+	}
+	return device, nil
+}
+
 // Revocation is a prepared revocation waiting for the user's consent. It is
 // the library's Revocation narrowed to what a UI needs, so that this package
 // can be tested without one.

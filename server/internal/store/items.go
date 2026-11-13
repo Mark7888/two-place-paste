@@ -32,9 +32,10 @@ var (
 	// has moved past.
 	ErrRevisionConflict = errors.New("store: item revision conflict")
 
-	// ErrStoreLinkRequired is returned for a rekey without a store link while
-	// the group has store items: applying it would leave them unreadable.
-	ErrStoreLinkRequired = errors.New("store: rekey needs a store link while the group has store items")
+	// ErrStoreLinkRequired is returned for a rekey without a store link. Store
+	// items would be unreadable after it, and the remaining devices could
+	// not check the new key (/spec/crypto.md §7.1).
+	ErrStoreLinkRequired = errors.New("store: rekey needs a store link")
 )
 
 // ItemUsage is how much of a store is held: committed items, and the room

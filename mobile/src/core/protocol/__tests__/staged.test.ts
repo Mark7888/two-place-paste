@@ -166,9 +166,12 @@ async function open(relay: FakeRelay, name: string, socketFactory: SocketFactory
   return client;
 }
 
+/** pair runs SPEC §3.2, the inviter's user confirming the join (step 4). */
 async function pair(inviter: Client, joiner: Client): Promise<void> {
   const invitation = await inviter.startPairing();
-  await joiner.joinPairing(invitation.payload);
+  const joining = joiner.joinPairing(invitation.payload);
+  await (await invitation.request).confirm();
+  await joining;
   await invitation.joined;
 }
 

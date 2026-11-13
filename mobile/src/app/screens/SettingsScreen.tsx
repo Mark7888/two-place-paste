@@ -13,7 +13,7 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Linking, Switch, Text, View } from 'react-native';
 
-import { publicKey, toHex } from '../../core';
+import { fingerprint, publicKey, toHex } from '../../core';
 import { appInfo, tile, type AppVersion } from '../../platform';
 import { builtAt } from '../buildStamp';
 import { LicensesScreen } from '../LicensesScreen';
@@ -123,6 +123,15 @@ export function SettingsScreen(): React.JSX.Element {
           Android Keystore and are never rendered, logged or exported
           (spec/crypto.md §10).
         */}
+        {/*
+          What another device's join or revoke dialog shows for this one, so
+          the user can compare the two.
+        */}
+        <Fact
+          label="Fingerprint"
+          value={state === undefined ? '—' : fingerprint(publicKeyOf(state))}
+          mono
+        />
         <Fact
           label="Public key"
           value={state === undefined ? '—' : toHex(publicKeyOf(state))}

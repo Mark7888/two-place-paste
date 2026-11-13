@@ -1,7 +1,9 @@
 package tppclient
 
 import (
+	"bytes"
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -47,9 +49,23 @@ type Handlers struct {
 	// it at connect time.
 	OnEpoch func(epoch uint64)
 
+	// OnKeyRefused fires when the relay offered a group key for a new epoch
+	// that this client could not verify (/spec/crypto.md §7.1), with an error
+	// that says why; errors.Is(err, ErrUnverifiedKey) holds. The key is not
+	// installed and the client stays at its epoch. A shell tells the user: a
+	// relay that keeps doing this is either out of date or hostile, and the
+	// way back is to leave the group and pair again.
+	OnKeyRefused func(epoch uint64, err error)
+
 	// OnDeviceRevoked fires when the group loses a device (SPEC §3.3). A UI
 	// refreshes its roster; it must not touch the clipboard.
 	OnDeviceRevoked func(deviceID string, epoch uint64)
+
+	// OnJoinRequest fires on the inviting device when a device asks to join
+	// with one of its invitations (SPEC §3.2 step 3). Nothing is handed over
+	// until the user confirms: the shell shows the request's name and
+	// fingerprint and calls Confirm or Reject.
+	OnJoinRequest func(*JoinRequest)
 
 	// OnDevicePaired fires on the inviting device once a joiner has been
 	// handed the group key (SPEC §3.2 step 4).
@@ -214,6 +230,9 @@ type Client struct {
 	storeKeys   *storeKeys
 	invitations []*Invitation
 
+	// installMu runs offered group keys through their check one at a time.
+	installMu sync.Mutex
+
 	// kick cuts the supervisor's backoff short. It is buffered so Reconnect
 	// never blocks, and it outlives Forget: a stale kick costs one early
 	// dial and nothing else.
@@ -343,6 +362,17 @@ func (c *Client) Epoch() uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.state.Epoch
+}
+
+// Fingerprint renders this device's public key the way another device's
+// confirmation dialog will show it (SPEC §3.2), so a shell can display it for
+// the user to compare.
+func (c *Client) Fingerprint() (string, error) {
+	pub, err := c.State().PublicKey()
+	if err != nil {
+		return "", err
+	}
+	return Fingerprint(pub), nil
 }
 
 // InGroup reports whether this device belongs to a group yet.
@@ -850,11 +880,9 @@ func (c *Client) onEvent(env *tppv1.Envelope) {
 		}
 		// A key that was waiting for this device arrives here on connect, so a
 		// device that was offline during a rekey catches up without asking
-		// (SPEC §3.3).
-		if err := c.installWrappedKey(ev.GetEpoch(), ev.GetWrappedGroupKey()); err != nil {
-			c.logger.Error("installing the new group key failed",
-				slog.Uint64("epoch", ev.GetEpoch()), slog.Any("error", err))
-		}
+		// (SPEC §3.3). Checking it takes a request of its own, which cannot
+		// be answered while this handler holds the read loop.
+		go c.offerWrappedKey(ev.GetEpoch(), ev.GetWrappedGroupKey())
 
 	case tppv1.MessageType_MESSAGE_TYPE_EPOCH_CHANGED:
 		var ev tppv1.EpochChanged
@@ -937,11 +965,9 @@ func (c *Client) onEvent(env *tppv1.Envelope) {
 		if err := proto.Unmarshal(env.GetPayload(), &ev); err != nil {
 			return
 		}
-		// The inviter is the only device that holds the group key, so wrapping
-		// for the joiner happens here and cannot be deferred (SPEC §3.2
-		// step 4). It runs on its own goroutine because it makes a request of
-		// its own, and this handler is on the read loop.
-		go c.completePairing(&ev)
+		// Nothing is wrapped here: the notice becomes a JoinRequest the user
+		// has to confirm first (SPEC §3.2 step 4).
+		c.onJoinNotice(&ev)
 
 	default:
 		// An event this client does not understand is ignored, never fatal
@@ -949,26 +975,122 @@ func (c *Client) onEvent(env *tppv1.Envelope) {
 	}
 }
 
-// installWrappedKey unwraps a delivered group key and advances the epoch.
+// offerWrappedKey checks and installs a group key the relay delivered, and
+// reports a key it refused. It runs on a goroutine of its own, one at a
+// time: two deliveries racing could otherwise check against a key the
+// other was replacing.
+func (c *Client) offerWrappedKey(epoch uint64, wrapped []byte) {
+	c.installMu.Lock()
+	defer c.installMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(c.runContext(), CallTimeout)
+	defer cancel()
+	err := c.installWrappedKey(ctx, epoch, wrapped)
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrUnverifiedKey):
+		c.logger.Error("refused a group key the relay offered", slog.Uint64("epoch", epoch), slog.Any("error", err))
+		if c.handlers.OnKeyRefused != nil {
+			c.handlers.OnKeyRefused(epoch, err)
+		}
+	case ctx.Err() != nil:
+		// The client is closing or the connection went: the key is offered
+		// again on the next connect.
+	default:
+		c.logger.Error("installing the new group key failed", slog.Uint64("epoch", epoch), slog.Any("error", err))
+	}
+}
+
+// installWrappedKey unwraps a delivered group key, checks it, and advances
+// the epoch.
 //
 // A key for an epoch this client already has, or for an older one, is dropped:
 // epochs only move forward, and a client keeps exactly one (epoch, group key)
 // pair — keeping older keys would silently defeat the forward secrecy the
 // rekey exists for (/spec/crypto.md §7).
-func (c *Client) installWrappedKey(epoch uint64, wrapped []byte) error {
-	c.mu.Lock()
-	current, priv := c.state.Epoch, c.state.DevicePrivateKey
-	c.mu.Unlock()
-
-	if epoch <= current {
+//
+// A key for a newer epoch is installed only once the store links chain it back
+// to the key this client holds (/spec/crypto.md §7.1). Unwrapping proves only
+// that the key was made for this device, and anyone can make one of those: the
+// links prove it was made by someone who held the previous key.
+func (c *Client) installWrappedKey(ctx context.Context, epoch uint64, wrapped []byte) error {
+	state := c.State()
+	if !state.InGroup() || epoch <= state.Epoch {
 		return nil
 	}
-	groupKey, err := tppcrypto.Unwrap(wrapped, priv, epoch)
+	groupKey, err := tppcrypto.Unwrap(wrapped, state.DevicePrivateKey, epoch)
 	if err != nil {
 		return fmt.Errorf("tppclient: unwrap the group key for epoch %d: %w", epoch, err)
 	}
+	if err := c.verifyEpochKey(ctx, state, epoch, groupKey); err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	moved := !bytes.Equal(c.state.GroupKey, state.GroupKey) || c.state.Epoch != state.Epoch
+	c.mu.Unlock()
+	if moved {
+		// Something else installed a key while this one was being checked —
+		// this device's own rekey. It was checked against a key that is no
+		// longer current, so it is not installed; a newer one is offered again.
+		return nil
+	}
 	c.setGroupKey(epoch, groupKey)
 	return c.persist()
+}
+
+// verifyEpochKey is /spec/crypto.md §7.1: it walks the store links from the
+// candidate key at epoch down to the epoch state holds, and accepts only if
+// they end at the store key derived from state's own group key.
+//
+// The links are fetched fresh rather than from the store-key cache: the link
+// into epoch is newer than anything the cache was filled with.
+func (c *Client) verifyEpochKey(ctx context.Context, state State, epoch uint64, groupKey []byte) error {
+	var resp tppv1.StoreLinksResponse
+	err := c.call(ctx, tppv1.MessageType_MESSAGE_TYPE_STORE_LINKS_REQUEST, &tppv1.StoreLinksRequest{}, &resp)
+	switch {
+	case errors.Is(err, errUnsupported), errors.Is(err, ErrStoreDisabled):
+		// A relay that predates the store has no links, and one from before
+		// this check refuses them while the group's store is off. A hostile
+		// relay can claim to be either: "no links" is never "nothing to
+		// check".
+		return fmt.Errorf("%w: the relay did not hand over the store links to check it against; it needs updating", ErrUnverifiedKey)
+	case err != nil:
+		return fmt.Errorf("tppclient: fetch the store links to check epoch %d: %w", epoch, err)
+	}
+	links := make(map[uint64][]byte, len(resp.GetLinks()))
+	for _, l := range resp.GetLinks() {
+		links[l.GetEpoch()] = l.GetLink()
+	}
+	return chainsBack(links, state.Epoch, state.GroupKey, epoch, groupKey)
+}
+
+// chainsBack reports whether links lead from candidate, the group key of
+// epoch, down to the store key of current, the epoch whose group key this
+// device holds. It is the offline half of verifyEpochKey.
+func chainsBack(links map[uint64][]byte, current uint64, currentKey []byte, epoch uint64, candidate []byte) error {
+	key, err := tppcrypto.StoreKey(candidate, epoch)
+	if err != nil {
+		return fmt.Errorf("tppclient: derive the store key of epoch %d: %w", epoch, err)
+	}
+	for e := epoch; e > current; e-- {
+		link, ok := links[e]
+		if !ok {
+			return fmt.Errorf("%w: the relay has no store link into epoch %d", ErrUnverifiedKey, e)
+		}
+		key, err = tppcrypto.OpenStoreLink(key, link, e)
+		if err != nil {
+			return fmt.Errorf("%w: the store link into epoch %d does not open with that key", ErrUnverifiedKey, e)
+		}
+	}
+	want, err := tppcrypto.StoreKey(currentKey, current)
+	if err != nil {
+		return fmt.Errorf("tppclient: derive the store key of epoch %d: %w", current, err)
+	}
+	if subtle.ConstantTimeCompare(key, want) != 1 {
+		return fmt.Errorf("%w: its store links lead to a key this device never held", ErrUnverifiedKey)
+	}
+	return nil
 }
 
 // setGroupKey installs an (epoch, group key) pair and notifies the caller's

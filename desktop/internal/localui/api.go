@@ -79,6 +79,14 @@ type API interface {
 	// JoinPairing joins a group with a payload pasted from another device.
 	JoinPairing(ctx context.Context, payload string) error
 
+	// ConfirmJoin hands the group key to a device asking to join with one of
+	// this device's invitations (Status.JoinRequests). It is the only way a
+	// device is admitted through an invitation.
+	ConfirmJoin(ctx context.Context, planID string) (DeviceView, error)
+
+	// RejectJoin turns a join request down. The device gets nothing.
+	RejectJoin(ctx context.Context, planID string) error
+
 	// StartOffer shows a code for a member of some group to accept, which is
 	// how a device with no group key pairs when it is the one with a screen
 	// the user is looking at (docs/internal/plans/joiner-emitted-pairing.md).

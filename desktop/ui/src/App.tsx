@@ -11,6 +11,7 @@ import {
 } from "./api";
 import { Icon, type IconName } from "./components/Icon";
 import { OutdatedNotice } from "./components/OutdatedNotice";
+import { JoinRequestDialog } from "./components/JoinRequestDialog";
 import { PauseNotice } from "./components/PauseNotice";
 import { SessionLostDialog } from "./components/SessionLostDialog";
 import { SetupWizard } from "./components/SetupWizard";
@@ -59,6 +60,7 @@ const arrival = readArrival();
 export function App() {
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState<string>("");
+  const [joinNotice, setJoinNotice] = useState<string>("");
   // The tray's "Check for updates…" opens #updates when it finds one.
   const [tab, setTab] = useState<Tab>(() =>
     window.location.hash === "#updates" ? "settings" : "sync",
@@ -323,6 +325,27 @@ export function App() {
               <span>{error}</span>
             </div>
           ) : null}
+          {joinNotice ? (
+            <div className="notice ok" role="status">
+              <Icon name="check" />
+              <span className="grow">{joinNotice}</span>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Dismiss"
+                title="Dismiss"
+                onClick={() => setJoinNotice("")}
+              >
+                <Icon name="close" size={16} />
+              </button>
+            </div>
+          ) : null}
+          {status?.key_refused && !status.revoked ? (
+            <div className="notice error" role="status">
+              <Icon name="alert" />
+              <span>{status.key_refused.message}</span>
+            </div>
+          ) : null}
           {status?.group_deleted ? (
             <div className="notice error">
               <Icon name="alert" />
@@ -399,6 +422,17 @@ export function App() {
           }}
         />
       ) : null}
+      <JoinRequestDialog
+        request={status?.join_requests?.[0] ?? null}
+        onDone={(message) => {
+          setJoinNotice(message);
+          void refresh();
+        }}
+        onError={(message) => {
+          setError(message);
+          void refresh();
+        }}
+      />
       <SessionLostDialog open={lost} />
     </div>
   );

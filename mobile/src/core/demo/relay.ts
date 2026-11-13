@@ -369,6 +369,7 @@ export class FakeRelay {
 
       case MessageType.MESSAGE_TYPE_PAIRING_WRAPPED_KEY_UPLOAD: {
         const request = PairingWrappedKeyUpload.decode(env.payload);
+        this.keyHandovers++;
         const complete = PairingComplete.encode({
           groupId: this.groupId,
           deviceId: request.deviceId,
@@ -718,6 +719,21 @@ export class FakeRelay {
     const isStore =
       env.type >= MessageType.MESSAGE_TYPE_STORE_LIMITS_REQUEST &&
       env.type <= MessageType.MESSAGE_TYPE_STORE_DELETE_RESPONSE;
+    // The links are answered with no store configured too, as the real relay
+    // answers them whatever its store switch says: every device checks a new
+    // key against them (spec/crypto.md §7.1).
+    if (env.type === MessageType.MESSAGE_TYPE_STORE_LINKS_REQUEST) {
+      if (this.refuseLinks !== null) {
+        fail(this.refuseLinks, 'no links from this relay');
+        return;
+      }
+      const links = [...this.storeLinks.entries()]
+        .filter(([, link]) => link.length > 0)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([epoch, link]) => ({ epoch: epoch.toString(), link }));
+      reply(MessageType.MESSAGE_TYPE_STORE_LINKS_RESPONSE, StoreLinksResponse.encode({ links }).finish());
+      return;
+    }
     if (config === null || !isStore) {
       fail(ErrorCode.ERROR_CODE_UNSUPPORTED_MESSAGE, 'unsupported message');
       return;
@@ -750,15 +766,6 @@ export class FakeRelay {
             nextCursor: '',
           }).finish(),
         );
-        return;
-      }
-
-      case MessageType.MESSAGE_TYPE_STORE_LINKS_REQUEST: {
-        const links = [...this.storeLinks.entries()]
-          .filter(([, link]) => link.length > 0)
-          .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-          .map(([epoch, link]) => ({ epoch: epoch.toString(), link }));
-        reply(MessageType.MESSAGE_TYPE_STORE_LINKS_RESPONSE, StoreLinksResponse.encode({ links }).finish());
         return;
       }
 
@@ -997,6 +1004,42 @@ export class FakeRelay {
 
   /** storeLinks are the store links rekeys sent, by the epoch each leads into. */
   readonly storeLinks = new Map<bigint, Uint8Array>();
+
+  // What a hostile relay does, for the tests of spec/crypto.md §7.1 and
+  // SPEC §3.2 step 4. The demo never uses them.
+
+  /**
+   * refuseLinks makes StoreLinksRequest fail with this code: UNSUPPORTED is a
+   * relay that predates the store, STORE_DISABLED a v1.2 relay with the store
+   * off. Null serves them.
+   */
+  refuseLinks: ErrorCode | null = null;
+
+  /** pushWrappedKey is the relay handing a device a key of its own making. */
+  pushWrappedKey(deviceId: string, epoch: bigint, wrapped: Uint8Array): void {
+    this.sockets.get(deviceId)?.push({
+      id: 'forged',
+      type: MessageType.MESSAGE_TYPE_WRAPPED_KEY_AVAILABLE,
+      payload: WrappedKeyAvailable.encode({ epoch: epoch.toString(), wrappedGroupKey: wrapped }).finish(),
+    });
+  }
+
+  /** pushJoinNotice is the relay reporting a join, real or made up. */
+  pushJoinNotice(deviceId: string, token: string, name: string, publicKey: Uint8Array): void {
+    this.sockets.get(deviceId)?.push({
+      id: 'notice',
+      type: MessageType.MESSAGE_TYPE_PAIRING_JOIN_NOTICE,
+      payload: PairingJoinNotice.encode({
+        pairingToken: token,
+        deviceId: 'made-up',
+        deviceName: name,
+        devicePublicKey: publicKey,
+      }).finish(),
+    });
+  }
+
+  /** keyHandovers counts wrapped keys handed over for joining devices. */
+  keyHandovers = 0;
 
   /** limits are what the relay answers EntryLimitsRequest with; null answers as a relay that predates it. */
   limits: EntryLimitsResponse | null;

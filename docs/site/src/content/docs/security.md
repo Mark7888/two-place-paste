@@ -41,6 +41,14 @@ nothing about the entry.
 On the device, keys are kept in the **macOS login keychain** or a file sealed with **Windows
 DPAPI** to your user account.
 
+## Adding a device
+
+The device that holds the group key hands it over, wrapped to the new device's public key. That key
+travels through the relay, so before anything is handed over the app shows the new device's
+**fingerprint** and asks you to compare it with what the new device shows. A relay that put a key of
+its own in its place would show a different fingerprint. The app also ignores a join for a code it
+did not show, or one already used.
+
 ## Revocation
 
 Revoking a device creates a new group key (a new *epoch*) and wraps it only to the remaining
@@ -51,6 +59,24 @@ Store items are different: they do not expire, and a rekey does not re-encrypt t
 device held the keys to every item saved before the revocation, and could have downloaded them
 while it was still a member. It cannot reach anything saved afterwards. If the store held a secret
 that the lost device must not keep, change the secret itself.
+
+The revoke dialog lists the devices that will get the new key, each with its fingerprint: the list
+comes from the relay, and the fingerprints are how you check it.
+
+Every remaining device checks the new key before using it. Each key change carries a *store link*
+that only a holder of the previous key can make, and a device accepts a new key only if the links
+lead back to the key it already has. So the relay cannot move your devices onto a key it chose.
+
+## What a hostile relay can still do
+
+The design assumes the relay may be run by someone you do not fully trust. Even so:
+
+- It can **drop or withhold** entries and keys. It cannot read or forge them.
+- A **newly joining device** cannot tell who handed it its first key. The device already in the
+  group is protected by the fingerprint check; the new one relies on the pairing code reaching it
+  directly.
+- A **revoked device working with the relay** could forge a key change for the devices it was
+  removed from. They would stop syncing with the device that removed it, which is how it shows.
 
 ## The desktop app's local page
 

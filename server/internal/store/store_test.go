@@ -256,6 +256,13 @@ func TestApplyRekey(t *testing.T) {
 				want: store.ErrInvalidRekey,
 			},
 			{
+				// Checked last, so every case above fails for its own reason
+				// although none of them carries a link either.
+				name: "no store link", epoch: 1, revoked: c.ID,
+				keys: []store.RekeyKey{{DeviceID: a, Key: []byte("x")}, {DeviceID: b.ID, Key: []byte("x")}},
+				want: store.ErrStoreLinkRequired,
+			},
+			{
 				name: "unknown revoked device", epoch: 1, revoked: "nobody",
 				keys: []store.RekeyKey{{DeviceID: a, Key: []byte("x")}, {DeviceID: b.ID, Key: []byte("x")}},
 				want: store.ErrNotFound,

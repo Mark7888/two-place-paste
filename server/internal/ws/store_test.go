@@ -135,6 +135,11 @@ func TestRelayWithoutAStore(t *testing.T) {
 	}
 }
 
+// testStoreLink is a store link of the right length. The relay never opens
+// one, so its content does not matter, but every rekey must carry one
+// (/spec/crypto.md §7a.2 fixes the length at 49 bytes).
+var testStoreLink = make([]byte, 49)
+
 // rekey revokes victim from the caller's group, sending link as the store
 // link, and returns the frame the relay answered with.
 func rekey(c *client, victim, keeper string, epoch uint64, link []byte) *tppv1.Envelope {
@@ -150,8 +155,9 @@ func rekey(c *client, victim, keeper string, epoch uint64, link []byte) *tppv1.E
 
 // TestStoreLinksComeFromRekeys: the link a rekey carries is kept for the new
 // epoch and listed, oldest first; a link of the wrong length is refused; and
-// like every store request but the limits, the list is refused while the
-// store is off (/spec/crypto.md §7a.2).
+// unlike the other store requests, the list is answered whether the store is
+// on or off, because devices check every new key against it
+// (/spec/crypto.md §7a.2, §7.1).
 func TestStoreLinksComeFromRekeys(t *testing.T) {
 	t.Parallel()
 
@@ -187,20 +193,17 @@ func TestStoreLinksComeFromRekeys(t *testing.T) {
 	link3 := []byte(strings.Repeat("3", 49))
 	rekey(laptop, tablet.GetDeviceId(), created.GetDeviceId(), 2, link3)
 
-	laptop.send("links-off", tppv1.MessageType_MESSAGE_TYPE_STORE_LINKS_REQUEST, &tppv1.StoreLinksRequest{})
-	if got := laptop.awaitError(); got.GetCode() != tppv1.ErrorCode_ERROR_CODE_STORE_DISABLED {
-		t.Errorf("StoreLinksRequest with the store off = %s, want %s", got.GetCode(), tppv1.ErrorCode_ERROR_CODE_STORE_DISABLED)
-	}
-
-	if err := h.store.SetGroupStore(context.Background(), created.GetGroupId(), true); err != nil {
-		t.Fatalf("SetGroupStore() error = %v", err)
-	}
-	laptop.send("links", tppv1.MessageType_MESSAGE_TYPE_STORE_LINKS_REQUEST, &tppv1.StoreLinksRequest{})
-	var resp tppv1.StoreLinksResponse
-	laptop.await(tppv1.MessageType_MESSAGE_TYPE_STORE_LINKS_RESPONSE, &resp)
-	got := resp.GetLinks()
-	if len(got) != 2 || got[0].GetEpoch() != 2 || string(got[0].GetLink()) != string(link2) ||
-		got[1].GetEpoch() != 3 || string(got[1].GetLink()) != string(link3) {
-		t.Errorf("StoreLinksResponse = %v, want the links into epochs 2 and 3", got)
+	for _, on := range []bool{false, true} {
+		if err := h.store.SetGroupStore(context.Background(), created.GetGroupId(), on); err != nil {
+			t.Fatalf("SetGroupStore(%v) error = %v", on, err)
+		}
+		laptop.send("links", tppv1.MessageType_MESSAGE_TYPE_STORE_LINKS_REQUEST, &tppv1.StoreLinksRequest{})
+		var resp tppv1.StoreLinksResponse
+		laptop.await(tppv1.MessageType_MESSAGE_TYPE_STORE_LINKS_RESPONSE, &resp)
+		got := resp.GetLinks()
+		if len(got) != 2 || got[0].GetEpoch() != 2 || string(got[0].GetLink()) != string(link2) ||
+			got[1].GetEpoch() != 3 || string(got[1].GetLink()) != string(link3) {
+			t.Errorf("StoreLinksResponse with the store on=%v = %v, want the links into epochs 2 and 3", on, got)
+		}
 	}
 }

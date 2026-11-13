@@ -9,7 +9,9 @@ import devices from '../../../assets/screenshots/desktop-devices.webp';
 import revoke from '../../../assets/screenshots/desktop-revoke.webp';
 
 The **Devices** tab lists every device that holds the group's key, with the current key
-generation (*epoch*).
+generation (*epoch*). Each device shows its **fingerprint**, four groups of four characters. A
+device shows its own fingerprint in **Settings → This device**, so you can tell your devices apart
+from anything the list should not contain.
 
 <Image src={devices} alt="The Devices tab listing Work laptop and Home desktop" class="screenshot" />
 
@@ -21,7 +23,9 @@ Do this when a computer is lost, sold, or simply no longer yours to sync with.
 
 1. On any other device in the group, open **Devices** and press **Revoke** next to the device.
 
-2. Read the dialog. It names the device you are removing and lists the devices that keep access.
+2. Read the dialog. It names the device you are removing and lists the devices that keep access,
+   each with its fingerprint. The new key goes to every device on that list, so check that each
+   fingerprint is one of your devices'.
 
    <Image src={revoke} alt="The dialog confirming the revocation of Home desktop" class="screenshot" />
 
@@ -41,6 +45,10 @@ What happens:
   member, so treat anything in the store as something it may have kept. Items saved from now on are
   out of its reach.
 - Your clipboard is not touched.
+
+Each remaining device checks the new key before it uses it: it must be provably made from the key
+that device already holds. A device that cannot check it keeps its old key and says so — see
+[Troubleshooting](/two-place-paste/guides/troubleshooting/#the-app-says-it-refused-a-new-key).
 
 <Aside>
 	**Leave the group** in Settings is different: it only deletes the keys on *this* device. The
