@@ -359,7 +359,11 @@ fit, the oldest committed entries are evicted — the writing group's own first,
 to the group limit, then the oldest anywhere, down to the total limit — and every
 online device of each affected group receives `EntryEvicted`. Uploads still in
 progress are never evicted; when only they hold the room, the write is refused with
-`QUOTA_EXCEEDED`. An entry larger than a limit on its own is `TOO_LARGE`.
+`QUOTA_EXCEEDED`. An entry larger than a limit on its own is `TOO_LARGE` — which no limit
+allows: the total, the default and every group or tag override are at least the per-entry cap.
+The relay refuses to start with a total or default below it, the admin screens refuse an override
+below it, and an override stored before that rule, or outgrown by a later cap, is applied as the
+cap and marked as raised on the admin screens.
 
 The store has limits of its own and never evicts (§4.6); history and store never evict
 each other.
@@ -542,8 +546,9 @@ Every store item is stored there, however small: none is inline in Redis.
 limit, with the same precedence: the group's override, else its tag's, else the
 server default. There is an optional total limit for every store together. **The store
 never evicts.** A save that would not fit is refused with `QUOTA_EXCEEDED`, and the
-client tells the user how much room is left. An item larger than the limit on its own
-is `TOO_LARGE`.
+client tells the user how much room is left. An item larger than the per-item cap is
+`TOO_LARGE`. As for blobs (§4.3), no store limit is smaller than one item of the largest
+size with its record, so an item within the cap always fits an empty store.
 
 **Write ordering.** An upload writes the item's record as *pending* first and lists it
 in a small in-flight set, then writes the blob, then marks the record committed and

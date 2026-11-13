@@ -100,6 +100,10 @@ type groupJSON struct {
 	LimitBytes  int64  `json:"limit_bytes"`
 	LimitSource string `json:"limit_source"`
 
+	// LimitRaised is true when the limit chosen for the group was below one
+	// entry and LimitBytes is that floor instead.
+	LimitRaised bool `json:"limit_raised"`
+
 	// Usage is nil when blob storage is not accounted.
 	Usage *usageJSON `json:"usage"`
 
@@ -398,6 +402,7 @@ func (s *Server) groupRow(ctx context.Context, g store.Group, tags map[string]st
 	limit := s.shownLimit(l)
 	v.LimitBytes = limit
 	v.LimitSource = l.Source
+	v.LimitRaised = l.Raised
 	if d.Ledger != nil {
 		u, err := d.Ledger.GroupUsage(ctx, g.ID)
 		if err != nil {

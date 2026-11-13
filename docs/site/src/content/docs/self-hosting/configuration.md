@@ -63,7 +63,7 @@ Sizes take a plain byte count or a unit: `500MB`, `5GiB`, `1.5GiB`.
 
 | Variable | Default | Description |
 |---|---|---|
-| `TPP_BLOB_MAX_TOTAL_BYTES` | `0` (unlimited) | All blob storage. Set it a little under the volume's size. |
+| `TPP_BLOB_MAX_TOTAL_BYTES` | `0` (unlimited) | All blob storage. Set it a little under the volume's size. At least `TPP_ENTRY_MAX_BYTES`. |
 | `TPP_BLOB_MAX_GROUP_BYTES` | `1GiB` | Per group, so one busy group cannot push out everyone else's entries. At least `TPP_ENTRY_MAX_BYTES`. |
 | `TPP_BLOB_MIN_FREE_BYTES` | `0` (off) | Disk backend: refuse new blobs while the volume has less than this free. |
 
@@ -91,7 +91,11 @@ ciphertext plus about 2 KiB of fixed record.
 
 | Variable | Default | Description |
 |---|---|---|
-| `TPP_STORE_MAX_TOTAL_BYTES` | `0` (unlimited) | Every group's store together. |
-| `TPP_STORE_MAX_GROUP_BYTES` | `100MiB` | One group's store, unless its tag or the group itself overrides it. `0` is unlimited. |
-| `TPP_STORE_MAX_ITEM_BYTES` | `TPP_ENTRY_MAX_BYTES` | The largest item, so anything that fits in history can be saved. |
+| `TPP_STORE_MAX_TOTAL_BYTES` | `0` (unlimited) | Every group's store together. At least one item of `TPP_STORE_MAX_ITEM_BYTES` plus its record (2194 bytes). |
+| `TPP_STORE_MAX_GROUP_BYTES` | `100MiB` | One group's store, unless its tag or the group itself overrides it. `0` is unlimited. At least one item plus its record, like the total. |
+| `TPP_STORE_MAX_ITEM_BYTES` | `TPP_ENTRY_MAX_BYTES` | The largest item, so anything that fits in history can be saved. Unset, it is cut down to what the store limits above can hold; set, the relay refuses to start if a store limit cannot hold one such item. |
 | `TPP_STORE_MAX_GROUP_ITEMS` | `1000` | Items per group. Each one is a record of about 2 KiB in Redis. |
+
+No limit can be smaller than the largest thing it has to hold: the relay refuses to start
+with one, and the admin screens refuse a group or tag limit below one entry (or, for a store,
+one item and its record). See [Tags and storage limits](/two-place-paste/self-hosting/admin/#tags-and-storage-limits).

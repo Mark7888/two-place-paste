@@ -108,10 +108,11 @@ func newGroupFixture(t *testing.T, limits quota.Limits, rds admin.RedisInfo) *gr
 	})
 	g.fixture = newFixtureWithOptions(t, "https://tpp.example.com", func(o *admin.Options) {
 		o.Dashboard = admin.Dashboard{
-			Ledger:     g.ledger,
-			Entries:    ephemeral,
-			TotalLimit: limits.TotalBytes,
-			GroupLimit: limits.GroupBytes,
+			Ledger:        g.ledger,
+			Entries:       ephemeral,
+			TotalLimit:    limits.TotalBytes,
+			GroupLimit:    limits.GroupBytes,
+			EntryMaxBytes: 1 << 20,
 		}
 		o.Live = g.live
 		o.Purger = g.svc
@@ -171,8 +172,10 @@ type groupPage struct {
 		} `json:"usage"`
 		LimitBytes  int64  `json:"limit_bytes"`
 		LimitSource string `json:"limit_source"`
+		LimitRaised bool   `json:"limit_raised"`
 	} `json:"group"`
-	Devices []struct {
+	MinLimitBytes int64 `json:"min_limit_bytes"`
+	Devices       []struct {
 		Name   string `json:"name"`
 		Online bool   `json:"online"`
 	} `json:"devices"`
@@ -261,6 +264,10 @@ func TestStorageLimitPrecedence(t *testing.T) {
 		{name: "group limit on", method: http.MethodPut, path: "/admin/api/groups/" + admin.HandleOf(id) + "/limit", body: limit{true, "2 GiB"}, want: 2 << 30, wantOwn: true},
 		{name: "group limit off keeps tag", method: http.MethodPut, path: "/admin/api/groups/" + admin.HandleOf(id) + "/limit", body: limit{false, ""}, want: 5 << 30, wantOwn: true},
 		{name: "tag limit off", method: http.MethodPut, path: "/admin/api/tags/family/limit", body: limit{false, ""}, want: def},
+		{name: "below one entry refused", method: http.MethodPut, path: "/admin/api/groups/" + admin.HandleOf(id) + "/limit", body: limit{true, "512 KiB"}, want: def, wantCode: http.StatusBadRequest},
+		{name: "exactly one entry", method: http.MethodPut, path: "/admin/api/groups/" + admin.HandleOf(id) + "/limit", body: limit{true, "1 MiB"}, want: 1 << 20, wantOwn: true},
+		{name: "a refused limit keeps the saved one", method: http.MethodPut, path: "/admin/api/groups/" + admin.HandleOf(id) + "/limit", body: limit{true, "1 KiB"}, want: 1 << 20, wantOwn: true, wantCode: http.StatusBadRequest},
+		{name: "tag limit below one entry refused", method: http.MethodPut, path: "/admin/api/tags/family/limit", body: limit{true, "100 KiB"}, want: 1 << 20, wantOwn: true, wantCode: http.StatusBadRequest},
 		{name: "group limit zero", method: http.MethodPut, path: "/admin/api/groups/" + admin.HandleOf(id) + "/limit", body: limit{true, "0"}, want: 0, wantOwn: true},
 		{name: "above total refused", method: http.MethodPut, path: "/admin/api/groups/" + admin.HandleOf(id) + "/limit", body: limit{true, "200 GiB"}, want: 0, wantOwn: true, wantCode: http.StatusBadRequest},
 		{name: "not a size refused", method: http.MethodPut, path: "/admin/api/groups/" + admin.HandleOf(id) + "/limit", body: limit{true, "lots"}, want: 0, wantOwn: true, wantCode: http.StatusBadRequest},
@@ -308,6 +315,55 @@ func TestStorageLimitPrecedence(t *testing.T) {
 	wantStatus(t, g.call(c, csrf, http.MethodPut, "/admin/api/groups/"+admin.HandleOf(id)+"/tag", map[string]string{"tag": "family"}), http.StatusBadRequest)
 	wantStatus(t, g.call(c, csrf, http.MethodPut, "/admin/api/tags/family/limit", limit{true, "1 GiB"}), http.StatusNotFound)
 	wantStatus(t, g.call(c, csrf, http.MethodDelete, "/admin/api/tags/family", nil), http.StatusNotFound)
+}
+
+// TestStoredLimitBelowOneEntryIsRaised: a limit saved below one entry —
+// before the admin screens refused one, or since outgrown by a larger entry
+// cap — is applied as one entry, and the screens say so (SPEC §4.3).
+func TestStoredLimitBelowOneEntryIsRaised(t *testing.T) {
+	t.Parallel()
+	g := newGroupFixture(t, quota.Limits{GroupBytes: 4 << 20}, nil)
+	ctx := context.Background()
+	id, _ := g.group(t, "Anna")
+	other, _ := g.group(t, "Ben")
+	if _, err := g.store.CreateTag(ctx, "small"); err != nil {
+		t.Fatalf("CreateTag() error = %v", err)
+	}
+	if err := g.store.SetGroupTag(ctx, other, "small"); err != nil {
+		t.Fatalf("SetGroupTag() error = %v", err)
+	}
+	// Straight into the store, as an older relay could have saved them.
+	if err := g.store.SetGroupLimit(ctx, id, store.LimitOverride{Enabled: true, Bytes: 100 << 10}); err != nil {
+		t.Fatalf("SetGroupLimit() error = %v", err)
+	}
+	if err := g.store.SetTagLimit(ctx, "small", store.LimitOverride{Enabled: true, Bytes: 10 << 10}); err != nil {
+		t.Fatalf("SetTagLimit() error = %v", err)
+	}
+	if err := g.admin.SyncStorageLimits(ctx); err != nil {
+		t.Fatalf("SyncStorageLimits() error = %v", err)
+	}
+
+	for _, gid := range []string{id, other} {
+		if got, own := g.ledgerLimit(t, gid); got != 1<<20 || !own {
+			t.Errorf("ledger limit of %s = %d (own %v), want one entry, 1 MiB", gid, got, own)
+		}
+	}
+	c := g.client()
+	g.login(c)
+	page := readJSON[groupPage](t, g.get(c, "/admin/api/groups/"+admin.HandleOf(id)))
+	if page.Group.LimitBytes != 1<<20 || !page.Group.LimitRaised || page.MinLimitBytes != 1<<20 {
+		t.Errorf("group page = limit %d raised %v min %d, want 1 MiB, raised, min 1 MiB", page.Group.LimitBytes, page.Group.LimitRaised, page.MinLimitBytes)
+	}
+	tags := readJSON[struct {
+		Rows []struct {
+			Name        string `json:"name"`
+			LimitRaised bool   `json:"limit_raised"`
+		} `json:"rows"`
+		MinLimitBytes int64 `json:"min_limit_bytes"`
+	}](t, g.get(c, "/admin/api/tags"))
+	if len(tags.Rows) != 1 || !tags.Rows[0].LimitRaised || tags.MinLimitBytes != 1<<20 {
+		t.Errorf("tag screen = %+v, want the small tag marked raised and a 1 MiB minimum", tags)
+	}
 }
 
 func TestTagNamesAreValidated(t *testing.T) {

@@ -211,14 +211,22 @@ are removed to make room. The limit is chosen in this order, the first that is o
 
 Each limit has a checkbox and a size such as `5 GiB` or `500 MB`. Unticking the box keeps the size
 for later. `0` means the group has no limit of its own, though `TPP_BLOB_MAX_TOTAL_BYTES` still
-applies, and no limit can be above it. Lowering a limit below what a group already holds deletes
-nothing straight away: the group's next upload removes its oldest entries until everything fits.
+applies, and no limit can be above it. No limit can be below `TPP_ENTRY_MAX_BYTES` either: a
+group with less room than one entry could never upload the largest file, however much it evicted.
+Lowering a limit below what a group already holds deletes nothing straight away: the group's next
+upload removes its oldest entries until everything fits.
+
+A limit saved before the relay refused small ones, or one that a later, larger
+`TPP_ENTRY_MAX_BYTES` has outgrown, is applied as one entry instead. The group's page and the Tags
+screen say **raised to one entry**, and the relay logs a warning at startup. Saving a new limit
+clears it.
 
 Deleting a tag leaves its groups untagged; they fall back to their own limit or the default.
 
 A tag can also carry a **store limit** for its groups' [stores](#the-store), in place of
 `TPP_STORE_MAX_GROUP_BYTES`, and within `TPP_STORE_MAX_TOTAL_BYTES`. It works like the storage
-limit, except that nothing is ever evicted. A tag cannot turn a store on; that is decided on each
+limit, except that nothing is ever evicted, and its smallest size is one item of
+`TPP_STORE_MAX_ITEM_BYTES` plus its 2194-byte record. A tag cannot turn a store on; that is decided on each
 group's page.
 
 ## API keys

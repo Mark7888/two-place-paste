@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/Mark7888/two-place-paste/server/internal/config"
 	"github.com/Mark7888/two-place-paste/server/internal/items"
 	"github.com/Mark7888/two-place-paste/server/internal/store"
 )
@@ -33,6 +34,9 @@ func TestLimits(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	cfg := items.Config{MaxTotalBytes: 0, MaxGroupBytes: 100 << 20, MaxItemBytes: 50 << 20, MaxGroupItems: 1000}
+	// small takes items up to exactly what a 10 MiB store holds, so the
+	// overrides below are at or above the floor.
+	small := items.Config{MaxGroupBytes: 100 << 20, MaxItemBytes: 10<<20 - items.RecordBytes, MaxGroupItems: 1000}
 
 	tests := []struct {
 		name       string
@@ -41,6 +45,7 @@ func TestLimits(t *testing.T) {
 		ownLimit   *store.LimitOverride
 		want       items.Limits
 		wantSource string
+		wantRaised bool
 	}{
 		{
 			name:       "the default",
@@ -50,18 +55,41 @@ func TestLimits(t *testing.T) {
 		},
 		{
 			name:       "the tag's",
-			cfg:        cfg,
+			cfg:        small,
 			tagLimit:   &store.LimitOverride{Bytes: 10 << 20, Enabled: true},
-			want:       items.Limits{Enabled: true, MaxBytes: 10 << 20, AvailableBytes: 10<<20 - items.RecordBytes, MaxItems: 1000, MaxItemBytes: 50 << 20},
+			want:       items.Limits{Enabled: true, MaxBytes: 10 << 20, AvailableBytes: 10<<20 - items.RecordBytes, MaxItems: 1000, MaxItemBytes: 10<<20 - items.RecordBytes},
 			wantSource: "tag",
 		},
 		{
 			name:       "the group's own, over its tag's",
 			cfg:        cfg,
-			tagLimit:   &store.LimitOverride{Bytes: 10 << 20, Enabled: true},
-			ownLimit:   &store.LimitOverride{Bytes: 20 << 20, Enabled: true},
-			want:       items.Limits{Enabled: true, MaxBytes: 20 << 20, AvailableBytes: 20<<20 - items.RecordBytes, MaxItems: 1000, MaxItemBytes: 50 << 20},
+			tagLimit:   &store.LimitOverride{Bytes: 60 << 20, Enabled: true},
+			ownLimit:   &store.LimitOverride{Bytes: 70 << 20, Enabled: true},
+			want:       items.Limits{Enabled: true, MaxBytes: 70 << 20, AvailableBytes: 50 << 20, MaxItems: 1000, MaxItemBytes: 50 << 20},
 			wantSource: "group",
+		},
+		{
+			name:       "an own limit of zero is no limit, not one raised",
+			cfg:        cfg,
+			ownLimit:   &store.LimitOverride{Bytes: 0, Enabled: true},
+			want:       items.Limits{Enabled: true, AvailableBytes: 50 << 20, MaxItems: 1000, MaxItemBytes: 50 << 20},
+			wantSource: "group",
+		},
+		{
+			name:       "a tag's limit below one item is raised to it",
+			cfg:        cfg,
+			tagLimit:   &store.LimitOverride{Bytes: 10 << 20, Enabled: true},
+			want:       items.Limits{Enabled: true, MaxBytes: 50<<20 + items.RecordBytes, AvailableBytes: 50 << 20, MaxItems: 1000, MaxItemBytes: 50 << 20},
+			wantSource: "tag",
+			wantRaised: true,
+		},
+		{
+			name:       "a group's own limit below one item is raised to it",
+			cfg:        cfg,
+			ownLimit:   &store.LimitOverride{Bytes: 1, Enabled: true},
+			want:       items.Limits{Enabled: true, MaxBytes: 50<<20 + items.RecordBytes, AvailableBytes: 50 << 20, MaxItems: 1000, MaxItemBytes: 50 << 20},
+			wantSource: "group",
+			wantRaised: true,
 		},
 		{
 			name:       "an override that is off",
@@ -72,8 +100,8 @@ func TestLimits(t *testing.T) {
 		},
 		{
 			name:       "cut to the total",
-			cfg:        items.Config{MaxTotalBytes: 30 << 20, MaxGroupBytes: 100 << 20, MaxItemBytes: 50 << 20, MaxGroupItems: 5},
-			want:       items.Limits{Enabled: true, MaxBytes: 30 << 20, AvailableBytes: 30<<20 - items.RecordBytes, MaxItems: 5, MaxItemBytes: 50 << 20},
+			cfg:        items.Config{MaxTotalBytes: 30 << 20, MaxGroupBytes: 100 << 20, MaxItemBytes: 30<<20 - items.RecordBytes, MaxGroupItems: 5},
+			want:       items.Limits{Enabled: true, MaxBytes: 30 << 20, AvailableBytes: 30<<20 - items.RecordBytes, MaxItems: 5, MaxItemBytes: 30<<20 - items.RecordBytes},
 			wantSource: "default",
 		},
 		{
@@ -129,9 +157,22 @@ func TestLimits(t *testing.T) {
 				v, _ := reg.GetTag(ctx, tag)
 				tg = &v
 			}
-			if src := svc.GroupLimit(g, tg).Source; src != tt.wantSource {
-				t.Errorf("GroupLimit().Source = %q, want %q", src, tt.wantSource)
+			l := svc.GroupLimit(g, tg)
+			if l.Source != tt.wantSource {
+				t.Errorf("GroupLimit().Source = %q, want %q", l.Source, tt.wantSource)
+			}
+			if l.Raised != tt.wantRaised {
+				t.Errorf("GroupLimit().Raised = %v, want %v", l.Raised, tt.wantRaised)
 			}
 		})
+	}
+}
+
+// TestRecordBytesMatchesConfig: config repeats the record size to check the
+// store limits at startup without importing this package.
+func TestRecordBytesMatchesConfig(t *testing.T) {
+	t.Parallel()
+	if items.RecordBytes != config.StoreItemRecordBytes {
+		t.Errorf("RecordBytes = %d, want config.StoreItemRecordBytes = %d", items.RecordBytes, config.StoreItemRecordBytes)
 	}
 }

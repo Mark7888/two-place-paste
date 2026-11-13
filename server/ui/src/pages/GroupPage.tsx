@@ -144,6 +144,7 @@ function Stats({ data }: { data: GroupDetail }) {
           <UsageMeter used={g.usage.used_bytes} limit={g.limit_bytes} label="Blob storage used" />
           <p className="sub">
             limit from {limitSources[g.limit_source]}
+            {g.limit_raised && " · raised to one entry, the smallest allowed"}
             {g.usage.over_limit && " · the next upload evicts its oldest entries down to the limit"}
           </p>
         </StatCard>
@@ -165,6 +166,7 @@ function StoreStat({ store }: { store: GroupStore }) {
       <p className="sub">
         {store.used_items} of {store.max_items} {plural(store.max_items, "item", "items")} · limit from{" "}
         {limitSources[store.limit_source]}
+        {store.limit_raised && " · raised to one item, the smallest allowed"}
       </p>
     </StatCard>
   );
@@ -272,8 +274,10 @@ function LimitForm({
       </div>
       <span className="hint">
         Overrides the tag's limit{data.tag_limit_bytes !== null && ` (${limitText(data.tag_limit_bytes)})`} and the
-        server default ({limitText(data.default_limit_bytes)}). 0 means no limit of its own. Unticking keeps the value
-        for later. Lowering it deletes nothing now: the group's next upload removes its oldest entries until it fits.
+        server default ({limitText(data.default_limit_bytes)}). 0 means no limit of its own
+        {data.min_limit_bytes > 0 && `; any other limit is at least ${humanBytes(data.min_limit_bytes)}, the largest entry`}.
+        Unticking keeps the value for later. Lowering it deletes nothing now: the group's next upload removes its oldest
+        entries until it fits.
       </span>
     </form>
   );
@@ -366,7 +370,8 @@ function StoreSection({
         <span className="hint">
           Overrides the tag's store limit{store.tag_limit_bytes !== null && ` (${limitText(store.tag_limit_bytes)})`}{" "}
           and the server default ({limitText(store.default_limit_bytes)}). 0 means no limit of its own. An item can
-          be up to {humanBytes(store.max_item_bytes)}. Separate from
+          be up to {humanBytes(store.max_item_bytes)}, so any other limit is at least that plus the item's record (
+          {store.min_limit_bytes} bytes). Separate from
           the storage limit above. Lowering it deletes nothing: the store never evicts, so new saves are refused until
           it fits.
         </span>

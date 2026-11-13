@@ -55,6 +55,12 @@ type groupStoreJSON struct {
 	LimitBytes  int64  `json:"limit_bytes"`
 	LimitSource string `json:"limit_source"`
 
+	// LimitRaised is true when the limit chosen for the store was below one
+	// item and LimitBytes is that floor instead; MinLimitBytes is the floor:
+	// one item of the largest size and its record.
+	LimitRaised   bool  `json:"limit_raised"`
+	MinLimitBytes int64 `json:"min_limit_bytes"`
+
 	OwnLimit          limitJSON `json:"own_limit"`
 	TagLimitBytes     *int64    `json:"tag_limit_bytes"`
 	DefaultLimitBytes int64     `json:"default_limit_bytes"`
@@ -121,6 +127,8 @@ func (s *Server) groupStore(ctx context.Context, g store.Group, tags map[string]
 		Enabled:           g.StoreEnabled,
 		LimitBytes:        storeShown(limit.Bytes, cfg.MaxTotalBytes),
 		LimitSource:       limit.Source,
+		LimitRaised:       limit.Raised,
+		MinLimitBytes:     cfg.MinLimitBytes(),
 		OwnLimit:          limitJSON{Enabled: g.StoreLimit.Enabled, Bytes: g.StoreLimit.Bytes},
 		DefaultLimitBytes: cfg.MaxGroupBytes,
 		MaxItems:          int64(cfg.MaxGroupItems),

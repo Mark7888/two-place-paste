@@ -249,13 +249,25 @@ type StoreConfig struct {
 	MaxGroupBytes int64
 
 	// MaxItemBytes is the largest blob one item may have. It defaults to the
-	// per-entry cap, so anything that fits in history can be saved.
+	// per-entry cap, so anything that fits in history can be saved, cut down
+	// to what the store limits leave room for.
 	MaxItemBytes int64
 
 	// MaxGroupItems caps how many items one group holds. It bounds the Redis
 	// memory the records take and the list a client downloads to search.
 	MaxGroupItems int
 }
+
+// StoreItemRecordBytes is what one store item's record costs besides its
+// blob: its wrapped item keys and its sealed metadata, whose sizes are fixed
+// (/spec/crypto.md §7a.3, §7a.5). It must equal items.RecordBytes, which a
+// test there checks; it is repeated here so that config needs no import.
+const StoreItemRecordBytes = 105 + 2089
+
+// MinLimitBytes is the smallest store limit that still holds one item of the
+// largest size, with its record. Any store limit below it would refuse such
+// an item outright, however empty the store (SPEC §4.6).
+func (s StoreConfig) MinLimitBytes() int64 { return s.MaxItemBytes + StoreItemRecordBytes }
 
 // Options controls Load.
 type Options struct {
@@ -331,13 +343,27 @@ func Load(opts Options) (*Config, error) {
 		},
 	}
 	if cfg.Store.MaxItemBytes == 0 {
-		cfg.Store.MaxItemBytes = cfg.Entry.MaxBytes
+		cfg.Store.MaxItemBytes = defaultStoreItemBytes(cfg.Entry.MaxBytes, cfg.Store.MaxGroupBytes, cfg.Store.MaxTotalBytes)
 	}
 
 	if err := errors.Join(append(r.errs, cfg.Validate())...); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	return cfg, nil
+}
+
+// defaultStoreItemBytes is the per-item cap when none is configured: the
+// per-entry cap, cut down so that one item and its record fit within each
+// store limit that is set. An explicit TPP_STORE_MAX_ITEM_BYTES is never cut;
+// Validate refuses one that does not fit.
+func defaultStoreItemBytes(entryMax int64, limits ...int64) int64 {
+	n := entryMax
+	for _, l := range limits {
+		if room := l - StoreItemRecordBytes; l > 0 && room > 0 && room < n {
+			n = room
+		}
+	}
+	return n
 }
 
 // Validate reports every configuration problem at once.
@@ -468,6 +494,20 @@ func (c *Config) Validate() error {
 	}
 	if c.Store.MaxItemBytes <= 0 {
 		errs = append(errs, fmt.Errorf("TPP_STORE_MAX_ITEM_BYTES must be positive, got %d", c.Store.MaxItemBytes))
+	} else {
+		// As for blobs: a store limit that cannot hold one item of the largest
+		// size refuses it however empty the store is.
+		for _, lim := range []struct {
+			key string
+			v   int64
+		}{
+			{"TPP_STORE_MAX_TOTAL_BYTES", c.Store.MaxTotalBytes},
+			{"TPP_STORE_MAX_GROUP_BYTES", c.Store.MaxGroupBytes},
+		} {
+			if lim.v > 0 && lim.v < c.Store.MinLimitBytes() {
+				errs = append(errs, fmt.Errorf("%s (%d) must be 0 (unlimited) or at least TPP_STORE_MAX_ITEM_BYTES plus one item's record (%d)", lim.key, lim.v, c.Store.MinLimitBytes()))
+			}
+		}
 	}
 	if c.Store.MaxGroupItems < 1 {
 		errs = append(errs, fmt.Errorf("TPP_STORE_MAX_GROUP_ITEMS must be at least 1, got %d", c.Store.MaxGroupItems))

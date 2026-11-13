@@ -66,6 +66,7 @@ export function TagsPage() {
           key={`${t.limit.enabled}-${t.limit.bytes}`}
           tag={t}
           stored={t.limit}
+          raisedTo={t.limit_raised ? meta?.min_limit_bytes : undefined}
           label="Storage limit"
           placeholder="e.g. 5 GiB"
           action={action}
@@ -84,6 +85,7 @@ export function TagsPage() {
                 key={`${t.store_limit.enabled}-${t.store_limit.bytes}`}
                 tag={t}
                 stored={t.store_limit}
+                raisedTo={t.store_limit_raised ? meta?.min_store_limit_bytes : undefined}
                 label="Store limit"
                 placeholder="e.g. 100 MiB"
                 action={action}
@@ -149,13 +151,15 @@ export function TagsPage() {
       {meta && (
         <p className="hint spaced">
           0 means no per-group limit; the server's total limit ({limitText(meta.total_limit_bytes)}) still applies.
+          {meta.min_limit_bytes > 0 && ` Any other limit is at least ${humanBytes(meta.min_limit_bytes)}, the largest entry.`}{" "}
           Unticking keeps the value for later.
           {meta.has_store && (
             <>
               {" "}
               A store limit works the same way for the groups' stores, in place of the server default (
               {limitText(meta.default_store_limit_bytes)}), within the total store limit (
-              {limitText(meta.total_store_limit_bytes)}). Whether a group has a store at all is set on its own page.
+              {limitText(meta.total_store_limit_bytes)}), and is at least one item of the largest size with its record (
+              {meta.min_store_limit_bytes} bytes). Whether a group has a store at all is set on its own page.
             </>
           )}
         </p>
@@ -202,6 +206,7 @@ function CreateTagForm({ action, onCreate }: { action: Action; onCreate: (name: 
 function TagLimitForm({
   tag,
   stored,
+  raisedTo,
   label,
   placeholder,
   action,
@@ -209,6 +214,9 @@ function TagLimitForm({
 }: {
   tag: Tag;
   stored: Limit;
+  /** Set when the stored limit is below the smallest allowed, which its
+   *  groups get instead: one saved before the relay refused such a limit. */
+  raisedTo?: number;
   label: string;
   placeholder: string;
   action: Action;
@@ -236,6 +244,9 @@ function TagLimitForm({
       <button type="submit" className="secondary small" disabled={action.busy}>
         Save
       </button>
+      {raisedTo !== undefined && (
+        <span className="hint">Raised to {humanBytes(raisedTo)}, the smallest allowed.</span>
+      )}
     </form>
   );
 }

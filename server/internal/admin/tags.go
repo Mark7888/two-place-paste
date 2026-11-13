@@ -24,6 +24,12 @@ type tagJSON struct {
 	// StoreLimit is the tag's store limit override (SPEC §4.6).
 	StoreLimit limitJSON `json:"store_limit"`
 
+	// LimitRaised and StoreLimitRaised are true when the tag's limit is on
+	// and below one entry, or one store item, so its groups get that floor
+	// instead.
+	LimitRaised      bool `json:"limit_raised"`
+	StoreLimitRaised bool `json:"store_limit_raised"`
+
 	// StoreBytes is what the stores of the tag's groups hold together, and
 	// StoreGroupsOn how many of those groups have their store on.
 	StoreBytes    int64 `json:"store_bytes"`
@@ -37,11 +43,16 @@ type tagsJSON struct {
 	DefaultLimitBytes int64 `json:"default_limit_bytes"`
 	TotalLimitBytes   int64 `json:"total_limit_bytes"`
 
+	// MinLimitBytes is the smallest limit a tag may set: one entry.
+	MinLimitBytes int64 `json:"min_limit_bytes"`
+
 	// HasStore says whether the relay has a store, and the store limits
-	// the tag screen's explanations name.
+	// the tag screen's explanations name. MinStoreLimitBytes is the
+	// smallest store limit: one item of the largest size and its record.
 	HasStore               bool  `json:"has_store"`
 	DefaultStoreLimitBytes int64 `json:"default_store_limit_bytes"`
 	TotalStoreLimitBytes   int64 `json:"total_store_limit_bytes"`
+	MinStoreLimitBytes     int64 `json:"min_store_limit_bytes"`
 
 	Problems []string `json:"problems"`
 }
@@ -87,13 +98,21 @@ func (s *Server) tagRows(ctx context.Context, probs *problems) ([]tagJSON, error
 		probs.add("the groups", err)
 	}
 
+	var storeFloor int64
+	if s.storeSvc != nil {
+		storeFloor = s.storeSvc.Config().MinLimitBytes()
+	}
 	rows := make([]tagJSON, 0, len(tags))
 	for _, t := range tags {
+		_, raised := raiseLimit(t.Limit.Bytes, s.minLimit())
+		_, storeRaised := raiseLimit(t.StoreLimit.Bytes, storeFloor)
 		rows = append(rows, tagJSON{
-			Name:       t.Name,
-			CreatedAt:  t.CreatedAt.UTC(),
-			Limit:      limitJSON{Enabled: t.Limit.Enabled, Bytes: t.Limit.Bytes},
-			StoreLimit: limitJSON{Enabled: t.StoreLimit.Enabled, Bytes: t.StoreLimit.Bytes},
+			Name:             t.Name,
+			CreatedAt:        t.CreatedAt.UTC(),
+			Limit:            limitJSON{Enabled: t.Limit.Enabled, Bytes: t.Limit.Bytes},
+			StoreLimit:       limitJSON{Enabled: t.StoreLimit.Enabled, Bytes: t.StoreLimit.Bytes},
+			LimitRaised:      t.Limit.Enabled && raised,
+			StoreLimitRaised: t.StoreLimit.Enabled && storeRaised,
 		})
 	}
 	byName := make(map[string]*tagJSON, len(rows))
@@ -137,6 +156,7 @@ func (s *Server) tagListView(ctx context.Context, query url.Values) (tagsJSON, e
 		tablePage:         tagTable.run(rows, query),
 		DefaultLimitBytes: s.dashboard.GroupLimit,
 		TotalLimitBytes:   s.dashboard.TotalLimit,
+		MinLimitBytes:     s.minLimit(),
 		Problems:          probs.list,
 	}
 	if s.storeSvc != nil {
@@ -144,6 +164,7 @@ func (s *Server) tagListView(ctx context.Context, query url.Values) (tagsJSON, e
 		v.HasStore = true
 		v.DefaultStoreLimitBytes = cfg.MaxGroupBytes
 		v.TotalStoreLimitBytes = cfg.MaxTotalBytes
+		v.MinStoreLimitBytes = cfg.MinLimitBytes()
 	}
 	return v, nil
 }

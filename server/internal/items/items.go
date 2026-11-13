@@ -184,24 +184,42 @@ func New(opts Options) *Service {
 // Config reports the configured store limits.
 func (s *Service) Config() Config { return s.cfg }
 
+// MinLimitBytes is the smallest store limit that still holds one item of the
+// largest size with its record. A limit below it would refuse such an item
+// however empty the store is, so none is ever applied (SPEC §4.6).
+func (c Config) MinLimitBytes() int64 { return c.MaxItemBytes + RecordBytes }
+
 // Limit is a group's store limit and where it comes from: "group" for its
 // own override, "tag" for its tag's, "default" for the server's.
 type Limit struct {
 	Bytes  int64
 	Source string
+
+	// Raised is true when the chosen limit was below MinLimitBytes and Bytes
+	// is that floor instead. The admin screens refuse such a limit, so it
+	// can only be one saved before they did, or one the per-item cap has
+	// since outgrown.
+	Raised bool
 }
 
 // GroupLimit resolves the store limit of a group: its own override if on,
-// else its tag's if on, else the server default. Zero is unlimited. The
-// relay's total store limit is applied separately.
+// else its tag's if on, else the server default, raised to MinLimitBytes when
+// it is below. Zero is unlimited. The relay's total store limit is applied
+// separately.
 func (s *Service) GroupLimit(g store.Group, tag *store.Tag) Limit {
-	if g.StoreLimit.Enabled {
-		return Limit{Bytes: g.StoreLimit.Bytes, Source: "group"}
+	var l Limit
+	switch {
+	case g.StoreLimit.Enabled:
+		l = Limit{Bytes: g.StoreLimit.Bytes, Source: "group"}
+	case tag != nil && tag.StoreLimit.Enabled:
+		l = Limit{Bytes: tag.StoreLimit.Bytes, Source: "tag"}
+	default:
+		l = Limit{Bytes: s.cfg.MaxGroupBytes, Source: "default"}
 	}
-	if tag != nil && tag.StoreLimit.Enabled {
-		return Limit{Bytes: tag.StoreLimit.Bytes, Source: "tag"}
+	if floor := s.cfg.MinLimitBytes(); l.Bytes > 0 && l.Bytes < floor {
+		l.Bytes, l.Raised = floor, true
 	}
-	return Limit{Bytes: s.cfg.MaxGroupBytes, Source: "default"}
+	return l
 }
 
 // Limits is the state of one group's store, as StoreLimitsResponse states it.
