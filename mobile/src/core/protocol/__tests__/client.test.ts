@@ -654,6 +654,47 @@ describe('what the server admin does to the group', () => {
     expect(store.peek('session')).toContain('"group_name":"Friends"');
   });
 
+  test('the client learns the operator website and links to it with its group id', async () => {
+    const relay = new FakeRelay({ operatorUrl: 'https://tpp.example.com/help?lang=en' });
+    const urls: string[] = [];
+    const laptop = await Client.open({
+      store: new MemoryStore(),
+      deviceName: 'laptop',
+      socketFactory: relay.factory,
+      healthCheck: async () => false,
+      deviceStatus: relay.deviceStatus,
+      handlers: { onOperatorUrl: (u) => urls.push(u) },
+    });
+    opened.push(laptop);
+    expect(laptop.operatorLink).toBeNull();
+    await laptop.createGroup(relay.creationURL);
+
+    await until(() => laptop.operatorUrl !== '');
+    expect(urls).toEqual(['https://tpp.example.com/help?lang=en']);
+    expect(laptop.operatorLink).toBe('https://tpp.example.com/help?lang=en&group_id=group-1');
+
+    // Forgetting the group forgets its relay's website with it.
+    await laptop.forget();
+    expect(laptop.operatorUrl).toBe('');
+    expect(laptop.operatorLink).toBeNull();
+  });
+
+  test('a website the app may not open is taken as none', async () => {
+    const relay = new FakeRelay({ operatorUrl: 'javascript:alert(1)' });
+    const laptop = await Client.open({
+      store: new MemoryStore(),
+      deviceName: 'laptop',
+      socketFactory: relay.factory,
+      healthCheck: async () => false,
+      deviceStatus: relay.deviceStatus,
+    });
+    opened.push(laptop);
+    await laptop.createGroup(relay.creationURL);
+    await until(() => laptop.groupName === 'Family');
+    expect(laptop.operatorUrl).toBe('');
+    expect(laptop.operatorLink).toBeNull();
+  });
+
   test('a deleted group closes the socket and stops the client for good', async () => {
     const relay = new FakeRelay();
     let deleted = 0;

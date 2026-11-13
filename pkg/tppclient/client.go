@@ -70,6 +70,13 @@ type Handlers struct {
 	// set it, is first learned or changes. It may be empty.
 	OnGroupName func(name string)
 
+	// OnOperatorURL fires when a connection learns the relay operator's
+	// website, or learns that it changed. url is the plain base URL;
+	// OperatorLink builds the link to open. Replacing the identity (Forget,
+	// SwitchGroup and the like) clears it without firing, since a shell
+	// redraws everything then anyway and reads OperatorLink afresh.
+	OnOperatorURL func(url string)
+
 	// OnEntryAdded fires when another device of the group has written a new
 	// latest entry. It carries metadata only and runs on the read loop: a
 	// handler that wants the content fetches it on a goroutine of its own.
@@ -165,6 +172,12 @@ type Client struct {
 	mu    sync.Mutex
 	state State
 	conn  *conn
+
+	// operatorURL is the relay operator's website as the relay last stated
+	// it (SPEC §4.4). It is not persisted: it belongs to the relay of the
+	// identity in use, so replacing the identity clears it until the next
+	// connection asks again.
+	operatorURL string
 
 	// parked are the groups this installation keeps but is not using
 	// (groups.go). parkedLocked is set when the stored record could not be
@@ -395,6 +408,7 @@ func (c *Client) restart(s State) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.state = s
+	c.operatorURL = ""
 	c.invitations = nil
 	c.storeKeys = nil
 	c.conn = nil
@@ -604,11 +618,12 @@ func (c *Client) serveOnce(runCtx context.Context) (connected bool, err error) {
 
 	go conn.keepalive(runCtx, pingInterval, pingTimeout)
 	// A rename made while this device was offline is not replayed as an
-	// event, so the name is asked for on every connect.
+	// event, so the name — and the operator's website, which a relay
+	// restart may have changed — is asked for on every connect.
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-		c.refreshGroupName(runCtx, conn)
+		c.refreshGroupInfo(runCtx, conn)
 	}()
 	readErr := conn.readLoop(runCtx, c.onEvent)
 	if websocket.CloseStatus(readErr) == groupDeletedCloseCode {
@@ -660,18 +675,57 @@ func (c *Client) GroupName() string {
 	return c.state.GroupName
 }
 
-// refreshGroupName asks the relay for the group's name on a fresh
-// connection. A relay too old to know the request answers that it does not
-// handle it, which is not worth more than a debug line.
-func (c *Client) refreshGroupName(runCtx context.Context, conn *conn) {
+// refreshGroupInfo asks the relay for the group's name and the operator's
+// website on a fresh connection. A relay too old to know the request answers
+// that it does not handle it, which is not worth more than a debug line.
+func (c *Client) refreshGroupInfo(runCtx context.Context, conn *conn) {
 	ctx, cancel := context.WithTimeout(runCtx, 15*time.Second)
 	defer cancel()
 	var resp tppv1.GroupInfoResponse
 	if err := conn.call(ctx, tppv1.MessageType_MESSAGE_TYPE_GROUP_INFO_REQUEST, &tppv1.GroupInfoRequest{}, &resp); err != nil {
-		c.logger.Debug("reading the group's name failed", slog.Any("error", err))
+		c.logger.Debug("reading the group's info failed", slog.Any("error", err))
 		return
 	}
 	c.setGroupName(resp.GetName())
+	c.setOperatorURL(resp.GetOperatorUrl())
+}
+
+// OperatorURL is the relay operator's website as the relay last stated it:
+// the plain base URL, without a group id. Empty when the relay names none,
+// predates the field, or has not answered on this identity yet.
+func (c *Client) OperatorURL() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.operatorURL
+}
+
+// OperatorLink is the link to open for the operator's website: OperatorURL
+// with this device's group id added. Empty when there is no website, no
+// group, or the URL is not one a client may open.
+func (c *Client) OperatorLink() string {
+	c.mu.Lock()
+	base, groupID := c.operatorURL, c.state.GroupID
+	c.mu.Unlock()
+	if base == "" || groupID == "" {
+		return ""
+	}
+	link, _ := OperatorLink(base, groupID)
+	return link
+}
+
+// setOperatorURL records the operator's website and tells the shell when it
+// changed. A URL a client may not open is recorded as none.
+func (c *Client) setOperatorURL(u string) {
+	if !ValidOperatorURL(u) {
+		u = ""
+	}
+	c.mu.Lock()
+	changed := c.operatorURL != u
+	c.operatorURL = u
+	c.mu.Unlock()
+	if changed && c.handlers.OnOperatorURL != nil {
+		c.handlers.OnOperatorURL(u)
+	}
 }
 
 // setGroupName records a group name and tells the shell when it changed.

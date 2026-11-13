@@ -125,6 +125,30 @@ describe('several groups (spec/crypto.md §10.1)', () => {
     expect(fromUTF8((await restarted.getLatest()).body)).toBe('in work');
   });
 
+  test("the operator link follows the active group's relay", async () => {
+    const { home, work, options } = twoRelays();
+    home.operatorUrl = 'https://home.test/help';
+    const phone = await openOn(options, new MemoryStore(), 'phone');
+    await phone.createGroup(home.creationURL);
+    await until('the home website', () => phone.operatorUrl !== '');
+    expect(phone.operatorLink).toBe('https://home.test/help?group_id=group-1');
+    const homeRef = phone.activeRef;
+
+    // Work's relay names no website: none of Home's is left over.
+    await phone.parkActive();
+    expect(phone.operatorLink).toBeNull();
+    await phone.createGroup(work.creationURL);
+    await until('the work group name', () => phone.groupName === 'Work');
+    expect(phone.operatorLink).toBeNull();
+
+    // Back to Home: nothing until its relay answers again.
+    await phone.switchGroup(homeRef);
+    expect(phone.operatorLink).toBeNull();
+    await phone.connect();
+    await until('the home website again', () => phone.operatorUrl !== '');
+    expect(phone.operatorLink).toBe('https://home.test/help?group_id=group-1');
+  });
+
   test('an interrupted switch leaves a duplicate the next open removes', async () => {
     const { home, work, options } = twoRelays();
     const store = new MemoryStore();

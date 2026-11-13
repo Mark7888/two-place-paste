@@ -155,6 +155,8 @@ export interface FakeRelayOptions {
   groupName?: string;
   /** groupId is the id the group is created with; two relays in one test need two. */
   groupId?: string;
+  /** operatorUrl is the operator's website GroupInfoResponse names; "" names none. */
+  operatorUrl?: string;
   /** limits are what EntryLimitsRequest is answered with; null answers as a relay that predates it. */
   limits?: EntryLimitsResponse | null;
   /** store is the group's store; null answers every store request as a relay that predates it. */
@@ -199,6 +201,7 @@ export class FakeRelay {
     this.endpoint = websocketURL(this.baseUrl, '');
     this.now = options.now ?? Date.now;
     this.groupName = options.groupName ?? 'Family';
+    this.operatorUrl = options.operatorUrl ?? '';
     this.createdGroupId = options.groupId ?? 'group-1';
     this.limits = options.limits ?? null;
     this.storeConfig = options.store ?? null;
@@ -658,7 +661,7 @@ export class FakeRelay {
       case MessageType.MESSAGE_TYPE_GROUP_INFO_REQUEST: {
         reply(
           MessageType.MESSAGE_TYPE_GROUP_INFO_RESPONSE,
-          GroupInfoResponse.encode({ name: this.groupName, operatorUrl: '' }).finish(),
+          GroupInfoResponse.encode({ name: this.groupName, operatorUrl: this.operatorUrl }).finish(),
         );
         return;
       }
@@ -969,6 +972,9 @@ export class FakeRelay {
 
   /** groupName is what the admin has called the group. */
   groupName: string;
+
+  /** operatorUrl is the operator's website GroupInfoResponse names; "" names none. */
+  operatorUrl: string;
 
   /** deleted is set by deleteGroup: every device of the group is refused from then on. */
   deleted = false;

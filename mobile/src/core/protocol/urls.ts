@@ -19,6 +19,7 @@
  * what keeps these tests — which run on Node — honest about what ships.
  */
 
+import { utf8 } from '../bytes';
 import { TppError } from './errors';
 
 /** WEBSOCKET_PATH is where the relay mounts the transport. */
@@ -168,4 +169,80 @@ export function websocketURL(base: string, deviceId: string): string {
   const transport = scheme === 'https' ? 'wss' : 'ws';
   const query = deviceId === '' ? '' : `?device_id=${encodeURIComponent(deviceId)}`;
   return `${transport}://${host}${WEBSOCKET_PATH}${query}`;
+}
+
+/**
+ * OPERATOR_GROUP_PARAM is the query parameter an operator link carries the
+ * group's id in (SPEC §4.4).
+ */
+export const OPERATOR_GROUP_PARAM = 'group_id';
+
+/**
+ * validOperatorURL reports whether `url` is a website the app may open: an
+ * absolute http:// or https:// URL with a host, without credentials, spaces
+ * or control characters. Anything else — javascript:, intent:, file:, a bare
+ * host — is never opened, whatever the relay sent. The Go client applies the
+ * same rules (pkg/tppclient/operator.go), and both test the same cases.
+ */
+export function validOperatorURL(url: string): boolean {
+  const lower = url.toLowerCase();
+  let rest: string;
+  if (lower.startsWith('https://')) {
+    rest = url.slice('https://'.length);
+  } else if (lower.startsWith('http://')) {
+    rest = url.slice('http://'.length);
+  } else {
+    return false;
+  }
+  for (let i = 0; i < url.length; i++) {
+    const c = url.charCodeAt(i);
+    if (c <= 0x20 || c === 0x7f) {
+      return false;
+    }
+  }
+  const end = rest.search(/[/?#]/);
+  const host = end < 0 ? rest : rest.slice(0, end);
+  return host !== '' && !host.includes('@') && !host.startsWith(':');
+}
+
+/**
+ * operatorLink adds `groupId` to the operator's website as `group_id`,
+ * keeping any query already there and any fragment at the end, so the
+ * operator's site can tell which group came from the app. It returns null
+ * when the URL is not one the app may open, or there is no group.
+ */
+export function operatorLink(base: string, groupId: string): string | null {
+  if (groupId === '' || !validOperatorURL(base)) {
+    return null;
+  }
+  const hash = base.indexOf('#');
+  let head = hash < 0 ? base : base.slice(0, hash);
+  const fragment = hash < 0 ? null : base.slice(hash + 1);
+  const param = `${OPERATOR_GROUP_PARAM}=${escapeQueryValue(groupId)}`;
+  if (!head.includes('?')) {
+    head += `?${param}`;
+  } else if (head.endsWith('?') || head.endsWith('&')) {
+    head += param;
+  } else {
+    head += `&${param}`;
+  }
+  return fragment === null ? head : `${head}#${fragment}`;
+}
+
+/**
+ * escapeQueryValue percent-encodes every UTF-8 byte but RFC 3986's unreserved
+ * ones. encodeURIComponent would leave !'()* as they are, and the Go client
+ * encodes them, so this is written out to match it byte for byte.
+ */
+function escapeQueryValue(value: string): string {
+  let out = '';
+  for (const byte of utf8(value)) {
+    const c = String.fromCharCode(byte);
+    if (/[A-Za-z0-9\-_.~]/.test(c)) {
+      out += c;
+    } else {
+      out += `%${byte.toString(16).toUpperCase().padStart(2, '0')}`;
+    }
+  }
+  return out;
 }

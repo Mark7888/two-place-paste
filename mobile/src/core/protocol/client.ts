@@ -171,7 +171,14 @@ import {
   newState,
   saveState,
 } from './state';
-import { deviceStatusURL, splitCreationURL, normalizeServerURL, websocketURL } from './urls';
+import {
+  deviceStatusURL,
+  operatorLink,
+  splitCreationURL,
+  normalizeServerURL,
+  validOperatorURL,
+  websocketURL,
+} from './urls';
 import { hashHex, type StoreDetails, type StoreItem, type StoreLimits, type StoreListing } from './store';
 import { randomBytes } from '../random';
 import { concat, toHex, u8 } from '../bytes';
@@ -630,6 +637,13 @@ export interface Handlers {
   /** onGroupName fires when the group's display name is first learned or changes. It may be empty. */
   onGroupName?: (name: string) => void;
   /**
+   * onOperatorUrl fires when a connection learns the relay operator's
+   * website, or learns that it changed (SPEC §4.4). `url` is the plain base
+   * URL; `operatorLink` is the link to open. Replacing the identity (forget,
+   * a group switch) clears it without firing: the screens redraw then anyway.
+   */
+  onOperatorUrl?: (url: string) => void;
+  /**
    * onEntryEvicted fires when the relay removed an entry before its expiry to
    * stay within its storage limit. A history view drops it.
    */
@@ -853,6 +867,12 @@ export class Client {
   private writes: Promise<void> = Promise.resolve();
   /** identityOps serialises the operations that replace the identity: forget and the group switches. */
   private identityOps: Promise<void> = Promise.resolve();
+  /**
+   * operatorUrlValue is the relay operator's website as the relay last stated
+   * it. It is not persisted: it belongs to the relay of the identity in use,
+   * so resetTo clears it until the next connection asks again.
+   */
+  private operatorUrlValue = '';
 
   private constructor(state: ClientState, options: ClientOptions) {
     this.state = state;
@@ -913,6 +933,26 @@ export class Client {
   /** groupName is the group's display name as the server admin set it, or "". */
   get groupName(): string {
     return this.state.groupName;
+  }
+
+  /**
+   * operatorUrl is the relay operator's website as the relay last stated it:
+   * the plain base URL, without a group id, or "" when the relay names none,
+   * predates it, or has not answered on this identity yet.
+   */
+  get operatorUrl(): string {
+    return this.operatorUrlValue;
+  }
+
+  /**
+   * operatorLink is the link to open for the operator's website: operatorUrl
+   * with this device's group id added, or null when there is none to open.
+   */
+  get operatorLink(): string | null {
+    if (this.operatorUrlValue === '' || this.state.groupId === '') {
+      return null;
+    }
+    return operatorLink(this.operatorUrlValue, this.state.groupId);
   }
 
   /** groupDeleted reports whether the relay has said the admin deleted this device's group. */
@@ -1104,7 +1144,7 @@ export class Client {
     this.handlers.onConnected?.();
     // A rename made while this device was away is not replayed as an event,
     // so the name is asked for on every connect.
-    void this.refreshGroupName(conn);
+    void this.refreshGroupInfo(conn);
     return conn;
   }
 
@@ -1122,21 +1162,36 @@ export class Client {
   }
 
   /**
-   * refreshGroupName asks the relay for the group's name. A relay too old to
-   * know the request refuses it, and the name stays what it was.
+   * refreshGroupInfo asks the relay for the group's name and the operator's
+   * website. A relay too old to know the request refuses it, and both stay
+   * what they were.
    */
-  private async refreshGroupName(conn: Connection): Promise<void> {
+  private async refreshGroupInfo(conn: Connection): Promise<void> {
     try {
       const response = await conn.call(
         MessageType.MESSAGE_TYPE_GROUP_INFO_REQUEST,
         { codec: GroupInfoRequest, message: {} },
         GroupInfoResponse,
       );
+      this.setOperatorUrl(response.operatorUrl);
       await this.setGroupName(response.name);
     } catch {
       // Not worth a status line: the name is a label, and the next connect
       // asks again.
     }
+  }
+
+  /**
+   * setOperatorUrl records the operator's website and tells the screens when
+   * it changed. One the app may not open is recorded as none.
+   */
+  private setOperatorUrl(url: string): void {
+    const valid = validOperatorURL(url) ? url : '';
+    if (this.operatorUrlValue === valid) {
+      return;
+    }
+    this.operatorUrlValue = valid;
+    this.handlers.onOperatorUrl?.(valid);
   }
 
   /** setGroupName records the group's name and tells the screens when it changed. */
@@ -1701,6 +1756,7 @@ export class Client {
     this.deleted = false;
     this.storeKeys = null;
     this.limitsCache = null;
+    this.operatorUrlValue = '';
     this.backoffMs = MIN_BACKOFF_MS;
     this.state = state;
   }
