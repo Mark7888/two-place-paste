@@ -125,6 +125,7 @@ func newGroupFixture(t *testing.T, limits quota.Limits, rds admin.RedisInfo) *gr
 		}
 		o.Redis = rds
 		o.Version = "v9.9.9 (abc123)"
+		o.OperatorURL = "https://tpp.example.com/help"
 	})
 	return g
 }
@@ -764,12 +765,17 @@ func TestHealthCard(t *testing.T) {
 				Health struct {
 					Version       string       `json:"version"`
 					UptimeSeconds int64        `json:"uptime_seconds"`
+					OperatorURL   string       `json:"operator_url"`
 					Redis         *redisHealth `json:"redis"`
 				} `json:"health"`
 			}](t, g.get(c, "/admin/api/dashboard"))
 			h := dash.Health
 			if h.Version != "v9.9.9 (abc123)" || h.UptimeSeconds != 90*60 {
 				t.Errorf("health = version %q, uptime %ds; want v9.9.9 (abc123), 90 min", h.Version, h.UptimeSeconds)
+			}
+			// As configured: the admin opens it without a group id.
+			if h.OperatorURL != "https://tpp.example.com/help" {
+				t.Errorf("health operator_url = %q, want the configured URL", h.OperatorURL)
 			}
 			if h.Redis == nil {
 				t.Fatal("health has no Redis section")

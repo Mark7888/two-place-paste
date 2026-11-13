@@ -118,6 +118,17 @@ function Summary({ data }: { data: Dashboard }) {
 const policyLabels: Record<HealthState, string> = { good: "ok", bad: "unsafe", warn: "check", unknown: "unknown" };
 const aofLabels: Record<HealthState, string> = { good: "ok", bad: "off", warn: "unknown", unknown: "unknown" };
 
+/** operatorHost is the host of the operator's website, shown beside its
+ *  button. The relay only accepts absolute http(s) URLs, so this always has
+ *  one; the whole URL is shown if it somehow does not parse. */
+function operatorHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
 /** HealthCard says whether Redis is set up the way SPEC §4.2 needs. A relay
  *  on allkeys-lru or without AOF looks healthy until the day it silently
  *  loses every group, so the card says so up front. */
@@ -131,6 +142,20 @@ function HealthCard({ health }: { health: Health }) {
           <Fact label="Version">{health.version}</Fact>
           <Fact label="Running for">{uptime(health.uptime_seconds)}</Fact>
           <Fact label="Go">{health.go_version}</Fact>
+          <Fact label="Operator website">
+            {health.operator_url ? (
+              <>
+                <code>{operatorHost(health.operator_url)}</code>{" "}
+                <a className="button secondary small" href={health.operator_url} target="_blank" rel="noopener noreferrer">
+                  Open operator website
+                </a>
+              </>
+            ) : (
+              <span className="muted">
+                not set — <code>TPP_RELAY_OPERATOR_URL</code> adds a link to the apps and the pairing page
+              </span>
+            )}
+          </Fact>
           {redis && (
             <>
               <Fact label="Redis eviction policy">

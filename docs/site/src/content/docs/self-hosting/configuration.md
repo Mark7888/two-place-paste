@@ -29,6 +29,22 @@ Sizes take a plain byte count or a unit: `500MB`, `5GiB`, `1.5GiB`.
 | `TPP_API_READ_RATE`, `TPP_API_READ_BURST` | `10`, `60` | Each [admin API](/two-place-paste/self-hosting/api/) key's budget for reads (`GET`): requests a second, refilled continuously, and how many it may spend at once. |
 | `TPP_API_WRITE_RATE`, `TPP_API_WRITE_BURST` | `2`, `10` | The same for every other request: creating, changing, purging and deleting. |
 | `TPP_SOURCE_URL` | `https://github.com/Mark7888/two-place-paste` | Where the **Source code** link on the admin and pairing pages points. If you run a modified relay for other people, set it to your version's source — see [License](/two-place-paste/self-hosting/overview/#license). |
+| `TPP_RELAY_OPERATOR_URL` | unset | Your website, such as `https://tpp.example.com/help`: who runs the relay and where people ask for more room. When set, the desktop app links to it as **Open operator website** — in its sidebar and in its out-of-space warnings — and so do the admin health card and the pairing page. Must be an absolute `http://` or `https://` URL. See [Operator website](#operator-website). |
+
+### Operator website
+
+The desktop app opens `TPP_RELAY_OPERATOR_URL` with the group's id added to its query, so
+your site can tell which group a visitor came from:
+
+```
+https://tpp.example.com/help?group_id=<the group's id>
+```
+
+An existing query is kept (`…/help?lang=en&group_id=…`). The admin health card and the
+pairing page link to the URL exactly as configured, without a group id: neither knows a
+group. The group id is the creation token that made the group; it can create nothing
+more and is no login, but it does identify the group, so point the variable only at a
+site you trust with that.
 
 ## Redis
 

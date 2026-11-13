@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -86,6 +87,13 @@ type Config struct {
 	// AGPL-3.0: whoever runs a modified relay for other people has to offer
 	// them its source, and pointing this at their fork is how they do it.
 	SourceURL string
+
+	// OperatorURL is the relay operator's website: who runs the relay, and
+	// where a user asks for more room. Clients link to it with the group's
+	// id added (GroupInfoResponse.operator_url); the admin and pairing pages
+	// link to it as is. Empty when the operator set none, and then nothing
+	// links to it.
+	OperatorURL string
 
 	LogLevel slog.Level
 
@@ -303,6 +311,7 @@ func Load(opts Options) (*Config, error) {
 		HTTPAddr:      r.str("TPP_HTTP_ADDR", DefaultHTTPAddr),
 		PublicBaseURL: strings.TrimRight(r.str("TPP_PUBLIC_BASE_URL", ""), "/"),
 		SourceURL:     r.str("TPP_SOURCE_URL", DefaultSourceURL),
+		OperatorURL:   strings.TrimSpace(r.str("TPP_RELAY_OPERATOR_URL", "")),
 		LogLevel:      r.logLevel("TPP_LOG_LEVEL", slog.LevelInfo),
 		Redis: RedisConfig{
 			Addr:     r.str("TPP_REDIS_ADDR", DefaultRedisAddr),
@@ -366,6 +375,21 @@ func defaultStoreItemBytes(entryMax int64, limits ...int64) int64 {
 	return n
 }
 
+// ValidOperatorURL reports whether u can be offered as the operator's website:
+// an absolute http or https URL with a host and nothing a browser would read
+// as credentials. Clients check the same before they open it, so a relay that
+// sent anything else would show no link rather than a broken one.
+func ValidOperatorURL(u string) bool {
+	if strings.ContainsAny(u, " \t\r\n") {
+		return false
+	}
+	p, err := url.Parse(u)
+	if err != nil {
+		return false
+	}
+	return (p.Scheme == "http" || p.Scheme == "https") && p.Host != "" && p.User == nil
+}
+
 // Validate reports every configuration problem at once.
 func (c *Config) Validate() error {
 	var errs []error
@@ -380,6 +404,9 @@ func (c *Config) Validate() error {
 	}
 	if !strings.HasPrefix(c.SourceURL, "http://") && !strings.HasPrefix(c.SourceURL, "https://") {
 		errs = append(errs, fmt.Errorf("TPP_SOURCE_URL must start with http:// or https://, got %q", c.SourceURL))
+	}
+	if c.OperatorURL != "" && !ValidOperatorURL(c.OperatorURL) {
+		errs = append(errs, fmt.Errorf("TPP_RELAY_OPERATOR_URL must be an absolute http:// or https:// URL with a host, got %q", c.OperatorURL))
 	}
 	if c.Redis.Addr == "" {
 		errs = append(errs, errors.New("TPP_REDIS_ADDR must not be empty"))

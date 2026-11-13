@@ -2,6 +2,7 @@ package ws_test
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"testing"
 
@@ -25,6 +26,9 @@ func TestGroupInfoAndRename(t *testing.T) {
 	if info.GetName() != "test" {
 		t.Errorf("GroupInfoResponse.Name = %q, want the token's name %q", info.GetName(), "test")
 	}
+	if info.GetOperatorUrl() != "" {
+		t.Errorf("GroupInfoResponse.OperatorUrl = %q, want none from a relay without one", info.GetOperatorUrl())
+	}
 
 	ctx := context.Background()
 	if err := h.store.RenameGroup(ctx, created.GetGroupId(), "Family"); err != nil {
@@ -46,6 +50,24 @@ func TestGroupInfoAndRename(t *testing.T) {
 	online := h.server.OnlineDevices(created.GetGroupId())
 	if !online[created.GetDeviceId()] || len(online) != 1 {
 		t.Errorf("OnlineDevices() = %v, want just %s", online, created.GetDeviceId())
+	}
+}
+
+// TestGroupInfoOperatorURL: the operator's website reaches every group as
+// configured; the client adds the group's id itself (SPEC §4.4).
+func TestGroupInfoOperatorURL(t *testing.T) {
+	t.Parallel()
+
+	const site = "https://tpp.example.com/something?lang=en"
+	h := newHarnessWithOptions(t, ws.Options{Logger: slog.New(slog.DiscardHandler), OperatorURL: site})
+	for _, name := range []string{"laptop", "phone"} {
+		c, _ := h.createGroup(t, name)
+		c.send("info", tppv1.MessageType_MESSAGE_TYPE_GROUP_INFO_REQUEST, &tppv1.GroupInfoRequest{})
+		var info tppv1.GroupInfoResponse
+		c.await(tppv1.MessageType_MESSAGE_TYPE_GROUP_INFO_RESPONSE, &info)
+		if info.GetOperatorUrl() != site {
+			t.Errorf("GroupInfoResponse.OperatorUrl = %q, want %q", info.GetOperatorUrl(), site)
+		}
 	}
 }
 

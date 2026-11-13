@@ -209,6 +209,11 @@ func TestLoadValidationErrors(t *testing.T) {
 			wantErr: "TPP_SOURCE_URL must start with http:// or https://",
 		},
 		{
+			name:    "operator url without scheme",
+			env:     map[string]string{"ADMIN_PASSWORD": "pw", "TPP_PUBLIC_BASE_URL": "https://x.example", "TPP_RELAY_OPERATOR_URL": "tpp.example.com/help"},
+			wantErr: "TPP_RELAY_OPERATOR_URL must be an absolute http:// or https:// URL with a host",
+		},
+		{
 			name:    "unknown blob backend",
 			env:     map[string]string{"ADMIN_PASSWORD": "pw", "TPP_PUBLIC_BASE_URL": "https://x.example", "TPP_BLOB_BACKEND": "gcs"},
 			wantErr: `got "gcs"`,
@@ -567,6 +572,61 @@ func TestDefaultStoreItemBytes(t *testing.T) {
 			t.Parallel()
 			if got := defaultStoreItemBytes(entryMax, tt.limits...); got != tt.want {
 				t.Errorf("defaultStoreItemBytes() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestLoadOperatorURL: the operator's website is optional, trimmed, and
+// otherwise kept exactly as written.
+func TestLoadOperatorURL(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct{ name, value, want string }{
+		{"unset", "", ""},
+		{"kept as written", "https://tpp.example.com/something?lang=en", "https://tpp.example.com/something?lang=en"},
+		{"trimmed", "  https://example.com/help  ", "https://example.com/help"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			env := minimalEnv()
+			if tt.value != "" {
+				env["TPP_RELAY_OPERATOR_URL"] = tt.value
+			}
+			cfg, err := Load(Options{DotenvPath: filepath.Join(t.TempDir(), "absent.env"), Lookup: lookupFrom(env)})
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.OperatorURL != tt.want {
+				t.Errorf("OperatorURL = %q, want %q", cfg.OperatorURL, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidOperatorURL(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		url  string
+		want bool
+	}{
+		{"https://tpp.example.com/something", true},
+		{"http://192.168.1.10:8080/", true},
+		{"https://example.com/help?lang=en#contact", true},
+		{"tpp.example.com/something", false},
+		{"ftp://example.com/", false},
+		{"javascript:alert(1)", false},
+		{"https://", false},
+		{"https:example.com", false},
+		{"https://user:pw@example.com/", false},
+		{"https://example.com/a b", false},
+		{"", false},
+	} {
+		t.Run(tt.url, func(t *testing.T) {
+			t.Parallel()
+			if got := ValidOperatorURL(tt.url); got != tt.want {
+				t.Errorf("ValidOperatorURL(%q) = %v, want %v", tt.url, got, tt.want)
 			}
 		})
 	}

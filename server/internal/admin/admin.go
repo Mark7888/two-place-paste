@@ -192,6 +192,11 @@ type Options struct {
 	// whether the session cookie is marked Secure — see New.
 	PublicBaseURL string
 
+	// OperatorURL is the relay operator's website (TPP_RELAY_OPERATOR_URL),
+	// shown on the health card with a button that opens it. Empty when none
+	// is set.
+	OperatorURL string
+
 	// SessionTTL bounds a session's lifetime.
 	SessionTTL time.Duration
 
@@ -355,14 +360,15 @@ type Server struct {
 	now       func() time.Time
 	dashboard Dashboard
 
-	live      Live
-	purger    Purger
-	limits    GroupLimits
-	storeSvc  StoreService
-	sweep     func() bool
-	redis     RedisInfo
-	version   string
-	startedAt time.Time
+	live        Live
+	purger      Purger
+	limits      GroupLimits
+	storeSvc    StoreService
+	sweep       func() bool
+	redis       RedisInfo
+	version     string
+	startedAt   time.Time
+	operatorURL string
 
 	baseURL  string
 	password []byte
@@ -446,6 +452,7 @@ func New(st Store, opts Options) (*Server, error) {
 		redis:         opts.Redis,
 		version:       opts.Version,
 		startedAt:     startedAt,
+		operatorURL:   opts.OperatorURL,
 		logger:        logger,
 		now:           now,
 		baseURL:       base,
