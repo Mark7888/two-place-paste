@@ -658,7 +658,7 @@ export class FakeRelay {
       case MessageType.MESSAGE_TYPE_GROUP_INFO_REQUEST: {
         reply(
           MessageType.MESSAGE_TYPE_GROUP_INFO_RESPONSE,
-          GroupInfoResponse.encode({ name: this.groupName }).finish(),
+          GroupInfoResponse.encode({ name: this.groupName, operatorUrl: '' }).finish(),
         );
         return;
       }

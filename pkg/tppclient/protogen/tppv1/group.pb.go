@@ -393,7 +393,16 @@ type GroupInfoResponse struct {
 	// The admin's display name for the group (SPEC §4.4), shown as-is. It is
 	// admin-chosen display text, never clipboard content, and may be empty, in
 	// which case a client shows no group label.
-	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// The relay operator's website (TPP_RELAY_OPERATOR_URL), where a user can
+	// find who runs the relay or ask for more room. Empty when the operator set
+	// none, and from a relay that predates it: a client then shows no link.
+	// It is the plain base URL, the same for every group; a client opening it
+	// appends `group_id=<the group's id>` to its query itself, so the site can
+	// tell which group came from the app. Operator-chosen, never clipboard
+	// content. A client opens it only when it is an absolute http:// or
+	// https:// URL, and ignores anything else.
+	OperatorUrl   string `protobuf:"bytes,2,opt,name=operator_url,json=operatorUrl,proto3" json:"operator_url,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -431,6 +440,13 @@ func (*GroupInfoResponse) Descriptor() ([]byte, []int) {
 func (x *GroupInfoResponse) GetName() string {
 	if x != nil {
 		return x.Name
+	}
+	return ""
+}
+
+func (x *GroupInfoResponse) GetOperatorUrl() string {
+	if x != nil {
+		return x.OperatorUrl
 	}
 	return ""
 }
@@ -649,9 +665,10 @@ const file_tpp_v1_group_proto_rawDesc = "" +
 	"\x12DeviceListResponse\x12(\n" +
 	"\adevices\x18\x01 \x03(\v2\x0e.tpp.v1.DeviceR\adevices\x12\x14\n" +
 	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\"\x12\n" +
-	"\x10GroupInfoRequest\"'\n" +
+	"\x10GroupInfoRequest\"J\n" +
 	"\x11GroupInfoResponse\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\"U\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
+	"\foperator_url\x18\x02 \x01(\tR\voperatorUrl\"U\n" +
 	"\n" +
 	"WrappedKey\x12\x1b\n" +
 	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12*\n" +
