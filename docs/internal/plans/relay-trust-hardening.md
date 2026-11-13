@@ -40,6 +40,14 @@ Two phases, because they cost very different amounts.
 Phase 1 is worth shipping on its own and first: it removes the silent, zero-interaction
 attacks within a single release.
 
+**No fallback, in either phase.** A client never takes a weaker path because of
+something the relay says: its version, the features it claims, or what the other device
+appears to support. A relay controls all of those, so a hostile one would simply claim
+whatever unlocks the weaker path. Where the hardened path cannot run — an old relay, an
+old app on the other side — the operation fails and the user is told what to update. A
+version check on the relay is therefore never part of the trust path; at most it makes a
+failure easier to explain.
+
 ## 3. Phase 1 — client-side hardening
 
 ### 3.1 Confirm every join (H1)
@@ -225,59 +233,55 @@ nothing about them — its checks are not part of the trust path.
   name the sender. Each device then shows "Re-keyed by *Laptop*, removing *Old phone*",
   so a key pushed by a revoked device working with the relay shows up as the wrong
   device doing the removing.
-- **No downgrade:** a client that has once seen its group verified records that in its
-  own state and from then on refuses version-`0x01` wraps, joins without a proof, and
-  rows without certs. The relay cannot switch it back.
+- **No weaker path:** a Phase 2 client never produces or accepts a version-`0x01` wrap, a
+  join without a proof, an accept without a proof, or a key for a device without a valid
+  cert — in any group, verified or not, whatever the relay reports. There is no per-group
+  flag to downgrade and nothing for a relay to switch off, so there is no "pretend to be
+  old" attack.
 
 ### 4.4 Rollout and compatibility
 
 A wire change lands in the server and both clients together (CLAUDE.md, "Shared
-contracts"). Every addition is a new protobuf field or message, which older code skips,
-so nothing breaks on contact. What changes is how much is checked, and it is decided
-per group: until a group is upgraded (§4.5) every new client behaves as Phase 1 does.
-
-**Before the group is upgraded**
+contracts"). Every addition is a new protobuf field or message, so nothing crashes on
+contact — but because a Phase 2 client has no weaker path (§4.3), anything that cannot
+speak Phase 2 is refused rather than met halfway.
 
 | Situation | Result |
 |---|---|
-| New relay, old clients | Works as today. |
-| Old relay, new clients | Works at Phase 1 level. An old relay drops the new fields, so there are no certs to check and the upgrade is not offered. |
-| New member invites, old device joins | The joiner sends no proof. The member falls back to the Phase 1 confirmation and an unauthenticated wrap, which the old joiner can open. |
-| Old member invites, new device joins | The member sends no authenticated wrap. The joiner accepts it, as it would today, and says the pairing could not be verified because the other device is out of date. It has no earlier state to defend, so this is no weaker than Phase 1. |
-| New code read by an old client | Works: the secret and the inviter key are fields the old decoder skips. The QR code is slightly denser. |
+| Phase 2 relay, Phase 2 apps | Works, fully checked. |
+| Old relay, or one that claims to be old | Pairing fails: the relay drops the proofs and certs, so nothing verifies. Rekeys fail for the same reason. The app says the relay needs updating. Sync, history and the store keep working at the current epoch. |
+| Phase 2 app and an old app pairing, either direction | Refused. The old app sends no proof and cannot open an authenticated wrap. Whichever side is new says the other device needs updating. |
+| Old app already in the group | Keeps working until the next rekey, which it cannot open, so it is left at the old epoch. Before a rekey, the app warns that those devices will be cut off until they update and pair again. The warning reads the version each device last reported; it is a courtesy, not a check. |
+| New code read by an old app | The old app reads it and tries to pair; the Phase 2 side refuses the join (no proof). |
 
-**After the group is upgraded**
+So Phase 2 asks the relay to be updated first and every app with it. A relay that is
+not updated stops new pairings and rekeys and nothing else, and a hostile relay gains
+nothing by pretending to be old.
 
-| Situation | Result |
-|---|---|
-| Old client in the group | Cannot open a `0x02` wrap, so it is stuck at the old epoch and told to update and pair again. To avoid stranding anyone, the upgrade step reads every device's last-seen client version from the relay and refuses until all are new. That check only keeps devices from being left behind; it is not trusted for security. |
-| Old device joining | Refused: it cannot send a proof or open an authenticated wrap. It is told to update first. |
-| Relay downgraded, or pretending to be old | The upgraded clients' downgrade rule (§4.3) still holds: they refuse unauthenticated wraps, unproven joins and rows without certs. The group stops admitting devices and rekeying until the relay is back, and the client says so. |
-
-So upgrading a group is one-way, and it waits until every device and the relay run the
-new version.
-
-### 4.5 Upgrading an existing group
+### 4.5 Bringing an existing group in
 
 A group made before Phase 2 has no certs, and — under H1 — the relay may already hold its
-key. Certifying the current roster as-is would accept whatever the relay added, so the
-upgrade is a deliberate step:
+key. Certifying the current roster as-is would accept whatever the relay added, and the
+rule of §4.3 forbids wrapping to a device without a cert. So the first Phase 2 rekey of
+such a group is also the step that certifies it:
 
-1. On one device, **Devices → Verify devices** lists every device with its fingerprint.
+1. On one device, **Devices → Verify devices** (or any revocation) lists every device
+   with its fingerprint. Devices without a cert are marked as not yet verified.
 2. The user compares each one with that device's own screen and ticks it; unticked rows
    are removed.
-3. The client runs a **rekey without a revocation** (empty `revoked_device_id`; the relay
-   refuses that today): new key, authenticated wraps, certs for every ticked device.
+3. The client rekeys — with no revocation if none was asked for (empty
+   `revoked_device_id`; the relay refuses that today) — with authenticated wraps and
+   certs for every ticked device only.
 
-After that the group is verified on every device that picks up the new epoch, and any key
-the relay took before is useless. Until then the Devices screen shows a "not verified"
-banner.
+Pairing needs no such step: a device paired by a Phase 2 app gets its cert at once. Until
+the group has been through step 3, the Devices screen shows the uncertified devices with
+a "not verified" banner, and any key the relay took before is still good; after it, that
+key is useless.
 
 ### 4.6 Phase 2 work, in landing order
 
-Two PRs again: both contracts together, then the implementation. Because Verify devices
-lands in the same PR as both apps' support for authenticated wraps, no build on `master`
-can upgrade a group that another build cannot read.
+Two PRs again: both contracts together, then the implementation. Both apps switch to
+the Phase 2 protocol in the same PR, so no build on `master` speaks only half of it.
 
 1. **Spec and proto** — `spec/crypto.md` 1.6 (§4.1 here), the reference generator in
    `spec/vectors/gen` and the new vectors, SPEC §2.1 and §3.2–§3.3, the roster row of
@@ -288,8 +292,10 @@ can upgrade a group that another build cannot read.
    - Server: store and return certs and proofs, rekey without a revocation,
      `PairingJoinReject`, client version per device. Tests against Redis.
    - Go and TypeScript clients: wrap v2, proofs and certs against the vectors; the rules
-     of §4.3 and the downgrade flag; the interop test in both pairing directions and
-     across a rekey.
+     of §4.3 with no version-0x01 path left in either client; tests that an old relay,
+     a relay claiming to be old, and an old peer each make pairing and rekeys fail
+     rather than fall back; the interop test in both pairing directions and across a
+     rekey.
    - Desktop and Android: the "not verified" banner, unverified rows, the rekey notice,
      and Verify devices (§4.5).
    - Docs site for all of it.
