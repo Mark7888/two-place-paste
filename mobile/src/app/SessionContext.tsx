@@ -47,6 +47,8 @@ export interface SessionState {
   probablyRevoked: boolean;
   /** groupDeleted is set when the relay has said the server admin deleted this device's group. */
   groupDeleted: boolean;
+  /** outdated is set while the relay refuses this version of the app for its age (SPEC §5.3). */
+  outdated: boolean;
   /** groupName is the group's display name as the server admin set it, or "". */
   groupName: string;
   /** syncing is true while a sync the store started — a tile tap — is running. */
@@ -133,6 +135,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
       notice: snapshot.notice,
       probablyRevoked: snapshot.probablyRevoked,
       groupDeleted: snapshot.groupDeleted,
+      outdated: snapshot.outdated,
       groupName: snapshot.groupName,
       syncing: snapshot.syncing,
       question: snapshot.question,
