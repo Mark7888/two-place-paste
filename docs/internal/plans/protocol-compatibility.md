@@ -1,6 +1,6 @@
 # Plan — protocol compatibility between relays and apps
 
-**Status:** in progress. PR 1 (proto) adds the schema and SPEC §5.3.
+**Status:** implemented (proto, relay and client). The pairing change of §4 builds on it.
 **Raised by:** an upcoming change to pairing that hardens its security and
 cannot be made backwards compatible. Before it lands, apps and relays need a
 way to tell each other, and the user, that they no longer fit.

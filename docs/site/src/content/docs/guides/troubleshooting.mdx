@@ -36,6 +36,30 @@ its devices. To carry on, open **Settings → Leave the group**, then either cre
 new creation link from the relay's admin, or pair with a device that is in another group. On
 Android the same message is on the **Sync** screen, and **Leave the group** is in Settings too.
 
+## The app says the relay needs a newer version
+
+The relay was upgraded to a version that no longer works with the version of TwoPlacePaste you have,
+usually after a security fix. The badge says **update needed** and nothing syncs until you update.
+Your group, its devices and its keys are untouched: once the app is updated it connects as before,
+with nothing to pair again.
+
+- **Desktop:** press **Check for updates** in the banner. It opens **Settings → Updates** and looks
+  for a new version straight away. See [Updates](/two-place-paste/install/updates/).
+- If no update is offered, your update channel has no version that works with this relay yet. The
+  relay is probably running a test build: ask whoever runs it, or switch to the **Beta** channel.
+- **Android:** the **Sync** screen says the same. Install the newer version from the
+  [releases page](https://github.com/Mark7888/two-place-paste/releases).
+
+## The app says the relay is too old for something
+
+That feature needs a newer relay than the one your group uses. Everything else keeps working. Only
+whoever runs the relay can update it; the app links to their website when the relay names one.
+
+## A pairing code is "made by a newer version"
+
+The device that showed the code runs a newer version of TwoPlacePaste, and its code is in a form this
+version cannot read. Update the app on this device, then scan or paste the code again.
+
 ## Something I copied was not uploaded
 
 - Is **Watch the clipboard** on? It is off by default.
