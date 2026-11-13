@@ -109,6 +109,17 @@ export interface GroupInfoResponse {
    * which case a client shows no group label.
    */
   name: string;
+  /**
+   * The relay operator's website (TPP_RELAY_OPERATOR_URL), where a user can
+   * find who runs the relay or ask for more room. Empty when the operator set
+   * none, and from a relay that predates it: a client then shows no link.
+   * It is the plain base URL, the same for every group; a client opening it
+   * appends `group_id=<the group's id>` to its query itself, so the site can
+   * tell which group came from the app. Operator-chosen, never clipboard
+   * content. A client opens it only when it is an absolute http:// or
+   * https:// URL, and ignores anything else.
+   */
+  operatorUrl: string;
 }
 
 /** WrappedKey carries the new group key encrypted to one device's public key. */
@@ -734,13 +745,16 @@ export const GroupInfoRequest: MessageFns<GroupInfoRequest> = {
 };
 
 function createBaseGroupInfoResponse(): GroupInfoResponse {
-  return { name: "" };
+  return { name: "", operatorUrl: "" };
 }
 
 export const GroupInfoResponse: MessageFns<GroupInfoResponse> = {
   encode(message: GroupInfoResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.name !== "") {
       writer.uint32(10).string(message.name);
+    }
+    if (message.operatorUrl !== "") {
+      writer.uint32(18).string(message.operatorUrl);
     }
     return writer;
   },
@@ -766,6 +780,14 @@ export const GroupInfoResponse: MessageFns<GroupInfoResponse> = {
             message.name = reader.string();
             continue;
           }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.operatorUrl = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -779,13 +801,23 @@ export const GroupInfoResponse: MessageFns<GroupInfoResponse> = {
   },
 
   fromJSON(object: any): GroupInfoResponse {
-    return { name: isSet(object.name) ? globalThis.String(object.name) : "" };
+    return {
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      operatorUrl: isSet(object.operatorUrl)
+        ? globalThis.String(object.operatorUrl)
+        : isSet(object.operator_url)
+        ? globalThis.String(object.operator_url)
+        : "",
+    };
   },
 
   toJSON(message: GroupInfoResponse): unknown {
     const obj: any = {};
     if (message.name !== "") {
       obj.name = message.name;
+    }
+    if (message.operatorUrl !== "") {
+      obj.operatorUrl = message.operatorUrl;
     }
     return obj;
   },
@@ -796,6 +828,7 @@ export const GroupInfoResponse: MessageFns<GroupInfoResponse> = {
   fromPartial<I extends Exact<DeepPartial<GroupInfoResponse>, I>>(object: I): GroupInfoResponse {
     const message = createBaseGroupInfoResponse();
     message.name = object.name ?? "";
+    message.operatorUrl = object.operatorUrl ?? "";
     return message;
   },
 };
