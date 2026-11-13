@@ -8,6 +8,7 @@ export * from './connection';
 export * from './entryCache';
 export * from './errors';
 export * from './groups';
+export * from './levels';
 export * from './pairing';
 export * from './state';
 export * from './store';

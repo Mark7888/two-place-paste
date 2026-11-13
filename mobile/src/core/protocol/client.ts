@@ -105,6 +105,7 @@ import {
   PairingWrappedKeyUpload,
 } from '../../protocol/gen/tpp/v1/pairing';
 import { Error as ErrorFrame, ErrorCode } from '../../protocol/gen/tpp/v1/error';
+import { HelloRequest, HelloResponse } from '../../protocol/gen/tpp/v1/hello';
 import {
   decodeFrameHead,
   encodeFrame,
@@ -146,6 +147,7 @@ import {
 import { Connection, REQUEST_TIMEOUT_MS, SocketFactory, fieldHead, webSocketFactory, type Codec } from './connection';
 import { DEFAULT_TTL_MS, decodeEntryMeta, encodeEntryMeta, type EntryCache } from './entryCache';
 import { ProtocolError, TppError, isCode } from './errors';
+import { LEGACY_RELAY, OUTDATED_RETRY_MS, refusalForAge, type Refusal, type RelayInfo } from './levels';
 import {
   PARKED_STATE_NAME,
   decodeParked,
@@ -634,6 +636,15 @@ export interface Handlers {
    * The client stops re-dialling. Unlike onProbablyRevoked this is not a guess.
    */
   onGroupDeleted?: () => void;
+  /**
+   * onClientOutdated fires when the relay refuses this build for its age
+   * (SPEC §5.3). It is not a revocation: the device's record and keys are
+   * untouched, and an updated app connects as before. While it lasts the
+   * client re-dials hourly rather than on the normal backoff; onConnected
+   * fires when a connection succeeds again. It fires once per run of
+   * refusals.
+   */
+  onClientOutdated?: () => void;
   /** onGroupName fires when the group's display name is first learned or changes. It may be empty. */
   onGroupName?: (name: string) => void;
   /**
@@ -664,6 +675,13 @@ export interface Handlers {
   onStoreState?: (enabled: boolean) => void;
 }
 
+/** DeviceStatus is the relay's answer to a plain GET of the transport endpoint. */
+export interface DeviceStatus {
+  status: number;
+  /** body is the answer's text; only a refusal for age (SPEC §5.3) needs it. */
+  body: string;
+}
+
 /** ClientOptions configures a Client. */
 export interface ClientOptions {
   /** store persists state across launches: on Android, Keystore-backed encrypted storage. */
@@ -680,10 +698,12 @@ export interface ClientOptions {
   healthCheck?: (baseUrl: string) => Promise<boolean>;
   /**
    * deviceStatus asks the relay, over plain HTTP, what it would answer this
-   * device's upgrade with: 401 revoked, 410 group deleted. It resolves with the
-   * status, or null when the relay cannot be reached.
+   * device's upgrade with: 401 revoked, 410 group deleted, 426 with a JSON
+   * body for an app too old for it (SPEC §5.3). It resolves with the status
+   * and body, or null when the relay cannot be reached. An empty deviceId
+   * asks about an unauthenticated connection.
    */
-  deviceStatus?: (baseUrl: string, deviceId: string) => Promise<number | null>;
+  deviceStatus?: (baseUrl: string, deviceId: string) => Promise<DeviceStatus | null>;
   /**
    * cache keeps large downloaded entries for a while, still encrypted, so
    * opening one twice downloads it once. Without one, nothing is kept.
@@ -817,8 +837,12 @@ export class Client {
   private readonly handlers: Handlers;
   /** limitsCache is the relay's entry limits as stated on one connection; a new connection asks again. */
   private limitsCache: { conn: Connection; limits: Limits } | null = null;
+  /** relayCache is what the relay supports as stated on one connection (SPEC §5.3); a new connection asks again. */
+  private relayCache: { conn: Connection; relay: RelayInfo } | null = null;
+  /** outdated is set while the relay refuses this build for its age, and cleared by the next connection that succeeds. */
+  private outdated: Refusal | null = null;
   private readonly healthCheck: (baseUrl: string) => Promise<boolean>;
-  private readonly deviceStatus: (baseUrl: string, deviceId: string) => Promise<number | null>;
+  private readonly deviceStatus: (baseUrl: string, deviceId: string) => Promise<DeviceStatus | null>;
   private readonly cache: EntryCache | null;
   /** deleted is set once the relay has said this device's group was deleted; nothing re-dials after it. */
   private deleted = false;
@@ -1122,11 +1146,14 @@ export class Client {
     try {
       conn = await Connection.connect(this.socketFactory, url);
     } catch (err) {
-      await this.probeRefusal();
+      if (await this.probeRefusal()) {
+        throw new TppError('client-outdated', 'the relay needs a newer version of this app', { cause: err });
+      }
       throw err;
     }
     this.refusals = 0;
     this.backoffMs = MIN_BACKOFF_MS;
+    this.outdated = null;
     this.conn = conn;
     conn.events((env) => {
       void this.onEvent(env);
@@ -1145,7 +1172,89 @@ export class Client {
     // A rename made while this device was away is not replayed as an event,
     // so the name is asked for on every connect.
     void this.refreshGroupInfo(conn);
+    // Asked now so the answer is at hand before a feature needs it; relay()
+    // asks again on demand if this fails.
+    void this.relayOn(conn).catch(() => undefined);
     return conn;
+  }
+
+  /**
+   * relay returns what the relay supports (SPEC §5.3), asking once per
+   * connection: the relay a new connection reaches may have been upgraded. A
+   * screen checks a capability with `relayHas` before offering the feature,
+   * and says the relay needs updating when it is missing.
+   */
+  async relay(): Promise<RelayInfo> {
+    return this.relayOn(await this.connection());
+  }
+
+  /**
+   * isOutdated reports whether the relay is currently refusing this build for
+   * its age, so a screen drawn later can show what onClientOutdated asked for.
+   */
+  get isOutdated(): boolean {
+    return this.outdated !== null;
+  }
+
+  /**
+   * relayOn asks one socket's relay what it supports. A relay that predates
+   * the question answers that it does not know it, which is a definite
+   * answer: level 1, no capabilities.
+   */
+  private async relayOn(conn: Connection): Promise<RelayInfo> {
+    if (this.relayCache?.conn === conn) {
+      return this.relayCache.relay;
+    }
+    let relay = LEGACY_RELAY;
+    try {
+      const resp = await conn.call(
+        MessageType.MESSAGE_TYPE_HELLO_REQUEST,
+        { codec: HelloRequest, message: {} },
+        HelloResponse,
+      );
+      relay = { protocolMin: resp.protocolMin, protocolMax: resp.protocolMax, capabilities: resp.capabilities };
+    } catch (err) {
+      if (!isCode(err, ErrorCode.ERROR_CODE_UNSUPPORTED_MESSAGE)) {
+        throw err;
+      }
+    }
+    this.relayCache = { conn, relay };
+    return relay;
+  }
+
+  /**
+   * markOutdated records that the relay refused this build for its age, and
+   * tells the screens the first time in a run of refusals.
+   */
+  private markOutdated(refusal: Refusal): void {
+    const first = this.outdated === null;
+    this.outdated = refusal;
+    if (first) {
+      this.handlers.onClientOutdated?.();
+    }
+  }
+
+  /**
+   * dialUnauthenticated opens a socket without a credential, for group
+   * creation and pairing. A refused upgrade is asked about over plain HTTP,
+   * as for a device's own socket, so an app too old for the relay is told so
+   * rather than that the relay is unreachable.
+   */
+  private async dialUnauthenticated(base: string): Promise<Connection> {
+    try {
+      return await Connection.connect(this.socketFactory, websocketURL(base, ''));
+    } catch (err) {
+      let answer: DeviceStatus | null = null;
+      try {
+        answer = await this.deviceStatus(base, '');
+      } catch {
+        answer = null;
+      }
+      if (answer !== null && refusalForAge(answer.status, answer.body) !== null) {
+        throw new TppError('client-outdated', 'the relay needs a newer version of this app', { cause: err });
+      }
+      throw err;
+    }
   }
 
   /** markDeleted records that the admin deleted the group, once, and stops re-dialling. */
@@ -1216,22 +1325,30 @@ export class Client {
    * device's record. It is reported as "probably revoked" and the UI says so
    * in those words; nothing is deleted on the strength of a guess.
    */
-  private async probeRefusal(): Promise<void> {
+  private async probeRefusal(): Promise<boolean> {
     // The relay answers a plain GET of the endpoint with the status it refused
-    // the upgrade with. 410 is definite: the admin deleted the group.
-    let status: number | null = null;
+    // the upgrade with. 410 is definite: the admin deleted the group. So is a
+    // refusal for age, which only its body tells apart from the 426 every
+    // plain GET gets (SPEC §5.3); it is never taken for a revocation.
+    let answer: DeviceStatus | null = null;
     try {
-      status = await this.deviceStatus(this.state.serverUrl, this.state.deviceId);
+      answer = await this.deviceStatus(this.state.serverUrl, this.state.deviceId);
     } catch {
-      status = null;
+      answer = null;
     }
-    if (status === 410) {
+    if (answer?.status === 410) {
       this.markDeleted();
-      return;
+      return false;
+    }
+    const refusal = answer === null ? null : refusalForAge(answer.status, answer.body);
+    if (refusal !== null) {
+      this.refusals = 0;
+      this.markOutdated(refusal);
+      return true;
     }
     this.refusals++;
     if (this.refusals < 2) {
-      return;
+      return false;
     }
     let healthy = false;
     try {
@@ -1242,13 +1359,16 @@ export class Client {
     if (healthy) {
       this.handlers.onProbablyRevoked?.();
     }
+    return false;
   }
 
   private scheduleRedial(): void {
     if (!this.wanted || this.deleted || this.retryTimer !== null) {
       return;
     }
-    const delay = jitter(this.backoffMs);
+    // A refusal for age only changes when the app or the relay is updated:
+    // asking again on the normal backoff would only collect refusals.
+    const delay = this.outdated !== null ? OUTDATED_RETRY_MS : jitter(this.backoffMs);
     this.backoffMs = Math.min(this.backoffMs * 2, MAX_BACKOFF_MS);
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
@@ -1380,7 +1500,7 @@ export class Client {
     // Group creation is one of the two frames an unauthenticated connection
     // may send: it is how this device acquires an identity. The socket is
     // dropped afterwards and the client dials again with the credential.
-    const conn = await Connection.connect(this.socketFactory, websocketURL(base, ''));
+    const conn = await this.dialUnauthenticated(base);
     let response: CreateGroupResponse;
     try {
       response = await conn.call(
@@ -1512,7 +1632,7 @@ export class Client {
     // Pairing-join is the second frame an unauthenticated connection may send.
     // The socket must stay open afterwards: PairingComplete is pushed to it
     // once the inviter has wrapped the key.
-    const conn = await Connection.connect(this.socketFactory, websocketURL(base, ''));
+    const conn = await this.dialUnauthenticated(base);
     let complete: PairingComplete;
     try {
       // Registered before the request goes out: the inviter can be fast enough
@@ -1571,7 +1691,7 @@ export class Client {
     // Offer minting is the third frame an unauthenticated connection may send.
     // The socket must stay open afterwards: PairingComplete is pushed to it
     // once a member accepts.
-    const conn = await Connection.connect(this.socketFactory, websocketURL(base, ''));
+    const conn = await this.dialUnauthenticated(base);
 
     // Registered before the request goes out: a member watching the screen can
     // accept fast enough that the completion arrives while the mint is still in
@@ -1756,6 +1876,8 @@ export class Client {
     this.deleted = false;
     this.storeKeys = null;
     this.limitsCache = null;
+    this.relayCache = null;
+    this.outdated = null;
     this.operatorUrlValue = '';
     this.backoffMs = MIN_BACKOFF_MS;
     this.state = state;
@@ -3282,10 +3404,12 @@ function jitter(ms: number): number {
 const GROUP_DELETED_CLOSE_CODE = 4410;
 
 /** defaultDeviceStatus asks the relay what it would answer this device's upgrade with. */
-async function defaultDeviceStatus(baseUrl: string, deviceId: string): Promise<number | null> {
+async function defaultDeviceStatus(baseUrl: string, deviceId: string): Promise<DeviceStatus | null> {
   try {
     const response = await fetch(deviceStatusURL(baseUrl, deviceId));
-    return response.status;
+    // Only a 426 can be a refusal for age, and its body is a few dozen bytes.
+    const body = response.status === 426 ? await response.text() : '';
+    return { status: response.status, body };
   } catch {
     return null;
   }

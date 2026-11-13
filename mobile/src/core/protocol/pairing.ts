@@ -15,6 +15,7 @@
 import './textEncoding';
 
 import { sha256 } from '@noble/hashes/sha2.js';
+import { BinaryReader, WireType } from '@bufbuild/protobuf/wire';
 
 import { fromBase64URL, toBase64URL, toHex } from '../bytes';
 import { PairingCode, PairingOffer, PairingPayload } from '../../protocol/gen/tpp/v1/pairing';
@@ -142,6 +143,10 @@ export function decodePairingOffer(text: string): PairingOffer {
  *     implementation that chose to wrap one. Reaching here means the bare
  *     reading produced nothing usable, so there is nothing to be ambiguous
  *     with.
+ *  4. Only when no reading works: a wrapper holding a member this build does
+ *     not know is a code from a newer app, and says so instead of calling the
+ *     code invalid (SPEC §5.3). The generated decoder drops unknown fields, so
+ *     this reads the wire directly.
  */
 export function decodePairingCode(text: string): PairingCode {
   let raw: Uint8Array;
@@ -173,7 +178,38 @@ export function decodePairingCode(text: string): PairingCode {
   if (wrapped?.invite !== undefined && validInvite(wrapped.invite)) {
     return { invite: wrapped.invite };
   }
+  if (wrapped !== null && wrapped.invite === undefined && wrapped.offer === undefined && hasNewerMember(raw)) {
+    throw new TppError('code-from-newer-app', 'this pairing code was made by a newer version of the app');
+  }
   throw new TppError('invalid', 'the pairing code is neither an invitation nor an offer');
+}
+
+/**
+ * PAIRING_CODE_MEMBERS is the highest PairingCode field number this build
+ * knows: invite = 1, offer = 2. A new kind of code is a new member above it.
+ */
+const PAIRING_CODE_MEMBERS = 2;
+
+/**
+ * hasNewerMember reports whether a PairingCode's bytes hold a length-delimited
+ * field above the members this build knows: the shape of a new kind of code.
+ * It mirrors the Go client's `hasNewerMember`.
+ */
+function hasNewerMember(raw: Uint8Array): boolean {
+  const reader = new BinaryReader(raw);
+  let found = false;
+  try {
+    while (reader.pos < reader.len) {
+      const [fieldNo, wireType] = reader.tag();
+      if (fieldNo > PAIRING_CODE_MEMBERS && wireType === WireType.LengthDelimited) {
+        found = true;
+      }
+      reader.skip(wireType, fieldNo);
+    }
+  } catch {
+    return false;
+  }
+  return found;
 }
 
 function validInvite(p: PairingPayload): boolean {
