@@ -24,6 +24,7 @@ import { choiceRule, type ChoiceRule } from './choices';
 import { downloadSink, entryBody, storeBody } from './downloads';
 import { queueDownload } from './transfers';
 import { formatSize, kindOf } from './preview';
+import { noteUploadFailure } from './spaceState';
 import {
   clipboard,
   clipboardTimestamp,
@@ -365,11 +366,16 @@ export async function upload(client: Client): Promise<SyncResult> {
   if (item === null) {
     return { direction: 'nothing', message: 'This device’s clipboard is empty.' };
   }
-  const meta = await client.putEntry({
-    contentType: item.contentType,
-    filename: item.filename,
-    body: item.body,
-  });
+  const meta = await client
+    .putEntry({
+      contentType: item.contentType,
+      filename: item.filename,
+      body: item.body,
+    })
+    .catch((err: unknown) => {
+      noteUploadFailure(err);
+      throw err;
+    });
   return {
     direction: 'uploaded',
     message: `Sent ${formatSize(item.body.length)} to the group (${meta.epoch} epoch).`,

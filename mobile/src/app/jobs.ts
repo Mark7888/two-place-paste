@@ -11,6 +11,7 @@
 import { fromHex, type ExternalBody, type StoreDetails, type UploadBody } from '../core';
 import type { StagedFile } from '../platform/types';
 import { SENT, STORED, type Payload, type ShareClient } from './share';
+import { noteUploadFailure } from './spaceState';
 
 /** Job is one upload: a payload, and where it goes. */
 export type Job = { id: number; payload: Payload } & (
@@ -71,7 +72,10 @@ export async function runJob(job: Job, deps: JobDeps): Promise<string> {
     // A bar of its own until the upload reports progress.
     deps.progress('Encrypting…', 0, 0);
     if (job.target === 'send') {
-      await client.putEntry(item);
+      await client.putEntry(item).catch((err: unknown) => {
+        noteUploadFailure(err);
+        throw err;
+      });
       return SENT;
     }
     await deps.saveToStore(item, job.details);

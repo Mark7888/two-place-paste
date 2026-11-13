@@ -21,6 +21,7 @@ import { useSession } from '../SessionContext';
 import { failureMessage } from '../session';
 import { Button, Notice, Screen, Section } from '../ui';
 import { colors, styles } from '../theme';
+import { OPEN_OPERATOR_WEBSITE, openOperatorWebsite, operatorHost } from '../SpaceNotices';
 
 export function SettingsScreen(): React.JSX.Element {
   const session = useSession();
@@ -103,6 +104,19 @@ export function SettingsScreen(): React.JSX.Element {
       <Section title="This device">
         <Fact label="Name" value={state?.deviceName ?? '—'} />
         <Fact label="Relay" value={relay} />
+        {session.operatorLink !== null && !session.demo && (
+          <View style={{ gap: 8 }}>
+            <Text style={styles.muted}>
+              The relay is run by {operatorHost(session.operatorLink)}. Its website is where to ask for more
+              room.
+            </Text>
+            <Button
+              label={OPEN_OPERATOR_WEBSITE}
+              variant="secondary"
+              onPress={() => openOperatorWebsite(session.operatorLink ?? '')}
+            />
+          </View>
+        )}
         <Fact label="Key generation" value={`epoch ${session.epoch.toString()}`} />
         {/*
           The public key is shown; the private key and the group key are in the
@@ -166,6 +180,24 @@ export function SettingsScreen(): React.JSX.Element {
             />
           </View>
         )}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <View style={styles.rowBody}>
+            <Text style={styles.text}>Hide out-of-space banners</Text>
+            <Text style={styles.muted}>
+              Stops the banners that say the store is almost full or that history removed older entries
+              to make room. A save or upload the relay refuses for lack of room is still shown. Off by
+              default.
+            </Text>
+          </View>
+          <Switch
+            accessibilityLabel="Hide out-of-space banners"
+            value={session.hideSpaceBanners}
+            onValueChange={(on) =>
+              void session.setHideSpaceBanners(on).catch((err: unknown) => setMessage(failureMessage(err)))
+            }
+            trackColor={{ false: colors.border, true: colors.accent }}
+          />
+        </View>
       </Section>
 
       <Section title="Version">

@@ -2,13 +2,16 @@ import { utf8, type ExternalBody, type StoreDetails } from '../../core';
 import type { StagedFile } from '../../platform/types';
 import { knownHash, runJob, type JobDeps, type UploadItem } from '../jobs';
 import { SENT, STORED, TEXT_CONTENT_TYPE, type ShareClient } from '../share';
+import { getSpaceSnapshot, resetSpace } from '../spaceState';
+import { ProtocolError } from '../../core';
+import { ErrorCode } from '../../protocol/gen/tpp/v1/error';
 
 const file: StagedFile = { token: 'tok', name: 'x', contentType: 'application/pdf', size: 3, sha256: '' };
 const details: StoreDetails = { name: 'Report', description: '', tags: ['work'] };
 
 /** deps are fake job dependencies that record what the job did, in order. */
 function deps(
-  opts: { client?: boolean; readFails?: boolean; putFails?: boolean; external?: ExternalBody | null } = {},
+  opts: { client?: boolean; readFails?: boolean; putFails?: boolean; putError?: Error; external?: ExternalBody | null } = {},
 ) {
   const log: string[] = [];
   const put: UploadItem[] = [];
@@ -24,6 +27,9 @@ function deps(
     },
     putEntry: async (item: UploadItem) => {
       log.push('put');
+      if (opts.putError !== undefined) {
+        throw opts.putError;
+      }
       if (opts.putFails === true) {
         throw new Error('relay gone');
       }
@@ -131,5 +137,16 @@ describe('knownHash', () => {
   ];
   it.each(cases)('gives $name', ({ hex, want }) => {
     expect(knownHash(hex)).toEqual(want);
+  });
+});
+
+describe('a send the relay refuses for lack of room', () => {
+  it('opens the out-of-space popup, and still fails the job', async () => {
+    resetSpace();
+    const { d } = deps({ putError: new ProtocolError(ErrorCode.ERROR_CODE_QUOTA_EXCEEDED, 'full') });
+    await expect(
+      runJob({ id: 1, target: 'send', payload: { kind: 'text', item: { contentType: TEXT_CONTENT_TYPE, filename: '', body: utf8('hi') } } }, d),
+    ).rejects.toThrow('full');
+    expect(getSpaceSnapshot().failure).toBe('relay_full');
   });
 });

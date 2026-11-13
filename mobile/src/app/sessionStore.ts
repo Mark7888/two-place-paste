@@ -40,7 +40,8 @@ import {
   type FileChoice,
 } from './session';
 import { DemoGate, DemoMode } from './demo';
-import { clearStore, invalidate as invalidateStore, storeEvents } from './storeState';
+import { clearStore, invalidate as invalidateStore, refreshLimits, storeEvents } from './storeState';
+import { noteEvicted, resetSpace, setHideBanners } from './spaceState';
 import { emitProgress } from './transferEvents';
 
 /** DirectionChoice is what the user answers a direction question with. */
@@ -82,6 +83,14 @@ export interface Snapshot {
   probablyRevoked: boolean;
   /** groupDeleted is set when the relay has said the server admin deleted this device's group. */
   groupDeleted: boolean;
+  /**
+   * operatorLink is the link to the relay operator's website, with the group's
+   * id added, or null when the relay names none (SPEC §4.4). It is the group
+   * in use's relay's, and null right after a switch until that relay says.
+   */
+  operatorLink: string | null;
+  /** hideSpaceBanners is the "Hide out-of-space banners" setting. */
+  hideSpaceBanners: boolean;
   /** groupName is the group's display name as the server admin set it, or "". */
   groupName: string;
   /** syncing is true while a sync this store started is running. */
@@ -131,6 +140,9 @@ export interface Snapshot {
  */
 export const MULTI_GROUP_NAME = 'multiGroup';
 
+/** HIDE_SPACE_BANNERS_NAME holds the "Hide out-of-space banners" setting the same way: "1", or nothing. */
+export const HIDE_SPACE_BANNERS_NAME = 'hideSpaceBanners';
+
 type Listener = () => void;
 
 let client: Client | null = null;
@@ -152,6 +164,8 @@ let gate: DemoGate | null = null;
 let nextQuestionId = 1;
 /** multiGroup is the "Keep several groups" setting, read once the secure store is open. */
 let multiGroup = false;
+/** hideSpaceBanners is the "Hide out-of-space banners" setting, read once the secure store is open. */
+let hideSpaceBanners = false;
 
 let started = false;
 const listeners = new Set<Listener>();
@@ -168,6 +182,8 @@ let snapshot: Snapshot = {
   notice: '',
   probablyRevoked: false,
   groupDeleted: false,
+  operatorLink: null,
+  hideSpaceBanners: false,
   groupName: '',
   syncing: false,
   question: null,
@@ -195,6 +211,8 @@ function emit(): void {
     notice,
     probablyRevoked,
     groupDeleted: client?.groupDeleted ?? false,
+    operatorLink: client?.inGroup ? client.operatorLink : null,
+    hideSpaceBanners,
     groupName: client?.inGroup ? client.groupName : '',
     syncing,
     question,
@@ -278,6 +296,7 @@ export async function forget(): Promise<void> {
   // Downloads of a group this device is no longer in are no business of its cache.
   share.downloadSink?.clear?.();
   clearStore();
+  resetSpace();
   probablyRevoked = false;
   notice = '';
   emit();
@@ -288,6 +307,21 @@ export async function forget(): Promise<void> {
  * tab and nothing else: the group in use stays in use and the others keep
  * their keys.
  */
+/**
+ * setHideSpaceBanners turns "Hide out-of-space banners" on or off. It hides
+ * the advice banners only: a refused save or upload is still shown.
+ */
+export async function setHideSpaceBanners(on: boolean): Promise<void> {
+  if (on) {
+    await secureStore.save(HIDE_SPACE_BANNERS_NAME, '1');
+  } else {
+    await secureStore.clear(HIDE_SPACE_BANNERS_NAME);
+  }
+  hideSpaceBanners = on;
+  setHideBanners(on);
+  emit();
+}
+
 export async function setMultiGroup(on: boolean): Promise<void> {
   if (on) {
     await secureStore.save(MULTI_GROUP_NAME, '1');
@@ -354,6 +388,7 @@ export async function removeGroup(ref: string): Promise<void> {
 /** resetScreens drops what the screens showed of the group that is going away. */
 function resetScreens(): void {
   clearStore();
+  resetSpace();
   // And the downloads kept from it: the cache is the group in use's.
   share.downloadSink?.clear?.();
   transfers.clear();
@@ -440,6 +475,11 @@ const handlers: Handlers = {
     // store is listed again when next needed.
     invalidateStore();
     emit();
+    // Its fullness, though, is read now: the "almost full" banner shows on
+    // every tab, not only once the Store tab is opened.
+    if (client !== null) {
+      void refreshLimits(client);
+    }
   },
   onDisconnected: () => emit(),
   onEpoch: (epoch) => {
@@ -465,12 +505,23 @@ const handlers: Handlers = {
     emit();
   },
   onGroupName: () => emit(),
-  onStoreItemAdded: storeEvents.put,
+  onOperatorUrl: () => emit(),
+  onStoreItemAdded: (item) => {
+    storeEvents.put(item);
+    refreshLimitsLater();
+  },
   onStoreItemUpdated: storeEvents.put,
-  onStoreItemDeleted: storeEvents.remove,
-  onStoreState: storeEvents.state,
+  onStoreItemDeleted: (id) => {
+    storeEvents.remove(id);
+    refreshLimitsLater();
+  },
+  onStoreState: () => {
+    storeEvents.state();
+    refreshLimitsLater();
+  },
   onEntryEvicted: (id) => {
     evicted = { id, seq: (evicted?.seq ?? 0) + 1 };
+    noteEvicted();
     emit();
   },
   onProgress: (p) => {
@@ -484,6 +535,13 @@ const handlers: Handlers = {
     emit();
   },
 };
+
+/** refreshLimitsLater reads the store's fullness again after another device changed the store. */
+function refreshLimitsLater(): void {
+  if (client !== null) {
+    void refreshLimits(client);
+  }
+}
 
 /**
  * init opens the session. It is called once, from `index.js`, before any
@@ -507,6 +565,11 @@ export function init(): void {
         // A setting that cannot be read is the default: off.
         () => false,
       );
+      hideSpaceBanners = await secureStore.load(HIDE_SPACE_BANNERS_NAME).then(
+        (v) => v === '1',
+        () => false,
+      );
+      setHideBanners(hideSpaceBanners);
       ready = true;
       emit();
       if (opened.inGroup) {

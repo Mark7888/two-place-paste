@@ -1,5 +1,5 @@
 // Package localui is the localhost HTTP server that serves the React UI to the
-// user's browser and exposes the service's operations as JSON (SPEC §7.2).
+// user's browser and exposes the service's operations as JSON (SPEC §7).
 //
 // Everything here exists because of one fact: any page in the user's browser
 // can issue requests to 127.0.0.1. The defences are therefore not decoration —
@@ -83,7 +83,7 @@ type Status struct {
 }
 
 // SpaceView is the active group's room on the relay, as far as the user has
-// to hear about it (SPEC §7.2). Sizes and counts only.
+// to hear about it (SPEC §7). Sizes and counts only.
 type SpaceView struct {
 	// StoreNearlyFull asks for the banner that the store is almost full: at
 	// least 90% of its bytes or items. False once the user closed the banner,

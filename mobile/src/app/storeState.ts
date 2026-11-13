@@ -14,6 +14,7 @@ import {
   StoreIndex,
   hashHex,
   isCode,
+  isQuotaExceeded,
   isStoreDisabled,
   sha256Sliced,
   type Client,
@@ -25,6 +26,7 @@ import {
 } from '../core';
 import { ErrorCode } from '../protocol/gen/tpp/v1/error';
 import { failureMessage } from './session';
+import { noteStoreFailure } from './spaceState';
 
 /** StoreStatus is where the store is: not asked yet, being listed, off, listed, or failed. */
 export type StoreStatus = 'idle' | 'loading' | 'off' | 'ready' | 'error';
@@ -151,6 +153,20 @@ export function loadStore(client: Client, force = false): Promise<void> {
   return loading;
 }
 
+/**
+ * refreshLimits reads the store's limits alone, without listing it, for the
+ * "almost full" banner: on every connect, and after any store change another
+ * device made. A failure keeps what was known; the banner is advice.
+ */
+export async function refreshLimits(client: Client): Promise<void> {
+  try {
+    limits = await client.storeLimits();
+  } catch {
+    return;
+  }
+  emit();
+}
+
 /** DuplicateError refuses a save whose body the store already holds, naming the items. */
 export class DuplicateError extends Error {
   readonly duplicates: StoreItem[];
@@ -181,7 +197,15 @@ export async function saveItem(
       throw new DuplicateError(dups);
     }
   }
-  const saved = await client.saveToStore(item, details);
+  const saved = await client.saveToStore(item, details).catch(async (err: unknown) => {
+    if (isQuotaExceeded(err)) {
+      // Read again to tell the group's store being full from the relay's.
+      limits = await client.storeLimits().catch(() => limits);
+      emit();
+      noteStoreFailure(err, limits);
+    }
+    throw err;
+  });
   index.put(saved);
   limits = await client.storeLimits().catch(() => limits);
   emit();

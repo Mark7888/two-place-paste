@@ -415,6 +415,14 @@ whose id is its token; a token's creation URL is sent only when the admin asks f
 
 No content access, by construction.
 
+**Operator website.** `TPP_RELAY_OPERATOR_URL` optionally names the operator's website:
+who runs the relay, and where a user asks for more room. The relay sends it to every group
+in `GroupInfoResponse.operator_url`, as configured. A client opens it with its group's id
+added to the query as `group_id`, so the site can tell which group came from the app, and
+only when it is an absolute `http(s)` URL with a host and no credentials. The dashboard's
+health card and the pairing page link to it as is: neither knows a group. It is
+operator-chosen text, like a group's name, never content (§2.3).
+
 **Requirements:**
 - Session cookie: `HttpOnly`, `SameSite=Strict`.
 - Rate limiting on the login endpoint. This UI is publicly reachable.
@@ -700,6 +708,10 @@ storage, and its default limits are small.
 - **Rekeys keep items readable** (§3.3 step 3) and a newly paired device reads them all
   (§3.2). Items saved before a revocation stay exposed to the revoked device, which held
   their keys; a rekey does not re-encrypt the store (`spec/crypto.md` §11.4).
+- **Fullness is read on connect.** The store's limits — sizes and counts, not the list —
+  are asked for on every connect and after every store change, so a client can warn that
+  the store is almost full (§7) on any screen. The item list is still pulled only when the
+  Store tab is opened.
 - **Header v2 waits for the relay.** A client writes version 2 entry headers only once
   the relay reports it accepts them; until then it writes version 1, which every relay
   accepts.
@@ -707,6 +719,18 @@ storage, and its default limits are small.
 ---
 
 ## 7. Clients
+
+**Running out of space** (both clients). Two banners at the top of every screen are advice:
+the store is at least 90% full, by bytes or items; and history entries were removed early
+(`EntryEvicted`), with how many. Each closes until next triggered — the next eviction, or a
+store change that leaves it that full — and a per-device setting, **Hide out-of-space
+banners** (off by default), hides both. A save or upload the relay refuses for lack of room
+is a failure and always opens a popup: the group's store is full; the relay's total store
+limit is full while the group had room (told apart from the limits read right after); or a
+history upload was refused, which is the relay's own trouble, since history evicts. When
+the relay names an operator website (§4.4), every one of them, the desktop sidebar and the
+Android Settings offer **Open operator website**. All of it belongs to the group in use and
+is dropped when that group changes.
 
 ### 7.1 Android
 

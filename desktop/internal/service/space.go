@@ -10,7 +10,7 @@ import (
 	"github.com/Mark7888/two-place-paste/pkg/tppclient/tppcrypto"
 )
 
-// The out-of-space banners and popup (SPEC §7.2). Two banners are advice —
+// The out-of-space banners and popup (SPEC §7). Two banners are advice —
 // the store is nearly full, history entries were removed early to make room
 // — and the user can close them or hide them for good. A refused upload or
 // save is a failure and is always shown, as a popup, until closed.

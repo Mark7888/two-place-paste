@@ -1,5 +1,5 @@
 /**
- * The out-of-space banners and popup (SPEC §7.2).
+ * The out-of-space banners and popup (SPEC §7).
  *
  * Two banners are advice: the store is nearly full, and history entries were
  * removed early to make room. Each closes with X until it is next triggered,

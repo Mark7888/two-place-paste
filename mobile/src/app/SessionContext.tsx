@@ -23,6 +23,7 @@ import {
   refresh,
   removeGroup,
   setError,
+  setHideSpaceBanners,
   setMultiGroup,
   setNotice,
   startDemo,
@@ -66,6 +67,10 @@ export interface SessionState {
   demoAvailable: boolean;
   /** multiGroup is the "Keep several groups" setting: it shows the Groups tab. */
   multiGroup: boolean;
+  /** operatorLink is the relay operator's website, with the group id added, or null. */
+  operatorLink: string | null;
+  /** hideSpaceBanners is the "Hide out-of-space banners" setting. */
+  hideSpaceBanners: boolean;
   /** activeRef names the group in use, or is "" in none. */
   activeRef: string;
   /** parkedGroups are the groups set aside on this device. */
@@ -91,6 +96,8 @@ export interface SessionState {
   closeDemo(): void;
   /** setMultiGroup turns "Keep several groups" on or off. Off keeps every group. */
   setMultiGroup(on: boolean): Promise<void>;
+  /** setHideSpaceBanners turns "Hide out-of-space banners" on or off. */
+  setHideSpaceBanners(on: boolean): Promise<void>;
   /** switchGroup makes a group set aside the one in use, and connects it. */
   switchGroup(ref: string): Promise<void>;
   /** addGroup sets the group in use aside; the setup screen then creates or joins the new one. */
@@ -136,6 +143,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
       demo: snapshot.demo,
       demoAvailable: snapshot.demoAvailable,
       multiGroup: snapshot.multiGroup,
+      operatorLink: snapshot.operatorLink,
+      hideSpaceBanners: snapshot.hideSpaceBanners,
       activeRef: snapshot.activeRef,
       parkedGroups: snapshot.parkedGroups,
       answer: answerQuestion,
@@ -148,6 +157,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
       startDemo,
       closeDemo,
       setMultiGroup,
+      setHideSpaceBanners,
       switchGroup,
       addGroup,
       removeGroup,
