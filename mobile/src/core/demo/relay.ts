@@ -60,6 +60,7 @@ import {
 } from '../../protocol/gen/tpp/v1/entry';
 import { Envelope, MessageType } from '../../protocol/gen/tpp/v1/envelope';
 import { Error as ErrorFrame, ErrorCode } from '../../protocol/gen/tpp/v1/error';
+import { HelloResponse } from '../../protocol/gen/tpp/v1/hello';
 import {
   PairingComplete,
   PairingJoinRequest,
@@ -86,7 +87,8 @@ import {
   StoreUploadBeginRequest,
   StoreUploadBeginResponse,
 } from '../../protocol/gen/tpp/v1/store';
-import { SINGLE_FRAME_MAX_BYTES } from '../protocol/client';
+import { SINGLE_FRAME_MAX_BYTES, type DeviceStatus } from '../protocol/client';
+import { PROTOCOL_LEVEL } from '../protocol/levels';
 import { Socket, SocketFactory } from '../protocol/connection';
 import { websocketURL } from '../protocol/urls';
 
@@ -165,6 +167,10 @@ export interface FakeRelayOptions {
   maxEntries?: number;
   /** maxEntryBytes caps the bytes all entries take together, evicting the oldest the same way. */
   maxEntryBytes?: number;
+  /** protocolMin is the lowest protocol level the relay accepts (SPEC §5.3); 1 unless a test raises it. */
+  protocolMin?: number;
+  /** hello false answers HelloRequest as a relay that predates it. */
+  hello?: boolean;
 }
 
 /** FakeRelay is one relay holding one group. */
@@ -179,6 +185,15 @@ export class FakeRelay {
 
   /** onRevoked is told when a device is revoked. The demo stops that device's client. */
   onRevoked: ((deviceId: string) => void) | null = null;
+
+  /**
+   * protocolMin is the lowest protocol level the relay accepts (SPEC §5.3). A
+   * test raises and lowers it to play a relay that no longer serves the app,
+   * and the app once updated.
+   */
+  protocolMin: number;
+
+  private readonly hello: boolean;
 
   private readonly now: () => number;
   private readonly endpoint: string;
@@ -198,7 +213,9 @@ export class FakeRelay {
 
   constructor(options: FakeRelayOptions = {}) {
     this.baseUrl = options.baseUrl ?? 'https://relay.test';
-    this.endpoint = websocketURL(this.baseUrl, '');
+    // The endpoint without its query: every client URL carries the protocol
+    // level (SPEC §5.3), and a device's carries its id too.
+    this.endpoint = websocketURL(this.baseUrl, '').split('?')[0];
     this.now = options.now ?? Date.now;
     this.groupName = options.groupName ?? 'Family';
     this.operatorUrl = options.operatorUrl ?? '';
@@ -207,6 +224,8 @@ export class FakeRelay {
     this.storeConfig = options.store ?? null;
     this.maxEntries = options.maxEntries ?? Number.POSITIVE_INFINITY;
     this.maxEntryBytes = options.maxEntryBytes ?? Number.POSITIVE_INFINITY;
+    this.protocolMin = options.protocolMin ?? 1;
+    this.hello = options.hello ?? true;
   }
 
   /** creationURL is what an operator hands a user (SPEC §3.1). */
@@ -229,6 +248,11 @@ export class FakeRelay {
     }
     const deviceId = deviceIdOf(url);
     const socket = new RelaySocket(this, deviceId);
+    if (protocolLevelOf(url) < this.protocolMin) {
+      // Refused before the upgrade, whoever the device is (SPEC §5.3).
+      socket.refuse('client outdated');
+      return socket.port;
+    }
     if (deviceId !== '') {
       if (!this.devices.has(deviceId)) {
         // A device the relay no longer knows is refused, exactly as a revoked
@@ -274,6 +298,18 @@ export class FakeRelay {
       reply(MessageType.MESSAGE_TYPE_ERROR, ErrorFrame.encode({ code, message }).finish());
 
     switch (env.type) {
+      case MessageType.MESSAGE_TYPE_HELLO_REQUEST: {
+        if (!this.hello) {
+          fail(ErrorCode.ERROR_CODE_UNSUPPORTED_MESSAGE, 'unsupported message');
+          return;
+        }
+        reply(
+          MessageType.MESSAGE_TYPE_HELLO_RESPONSE,
+          HelloResponse.encode({ protocolMin: this.protocolMin, protocolMax: PROTOCOL_LEVEL, capabilities: [] }).finish(),
+        );
+        return;
+      }
+
       case MessageType.MESSAGE_TYPE_CREATE_GROUP_REQUEST: {
         const request = CreateGroupRequest.decode(env.payload);
         if (request.token !== this.creationToken || this.groupId !== '') {
@@ -1029,12 +1065,20 @@ export class FakeRelay {
   /** closed is set by close: the relay answers nothing after it. */
   private closed = false;
 
-  /** deviceStatus is the status a plain GET of the endpoint would answer, for the client's deviceStatus option. */
-  readonly deviceStatus = async (_base: string, deviceId: string): Promise<number | null> => {
-    if (this.formerDevices.has(deviceId)) {
-      return 410;
+  /** deviceStatus is what a plain GET of the endpoint would answer, for the client's deviceStatus option. */
+  readonly deviceStatus = async (_base: string, deviceId: string): Promise<DeviceStatus | null> => {
+    if (PROTOCOL_LEVEL < this.protocolMin) {
+      const body = { error: 'client_outdated', protocol_min: this.protocolMin, protocol_max: this.protocolMin };
+      return { status: 426, body: JSON.stringify(body) };
     }
-    return this.devices.has(deviceId) ? 426 : 401;
+    if (this.formerDevices.has(deviceId)) {
+      return { status: 410, body: 'group deleted' };
+    }
+    // The WebSocket library's answer to anything that is not an upgrade: a
+    // 426 that is not a refusal for age.
+    return this.devices.has(deviceId) || deviceId === ''
+      ? { status: 426, body: 'WebSocket protocol violation' }
+      : { status: 401, body: 'unknown device' };
   };
 
   /** rewriteEntryId makes the relay file the next entry under another id, to prove the client refuses it. */
@@ -1090,6 +1134,12 @@ export class FakeRelay {
  * than with `URL`, whose React Native shim is not the WHATWG class (see
  * src/core/protocol/urls.ts) — this file runs on the phone as well as in Node.
  */
+/** protocolLevelOf reads the level a client states on its URL; none means level 1 (SPEC §5.3). */
+function protocolLevelOf(url: string): number {
+  const match = /[?&]proto=(\d+)/.exec(url);
+  return match === null ? 1 : Number(match[1]);
+}
+
 function deviceIdOf(url: string): string {
   const match = /[?&]device_id=([^&#]*)/.exec(url);
   return match === null ? '' : decodeURIComponent(match[1]);

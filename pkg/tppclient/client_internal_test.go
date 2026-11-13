@@ -267,15 +267,16 @@ func TestURLHandling(t *testing.T) {
 		if err != nil {
 			t.Fatalf("websocketURL: %v", err)
 		}
-		if got != "wss://tpp.example.com/ws?device_id=dev-1" {
+		if got != "wss://tpp.example.com/ws?device_id=dev-1&proto=1" {
 			t.Errorf("websocketURL = %q", got)
 		}
-		// The two unauthenticated flows dial without a credential.
+		// The unauthenticated flows dial without a credential, but every
+		// connection states the protocol level (SPEC §5.3).
 		got, err = websocketURL("http://127.0.0.1:8080", "")
 		if err != nil {
 			t.Fatalf("websocketURL: %v", err)
 		}
-		if got != "ws://127.0.0.1:8080/ws" {
+		if got != "ws://127.0.0.1:8080/ws?proto=1" {
 			t.Errorf("websocketURL = %q", got)
 		}
 	})

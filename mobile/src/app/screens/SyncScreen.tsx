@@ -195,7 +195,15 @@ export function SyncScreen(): React.JSX.Element {
             </Text>
           </Section>
         )}
-        {!session.groupDeleted && session.probablyRevoked && (
+        {!session.groupDeleted && session.outdated && (
+          <Section title="Update TwoPlacePaste">
+            <Text style={styles.text}>
+              The relay needs a newer version of this app, so nothing syncs until you update it.
+              Your group and its devices are unaffected: once updated, this phone connects as before.
+            </Text>
+          </Section>
+        )}
+        {!session.groupDeleted && !session.outdated && session.probablyRevoked && (
           <Section title="This device may have been removed">
             <Text style={styles.text}>
               The relay is answering but is refusing this device’s connection. That is what a

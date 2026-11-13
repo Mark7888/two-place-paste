@@ -76,15 +76,15 @@ describe('relay URLs', () => {
     expect(() => splitCreationURL('https://relay.example.com/a/b')).toThrow(/single-segment/);
   });
 
-  test('the transport endpoint carries the device credential, and the unauthenticated flows carry none', () => {
+  test('the transport endpoint carries the device credential and the protocol level; the unauthenticated flows carry only the level', () => {
     expect(websocketURL('https://relay.example.com', 'device-1')).toBe(
-      'wss://relay.example.com/ws?device_id=device-1',
+      'wss://relay.example.com/ws?device_id=device-1&proto=1',
     );
-    expect(websocketURL('http://127.0.0.1:8080', '')).toBe('ws://127.0.0.1:8080/ws');
+    expect(websocketURL('http://127.0.0.1:8080', '')).toBe('ws://127.0.0.1:8080/ws?proto=1');
     expect(websocketURL('https://Relay.Example.COM:8443', 'a b+c')).toBe(
-      'wss://relay.example.com:8443/ws?device_id=a%20b%2Bc',
+      'wss://relay.example.com:8443/ws?device_id=a%20b%2Bc&proto=1',
     );
-    expect(websocketURL('http://[::1]:8080', '')).toBe('ws://[::1]:8080/ws');
+    expect(websocketURL('http://[::1]:8080', '')).toBe('ws://[::1]:8080/ws?proto=1');
   });
 
   test.each(['https://relay.example.com:0', 'https://relay.example.com:99999', 'https://u:p@relay.example.com'])(
@@ -116,7 +116,7 @@ describe('relay URLs', () => {
       );
       expect(splitCreationURL('https://relay.example.com/abc123').token).toBe('abc123');
       expect(websocketURL('https://relay.example.com', 'device-1')).toBe(
-        'wss://relay.example.com/ws?device_id=device-1',
+        'wss://relay.example.com/ws?device_id=device-1&proto=1',
       );
       expect(classifyCode('https://relay.example.com/abc123')).toBe('creation-url');
     } finally {

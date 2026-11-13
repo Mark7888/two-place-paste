@@ -4,6 +4,8 @@ description: How the desktop app updates itself, and the Stable, Beta and Nightl
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import { Image } from 'astro:assets';
+import updateNeeded from '../../../assets/screenshots/desktop-update-needed.webp';
 
 The desktop app updates itself. Open **Settings → Updates** in the app, or choose
 **Check for updates…** in the tray menu.
@@ -44,3 +46,16 @@ The relay server has matching image tags: `latest` for Stable and `beta` for Bet
 <Aside>
 	A build you compiled yourself (version `0.0.0-local`) never replaces itself.
 </Aside>
+
+## Compatibility with the relay
+
+The app and the relay update separately, so they are built to keep working across versions: a newer
+app always works with an older relay, and a relay release keeps working with the apps released
+before it wherever it can. Rarely, usually for a security fix, a relay release can no longer serve an
+older app. The app then says **update needed** and shows a banner instead of failing silently;
+nothing syncs until you update, but your group, its devices and their keys are untouched. **Check
+for updates** opens this section and checks straight away. If no update is offered, your channel has
+no version for that relay yet: try the Beta channel, or ask whoever runs the relay. See
+[Troubleshooting](/two-place-paste/guides/troubleshooting/#the-app-says-the-relay-needs-a-newer-version).
+
+<Image src={updateNeeded} alt="The Sync tab with an update needed badge and a banner saying the relay needs a newer version, with a Check for updates button" class="screenshot" />

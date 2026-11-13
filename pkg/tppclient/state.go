@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Mark7888/two-place-paste/pkg/tppclient/keystore"
@@ -177,9 +178,14 @@ func websocketURL(base, deviceID string) (string, error) {
 		return "", fmt.Errorf("tppclient: server URL %q must be http or https", base)
 	}
 	u.Path = websocketPath
+	// Every connection states this build's protocol level, pairing ones
+	// included, so a relay can refuse an app too old for it before the
+	// upgrade (SPEC §5.3). A relay that predates levels ignores it.
+	query := url.Values{protocolParam: {strconv.FormatUint(uint64(ProtocolLevel), 10)}}
 	if deviceID != "" {
-		u.RawQuery = url.Values{"device_id": {deviceID}}.Encode()
+		query.Set("device_id", deviceID)
 	}
+	u.RawQuery = query.Encode()
 	return u.String(), nil
 }
 

@@ -21,6 +21,7 @@
 
 import { utf8 } from '../bytes';
 import { TppError } from './errors';
+import { PROTOCOL_LEVEL, PROTOCOL_PARAM } from './levels';
 
 /** WEBSOCKET_PATH is where the relay mounts the transport. */
 export const WEBSOCKET_PATH = '/ws';
@@ -149,26 +150,34 @@ export function splitCreationURL(raw: string): { base: string; token: string } {
 }
 
 /**
- * websocketURL derives the transport endpoint from a base URL. `deviceId` is
- * the connection's credential and is omitted for the three unauthenticated
- * flows: group creation, pairing-join and offer minting.
- */
-/**
  * deviceStatusURL is the transport endpoint over plain HTTP(S). A GET of it is
  * not an upgrade, so the relay answers with the status it would refuse the
  * upgrade with — 401 for a revoked device, 410 for one whose group the admin
- * deleted — which the WebSocket API itself never shows.
+ * deleted, 426 with a JSON body for an app too old for it (SPEC §5.3) — which
+ * the WebSocket API itself never shows. An empty `deviceId` asks about an
+ * unauthenticated connection.
  */
 export function deviceStatusURL(base: string, deviceId: string): string {
   const { scheme, host } = parse(base, 'server URL');
-  return `${scheme}://${host}${WEBSOCKET_PATH}?device_id=${encodeURIComponent(deviceId)}`;
+  return `${scheme}://${host}${WEBSOCKET_PATH}${transportQuery(deviceId)}`;
 }
 
+/**
+ * websocketURL derives the transport endpoint from a base URL. `deviceId` is
+ * the connection's credential and is omitted for the three unauthenticated
+ * flows: group creation, pairing-join and offer minting. Every connection
+ * states this build's protocol level (SPEC §5.3).
+ */
 export function websocketURL(base: string, deviceId: string): string {
   const { scheme, host } = parse(base, 'server URL');
   const transport = scheme === 'https' ? 'wss' : 'ws';
-  const query = deviceId === '' ? '' : `?device_id=${encodeURIComponent(deviceId)}`;
-  return `${transport}://${host}${WEBSOCKET_PATH}${query}`;
+  return `${transport}://${host}${WEBSOCKET_PATH}${transportQuery(deviceId)}`;
+}
+
+/** transportQuery is the endpoint's query: the credential, if any, and the protocol level. */
+function transportQuery(deviceId: string): string {
+  const level = `${PROTOCOL_PARAM}=${PROTOCOL_LEVEL}`;
+  return deviceId === '' ? `?${level}` : `?device_id=${encodeURIComponent(deviceId)}&${level}`;
 }
 
 /**

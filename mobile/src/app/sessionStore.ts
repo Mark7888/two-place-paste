@@ -84,6 +84,11 @@ export interface Snapshot {
   /** groupDeleted is set when the relay has said the server admin deleted this device's group. */
   groupDeleted: boolean;
   /**
+   * outdated is set while the relay refuses this version of the app for its
+   * age (SPEC §5.3). Not a revocation: it ends once the app is updated.
+   */
+  outdated: boolean;
+  /**
    * operatorLink is the link to the relay operator's website, with the group's
    * id added, or null when the relay names none (SPEC §4.4). It is the group
    * in use's relay's, and null right after a switch until that relay says.
@@ -182,6 +187,7 @@ let snapshot: Snapshot = {
   notice: '',
   probablyRevoked: false,
   groupDeleted: false,
+  outdated: false,
   operatorLink: null,
   hideSpaceBanners: false,
   groupName: '',
@@ -211,6 +217,7 @@ function emit(): void {
     notice,
     probablyRevoked,
     groupDeleted: client?.groupDeleted ?? false,
+    outdated: client?.isOutdated ?? false,
     operatorLink: client?.inGroup ? client.operatorLink : null,
     hideSpaceBanners,
     groupName: client?.inGroup ? client.groupName : '',
@@ -504,6 +511,7 @@ const handlers: Handlers = {
     notice = 'The server admin deleted this group.';
     emit();
   },
+  onClientOutdated: () => emit(),
   onGroupName: () => emit(),
   onOperatorUrl: () => emit(),
   onStoreItemAdded: (item) => {

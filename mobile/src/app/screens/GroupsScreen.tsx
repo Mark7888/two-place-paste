@@ -69,7 +69,9 @@ export function GroupsScreen(): React.JSX.Element {
           <Text style={styles.small} numberOfLines={1}>
             {session.groupDeleted
               ? 'Deleted by the server admin'
-              : session.probablyRevoked
+              : session.outdated
+                ? 'The relay needs a newer version of this app'
+                : session.probablyRevoked
                 ? 'This phone was probably removed from it'
                 : (state?.serverUrl ?? '')}
           </Text>

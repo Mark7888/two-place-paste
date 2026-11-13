@@ -10,6 +10,7 @@ import {
   type Status,
 } from "./api";
 import { Icon, type IconName } from "./components/Icon";
+import { OutdatedNotice } from "./components/OutdatedNotice";
 import { PauseNotice } from "./components/PauseNotice";
 import { SessionLostDialog } from "./components/SessionLostDialog";
 import { SetupWizard } from "./components/SetupWizard";
@@ -170,6 +171,7 @@ export function App() {
     if (!status) return { cls: "", text: "connecting…" };
     if (status.group_deleted) return { cls: "off", text: "group deleted" };
     if (status.revoked) return { cls: "off", text: "revoked" };
+    if (status.outdated) return { cls: "off", text: "update needed" };
     if (!status.in_group) return { cls: "", text: "no group" };
     return status.connected ? { cls: "on", text: "connected" } : { cls: "off", text: "offline" };
   }, [status]);
@@ -338,6 +340,18 @@ export function App() {
                 is still in the group.
               </span>
             </div>
+          ) : status?.outdated ? (
+            <OutdatedNotice
+              onCheck={() => {
+                // The same landing the tray's "Check for updates…" uses.
+                window.location.hash = "#updates";
+                setTab("settings");
+                document.getElementById("updates")?.scrollIntoView();
+                void api
+                  .checkUpdate()
+                  .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+              }}
+            />
           ) : null}
 
           {tab === "sync" ? <SyncPanel status={status} onChanged={refresh} /> : null}

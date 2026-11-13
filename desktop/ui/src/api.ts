@@ -112,6 +112,11 @@ export interface Status {
   revoked: boolean;
   /** Set with `revoked` when the server admin deleted the group. */
   group_deleted: boolean;
+  /**
+   * Set while the relay refuses this version of the app for its age. Not a
+   * revocation: it ends once the app is updated.
+   */
+  outdated: boolean;
   /** The group's display name, as the server admin set it. */
   group_name?: string;
   last_sync?: string;

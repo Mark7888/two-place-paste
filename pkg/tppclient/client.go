@@ -66,6 +66,14 @@ type Handlers struct {
 	// the client stops reconnecting.
 	OnGroupDeleted func()
 
+	// OnClientOutdated fires when the relay refuses this build because its
+	// protocol level is too old (SPEC §5.3). It is not a revocation: the
+	// device's record and keys are untouched, and once the app is updated it
+	// connects as before. The client keeps trying, but only hourly, or at
+	// once on Reconnect; OnConnected fires when it succeeds. It fires once
+	// per run of refusals, not on every refused attempt.
+	OnClientOutdated func()
+
 	// OnGroupName fires when the group's display name, as the server admin
 	// set it, is first learned or changes. It may be empty.
 	OnGroupName func(name string)
@@ -189,7 +197,18 @@ type Client struct {
 	// connection asks again: the relay it reaches may have been reconfigured.
 	limits     Limits
 	limitsConn *conn
-	ready      chan struct{} // closed while a connection is live
+
+	// relay is what the relay supports, as stated on relayConn (SPEC §5.3).
+	relay     RelayInfo
+	relayConn *conn
+
+	// outdatedErr is set while the relay refuses this build for its age, and
+	// cleared by the next connection that succeeds. refused is closed when it
+	// is set, so requests waiting for a connection answer with it instead of
+	// waiting an hour for the next attempt.
+	outdatedErr error
+	refused     chan struct{}
+	ready       chan struct{} // closed while a connection is live
 
 	// storeKeys are the store keys and links of the current group key.
 	storeKeys   *storeKeys
@@ -235,6 +254,7 @@ func New(opts Options) (*Client, error) {
 		maxBackoff: opts.MaxBackoff,
 		now:        opts.Now,
 		ready:      make(chan struct{}),
+		refused:    make(chan struct{}),
 		stopped:    make(chan struct{}),
 		kick:       make(chan struct{}, 1),
 	}
@@ -415,6 +435,7 @@ func (c *Client) restart(s State) {
 	c.ready = make(chan struct{})
 	c.revoked = false
 	c.revokedErr = nil
+	c.clearOutdatedLocked()
 	c.started = false
 	if !c.closed {
 		// A fresh generation for the next Connect. A closed client stays
@@ -571,10 +592,18 @@ func (c *Client) supervise(runCtx context.Context, stopped chan struct{}) {
 				c.handlers.OnRevoked()
 			}
 			return
+		case errors.Is(err, ErrClientOutdated):
+			// Not a revocation, and not an outage either: nothing changes
+			// until the app or the relay is updated (SPEC §5.3).
+			c.markOutdated(err)
 		case err != nil:
 			c.logger.Debug("relay connection ended", slog.Any("reason", err))
 		}
 
+		wait := jitter(backoff)
+		if errors.Is(err, ErrClientOutdated) {
+			wait = outdatedRetry
+		}
 		select {
 		case <-runCtx.Done():
 			return
@@ -583,7 +612,7 @@ func (c *Client) supervise(runCtx context.Context, stopped chan struct{}) {
 			// before is no guide to what it is doing after.
 			backoff = c.minBackoff
 			continue
-		case <-time.After(jitter(backoff)):
+		case <-time.After(wait):
 		}
 		if backoff < c.maxBackoff {
 			backoff = min(backoff*backoffFactor, c.maxBackoff)
@@ -610,6 +639,7 @@ func (c *Client) serveOnce(runCtx context.Context) (connected bool, err error) {
 	c.mu.Lock()
 	c.conn = conn
 	close(c.ready)
+	c.clearOutdatedLocked()
 	c.mu.Unlock()
 	c.logger.Debug("connected to the relay", slog.String("group_id", base))
 	if c.handlers.OnConnected != nil {
@@ -617,6 +647,11 @@ func (c *Client) serveOnce(runCtx context.Context) (connected bool, err error) {
 	}
 
 	go conn.keepalive(runCtx, pingInterval, pingTimeout)
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.refreshRelay(runCtx, conn)
+	}()
 	// A rename made while this device was offline is not replayed as an
 	// event, so the name — and the operator's website, which a relay
 	// restart may have changed — is asked for on every connect.
@@ -754,14 +789,19 @@ func (c *Client) connection(ctx context.Context) (*conn, error) {
 		c.mu.Lock()
 		conn, ready, revoked, revokedErr := c.conn, c.ready, c.revoked, c.revokedErr
 		runCtx, stopped := c.runCtx, c.stopped
+		outdatedErr, refused := c.outdatedErr, c.refused
 		c.mu.Unlock()
 		switch {
 		case revoked:
 			return nil, revokedErr
 		case conn != nil:
 			return conn, nil
+		case outdatedErr != nil:
+			return nil, outdatedErr
 		}
 		select {
+		case <-refused:
+			// Loop to read the refusal.
 		case <-ctx.Done():
 			return nil, fmt.Errorf("tppclient: waiting for a connection to the relay: %w", ctx.Err())
 		case <-runCtx.Done():

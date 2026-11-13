@@ -17,6 +17,7 @@ import (
 	"github.com/Mark7888/two-place-paste/desktop/internal/config"
 	"github.com/Mark7888/two-place-paste/desktop/internal/localui"
 	"github.com/Mark7888/two-place-paste/pkg/tppclient"
+	tppv1 "github.com/Mark7888/two-place-paste/pkg/tppclient/protogen/tppv1"
 )
 
 // fakeRelay is the client core reduced to a map. The flows it stands in for
@@ -1327,5 +1328,80 @@ func TestEvictionAndProgressReachTheUI(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatalf("no %s event", w.Kind)
 		}
+	}
+}
+
+// TestOutdatedAppIsToldToUpdate covers SPEC §5.3: a relay that refuses this
+// build for its age is neither a revocation nor an outage. The UI says to
+// update, and the next connection clears it.
+func TestOutdatedAppIsToldToUpdate(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	events, stop := f.svc.Subscribe()
+	defer stop()
+	f.svc.ClientHandlers().OnClientOutdated()
+
+	select {
+	case ev := <-events:
+		if ev.Kind != localui.EventClientOutdated || !strings.Contains(ev.Message, "newer version") {
+			t.Errorf("event = %+v, want a client-outdated event", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no event arrived")
+	}
+	status := f.svc.Status(context.Background())
+	if !status.Outdated || status.Revoked || status.Connected {
+		t.Errorf("Status() = outdated %v, revoked %v, connected %v; want true, false, false",
+			status.Outdated, status.Revoked, status.Connected)
+	}
+
+	f.svc.ClientHandlers().OnConnected()
+	if f.svc.Status(context.Background()).Outdated {
+		t.Error("Status() still outdated after a connection succeeded")
+	}
+}
+
+// TestVersionMismatchesAreSaidPlainly: each way the relay and this build can
+// stop fitting gets its own sentence, wherever the request came from.
+func TestVersionMismatchesAreSaidPlainly(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		err      error
+		wantCode int
+		wantText string
+	}{
+		{
+			name:     "refused at the upgrade",
+			err:      fmt.Errorf("connect: %w", &tppclient.OutdatedError{ProtocolMin: 2, ProtocolMax: 2}),
+			wantCode: http.StatusUpgradeRequired,
+			wantText: "newer version of TwoPlacePaste",
+		},
+		{
+			name:     "one request refused",
+			err:      &tppclient.ProtocolError{Code: tppv1.ErrorCode_ERROR_CODE_CLIENT_OUTDATED},
+			wantCode: http.StatusUpgradeRequired,
+			wantText: "newer version of TwoPlacePaste",
+		},
+		{name: "relay too old", err: tppclient.ErrRelayOutdated, wantCode: http.StatusNotImplemented, wantText: "operator"},
+		{name: "code from a newer app", err: tppclient.ErrCodeFromNewerApp, wantCode: http.StatusBadRequest, wantText: "newer version"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			f.clip.set(textContent("hello"))
+			f.relay.mu.Lock()
+			f.relay.putErr = tt.err
+			f.relay.mu.Unlock()
+			_, err := f.svc.Sync(context.Background(), localui.SyncRequest{Direction: localui.DirectionUpload})
+			var se *localui.StatusError
+			if !errors.As(err, &se) || se.Code != tt.wantCode || !strings.Contains(se.Message, tt.wantText) {
+				t.Errorf("Sync() = %v, want a %d saying %q", err, tt.wantCode, tt.wantText)
+			}
+		})
 	}
 }

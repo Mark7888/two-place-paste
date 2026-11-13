@@ -36,6 +36,10 @@ type Status struct {
 	// group, so the screen can say that rather than "revoked".
 	GroupDeleted bool `json:"group_deleted"`
 
+	// Outdated is set while the relay refuses this build for its age (SPEC
+	// §5.3): the app needs updating. The group and its keys are untouched.
+	Outdated bool `json:"outdated"`
+
 	// GroupName is the group's display name as the server admin set it, or
 	// empty.
 	GroupName string `json:"group_name,omitempty"`
@@ -719,6 +723,10 @@ const (
 	// EventGroupDeleted says the server admin deleted this device's group.
 	// Like EventRevoked, the device can do nothing more in it.
 	EventGroupDeleted = "group_deleted"
+
+	// EventClientOutdated says the relay refuses this build for its age
+	// (SPEC §5.3). Unlike EventRevoked it ends once the app is updated.
+	EventClientOutdated = "client_outdated"
 
 	// EventGroupName says the group's display name was learned or changed;
 	// Name carries it.

@@ -25,6 +25,16 @@ export type TppErrorKind =
   | 'revoked'
   /** The server admin deleted this device's group. Like 'revoked', nothing more can be done in it. */
   | 'group-deleted'
+  /**
+   * The relay refused this build at the upgrade for its age (SPEC §5.3). Not
+   * a revocation: the device's record and keys are untouched, and an updated
+   * app connects as before.
+   */
+  | 'client-outdated'
+  /** The relay lacks something this build needs for what was asked. Only its operator can update it. */
+  | 'relay-outdated'
+  /** A pairing code was made by a newer version of the app, in a form this build cannot read. */
+  | 'code-from-newer-app'
   /** The connection is gone. */
   | 'disconnected'
   /** The client was closed. */
@@ -112,6 +122,15 @@ export function isRevisionConflict(err: unknown): boolean {
   return isCode(err, ErrorCode.ERROR_CODE_REVISION_CONFLICT);
 }
 
+/**
+ * isClientOutdated means the relay needs a newer version of this app: it
+ * refused the connection for its age, or refused one request this build may
+ * no longer make (SPEC §5.3). Either way the user updates the app.
+ */
+export function isClientOutdated(err: unknown): boolean {
+  return isKind(err, 'client-outdated') || isCode(err, ErrorCode.ERROR_CODE_CLIENT_OUTDATED);
+}
+
 /** describe renders an error for the one-line status a screen shows. It never renders a cause chain into the UI. */
 export function describe(err: unknown): string {
   // The two storage refusals get a sentence a person can act on; the relay's
@@ -128,8 +147,14 @@ export function describe(err: unknown): string {
   if (isRevisionConflict(err)) {
     return 'Another device edited this item first.';
   }
-  if (isCode(err, ErrorCode.ERROR_CODE_CLIENT_OUTDATED)) {
-    return 'The server needs a newer version of this app.';
+  if (isClientOutdated(err)) {
+    return 'The relay needs a newer version of this app. Update TwoPlacePaste to keep syncing.';
+  }
+  if (isKind(err, 'relay-outdated')) {
+    return 'The relay is too old for this. Ask its operator to update it.';
+  }
+  if (isKind(err, 'code-from-newer-app')) {
+    return 'This code was made by a newer version of TwoPlacePaste. Update this app to use it.';
   }
   if (err instanceof TppError || err instanceof ProtocolError) {
     return err.message;
