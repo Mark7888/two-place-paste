@@ -129,11 +129,23 @@ string — but the payload and protocol are the same.
 2. The **joiner** scans or pastes it, generates its own device keypair, and sends its
    public key to the server referencing the pairing token.
 3. The server notifies the inviter over its open WebSocket.
-4. The inviter wraps the **current** group key to the joiner's public key and uploads
-   the wrapped blob. The server relays it; it cannot unwrap it.
+4. The inviter's UI shows the joining device's name and a fingerprint of its public
+   key, and the user confirms. Only then does the inviter wrap the **current** group
+   key to the joiner's public key and upload the wrapped blob. The server relays it;
+   it cannot unwrap it.
 5. The joiner is now a group member at the current epoch.
 
 Pairing tokens are short-lived (suggested: 5 minutes) and single-use.
+
+**The confirmation in step 4 is not advisory**, for the same reason as in the
+joiner-emitted flow below. The joiner's public key reaches the inviter through the
+server, so a server that substituted its own would be handed the group key. An
+inviter MUST act on a join notice only for a token it minted itself, still open and
+not yet used, and MUST NOT wrap anything until the user has confirmed a dialog
+naming the device and showing the fingerprint. The joining device shows its own
+fingerprint while it waits, so the two can be compared. A join the user turns down
+gets no key; the device record the server made for it stays keyless until the
+device is revoked.
 
 **New devices start empty.** They cannot decrypt entries created before they joined
 and do not attempt to fetch them. The store is the exception: a new device reads every
@@ -191,7 +203,8 @@ all devices belong to the same person.
 
 1. The revoking device requests the current device roster from the server.
 2. The client **displays a confirmation listing the devices it is about to re-key
-   for**, by name. The user confirms.
+   for**, by name and with the fingerprint of each one's public key. The user
+   confirms.
 3. The revoking device generates a new group key and wraps it once per remaining
    device using each device's stored public key. It also seals the previous epoch's
    store key under the new one: the **store link** (`spec/crypto.md` §7a.2).
@@ -204,14 +217,19 @@ all devices belong to the same person.
 Remaining devices do **not** need to be online. Their wrapped key waits for them; they
 pick it up on next connect.
 
+**A remaining device checks the new key before it installs it**: the store links must
+chain it back to the key it already holds (`spec/crypto.md` §7.1). Only a holder of the
+previous key can make a link, so the server cannot move a device onto a key of its own.
+
 **Old entries are not deleted.** Clients skip any entry whose epoch is older than
 their current one, and those entries expire naturally within 24 hours.
 
 **The local clipboard is never touched by a rekey.** If a device has `asd123` on its
 OS clipboard, it stays there.
 
-A rekey that carries no link is refused while the group has store items: accepting it
-would leave every item unreadable. A client that predates the store is told to update.
+A rekey that carries no link is refused, whether or not the group has store items:
+without one, store items would be unreadable and the remaining devices could not check
+the new key. A client that predates the store is told to update.
 
 **Known limitation:** revocation requires a device holding the current group key. A
 user with only one remaining device that has lost access should leave and create a new
@@ -577,8 +595,8 @@ group.
 
 **Turning a store off** blocks every store request with `STORE_DISABLED` and keeps the
 items; turning it on again brings them back as they were. Deleting them is **Purge
-store**. A disabled store still holds its link chain, and a rekey still has to carry a
-link while the group has items (§3.3).
+store**. A disabled store still holds its link chain, the links are still served, and
+a rekey still has to carry a link (§3.3).
 
 ---
 
