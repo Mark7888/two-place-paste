@@ -1,0 +1,59 @@
+# CodeQL code scanning for GitHub Actions workflows, as an advanced setup.
+#
+# Each CodeQL language has its own workflow so that it can be path-gated on
+# the files it actually analyses: a Go-only change should not wait minutes
+# for the Android build. A skipped run leaves that language's last analysis
+# in place, which is still accurate because none of its files changed. The
+# weekly schedule ignores path filters and re-analyses every language, so new
+# CodeQL queries still reach code nobody has touched.
+#
+# The results category stays /language:<lang>, as it was when all languages
+# shared one workflow, so existing alerts carry over.
+#
+# Default setup must be switched off in the repository settings for these
+# results to be accepted; GitHub rejects advanced-setup uploads while it is on.
+name: CodeQL (Actions)
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - ".github/workflows/**"
+      - ".github/actions/**"
+      - ".github/workflows/codeql-actions.yml"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - ".github/workflows/**"
+      - ".github/actions/**"
+      - ".github/workflows/codeql-actions.yml"
+  schedule:
+    - cron: "27 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (actions)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: actions
+          build-mode: none
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:actions"

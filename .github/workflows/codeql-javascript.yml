@@ -1,0 +1,87 @@
+# CodeQL code scanning for JavaScript and TypeScript, as an advanced setup.
+#
+# Each CodeQL language has its own workflow so that it can be path-gated on
+# the files it actually analyses: a Go-only change should not wait minutes
+# for the Android build. A skipped run leaves that language's last analysis
+# in place, which is still accurate because none of its files changed. The
+# weekly schedule ignores path filters and re-analyses every language, so new
+# CodeQL queries still reach code nobody has touched.
+#
+# The results category stays /language:<lang>, as it was when all languages
+# shared one workflow, so existing alerts carry over.
+#
+# Default setup must be switched off in the repository settings for these
+# results to be accepted; GitHub rejects advanced-setup uploads while it is on.
+#
+# Gated on the file types the JavaScript extractor reads, wherever they live:
+# the mobile app, both React UIs, the docs site, the pairing page and the
+# notices script. No build is needed (build-mode none).
+name: CodeQL (JavaScript/TypeScript)
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "**/*.js"
+      - "**/*.cjs"
+      - "**/*.mjs"
+      - "**/*.jsx"
+      - "**/*.ts"
+      - "**/*.cts"
+      - "**/*.mts"
+      - "**/*.tsx"
+      - "**/*.html"
+      - "**/*.htm"
+      - "**/*.vue"
+      - "**/*.astro"
+      - "**/package.json"
+      - "**/tsconfig*.json"
+      - ".github/workflows/codeql-javascript.yml"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "**/*.js"
+      - "**/*.cjs"
+      - "**/*.mjs"
+      - "**/*.jsx"
+      - "**/*.ts"
+      - "**/*.cts"
+      - "**/*.mts"
+      - "**/*.tsx"
+      - "**/*.html"
+      - "**/*.htm"
+      - "**/*.vue"
+      - "**/*.astro"
+      - "**/package.json"
+      - "**/tsconfig*.json"
+      - ".github/workflows/codeql-javascript.yml"
+  schedule:
+    - cron: "27 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (javascript-typescript)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          build-mode: none
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:javascript-typescript"
