@@ -1,6 +1,6 @@
 # Plan — Public admin REST API with API keys
 
-**Status:** agreed, not started. Everything lands on one branch and one PR, as asked
+**Status:** implemented (#64), on one branch and one PR, as asked
 (§9, answer "one PR"); the shared contracts it touches (`Makefile`, CI workflows,
 licensing files) go in their own commits inside that PR.
 **Touches:** `/api/**` (new), `/server/**`, `/docs/site/**`, `/deploy/.env.example`,
