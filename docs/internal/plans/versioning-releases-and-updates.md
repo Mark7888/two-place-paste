@@ -1,6 +1,6 @@
 # Plan — versioning, releases and the desktop auto-updater
 
-**Status:** proposed.
+**Status:** implemented. Tags publish releases through `release.yml` (`v1.0.0` on 2026-10-13), and the desktop app updates itself on the Stable, Beta and Nightly channels.
 **Raised by:** ROADMAP P8 (release artefacts). The CI builds today carry no version at all:
 `Info.plist`, `winres.json`, the NSIS script and `build.gradle` all hard-code `0.1.0` /
 `versionCode 1`, so neither a person nor an updater can tell two builds apart.

@@ -13,32 +13,37 @@ request. Phases run in numeric order; only one pair of phases may overlap.
 | **P0** | Foundation — scaffolding, config, CI | ✅ **Done** (#1) | — |
 | **P1** | Wire contract — protobuf schema + codegen | ✅ **Done** (#2) | P0 |
 | **P2** | Crypto contract — spec + cross-language vectors | ✅ **Done** (#3) | P0 |
-| **P3** | Server core — storage, blobs, WebSocket protocol | ✅ **Done** | P1, P2 |
-| **P4** | Server surface — admin UI, tokens, deployment | ✅ **Done** | P3 |
-| **P5** | Go client core — `pkg/tppclient` | ✅ **Done** | P4 |
-| **P6** | Desktop app — Windows + macOS | ✅ **Done** | P5 |
-| **P7** | Android app | ✅ **Done** | P5 (server from P4 for tests) |
-| **P8** | Release — E2E, hardening, docs, artefacts | ▶ **Next** | P6, P7 |
-| **P9** | Storage — S3/MinIO blobs, storage limits, chunked transfer, admin dashboard | 🔍 **In review** (#26) | P3–P7 |
-| **P10** | Admin group management — rename, tags, limits, purge, delete, health, audit | 🔍 **In review** | P9 |
-| **P11** | Persistent store — items kept beyond the 24-hour history, per group | ✅ **Done** (#40, #42–#47) | P10 |
+| **P3** | Server core — storage, blobs, WebSocket protocol | ✅ **Done** (#5) | P1, P2 |
+| **P4** | Server surface — admin UI, tokens, deployment | ✅ **Done** (#6) | P3 |
+| **P5** | Go client core — `pkg/tppclient` | ✅ **Done** (#7) | P4 |
+| **P6** | Desktop app — Windows + macOS | ✅ **Done** (#8) | P5 |
+| **P7** | Android app | ✅ **Done** (#9) | P5 (server from P4 for tests) |
+| **P8** | Release — E2E, hardening, docs, artefacts | 🟡 **Mostly done** — releases, docs and interop tests shipped; drills and `SECURITY.md` open | P6, P7 |
+| **P9** | Storage — S3/MinIO blobs, storage limits, chunked transfer, admin dashboard | ✅ **Done** (#26) | P3–P7 |
+| **P10** | Admin group management — rename, tags, limits, purge, delete, health, audit | ✅ **Done** (#35, #36) | P9 |
+| **P11** | Persistent store — items kept beyond the 24-hour history, per group | ✅ **Done** (#40, #42–#49) | P10 |
+| — | Relay trust hardening — confirmed joins, key checks against store links | 🔍 **In review** (#54, #55) | P11, protocol compatibility |
 
-**Only P6 and P7 may run at the same time** (different languages, disjoint directories,
-no shared file). Both are done, so P8 now runs on its own. Everything else is strictly
-sequential. Running a single agent through P3 → P4 → P5 → P6 → P7 → P8 is a fully valid
-schedule; nothing in this roadmap requires parallelism.
+**Only P6 and P7 were allowed to run at the same time** (different languages, disjoint
+directories, no shared file). Every numbered phase has now landed except what is left of
+P8. Work since P7 has not followed the one-phase-one-PR sequence: it lands as
+cross-cutting features, each with its own plan in `docs/internal/plans/` and one PR per
+step (see [Work beyond the phases](#work-beyond-the-phases) below).
 
-When a phase merges, update its row here to ✅ and flip the next row to ▶.
+When a phase or feature merges, update its row here and in that table.
+
+The project ships: `v1.0.0` was tagged on 2026-10-13 and the latest release is `v1.4.0`
+(2026-11-13). Builds on `master` publish the rolling Beta channel.
 
 P9 is a cross-cutting change rather than a phase in the sequence above: it touches
 `/proto`, `/server`, `/pkg/tppclient`, `/desktop`, `/mobile` and `/deploy` together,
 because a wire change has to land in every client at once. Its plan, decisions and
 work items are in [`docs/internal/plans/s3-blob-storage.md`](plans/s3-blob-storage.md), in the
-same way `docs/internal/plans/joiner-emitted-pairing.md` carried the last such change.
+same way `docs/internal/plans/joiner-emitted-pairing.md` carried the first such change.
 
 P10 is cross-cutting in the same way: the admin can now rename, tag, limit, purge and
 delete groups, and the apps show a group's name and say when it was deleted. Its wire
-change went in first as its own PR (#35); the plan is
+change went in first as its own PR (#35), the rest in #36; the plan is
 [`docs/internal/plans/admin-group-management.md`](plans/admin-group-management.md).
 
 P11 is cross-cutting as well: a group can keep items that do not expire — searched,
@@ -46,8 +51,8 @@ tagged and encrypted like everything else, readable across rekeys through a chai
 store links, and off until the admin turns it on for the group (SPEC §4.6, §6b;
 spec/crypto.md §7a). It landed as one PR per step: crypto and spec (#40), header v2
 (#42), wire schema (#43), relay (#44), Go client core (#45), desktop (#46), and the
-TypeScript core with Android (#47). The plan is
-[`docs/internal/plans/persistent-store.md`](plans/persistent-store.md).
+TypeScript core with Android (#47), followed by docs and fixes (#48, #49, #53). The plan
+is [`docs/internal/plans/persistent-store.md`](plans/persistent-store.md).
 
 ---
 
@@ -161,8 +166,12 @@ graph TD
     P4 --> P5["P5 Go client core ✅"]
     P5 --> P6["P6 Desktop app ✅"]
     P5 --> P7["P7 Android app ✅"]
-    P6 --> P8["P8 Release"]
+    P6 --> P8["P8 Release 🟡"]
     P7 --> P8
+    P6 --> P9["P9 Storage ✅"]
+    P7 --> P9
+    P9 --> P10["P10 Group management ✅"]
+    P10 --> P11["P11 Persistent store ✅"]
 ```
 
 ---
@@ -929,7 +938,7 @@ to keep current for a stack one level deep.
 
 ---
 
-# PHASE 8 — Release: E2E, hardening, docs ▶ Next
+# PHASE 8 — Release: E2E, hardening, docs 🟡 Mostly done
 
 **Depends on:** P6, P7.
 **Owns:** `/e2e/**`, `/docs/**`, release workflow, `SECURITY.md`.
@@ -947,24 +956,71 @@ to keep current for a stack one level deep.
 - Docs: install, pairing walkthrough, revocation, backup and restore.
 - Tagged release with artefacts for Windows, macOS and Android.
 
+### Where it stands
+
+The phase never landed as one PR; its parts arrived piecemeal with other work.
+
+**Done**
+- **Tagged releases.** `release.yml` builds and publishes a GitHub Release from a
+  `vX.Y.Z` tag: the Windows `.exe` and installer, the macOS app, a signed release APK and
+  the relay image on GHCR (#22, #24). `v1.0.0` shipped on 2026-10-13; the latest is
+  `v1.4.0`. Desktop builds update themselves from signed manifests, with Stable, Beta and
+  Nightly channels ([`plans/versioning-releases-and-updates.md`](plans/versioning-releases-and-updates.md)).
+- **Docs.** The Starlight site in `docs/site/` (#29, kept current since) covers install on
+  every platform, updates and uninstall, creating a group, adding a device, devices and
+  revocation, backup and restore (`self-hosting/operations`), and a security page.
+- **Cross-client tests against a real relay.** `npm run interop`
+  (`mobile/src/interop/`) runs the Go and TypeScript clients against a relay and Redis:
+  pairing both ways, entries in both directions, chunked transfers, the store, and a
+  revocation that locks the phone out. `pkg/tppclient/integration_test.go` drives pair,
+  sync, rekey and revoke in Go.
+- **Hardening.** CodeQL for Go, JavaScript, Java/Kotlin and Actions (#30, #65, #75),
+  Dependabot fixes, and pinned npm dependencies.
+
+**Still open**
+- A dedicated `/e2e/` suite with the drills above: the three-device revocation with one
+  device offline, Redis restart and AOF recovery, downtime longer than a bucket, the size
+  boundaries, and the assertion that the relay's stored bytes and logs hold no plaintext,
+  content type or filename.
+- `SECURITY.md` (how to report a vulnerability). The docs site's security page explains
+  the model but is not a reporting policy.
+
 ---
 
-## Queued contract change — joiner-emitted pairing
+## Work beyond the phases
 
-Pairing works in every transport (QR, copied text) but only in one direction: the device
-that already holds a group key emits the code, and the device without one consumes it.
-`PairingStartRequest` is legal only on an authenticated connection, so a joiner cannot
-mint a token and cannot show a code a member could accept.
+Everything after P7 that changed behaviour across areas, in merge order. Each has a plan
+in `docs/internal/plans/` that records its decisions and where the build differs.
 
-Making it symmetric needs new message types, relay-held offers, and a named confirmation
-on the accepting member — a shared-contract change, so it is its own PR and not part of
-any feature phase (§3). The mechanism, the wire additions, the security consequence of
-moving the risk onto the member, and the work split are in
-[`docs/internal/plans/joiner-emitted-pairing.md`](plans/joiner-emitted-pairing.md).
+| Feature | PRs | Status | Plan |
+|---|---|---|---|
+| Joiner-emitted pairing — a device without the key can show the code | #11, #17 | ✅ Done | [`joiner-emitted-pairing.md`](plans/joiner-emitted-pairing.md) |
+| Versioning, releases and the desktop auto-updater | #22, #24, #50 | ✅ Done | [`versioning-releases-and-updates.md`](plans/versioning-releases-and-updates.md) |
+| Storage (P9) | #26 | ✅ Done | [`s3-blob-storage.md`](plans/s3-blob-storage.md) |
+| Admin group management (P10) | #35, #36 | ✅ Done | [`admin-group-management.md`](plans/admin-group-management.md) |
+| Admin UI rewritten as a React app, with SmartTable | #38 | ✅ Done | [`admin-react-rewrite/`](plans/admin-react-rewrite/rewrite.md) |
+| Persistent store (P11) | #40, #42–#49, #53 | ✅ Done | [`persistent-store.md`](plans/persistent-store.md) |
+| Sensitive content and auto-upload filters (desktop) | #37 | ✅ Done | [`auto-upload-filters.md`](plans/auto-upload-filters.md) |
+| Android demo mode for store review | #52 | ✅ Done | [`demo-mode.md`](plans/demo-mode.md) |
+| Several groups on one installation | #59, #60, #61 | ✅ Done | [`multi-group-desktop.md`](plans/multi-group-desktop.md), [`multi-group-mobile.md`](plans/multi-group-mobile.md) |
+| Admin REST API with API keys | #64 | ✅ Done | [`admin-rest-api.md`](plans/admin-rest-api.md) |
+| Relay operator URL and out-of-space warnings | #68, #69 | ✅ Done | — |
+| Protocol levels and Hello — relays and apps tell when they no longer fit | #70–#73 | ✅ Done | [`protocol-compatibility.md`](plans/protocol-compatibility.md) |
+| Relay trust hardening — confirmed joins, new keys checked against store links | #54, #55 | 🔍 In review | `relay-trust-hardening.md` (on the #54 branch) |
 
----
+Smaller app work that needed no plan also landed in this period: file previews in the
+desktop history (#32), save-or-open and share for received files on Android (#28, #56),
+the Android share sheet (#63), auto-apply of remote entries (#18), the tray status badges
+(#27, #58), the desktop first-run wizard (#57) and the licensing and third-party notices
+infrastructure (#33, #34).
 
-## Desktop feature — sensitive content and auto-upload filters
+### Joiner-emitted pairing
+
+✅ **Done** (#11). A device without the group key can now show a code that a member
+accepts, with a named confirmation on the accepting side. It was the first contract
+change made outside a feature phase, and the model the later ones followed.
+
+### Desktop feature — sensitive content and auto-upload filters
 
 ✅ **Done** (#37). Keeps password-manager copies and anything matching a built-in
 detector or a user filter out of auto-upload, masks it on the Sync screen, and asks
@@ -972,22 +1028,27 @@ before a manual push or a save to the store, from the UI or the tray. Filters ca
 exported and imported between devices, through the store or the clipboard. A
 five-minute pause holds both automatic directions, for copies no detector can see,
 such as a browser extension's. Desktop only and local only: no wire, spec or server
-change. Plan, decisions and what was built differently are in
-[`docs/internal/plans/auto-upload-filters.md`](plans/auto-upload-filters.md).
+change.
 
----
+### Relay feature — admin REST API with API keys
 
-## Relay feature — admin REST API with API keys
-
-✅ **Done** (one PR). A public, versioned REST API under `/api/v1/` for scripts and
+✅ **Done** (#64). A public, versioned REST API under `/api/v1/` for scripts and
 automation, doing what the admin screens do. It is described by `api/openapi.yaml`
 (OpenAPI 3.1, MPL-2.0), from which oapi-codegen generates the relay's server code
 (`make api`, checked by `make api-check` in CI), and from which the docs site renders its
 API reference. Scoped, expiring API keys are created on a new **API keys** screen or with
 `tpp apikey`, never through the API; each key has its own rate limit, and failed
 authentication is limited per address. The audit log now records who acted: the admin
-page, an API key or the command line. Plan and decisions are in
-[`docs/internal/plans/admin-rest-api.md`](plans/admin-rest-api.md).
+page, an API key or the command line. Protocol levels were added to it later (#73).
+
+### Relay trust hardening
+
+🔍 **In review** (#54 spec, #55 implementation, stacked). Closes two ways a modified
+relay could obtain a group key with no user action: an inviter now wraps the key only
+after its user confirms the joining device's name and fingerprint, and a device installs
+a new epoch's key only after the store links lead from it back to the key it holds
+(spec/crypto.md §7.1). It builds on the protocol levels above, because it cannot be made
+fully backwards compatible: the relay and the apps must be updated together.
 
 ---
 
@@ -997,9 +1058,9 @@ page, an API key or the command line. Plan and decisions are in
 |---|---|
 | Push delivery for Android (FCM gateway / UnifiedPush / WS-only) | §9 |
 | Plaintext padding | §9 |
-| Admin password hashing (the P0 config loader already accommodates it) | §4.4, §9 |
+| Admin password hashing (the config loader accepts `ADMIN_PASSWORD_HASH`, but the relay refuses to start with it until verification exists) | §4.4, §9 |
 | iOS client + share-sheet extension | §7.3 |
-| Linux desktop (tray, X11/Wayland clipboard, packaging) | §7.4 |
+| Linux desktop (tray, X11/Wayland clipboard, packaging); the app builds on Linux for development only | §7.4 |
 | Auto-sync on Android | §7.1 |
 
 **Standing prohibition:** no pin, favourite or extend-TTL feature. Entry lifetimes are
