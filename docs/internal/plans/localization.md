@@ -130,7 +130,8 @@ Independent of localization, and worth having first (review answer 7):
   with the other answers and `setup_done` at the end, as the wizard already
   does.
 - Settings panel: a "Language" picker. Saving re-renders the UI and the tray
-  menu (the tray sets its labels once at start today, so it gains a relabel
+  menu (the tray updates its status and pause items live, but sets the fixed
+  items such as "Sync now" and "Quit" once at start, so those gain a relabel
   step for a language change).
 
 **Mobile**
