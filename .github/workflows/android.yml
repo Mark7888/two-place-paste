@@ -144,7 +144,7 @@ jobs:
       # repository has. With it the job builds the signed release APK that
       # updates install over; without it (a fork's pull request) it falls back
       # to the debug build it always made, which installs as the separate
-      # com.twoplacepaste.debug app and never as an update of the real one.
+      # com.mark7888.twoplacepaste.debug app and never as an update of the real one.
       - name: Decode the release keystore
         id: keystore
         run: |

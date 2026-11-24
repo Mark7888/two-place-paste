@@ -1,4 +1,4 @@
-package com.twoplacepaste
+package com.mark7888.twoplacepaste
 
 import android.content.Intent
 import com.facebook.react.ReactActivity

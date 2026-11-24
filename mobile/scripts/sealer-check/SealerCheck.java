@@ -1,11 +1,11 @@
-package com.twoplacepaste;
+package com.mark7888.twoplacepaste;
 
 import java.nio.file.*;
 import java.util.*;
 
 /**
  * Holds the app's native XChaCha20-Poly1305 sealer and opener
- * (android/app/src/main/java/com/twoplacepaste/) to the cases gen.mjs writes:
+ * (android/app/src/main/java/com/mark7888/twoplacepaste/) to the cases gen.mjs writes:
  * the spec's entry vectors and random inputs sealed by @noble/ciphers. Each
  * is sealed and opened whole and twice more in random pieces, since both
  * stream; each is also tampered with every way that matters, which the opener

@@ -1,4 +1,4 @@
-package com.twoplacepaste;
+package com.mark7888.twoplacepaste;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
