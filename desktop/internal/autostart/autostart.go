@@ -22,7 +22,13 @@ var ErrUnsupported = errors.New("autostart: not supported on this platform")
 
 // Label identifies the login item. It is the launchd label on macOS and the
 // registry value name on Windows.
-const Label = "com.twoplacepaste.desktop"
+const Label = "com.mark7888.twoplacepaste.desktop"
+
+// LegacyLabel is the name the login item had before the app identifier moved
+// to com.mark7888.twoplacepaste. A login item installed by an older build
+// still carries it, so the managers count it as enabled, and replace or
+// remove it, rather than leaving an entry the toggle can no longer turn off.
+const LegacyLabel = "com.twoplacepaste.desktop"
 
 // Manager installs and removes the login item.
 type Manager interface {

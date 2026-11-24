@@ -21,7 +21,7 @@ static void tppScheduleUpdateChecks(double interval, double tolerance) {
 	@autoreleasepool {
 		[tppScheduler invalidate];
 		NSBackgroundActivityScheduler *s = [[NSBackgroundActivityScheduler alloc]
-			initWithIdentifier:@"com.twoplacepaste.desktop.update-check"];
+			initWithIdentifier:@"com.mark7888.twoplacepaste.desktop.update-check"];
 		s.repeats = YES;
 		s.interval = interval;
 		s.tolerance = tolerance;

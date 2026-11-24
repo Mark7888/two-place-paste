@@ -297,7 +297,7 @@ the new one binds**, or the new one shows the tray's "port in use" failure:
 
 **macOS:**
 - Unpack with `ditto -x -k` into the staging dir. Check the new bundle's
-  `CFBundleIdentifier == com.twoplacepaste.desktop` and run `codesign --verify --deep`.
+  `CFBundleIdentifier == com.mark7888.twoplacepaste.desktop` and run `codesign --verify --deep`.
 - **Swap the whole bundle, never files inside it.** Rewriting the binary inside a running
   signed bundle can get the process killed with *Code Signature Invalid*.
   `rename(App.app → App.app.old)`, then `rename(staged.app → App.app)`.

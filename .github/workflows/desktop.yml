@@ -250,7 +250,7 @@ jobs:
           rm -rf "$check" && mkdir -p "$check"
           ditto -x -k "dist/TwoPlacePaste-${{ matrix.name }}.zip" "$check"
           id=$(plutil -extract CFBundleIdentifier raw -o - "$check/TwoPlacePaste.app/Contents/Info.plist")
-          [ "$id" = com.twoplacepaste.desktop ] || { echo "::error::bundle identifier is $id"; exit 1; }
+          [ "$id" = com.mark7888.twoplacepaste.desktop ] || { echo "::error::bundle identifier is $id"; exit 1; }
           codesign --verify --deep --strict "$check/TwoPlacePaste.app"
 
       - uses: actions/upload-artifact@v4

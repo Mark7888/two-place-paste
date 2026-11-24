@@ -24,6 +24,10 @@ func newManager() Manager { return &launchdManager{} }
 func (m *launchdManager) Available() bool { return true }
 
 func (m *launchdManager) plistPath() (string, error) {
+	return m.plistPathFor(Label)
+}
+
+func (m *launchdManager) plistPathFor(label string) (string, error) {
 	dir := m.dir
 	if dir == "" {
 		home, err := os.UserHomeDir()
@@ -32,22 +36,24 @@ func (m *launchdManager) plistPath() (string, error) {
 		}
 		dir = filepath.Join(home, "Library", "LaunchAgents")
 	}
-	return filepath.Join(dir, Label+".plist"), nil
+	return filepath.Join(dir, label+".plist"), nil
 }
 
 func (m *launchdManager) Enabled() (bool, error) {
-	path, err := m.plistPath()
-	if err != nil {
-		return false, err
+	for _, label := range []string{Label, LegacyLabel} {
+		path, err := m.plistPathFor(label)
+		if err != nil {
+			return false, err
+		}
+		switch _, err := os.Stat(path); {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, fs.ErrNotExist):
+		default:
+			return false, fmt.Errorf("autostart: stat %s: %w", path, err)
+		}
 	}
-	switch _, err := os.Stat(path); {
-	case err == nil:
-		return true, nil
-	case errors.Is(err, fs.ErrNotExist):
-		return false, nil
-	default:
-		return false, fmt.Errorf("autostart: stat %s: %w", path, err)
-	}
+	return false, nil
 }
 
 func (m *launchdManager) Enable(exePath string) error {
@@ -61,11 +67,17 @@ func (m *launchdManager) Enable(exePath string) error {
 	if err := os.WriteFile(path, []byte(plist(exePath)), 0o600); err != nil {
 		return fmt.Errorf("autostart: write %s: %w", path, err)
 	}
-	return nil
+	// One login item, not two: an older build's agent would start the
+	// service a second time at login.
+	return m.remove(LegacyLabel)
 }
 
 func (m *launchdManager) Disable() error {
-	path, err := m.plistPath()
+	return errors.Join(m.remove(Label), m.remove(LegacyLabel))
+}
+
+func (m *launchdManager) remove(label string) error {
+	path, err := m.plistPathFor(label)
 	if err != nil {
 		return err
 	}

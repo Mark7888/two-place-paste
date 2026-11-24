@@ -28,14 +28,16 @@ func (registryManager) Enabled() (bool, error) {
 	}
 	defer func() { _ = k.Close() }()
 
-	switch _, _, err := k.GetStringValue(Label); {
-	case err == nil:
-		return true, nil
-	case errors.Is(err, registry.ErrNotExist):
-		return false, nil
-	default:
-		return false, fmt.Errorf("autostart: read HKCU\\%s\\%s: %w", runKey, Label, err)
+	for _, label := range []string{Label, LegacyLabel} {
+		switch _, _, err := k.GetStringValue(label); {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, registry.ErrNotExist):
+		default:
+			return false, fmt.Errorf("autostart: read HKCU\\%s\\%s: %w", runKey, label, err)
+		}
 	}
+	return false, nil
 }
 
 func (registryManager) Enable(exePath string) error {
@@ -50,6 +52,11 @@ func (registryManager) Enable(exePath string) error {
 	if err := k.SetStringValue(Label, `"`+exePath+`"`); err != nil {
 		return fmt.Errorf("autostart: write HKCU\\%s\\%s: %w", runKey, Label, err)
 	}
+	// One login item, not two: an older build's value would start the
+	// service a second time at sign-in.
+	if err := k.DeleteValue(LegacyLabel); err != nil && !errors.Is(err, registry.ErrNotExist) {
+		return fmt.Errorf("autostart: delete HKCU\\%s\\%s: %w", runKey, LegacyLabel, err)
+	}
 	return nil
 }
 
@@ -63,8 +70,11 @@ func (registryManager) Disable() error {
 	}
 	defer func() { _ = k.Close() }()
 
-	if err := k.DeleteValue(Label); err != nil && !errors.Is(err, registry.ErrNotExist) {
-		return fmt.Errorf("autostart: delete HKCU\\%s\\%s: %w", runKey, Label, err)
+	var errs []error
+	for _, label := range []string{Label, LegacyLabel} {
+		if err := k.DeleteValue(label); err != nil && !errors.Is(err, registry.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("autostart: delete HKCU\\%s\\%s: %w", runKey, label, err))
+		}
 	}
-	return nil
+	return errors.Join(errs...)
 }

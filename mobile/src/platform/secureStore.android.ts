@@ -18,7 +18,7 @@ import * as Keychain from 'react-native-keychain';
 import type { SecureStorePort } from './types';
 
 /** SERVICE_PREFIX namespaces this app's entries in the platform store. */
-const SERVICE_PREFIX = 'com.twoplacepaste.state.';
+const SERVICE_PREFIX = 'com.mark7888.twoplacepaste.state.';
 
 /** The username half of the credential is unused; the value is the password half. */
 const ACCOUNT = 'tpp';

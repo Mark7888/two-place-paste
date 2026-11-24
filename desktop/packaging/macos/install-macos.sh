@@ -24,7 +24,7 @@ set -eu
 
 REPO=Mark7888/two-place-paste
 APP_NAME=TwoPlacePaste.app
-BUNDLE_ID=com.twoplacepaste.desktop
+BUNDLE_ID=com.mark7888.twoplacepaste.desktop
 
 say() { printf '%s\n' "$*"; }
 die() {

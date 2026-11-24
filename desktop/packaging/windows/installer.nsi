@@ -78,6 +78,8 @@ Section "Uninstall"
 
   ; The login item is this installer's to remove; the user's settings and keys
   ; are not, and are left where they are.
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "com.mark7888.twoplacepaste.desktop"
+  ; The name older builds gave it, before the app identifier changed.
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "com.twoplacepaste.desktop"
   DeleteRegKey HKCU "Software\TwoPlacePaste"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TwoPlacePaste"

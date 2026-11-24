@@ -43,6 +43,14 @@ The relay server has matching image tags: `latest` for Stable and `beta` for Bet
   was closed or restarted*. The message cannot be dismissed; use the new tab, or open the app again
   from the tray icon, and close the old one.
 
+<Aside type="caution" title="macOS: updating from 1.4.0 or earlier">
+	The Mac app's identifier changed to `com.mark7888.twoplacepaste.desktop` after 1.4.0. A Mac app at
+	1.4.0 or earlier refuses an update that carries the new identifier, so it cannot update itself
+	past that point. Run the [install command](/two-place-paste/install/macos/) once to move to the
+	new version; your settings, keys and **Start at login** carry over, and it updates itself again
+	from then on.
+</Aside>
+
 <Aside>
 	A build you compiled yourself (version `0.0.0-local`) never replaces itself.
 </Aside>

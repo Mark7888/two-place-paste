@@ -7,7 +7,7 @@
 	<key>CFBundleDisplayName</key>
 	<string>TwoPlacePaste</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.twoplacepaste.desktop</string>
+	<string>com.mark7888.twoplacepaste.desktop</string>
 	<key>CFBundleExecutable</key>
 	<string>tppdesktop</string>
 	<!-- Contents/Resources/AppIcon.icns: what Finder, Login Items and the

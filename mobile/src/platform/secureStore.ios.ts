@@ -8,7 +8,7 @@ import * as Keychain from 'react-native-keychain';
 
 import type { SecureStorePort } from './types';
 
-const SERVICE_PREFIX = 'com.twoplacepaste.state.';
+const SERVICE_PREFIX = 'com.mark7888.twoplacepaste.state.';
 const ACCOUNT = 'tpp';
 
 export const secureStore: SecureStorePort = {
