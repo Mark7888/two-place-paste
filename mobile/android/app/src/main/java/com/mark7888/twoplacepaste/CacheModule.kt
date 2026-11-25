@@ -1,4 +1,4 @@
-package com.twoplacepaste
+package com.mark7888.twoplacepaste
 
 import android.util.Base64
 import com.facebook.react.bridge.Arguments

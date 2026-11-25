@@ -60,3 +60,49 @@ func TestPlistEscapesThePath(t *testing.T) {
 		t.Errorf("plist() did not escape the path:\n%s", got)
 	}
 }
+
+// TestLaunchdManagerLegacyLabel covers a login item an older build installed
+// under the previous app identifier: it counts as enabled, Enable replaces it
+// rather than adding a second agent, and Disable removes it.
+func TestLaunchdManagerLegacyLabel(t *testing.T) {
+	t.Parallel()
+
+	exe := "/Applications/TwoPlacePaste.app/Contents/MacOS/tppdesktop"
+	tests := []struct {
+		name string
+		act  func(m *launchdManager) error
+		want []string // plist files left in the directory
+	}{
+		{"enable replaces it", func(m *launchdManager) error { return m.Enable(exe) }, []string{Label + ".plist"}},
+		{"disable removes it", func(m *launchdManager) error { return m.Disable() }, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			legacy := filepath.Join(dir, LegacyLabel+".plist")
+			if err := os.WriteFile(legacy, []byte(plist(exe)), 0o600); err != nil {
+				t.Fatalf("writing the legacy plist: %v", err)
+			}
+			m := &launchdManager{dir: dir}
+			if on, err := m.Enabled(); err != nil || !on {
+				t.Fatalf("Enabled() with a legacy plist = %v, %v; want true, nil", on, err)
+			}
+			if err := tt.act(m); err != nil {
+				t.Fatalf("error = %v", err)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatalf("reading the directory: %v", err)
+			}
+			var got []string
+			for _, e := range entries {
+				got = append(got, e.Name())
+			}
+			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+				t.Errorf("files = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

@@ -14,7 +14,7 @@ import (
 // bundleID is the CFBundleIdentifier every build carries
 // (desktop/packaging/macos/Info.plist). A download that unpacks into anything
 // else is not installed.
-const bundleID = "com.twoplacepaste.desktop"
+const bundleID = "com.mark7888.twoplacepaste.desktop"
 
 // darwinApplier replaces the whole .app bundle the service runs from: the
 // bundle is never edited in place. The LaunchAgent points at the executable

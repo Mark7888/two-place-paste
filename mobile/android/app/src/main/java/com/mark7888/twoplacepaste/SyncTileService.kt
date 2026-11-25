@@ -1,4 +1,4 @@
-package com.twoplacepaste
+package com.mark7888.twoplacepaste
 
 import android.app.PendingIntent
 import android.content.Intent
@@ -93,6 +93,6 @@ class SyncTileService : TileService() {
 
     companion object {
         /** ACTION_TILE_SYNC marks the activity start as a tile tap rather than a launcher tap. */
-        const val ACTION_TILE_SYNC = "com.twoplacepaste.action.TILE_SYNC"
+        const val ACTION_TILE_SYNC = "com.mark7888.twoplacepaste.action.TILE_SYNC"
     }
 }

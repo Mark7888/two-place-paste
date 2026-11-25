@@ -1,4 +1,4 @@
-package com.twoplacepaste
+package com.mark7888.twoplacepaste
 
 import android.app.Application
 import com.facebook.react.PackageList

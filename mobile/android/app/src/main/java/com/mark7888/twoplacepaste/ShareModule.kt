@@ -1,4 +1,4 @@
-package com.twoplacepaste
+package com.mark7888.twoplacepaste
 
 import android.content.ContentResolver
 import android.content.Context

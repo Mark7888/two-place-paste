@@ -7,9 +7,9 @@ here=$(cd "$(dirname "$0")" && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 node "$here/gen.mjs" "$work/cases.txt" "$work/capture.txt"
-mkdir -p "$work/src/com/twoplacepaste"
-native="$here/../../android/app/src/main/java/com/twoplacepaste"
+mkdir -p "$work/src/com/mark7888/twoplacepaste"
+native="$here/../../android/app/src/main/java/com/mark7888/twoplacepaste"
 cp "$native/XChaCha20Poly1305Sealer.java" "$native/XChaCha20Poly1305Opener.java" "$native/RangeCapture.java" \
-  "$here/SealerCheck.java" "$work/src/com/twoplacepaste/"
-javac -d "$work/out" "$work"/src/com/twoplacepaste/*.java
-java -cp "$work/out" com.twoplacepaste.SealerCheck "$work/cases.txt" "$work/capture.txt"
+  "$here/SealerCheck.java" "$work/src/com/mark7888/twoplacepaste/"
+javac -d "$work/out" "$work"/src/com/mark7888/twoplacepaste/*.java
+java -cp "$work/out" com.mark7888.twoplacepaste.SealerCheck "$work/cases.txt" "$work/capture.txt"

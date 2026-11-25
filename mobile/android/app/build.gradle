@@ -38,10 +38,10 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace "com.twoplacepaste"
+    namespace "com.mark7888.twoplacepaste"
 
     defaultConfig {
-        applicationId "com.twoplacepaste"
+        applicationId "com.mark7888.twoplacepaste"
         minSdk rootProject.ext.minSdkVersion
         targetSdk rootProject.ext.targetSdkVersion
         // CI passes both (-PversionCode=… -PversionName=…) from
